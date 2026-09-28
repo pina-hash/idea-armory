@@ -4,6 +4,20 @@ namespace Armory.Core.Tests;
 
 public sealed class ReconcilerTests
 {
+    [Fact]
+    public void SolidWorksUploadWithoutPinnedReleaseIsRefused()
+    {
+        Assert.True(VaultPath.TryCreate("Robot/Arm.SLDPRT", out var path, out _));
+        var prior = new Revision("v1", "old", "Alex");
+        var input = new SyncInput(path, prior, "new", prior, LockOwnership.ThisDevice, false, true,
+            SavedRelease: new(2025), PinnedRelease: null);
+
+        var action = Assert.Single(Reconciler.Plan(input).Actions);
+
+        Assert.Equal(SyncActionKind.Refuse, action.Kind);
+        Assert.Contains("no pinned SolidWorks release", action.Reason);
+    }
+
     private static SyncActionKind[] Kinds(SyncInput input) => Reconciler.Plan(input).Actions.Select(a => a.Kind).ToArray();
 
     [Theory]
@@ -81,7 +95,7 @@ public sealed class ReconcilerTests
         foreach (var ownership in Enum.GetValues<LockOwnership>())
         foreach (var remote in new[] { Fixtures.Base, Fixtures.Newer, new Revision("dead", null, "Maria") })
         {
-            var input = Fixtures.Input with { Path = Fixtures.Path("part" + extension), LocalHash = "edit", Lock = ownership, Remote = remote, SavedRelease = new(2026) };
+            var input = Fixtures.Input with { Path = Fixtures.Path("part" + extension), LocalHash = "edit", Lock = ownership, Remote = remote, SavedRelease = new(2026), PinnedRelease = new(2025) };
             var action = Assert.Single(Reconciler.Plan(input).Actions);
             Assert.Equal(SyncActionKind.Refuse, action.Kind);
             Assert.Contains("2026", action.Reason);
