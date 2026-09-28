@@ -1,10 +1,8 @@
--- Identity seam: tests SET LOCAL armory.test_email. Production leaves it unset and uses idea-app's current_user_email().
 create or replace function public.armory_current_email() returns text language plpgsql stable security definer set search_path='' as $$
-declare v text := nullif(lower(btrim(current_setting('armory.test_email', true))), '');
+declare v text := public.current_user_email();
 begin
- if v is not null then return v; end if;
- if to_regprocedure('public.current_user_email()') is not null then execute 'select public.current_user_email()' into v; end if;
- return coalesce(v,'');
+ if v is null then raise exception 'current user email is unavailable'; end if;
+ return v;
 end $$;
 create function public.armory_is_member(p_project uuid) returns boolean language sql stable security definer set search_path='' as $$
  select exists(select 1 from public.armory_members where project_id=p_project and email=public.armory_current_email()) $$;

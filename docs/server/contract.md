@@ -15,4 +15,6 @@ These SQL files are a draft, not an idea-app migration. The app's migration lane
 
 Names have a database unique index on project plus lowercase NFC form. Both shared and side version rows reject update and delete, including byte metadata. No purge operation exists.
 
-Identity is `current_user_email()` from idea-app. The harness substitutes `SET armory.test_email` against its isolated throwaway database. See `server/IDEA_APP_CONVENTIONS.md` for the reviewed precedent.
+Identity comes only from idea-app's zero-argument, `text`-returning `public.current_user_email()`, defined by idea-app migration `0067_admin_tier.sql`. `armory_current_email()` raises when that function returns null. Production SQL has no caller-settable identity seam. The test harness installs its matching `current_user_email()` stub from `tests/Armory.Server.Tests/sql/000_test_identity.sql` before applying the production files; only that test-only stub reads `armory.test_email`. See `server/IDEA_APP_CONVENTIONS.md` for the reviewed precedent.
+
+`authenticated` receives `select` on the nine `armory_` tables by explicit name, and every one has row-level security enabled with project-membership policies. The Armory scripts never grant privileges on unrelated `public` tables. Direct writes remain revoked and are available only through the authorized RPCs.
