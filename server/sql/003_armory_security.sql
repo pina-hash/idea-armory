@@ -2,7 +2,9 @@
 revoke all on public.armory_projects,public.armory_members,public.armory_files,public.armory_versions,
  public.armory_side_versions,public.armory_locks,public.armory_tombstones,
  public.armory_part_number_allocations,public.armory_change_feed from public,anon,authenticated;
-grant select on all tables in schema public to authenticated;
+grant select on public.armory_projects,public.armory_members,public.armory_files,public.armory_versions,
+ public.armory_side_versions,public.armory_locks,public.armory_tombstones,
+ public.armory_part_number_allocations,public.armory_change_feed to authenticated;
 
 alter table public.armory_projects enable row level security;
 alter table public.armory_members enable row level security;
