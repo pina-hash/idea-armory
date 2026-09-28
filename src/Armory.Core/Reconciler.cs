@@ -49,7 +49,9 @@ public static class Reconciler
                 return Actions(Recover());
             if (IsSolidWorks(input.Path))
             {
-                var problem = SolidWorksVersionGate.UploadProblem(input.SavedRelease, input.PinnedRelease ?? new(2025));
+                if (input.PinnedRelease is null)
+                    return Actions(Action(SyncActionKind.Refuse, "The vault has no pinned SolidWorks release; upload is unsafe."));
+                var problem = SolidWorksVersionGate.UploadProblem(input.SavedRelease, input.PinnedRelease.Value);
                 if (problem is not null) return Actions(Action(SyncActionKind.Refuse, problem));
             }
             var mustPreserve = input.LockWasBroken || remoteChanged || input.Remote?.IsTombstone == true ||

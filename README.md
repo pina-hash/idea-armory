@@ -47,3 +47,7 @@ work. Simulation and disk tests provide bounded evidence, not proof against ever
 hardware, or concurrent-writer failure.
 
 Design and evidence: [audit](docs/core/audit.md), [simulation](docs/core/simulation.md).
+
+## Server and storage lane
+
+`server/sql/` contains the reviewed draft PostgreSQL contract for later numbering in idea-app, with its identity integration notes in `server/IDEA_APP_CONVENTIONS.md`. `Armory.Storage` implements credential-free, content-addressed S3 transfers. Server integration tests require `ARMORY_TEST_POSTGRES` to identify a throwaway cluster; CI supplies a PostgreSQL service and the fixture creates and drops only its own database.
