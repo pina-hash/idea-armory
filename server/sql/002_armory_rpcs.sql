@@ -12,7 +12,9 @@ declare c bigint; begin insert into public.armory_change_feed(project_id,kind,en
 create function public.armory_acquire_lock(p_file uuid) returns boolean language plpgsql security definer set search_path='' as $$
 declare e text:=public.armory_current_email(); p uuid;
 begin select project_id into p from public.armory_files where id=p_file; if e='' or not public.armory_is_member(p) then raise exception 'not a project member'; end if;
- insert into public.armory_locks(file_id,holder_email) values(p_file,e) on conflict do nothing;
+ insert into public.armory_locks(file_id,holder_email) values(p_file,e)
+ on conflict(file_id) do update set holder_email=excluded.holder_email,acquired_at=now(),broken_at=null,broken_by=null
+ where public.armory_locks.broken_at is not null;
  if not exists(select 1 from public.armory_locks where file_id=p_file and holder_email=e and broken_at is null) then return false; end if;
  perform public.armory_add_change(p,'lock_acquired',p_file,jsonb_build_object('holder',e)); return true; end $$;
 create function public.armory_release_lock(p_file uuid) returns boolean language plpgsql security definer set search_path='' as $$

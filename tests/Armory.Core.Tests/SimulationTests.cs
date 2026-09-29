@@ -15,16 +15,23 @@ public sealed class SimulationTests(ITestOutputHelper output)
         var count = specific is not null ? 1 : Environment.GetEnvironmentVariable("ARMORY_STRESS") == "1" ? 1_000_000 : 10_000;
         var start = specific is not null ? int.Parse(specific, System.Globalization.CultureInfo.InvariantCulture) : 0;
         var watch = Stopwatch.StartNew();
+        var stateHashes = new List<string>();
         for (var i = 0; i < count; i++)
         {
             var seed = start + i;
-            try { new Simulation(seed).Run(); }
+            try
+            {
+                var simulation = new Simulation(seed);
+                simulation.Run();
+                if (seed is >= 0 and < 100) stateHashes.Add($"{seed}:{simulation.FinalStateHash()}");
+            }
             catch (Exception error)
             {
                 throw new InvalidOperationException($"REPRO: ARMORY_SEED={seed} dotnet test --filter Seeded_scenarios | {error.Message}", error);
             }
         }
         output.WriteLine($"SIMULATION scenarios={count} elapsed={watch.Elapsed.TotalSeconds:F3}s first_seed={start}");
+        if (stateHashes.Count > 0) output.WriteLine("SIMULATION state_hashes=" + string.Join(',', stateHashes));
         if (specific is null && count == 10_000) Assert.True(watch.Elapsed < TimeSpan.FromMinutes(2), $"Normal simulation exceeded two minutes: {watch.Elapsed}.");
     }
 }
@@ -47,7 +54,7 @@ internal sealed class Simulation
     private static readonly VaultPath[] Paths = [Fixtures.Path("robot/plate.txt"), Fixtures.Path("robot/bracket.txt"), Fixtures.Path("class/design.txt")];
     private readonly int seed;
     private readonly ScheduleRandom random;
-    private readonly FakeServer server = new();
+    private readonly ISimulationServer server = new FakeServer();
     private readonly FakeClient[] clients;
     private readonly Dictionary<string, byte[]> everSaved = new(StringComparer.Ordinal);
     private readonly List<StoredVersion> immutableHistory = [];
@@ -119,6 +126,14 @@ internal sealed class Simulation
             if (step % 16 == 15) Drain();
         }
         Drain();
+    }
+
+    internal string FinalStateHash()
+    {
+        var canonical = string.Join('\n', server.Versions.Select(v => $"{v.Path}|{v.Revision.Id}|{v.Revision.Hash}|{v.Revision.Author}|{v.Side}|{v.OperationId}"))
+            + "\n--latest--\n" + string.Join('\n', server.Latest.OrderBy(v => v.Key).Select(v => $"{v.Key}|{v.Value.Id}|{v.Value.Hash}|{v.Value.Author}"))
+            + "\n--blobs--\n" + string.Join('\n', server.Blobs.OrderBy(v => v.Key).Select(v => $"{v.Key}|{Convert.ToHexStringLower(v.Value)}"));
+        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
     }
 
     private void Edit(FakeClient client, VaultPath path)
@@ -375,17 +390,28 @@ internal sealed class Simulation
         }
     }
     private sealed record StoredVersion(VaultPath Path, Revision Revision, bool Side, string OperationId);
-    private sealed class FakeServer
+    private interface ISimulationServer
     {
-        internal Dictionary<string, byte[]> Blobs { get; } = new(StringComparer.Ordinal);
-        internal List<StoredVersion> Versions { get; } = [];
-        internal Dictionary<VaultPath, Revision> Latest { get; } = [];
-        internal Dictionary<VaultPath, FileLock> Locks { get; } = [];
-        internal HashSet<(string Device, VaultPath Path)> BreakNotices { get; } = [];
-        internal Dictionary<string, JournalEntry> Applied { get; } = new(StringComparer.Ordinal);
-        internal List<(LockHolder Actor, LockHolder? Holder)> Advances { get; } = [];
+        Dictionary<string, byte[]> Blobs { get; }
+        List<StoredVersion> Versions { get; }
+        Dictionary<VaultPath, Revision> Latest { get; }
+        Dictionary<VaultPath, FileLock> Locks { get; }
+        HashSet<(string Device, VaultPath Path)> BreakNotices { get; }
+        Dictionary<string, JournalEntry> Applied { get; }
+        List<(LockHolder Actor, LockHolder? Holder)> Advances { get; }
+        void AddVersion(VaultPath path, string? hash, string author, bool side, string operation);
+    }
+    private sealed class FakeServer : ISimulationServer
+    {
+        public Dictionary<string, byte[]> Blobs { get; } = new(StringComparer.Ordinal);
+        public List<StoredVersion> Versions { get; } = [];
+        public Dictionary<VaultPath, Revision> Latest { get; } = [];
+        public Dictionary<VaultPath, FileLock> Locks { get; } = [];
+        public HashSet<(string Device, VaultPath Path)> BreakNotices { get; } = [];
+        public Dictionary<string, JournalEntry> Applied { get; } = new(StringComparer.Ordinal);
+        public List<(LockHolder Actor, LockHolder? Holder)> Advances { get; } = [];
         private readonly HashSet<string> operations = new(StringComparer.Ordinal);
-        internal void AddVersion(VaultPath path, string? hash, string author, bool side, string operation)
+        public void AddVersion(VaultPath path, string? hash, string author, bool side, string operation)
         {
             if (!operations.Add(operation)) return;
             var revision = new Revision($"v{Versions.Count}", hash, author);
