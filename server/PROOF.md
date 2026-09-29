@@ -12,3 +12,14 @@ Each mutation below was applied only to a temporary copy or working-tree edit, i
 | Restored the production `armory.test_email` fallback | `ProductionSqlIgnoresTestIdentityAndEveryRpcRefusesWithoutAppIdentity` found that an RPC accepted the caller-set identity instead of refusing. |
 
 The final three SQL files are the restored versions. The proof procedure hashes each before mutation and compares after restoration.
+
+## Server-backed simulation mutations
+
+The 300-seed PostgreSQL simulation was also run against two temporary mutations of
+`002_armory_rpcs.sql`. Each failure included the reproducible seed, and the production
+SQL was restored to the exact pre-mutation SHA-256 afterward.
+
+| Break | Server-backed simulation result |
+|---|---|
+| Reversed the stale-parent comparison | Seed 0 failed because the RPC reported a side version where the observed current parent required a shared advance. |
+| Removed the commit lock-holder predicate | Seed 0 failed because a client that did not acquire the lock was able to commit instead of receiving PostgreSQL's refusal. |

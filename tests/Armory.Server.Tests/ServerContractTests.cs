@@ -30,6 +30,15 @@ public sealed class ServerContractTests(DatabaseFixture db)
         var(_,f)=await Seed();await using var c=await db.Open("student@example.com");await Cmd(c,"select armory_acquire_lock(@f)",("f",f)).ExecuteNonQueryAsync();await Cmd(c,"select * from armory_commit_version(@f,null,'key',@h,1)",("f",f),("h",Hash)).ExecuteNonQueryAsync();
         await Assert.ThrowsAsync<PostgresException>(async()=>await Cmd(c,"update armory_versions set byte_length=2").ExecuteNonQueryAsync());await Assert.ThrowsAsync<PostgresException>(async()=>await Cmd(c,"delete from armory_versions").ExecuteNonQueryAsync());
     }
+    [DatabaseFact] public async Task ANewHolderCanAcquireAfterALockIsBroken()
+    {
+        var(_,f)=await Seed();
+        await using(var student=await db.Open("student@example.com"))Assert.True((bool)(await Cmd(student,"select armory_acquire_lock(@f)",("f",f)).ExecuteScalarAsync())!);
+        await using(var mentor=await db.Open("owner@example.com"))Assert.True((bool)(await Cmd(mentor,"select armory_break_lock(@f)",("f",f)).ExecuteScalarAsync())!);
+        await using var replacement=await db.Open("owner@example.com");
+        Assert.True((bool)(await Cmd(replacement,"select armory_acquire_lock(@f)",("f",f)).ExecuteScalarAsync())!);
+        Assert.Equal("owner@example.com",(string)(await Cmd(replacement,"select holder_email from armory_locks where file_id=@f and broken_at is null",("f",f)).ExecuteScalarAsync())!);
+    }
     [DatabaseFact] public async Task RlsIsolatesProjectsAndAnonCannotUseRpcs()
     {
         var(p,_)=await Seed();await using var owner=await db.Open("owner@example.com");
