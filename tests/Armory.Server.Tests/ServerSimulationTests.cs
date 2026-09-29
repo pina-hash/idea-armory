@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
-using Npgsql;
 using Xunit.Abstractions;
 
 namespace Armory.Server.Tests;
@@ -119,8 +118,9 @@ public sealed class ServerSimulationTests(DatabaseFixture database, ITestOutputH
             }
             else
             {
-                Assert.Throws<Npgsql.PostgresException>(() => server.Commit(client, path, save.Parent, save.Hash, save.Bytes));
-                server.Side(client, path, save.Parent, save.Hash, save.Bytes);
+                var result = server.Commit(client, path, save.Parent, save.Hash, save.Bytes);
+                Assert.False(result.Advanced);
+                Assert.NotEqual(result.Id, server.Latest(path));
             }
         }
         observed[(client, path)] = server.Latest(path);

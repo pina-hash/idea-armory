@@ -7,18 +7,18 @@ Baseline reviewed at `08677b6fc4583160f445d2a26cb06625da3ed7ea`.
 | Simulation `FakeServer` operation | Production RPC | Difference found before implementation |
 |---|---|---|
 | Read latest shared revision | authenticated reads of `armory_files.current_version_id` and `armory_versions` | No RPC. This is an RLS-protected read. |
-| Read the current lock | authenticated read of `armory_locks` | No RPC. This is an RLS-protected read. SQL identifies a holder by email, while the fake identifies a holder by person and device. |
-| Acquire a free lock | `armory_acquire_lock` | SQL identifies the holder by email and cannot distinguish two devices belonging to one person. |
-| Release a held lock | `armory_release_lock` | Same holder rule, subject to the identity difference above. |
-| Break a held lock and notify the former device | `armory_break_lock` plus the change feed | SQL records the former holder's email but not its device, so a precise per-device break notice has no representation. |
+| Read the current lock | authenticated read of `armory_locks` | No RPC. This is an RLS-protected read. The lock row identifies its holder by caller email and registered device UUID. |
+| Acquire a free lock | `armory_acquire_lock` | The RPC validates the caller-owned device and locks by the email/device pair. |
+| Release a held lock | `armory_release_lock` | Only the exact email/device holder pair can release. |
+| Break a held lock and notify the former device | `armory_break_lock` plus the change feed | SQL preserves the former email/device pair and publishes both in the break change payload. |
 | Add a shared version only when the expected parent is current and the caller holds the lock | `armory_commit_version` | The rules match. SQL turns a stale commit into a side version instead of rejecting before the call. |
 | Add a conflict or broken-lock side version | `armory_save_side_version` | The rules match. |
 | Add a tombstone only when the expected parent is current and the caller holds the lock | `armory_tombstone` | The rules match. The fake represents deletion as a hashless shared revision, while SQL stores an immutable tombstone and marks the file deleted. |
-| Deduplicate a replayed operation by stable operation ID | none | Production RPCs have no operation-id parameter or receipt table. Replaying a save-side-version call creates duplicate immutable rows. |
+| Deduplicate a replayed operation by stable operation ID | write RPC receipts | All write RPCs accept an operation UUID and atomically return the stored receipt on replay. |
 | Store and retrieve immutable bytes by SHA-256 | none | Intentionally remains an in-memory blob map because storage is outside this lane. |
 | Enumerate all shared and side versions and prove none were purged | authenticated reads of `armory_versions`, `armory_side_versions`, and `armory_tombstones` | No RPC. These are RLS-protected reads. |
 
-The device identity, break-notice, and operation-receipt gaps prevent a byte-for-byte adapter for the existing simulation without changing its behavior. The adapter therefore keeps device-local connection and replay state while sending every lock, shared-version, side-version, and tombstone decision through the production RPCs. No simulation invariant is relaxed.
+The device identity, break-notice, and operation-receipt gaps are closed. `PostgresSimulationServer` registers its devices and sends device and operation UUIDs through every production write RPC; it has no adapter-local lock or replay workaround. No simulation invariant is relaxed.
 
 ## Findings from server-backed runs
 

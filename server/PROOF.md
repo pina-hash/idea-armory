@@ -23,3 +23,12 @@ SQL was restored to the exact pre-mutation SHA-256 afterward.
 |---|---|
 | Reversed the stale-parent comparison | Seed 0 failed because the RPC reported a side version where the observed current parent required a shared advance. |
 | Removed the commit lock-holder predicate | Seed 0 failed because a client that did not acquire the lock was able to commit instead of receiving PostgreSQL's refusal. |
+
+## S4 device and replay mutations
+
+The S4 contract suite was run after each temporary mutation, followed by restoration of the exact saved SQL bytes:
+
+| Break | Test that turned red |
+|---|---|
+| Changed lock ownership checks from `(holder_email, holder_device_id)` back to email alone | `SamePersonOnTwoDevicesCannotShareLockAndOtherDeviceCommitBecomesSideVersion` allowed the laptop to act under the school PC's lock. |
+| Removed the operation receipt replay check | `SimultaneousReplayWritesExactlyOnceForOneThousandIterations` attempted the second immutable write and failed on the duplicate receipt instead of returning the first result. |
