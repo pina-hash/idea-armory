@@ -10,6 +10,10 @@ create table public.armory_members (
  project_id uuid not null references public.armory_projects on delete cascade,
  email text not null check (email=lower(btrim(email))), role public.armory_member_role not null,
  primary key(project_id,email));
+create table public.armory_devices (
+ id uuid primary key default gen_random_uuid(), owner_email text not null,
+ name text not null check (btrim(name) <> ''), registered_at timestamptz not null default now(),
+ unique(owner_email,id));
 create table public.armory_files (
  id uuid primary key default gen_random_uuid(), project_id uuid not null references public.armory_projects,
  name text not null, current_version_id uuid, deleted_at timestamptz,
@@ -31,7 +35,9 @@ create table public.armory_side_versions (
  author_email text not null, reason text not null, created_at timestamptz not null default now());
 create table public.armory_locks (
  file_id uuid primary key references public.armory_files, holder_email text not null,
- acquired_at timestamptz not null default now(), broken_at timestamptz, broken_by text);
+ holder_device_id uuid not null references public.armory_devices,
+ acquired_at timestamptz not null default now(), broken_at timestamptz, broken_by text,
+ broken_holder_email text, broken_holder_device_id uuid references public.armory_devices);
 create table public.armory_tombstones (
  file_id uuid primary key references public.armory_files, version_id uuid references public.armory_versions,
  author_email text not null, created_at timestamptz not null default now());
@@ -45,6 +51,9 @@ create table public.armory_change_feed (
  cursor bigint generated always as identity primary key, project_id uuid not null references public.armory_projects,
  kind text not null, entity_id uuid not null, payload jsonb not null default '{}',
  created_at timestamptz not null default now());
+create table public.armory_operation_receipts (
+ operation_id uuid primary key, caller_email text not null, rpc_name text not null,
+ result jsonb not null, completed_at timestamptz not null default now());
 
 create function public.armory_refuse_version_mutation() returns trigger language plpgsql set search_path='' as $$
 begin raise exception 'Armory versions are immutable' using errcode='55000'; end $$;
