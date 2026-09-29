@@ -2,4 +2,8 @@
  <PropertyGroup><IsPackable>false</IsPackable><IsTestProject>true</IsTestProject></PropertyGroup>
  <ItemGroup><PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1"/><PackageReference Include="xunit" Version="2.9.3"/><PackageReference Include="xunit.runner.visualstudio" Version="3.1.1" PrivateAssets="all"/><ProjectReference Include="../../src/Armory.Storage/Armory.Storage.csproj"/></ItemGroup>
  <ItemGroup><Using Include="Xunit"/></ItemGroup>
+ <ItemGroup>
+  <Compile Include="../GuardTests/DocumentedTestGuard.cs" Link="DocumentedTestGuard.cs" />
+  <None Include="../GUARDS.txt" Link="GUARDS.txt" CopyToOutputDirectory="PreserveNewest" />
+ </ItemGroup>
 </Project>

@@ -10,4 +10,8 @@
     <ProjectReference Include="../../src/Armory.Core/Armory.Core.csproj" />
     <Using Include="Xunit" />
   </ItemGroup>
+ <ItemGroup>
+  <Compile Include="../GuardTests/DocumentedTestGuard.cs" Link="DocumentedTestGuard.cs" />
+  <None Include="../GUARDS.txt" Link="GUARDS.txt" CopyToOutputDirectory="PreserveNewest" />
+ </ItemGroup>
 </Project>

@@ -10,3 +10,4 @@
 - Preserve originals in probes. CAD searches stay within Documents and the vault, capped at 50 files.
 - Never change Defender settings or commit customer/team CAD files.
 - Keep replacement's documented concurrent-writer limitation explicit until application coordination closes it.
+- A test named in `tests/GUARDS.txt` may be changed but never removed. Removing one requires naming its replacement in the same commit.
