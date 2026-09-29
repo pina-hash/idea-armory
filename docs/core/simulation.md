@@ -45,15 +45,15 @@ script changes one production rule, runs only the simulation, requires a failing
 and restores the original source bytes in `finally`. It verifies SHA-256 before and
 after restoration. It does not count a compilation error as a caught mutation.
 
-| Broken rule | Seed | Observed failure |
-|---|---:|---|
-| Download despite an open file | 0 | Open overwrite at step 9 |
-| Omit side-version action before conflict download | 0 | Unsynced local overwrite without side-version acknowledgement at step 12 |
-| Emit Upload instead of AcquireLockThenUpload | 1 | Shared-write assertion found a different/missing lock holder |
-| Parse an incomplete journal frame as committed | 0 | Truncated JSON reached the replay path instead of being dropped |
+| Broken rule | Seed | Observed failure | Last verified commit |
+|---|---:|---|---|
+| Download despite an open file | 0 | Open overwrite at step 9 | `b5094f3` |
+| Omit side-version action before conflict download | 0 | Unsynced local overwrite without side-version acknowledgement at step 12 | `b5094f3` |
+| Emit Upload instead of AcquireLockThenUpload | 1 | Shared-write assertion found a different/missing lock holder | `b5094f3` |
+| Parse an incomplete journal frame as committed | 0 | Truncated JSON reached the replay path instead of being dropped | `b5094f3` |
 
 All four were caught. The reconciliation source was restored byte-identical with SHA-256
-`B30FA154719044279F0CA3E506314476A2D16D7C83F5B9C553E6ACE8FD8BF613`.
+`6074616EC43FFC2EA2E8E3AED301E3F898BCA76C10758FD82193A91C69F5AE92`.
 The journal source was restored byte-identical with SHA-256
 `02D236758BBEA45D2674B1B015D1D2B9EE7DEBBD92511BE6BFC11B913AB3ADF9`.
 Raw logs and JSON results are generated under ignored `artifacts/mutations/`.

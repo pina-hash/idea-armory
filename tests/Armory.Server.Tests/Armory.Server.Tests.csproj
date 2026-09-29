@@ -6,4 +6,8 @@
   <None Include="../../server/sql/*.sql" Link="server-sql/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest"/>
   <None Include="sql/*.sql" Link="test-sql/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest"/>
  </ItemGroup>
+ <ItemGroup>
+  <Compile Include="../GuardTests/DocumentedTestGuard.cs" Link="DocumentedTestGuard.cs" />
+  <None Include="../GUARDS.txt" Link="GUARDS.txt" CopyToOutputDirectory="PreserveNewest" />
+ </ItemGroup>
 </Project>
