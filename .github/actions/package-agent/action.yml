@@ -48,23 +48,26 @@ runs:
     - name: Inno Setup 6.3 or later
       shell: pwsh
       run: |
-        $known = @((Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'), (Join-Path $env:ProgramFiles 'Inno Setup 6\ISCC.exe'))
-        function Find-Iscc { $known | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1 }
-        function Get-IsccVersion([string]$path) { [version]((Get-Item -LiteralPath $path).VersionInfo.ProductVersion -replace '[^\d.].*$', '') }
+        . ./tools/inno-setup.ps1
         $iscc = Find-Iscc
+        $found = $null
+        if ($iscc) { $found = Get-IsccVersion $iscc }
         if (-not $iscc) {
           Write-Host 'Inno Setup is not on this runner; installing it with Chocolatey.'
           choco install innosetup --no-progress -y
           if ($LASTEXITCODE -ne 0) { throw "choco install innosetup failed with exit code $LASTEXITCODE" }
-          $iscc = Find-Iscc
-        } elseif ((Get-IsccVersion $iscc) -lt [version]'6.3') {
-          Write-Host ('Inno Setup ' + (Get-IsccVersion $iscc) + ' is older than 6.3; upgrading it with Chocolatey.')
+        } elseif (-not $found.Version -or $found.Version -lt [version]'6.3') {
+          Write-Host ('Inno Setup reads as ' + $found.Version + ' (' + ($found.Seen -join '; ') + '); upgrading it with Chocolatey.')
           choco upgrade innosetup --no-progress -y
           if ($LASTEXITCODE -ne 0) { throw "choco upgrade innosetup failed with exit code $LASTEXITCODE" }
-          $iscc = Find-Iscc
         }
+        $iscc = Find-Iscc
         if (-not $iscc) { throw 'ISCC.exe was not found after installing Inno Setup.' }
-        Write-Host ('Inno Setup ' + (Get-IsccVersion $iscc) + ': ' + $iscc)
+        $found = Get-IsccVersion $iscc
+        Write-Host ('Version readings: ' + ($found.Seen -join '; '))
+        if ($found.Version -and $found.Version -lt [version]'6.3') { throw ('Inno Setup ' + $found.Version + ' is older than 6.3 after the upgrade.') }
+        if (-not $found.Version) { Write-Host '::warning::The Inno Setup version could not be read; ISCC itself refuses directives it does not know.' }
+        Write-Host ('Inno Setup ' + $found.Version + ' (from ' + $found.Source + '): ' + $iscc)
         "ARMORY_ISCC=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
     - name: Package the flash-drive zip and the installer

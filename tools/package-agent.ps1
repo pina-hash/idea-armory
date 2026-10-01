@@ -129,14 +129,16 @@ $setupHash = $null
 foreach ($old in @($setupExe, ($setupExe + '.sha256'))) { if (Test-Path -LiteralPath $old) { Remove-Item -LiteralPath $old -Force } }
 if (-not $NoSetupExe) {
     if (-not $onWindows) { throw 'IDEA-Armory-Setup needs Inno Setup on Windows. Use -NoSetupExe to build only the flash-drive zip here.' }
-    $candidates = @($Iscc, $env:ARMORY_ISCC, (Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'), (Join-Path $env:ProgramFiles 'Inno Setup 6\ISCC.exe'),
-        (Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe'))
-    $command = Get-Command 'ISCC.exe' -ErrorAction SilentlyContinue
-    if ($command) { $candidates += $command.Source }
-    $compiler = $candidates | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1
+    . (Join-Path $PSScriptRoot 'inno-setup.ps1')
+    $compiler = Find-Iscc @($Iscc, $env:ARMORY_ISCC)
     if (-not $compiler) { throw 'Inno Setup 6.3 or later is not installed (ISCC.exe not found). Install it, or pass -Iscc <path>.' }
-    $isccVersion = [version]((Get-Item -LiteralPath $compiler).VersionInfo.ProductVersion -replace '[^\d.].*$', '')
-    if ($isccVersion -lt [version]'6.3') { throw ('Inno Setup ' + $isccVersion + ' is too old; IdeaArmory.iss needs 6.3 or later.') }
+    $found = Get-IsccVersion $compiler
+    $isccVersion = $found.Version
+    if ($isccVersion -and $isccVersion -lt [version]'6.3') { throw ('Inno Setup ' + $isccVersion + ' is too old; IdeaArmory.iss needs 6.3 or later.') }
+    if (-not $isccVersion) {
+        Write-Warning ('The Inno Setup version could not be read (' + ($found.Seen -join '; ') + '); ISCC itself refuses directives it does not know.')
+        $isccVersion = 'unknown version'
+    }
     $arguments = @('/DAppVersion=' + $Version, '/DPayloadDir=' + $files, '/DOutputDir=' + $dist)
     $icon = Join-Path $root 'src/Armory.Agent/Assets/armory.ico'
     if (Test-Path -LiteralPath $icon) { $arguments += '/DIconFile=' + $icon }
