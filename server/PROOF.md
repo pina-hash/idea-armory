@@ -32,3 +32,17 @@ The S4 contract suite was run after each temporary mutation, followed by restora
 |---|---|---|
 | Changed lock ownership checks from `(holder_email, holder_device_id)` back to email alone | `SamePersonOnTwoDevicesCannotShareLockAndOtherDeviceCommitBecomesSideVersion` allowed the laptop to act under the school PC's lock. | `b5094f3` |
 | Removed the operation receipt replay check | `SimultaneousReplayWritesExactlyOnceForOneThousandIterations` attempted the second immutable write and failed on the duplicate receipt instead of returning the first result. | `b5094f3` |
+
+## Lane A agent RPC mutations (2026-10-01)
+
+Each break edited `server/sql/004_armory_agent.sql` in the working tree, rebuilt, ran
+`AgentRpcTests` against a fresh throwaway database, and restored the saved copy. SHA-256
+before and after every restoration: `adfc31bbce432fc8293305320019d7abe90b246b0f5940446becb9d068e54024`.
+
+| Break | Test that turned red |
+|---|---|
+| Removed the lock-holder predicate from `armory_move_file` (`answer:=f.deleted_at is null`) | `MoveFileRequiresTheLockHolderAndWritesFileMoved`: the move with no lock held succeeded (`Assert.False` saw true). |
+| Removed the last-mentor guard from `armory_remove_member` | `TheLastMentorCanNeverBeRemoved`: the sole mentor removed themself (`Assert.Throws` saw no exception). |
+| Removed the last-mentor guard from `armory_add_member` (demotion path) | `TheLastMentorCanNeverBeRemoved`: the sole mentor demoted themself to `cad_lead`. |
+
+Every other `AgentRpcTests` test stayed green during each break, so each test isolates its rule.

@@ -80,7 +80,7 @@ public sealed class DatabaseFixture : IAsyncLifetime
         await using var connection = new NpgsqlConnection(admin);
         await connection.OpenAsync();
         await new NpgsqlCommand($"create database {database}", connection).ExecuteNonQueryAsync();
-        return (database, new NpgsqlConnectionStringBuilder(root) { Database = database }.ConnectionString);
+        return (database, new NpgsqlConnectionStringBuilder(root) { Database = database, IncludeErrorDetail = true }.ConnectionString);
     }
 
     private static Task EnsureRoles(NpgsqlConnection connection) => new NpgsqlCommand(

@@ -98,7 +98,19 @@ public sealed class ServerContractTests(DatabaseFixture db)
                 "select * from armory_commit_version(@id,null,'key',@hash,1,@device,@operation)",
                 "select armory_tombstone(@id,null,@device,@operation)",
                 "select * from armory_allocate_part_number(@id,1,2026,@operation)",
-                "select * from armory_list_changes(@id,0)"};
+                "select * from armory_list_changes(@id,0)",
+                "select armory_create_project('Robot',2027::smallint,@operation)",
+                "select armory_add_member(@id,'student@example.com','student',@operation)",
+                "select armory_remove_member(@id,'student@example.com',@operation)",
+                "select armory_create_file(@id,'','Part.SLDPRT',@device,@operation)",
+                "select armory_move_file(@id,'','Part.SLDPRT',@device,@operation)",
+                "select * from armory_commit_version_with_release(@id,null,'key',@hash,1,@device,@operation,null)",
+                "select armory_save_side_version_with_release(@id,null,'key',@hash,1,'conflict',@device,@operation,null)",
+                "select armory_set_release_gate(@id,'enforce',@operation)",
+                "select armory_raise_pinned_release(@id,2026::smallint,@operation)",
+                "select armory_my_projects()",
+                "select armory_project_files(@id)",
+                "select armory_file_history(@id)"};
             foreach (var call in calls) await Assert.ThrowsAsync<PostgresException>(async () => await Cmd(connection, call, ("id", id), ("device", device), ("operation", operation), ("hash", Hash)).ExecuteNonQueryAsync());
         }
         finally { await db.DropDatabase(production.Database); }

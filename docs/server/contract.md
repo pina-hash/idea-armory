@@ -23,3 +23,32 @@ Names have a database unique index on project plus lowercase NFC form. Both shar
 Identity comes only from idea-app's zero-argument, `text`-returning `public.current_user_email()`, defined by idea-app migration `0067_admin_tier.sql`. `armory_current_email()` raises when that function returns null. Production SQL has no caller-settable identity seam. The test harness installs its matching `current_user_email()` stub from `tests/Armory.Server.Tests/sql/000_test_identity.sql` before applying the production files; only that test-only stub reads `armory.test_email`. See `server/IDEA_APP_CONVENTIONS.md` for the reviewed precedent.
 
 `authenticated` receives `select` on the eleven `armory_` tables by explicit name, and every one has row-level security enabled. Project data uses membership policies, devices use owner email, and receipts use caller email. The Armory scripts never grant privileges on unrelated `public` tables. Direct writes remain revoked and are available only through authorized RPCs.
+
+## Lane A additions (`004_armory_agent.sql`)
+
+`docs/agent/CONTRACT.md` section 6 names the RPCs lane B builds against. All follow the rules above:
+security definer, empty search path, identity only from `current_user_email()`, a receipt and a
+change-feed entry for every write. Authorization refusals use SQLSTATE `42501`, invalid names and
+values `22023`, a taken name `23505` with a JSON DETAIL `{"existing_folder", "existing_name", "file_id"}`,
+and the last-mentor guard `P0001`. Folders and names must pass Core's `VaultPath` name rules, and the
+agent's ignore list (`~$*`, `.armory`, `desktop.ini`, `Thumbs.db`) is refused as a name.
+
+| RPC | Rule |
+|---|---|
+| `armory_create_project(name, season, operation_id)` | `public.is_admin()` only; the caller becomes a mentor. Project names are unique without regard to case, because each is a vault folder. |
+| `armory_add_member(project, email, role, operation_id)` | Mentor or CAD lead; only a mentor grants or changes `mentor`/`cad_lead`. Changes an existing member's role; never demotes the last mentor. |
+| `armory_remove_member(project, email, operation_id)` | Mentor only; never removes the last mentor. Membership changes serialize on the project row. |
+| `armory_create_file(project, folder, name, device, operation_id)` | Any member with a registered device. |
+| `armory_move_file(file, folder, name, device, operation_id)` | Only the live lock holder pair; returns false otherwise. Writes `file_moved` with old and new folder and name. |
+| `armory_commit_version_with_release(..., saved_release)` | Calls 002's `armory_commit_version` (one source of the lock and parent rules) under a derived operation id, then records the SolidWorks release. |
+| `armory_save_side_version_with_release(..., saved_release)` | Same, around `armory_save_side_version`. |
+| `armory_set_release_gate(project, 'enforce' or 'warn', operation_id)` | Mentor only. New projects default to `warn`, pinned to SolidWorks 2025. |
+| `armory_raise_pinned_release(project, release, operation_id)` | Mentor only; the pin must strictly increase (Core's `TryRaise`). |
+| `armory_my_projects()`, `armory_project_files(project)`, `armory_file_history(file)` | Member-scoped read snapshots for the agent. |
+
+The release gate: a SolidWorks file (`.sldprt`, `.sldasm`, `.slddrw`) whose saved release is
+known to be newer than the project's pin is refused in both modes; an unknown release is refused in
+`enforce` and accepted in `warn`, where `armory_version_releases.release_checked` is false ("release
+not checked"). `armory_current_email()` now also refuses idea-app's empty-string identity.
+The test harness stubs `public.is_admin()` in `tests/Armory.Server.Tests/sql/001_test_admin.sql`;
+production SQL never defines it.
