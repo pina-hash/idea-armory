@@ -62,7 +62,7 @@ public sealed class AgentProcessTests
         using var data = new TempFolder();
         WriteSettings(data);
         var (code, json) = RunCheck(AgentExe.Folder(), data.Root);
-        Assert.Equal(["version", "vaultRoot", "webView2Runtime", "wwwroot"], json.RootElement.EnumerateObject().Select(p => p.Name).Order(StringComparer.Ordinal));
+        Assert.Equal(["vaultRoot", "version", "webView2Runtime", "wwwroot"], json.RootElement.EnumerateObject().Select(p => p.Name).Order(StringComparer.Ordinal));
         Assert.Equal("0.1.0", json.RootElement.GetProperty("version").GetString());
         Assert.True(json.RootElement.GetProperty("wwwroot").GetBoolean());
         Assert.Equal(data.File("vault"), json.RootElement.GetProperty("vaultRoot").GetString());
