@@ -24,6 +24,14 @@ param(
     [string]$LogDir = ''
 )
 $ErrorActionPreference = 'Stop'
+# Started from PowerShell 7 (a terminal, a CI runner), Windows PowerShell 5.1 inherits
+# PowerShell 7's module folders ahead of its own and then cannot load Get-CimInstance and
+# similar commands. Windows PowerShell keeps only its own module folders, its own first.
+if ($PSVersionTable.PSEdition -ne 'Core') {
+    $ownModules = Join-Path $PSHOME 'Modules'
+    $keptModules = @($env:PSModulePath -split ';' | Where-Object { $_ -and ($_ -notmatch '\\PowerShell\\(7[^\\]*\\)?Modules\\?$') -and ($_ -ne $ownModules) })
+    $env:PSModulePath = (@($ownModules) + $keptModules) -join ';'
+}
 $Version = '__VERSION__'
 if ($Version -eq ('__' + 'VERSION__')) { $Version = 'dev' }
 $AppName = 'IDEA Armory'
@@ -342,13 +350,21 @@ function Read-Manifest([string]$root) {
     if ($entries.Count -eq 0) { throw ('The file list ' + $ManifestName + ' is empty. Copy the whole folder from the ZIP again.') }
     return $entries
 }
+# SHA-256 of a file, lowercase hex, without Get-FileHash (a script command that Windows
+# PowerShell 5.1 loads from its module path).
+function Get-Sha256([string]$file) {
+    $stream = [IO.File]::Open($file, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { return ([BitConverter]::ToString($sha.ComputeHash($stream)) -replace '-', '').ToLowerInvariant() }
+    finally { $sha.Dispose(); $stream.Dispose() }
+}
 # Paths (relative) whose bytes are missing or differ from the package's file list.
 function Test-Manifest([string]$root, $entries) {
     $bad = @()
     foreach ($entry in $entries) {
         $file = Join-Path $root $entry.Path
         if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { $bad += $entry.Path; continue }
-        $hash = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
+        $hash = Get-Sha256 $file
         if ($hash -ne $entry.Hash) { $bad += $entry.Path }
     }
     return $bad
