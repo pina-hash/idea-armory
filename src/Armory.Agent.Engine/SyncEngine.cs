@@ -11,6 +11,9 @@ public sealed record EngineOptions
     public TimeSpan ActivePollInterval { get; init; } = TimeSpan.FromSeconds(5);
     public TimeSpan IdlePollInterval { get; init; } = TimeSpan.FromSeconds(60);
     public TimeSpan IdleAfter { get; init; } = TimeSpan.FromMinutes(2);
+    public TimeSpan StaleMarkerAfter { get; init; } = TimeSpan.FromMinutes(10);
+    // The contract's PUT limit (2 GiB); tests lower it.
+    public long MaximumFileBytes { get; init; } = Armory.Client.BlobClient.MaximumPutBytes;
 }
 
 public sealed class EngineDependencies
@@ -162,57 +165,85 @@ public sealed partial class SyncEngine : IAsyncDisposable
         problems.Clear(); notices.Clear();
         uploaded = downloaded = sideVersions = refused = 0;
         wrote = false;
+        state.Remembered.RemoveAll(n => deps.Clock.GetUtcNow() - n.At > TimeSpan.FromMinutes(30));
         var session = deps.Sessions.Current;
         if (session is null) return Report(false);
         if (state.Email is not null && !string.Equals(state.Email, session.Email, StringComparison.OrdinalIgnoreCase)) return Report(true);
         if (state.Email is null || state.DeviceId != session.DeviceId)
         {
-            // A reconnect of the same person registers a new device; its work stays theirs.
+            // A reconnect of the same person registers a new device; its work and the locks
+            // it holds stay this computer's.
+            if (state.DeviceId is { } former && !state.FormerDevices.Contains(former)) state.FormerDevices.Add(former);
             state.Email = session.Email;
             state.DeviceId = session.DeviceId;
             Save();
         }
 
-        recorder.Recover();
-        var entries = AttachEntries();
+        if (!recovered)
+        {
+            // Re-journal any capture a crash left unjournaled, once per start.
+            try { recorder.Recover(); recovered = true; }
+            catch (Exception error) when (error is IOException or InvalidDataException) { problems.Add("The save journal needs attention: " + error.Message); }
+        }
 
         local.Clear(); markerDocuments.Clear();
         VaultScan scan;
         try { scan = fs.Scan(); }
         catch (IOException error) { problems.Add(error.Message); return Report(true); }
         foreach (var file in scan.Files) local[file.Path.Value] = file;
-        foreach (var marker in scan.Markers)
-            if (LockMarkers.TryGetDocument(marker, out var document)) markerDocuments.Add(document);
+        ReadMarkers(scan);
         problems.AddRange(scan.Problems);
+
+        // Saves are captured before any network step, so nothing on the server side can stop
+        // this computer from keeping every save.
+        AttachEntries();
+        Capture(session, notify: false);
+        CrashPoint?.Invoke("after-capture");
 
         online = await RefreshAsync(ct);
         if (online == true)
         {
             lastOnline = deps.Clock.GetUtcNow();
-            await ResumeInflightAsync(ct);
-            if (await ApplyRemoteMovesAsync(ct)) await RefreshAsync(ct);
-            AdoptIdenticalBases();
+            if (await ResumeInflightAsync(ct) && online == true) online = await RefreshAsync(ct);
         }
-
-        Capture(session);
-        CrashPoint?.Invoke("after-capture");
-        entries = AttachEntries();
         if (online == true)
         {
+            if (ApplyRemoteMoves()) online = await RefreshAsync(ct);
+            AdoptIdenticalBases();
+            Capture(session, notify: true); // projects learned this pass
+        }
+        var entries = AttachEntries();
+        if (online == true)
+        {
+            DetectLocalMoves(scan);
             await ExecutePendingMovesAsync(ct);
             await ArchiveSupersededAsync(entries, ct);
         }
 
         lastLoopError = null;
-        foreach (var path in AllPaths()) { await PlanAndExecuteAsync(path, online == true, ct); PublishIfPending(); }
+        foreach (var path in AllPaths())
+        {
+            try { await PlanAndExecuteAsync(path, online == true, ct); }
+            catch (ArmoryOfflineException) { online = false; }
+            catch (Exception error) when (error is ArmoryClientException or Armory.Storage.HashMismatchException or IOException or UnauthorizedAccessException or InvalidDataException)
+            { problems.Add($"{path}: {error.Message}"); }
+            Save();
+            PublishIfPending();
+        }
 
         if (online == true)
         {
             // Locks are decided on the server's state after this pass's own writes.
-            if (wrote) await RefreshAsync(ct);
-            await AcquireForMarkersAsync(ct);
-            await ReleaseFinishedLocksAsync(ct);
-            ApplyReadOnly();
+            if (wrote) online = await RefreshAsync(ct);
+            if (online == true)
+            {
+                wrote = false;
+                await AcquireForMarkersAsync(ct);
+                await ReleaseFinishedLocksAsync(ct);
+                // Read-only follows the locks as they are after this pass's lock changes.
+                if (wrote && online == true) online = await RefreshAsync(ct);
+                if (online == true) ApplyReadOnly();
+            }
         }
         return Report(true);
     }
@@ -249,7 +280,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
                 foreach (var change in changes)
                 {
                     if (change.Kind == "lock_broken" && change.Payload["former_device_id"]?.GetValue<string>() is { } former &&
-                        Guid.TryParse(former, out var device) && device == state.DeviceId)
+                        Guid.TryParse(former, out var device) && state.IsMine(device))
                         foreach (var st in state.Files.Values.Where(f => f.FileId == change.EntityId)) st.BreakNotice = true;
                     ps.Cursor = Math.Max(ps.Cursor, change.Cursor);
                 }
@@ -274,30 +305,39 @@ public sealed partial class SyncEngine : IAsyncDisposable
         catch (ArmoryOfflineException) { Save(); return false; }
     }
 
-    // A local file byte-identical to the server's current version is that version: this
-    // is how a computer that already has copies starts, without inventing a conflict.
+    // A local file byte-identical to the server's current version is that version: this is
+    // how a computer that already has copies starts, and how a download whose bookkeeping a
+    // crash interrupted is recognized, without inventing a conflict. Identical bytes are
+    // already preserved, so this decides nothing Core decides.
     private void AdoptIdenticalBases()
     {
         foreach (var (key, remote) in remoteByPath)
         {
-            if (!local.TryGetValue(key, out var file) || remote.File.Current is not { } current || current.Hash != file.Hash) continue;
-            var st = FileFor(remote.Project, key);
+            if (remote.File.Deleted || remote.File.Current is not { } current || !local.TryGetValue(key, out var file) || current.Hash != file.Hash) continue;
+            state.Files.TryGetValue(key, out var st);
+            if (st is not null && (st.Inflight is not null || (st.FileId is not null && st.FileId != remote.File.Id))) continue;
+            if (state.Files.Values.Any(f => f.FileId == remote.File.Id && !ReferenceEquals(f, st))) continue;
+            st ??= FileFor(remote.Project, key);
             st.FileId ??= remote.File.Id;
-            if (st.Base is null && st.Inflight is null) { st.SetBase(new(current.Id.ToString(), current.Hash, current.Author)); st.LastCaptured ??= current.Hash; }
+            if (st.BaseId == current.Id.ToString()) continue;
+            st.SetBase(new(current.Id.ToString(), current.Hash, current.Author));
+            st.LastCaptured ??= current.Hash;
+            Complete(st, current.Hash);
         }
         Save();
     }
 
     // ---- Capture -------------------------------------------------------------------
 
-    private void Capture(ArmorySession session)
+    private void Capture(ArmorySession session, bool notify)
     {
+        notify |= online == false && state.Projects.Count > 0;
         foreach (var file in local.Values.OrderBy(f => f.Path))
         {
             var project = ProjectOf(file.Path);
             if (project is null)
             {
-                Notice(AttentionKinds.Refused, null, file.Path.Value, "This file is outside every project", "Move it into one of your project folders so Armory can keep it.");
+                if (notify) Notice(AttentionKinds.Refused, null, file.Path.Value, "This file is outside every project", "Move it into one of your project folders so Armory can keep it.");
                 continue;
             }
             var st = FileFor(project, file.Path.Value);
@@ -350,13 +390,38 @@ public sealed partial class SyncEngine : IAsyncDisposable
         if (!VaultPath.TryCreate(key, out var path, out _, options.VaultRoot)) return;
         var project = ProjectOf(path);
         if (project is null || !project.Usable) return;
-        remoteByPath.TryGetValue(key, out var remote);
         local.TryGetValue(key, out var localFile);
         state.Files.TryGetValue(key, out var st);
+        // A file this computer already tracks is planned against its own server record
+        // (found by id, wherever it now lives); a server path whose file another state owns
+        // is that file's pending move, not a new file.
+        (RemoteFile? File, ProjectState? Project) remote = default;
+        if (st?.FileId is { } id) { if (remoteById.TryGetValue(id, out var byId)) remote = (byId.File, byId.Project); }
+        else if (remoteByPath.TryGetValue(key, out var byPath))
+        {
+            if (state.Files.Values.Any(f => f.FileId == byPath.File.Id && !ReferenceEquals(f, st))) return;
+            remote = byPath;
+        }
         if (st is null && localFile is null && remote.File is null) return;
+        if (st?.LocalMoveTo is not null || state.Files.Values.Any(f => string.Equals(f.LocalMoveTo, key, StringComparison.OrdinalIgnoreCase))) return;
+        // A brand-new file cannot take the name of a removed one: names stay with their history.
+        if (remote.File is { Deleted: true } && localFile is not null && st?.FileId is null && st?.Base is null)
+        {
+            st ??= FileFor(project, key);
+            st.Refusal = $"A file named {path.Name} was removed from this project, and names stay with their history. Rename yours to keep it.";
+            st.RefusalKind = AttentionKinds.NameTaken;
+            return;
+        }
         st ??= FileFor(project, key);
         if (remote.File is not null) st.FileId ??= remote.File.Id;
         if (st.Inflight is not null) return; // finished on the next online pass
+
+        // One scan's absence is not a deletion: wait for a second scan before planning one.
+        if (localFile is null && st.BaseHash is not null)
+        {
+            if (++st.AbsentScans < 2) return;
+        }
+        else st.AbsentScans = 0;
 
         var remoteRevision = RevisionOf(remote.File);
         var ownership = OwnershipOf(remote.File?.Lock);
@@ -379,7 +444,6 @@ public sealed partial class SyncEngine : IAsyncDisposable
             CrashPoint?.Invoke("before-" + action.Kind);
             if (!await ExecuteAsync(action, input, st, project, remote.File, ct)) break;
         }
-        Save();
     }
 
     // The engine's "never overwrite an open file" check: the platform's open-file answer,
@@ -388,11 +452,35 @@ public sealed partial class SyncEngine : IAsyncDisposable
     private bool IsOpenNow(VaultPath path)
         => fs.IsOpen(path) || markerDocuments.Contains(path.Value);
 
+    // SolidWorks' ~$ marker means "open" while the platform corroborates it (the document or
+    // the marker itself is held open), and for a while after it first appears. A marker left
+    // behind by a crash, never corroborated for StaleMarkerAfter, is stale and ignored.
+    private void ReadMarkers(VaultScan scan)
+    {
+        var now = deps.Clock.GetUtcNow();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var marker in scan.Markers)
+        {
+            if (!LockMarkers.TryGetDocument(marker, out var document) || !VaultPath.TryCreate(document, out var doc, out _, options.VaultRoot)) continue;
+            seen.Add(document);
+            var live = fs.IsOpen(doc) || (VaultPath.TryCreate(marker, out var markerPath, out _, options.VaultRoot) && fs.IsOpen(markerPath));
+            if (live) { markerSince.Remove(document); markerDocuments.Add(document); continue; }
+            if (!markerSince.TryGetValue(document, out var since)) markerSince[document] = since = now;
+            if (now - since < options.StaleMarkerAfter) markerDocuments.Add(document);
+            else Notice(AttentionKinds.Refused, null, document, "SolidWorks may have closed unexpectedly",
+                $"Armory is treating {doc.Name} as closed. If SolidWorks still has it open, save it there.");
+        }
+        foreach (var gone in markerSince.Keys.Where(k => !seen.Contains(k)).ToArray()) markerSince.Remove(gone);
+    }
+
+    private readonly Dictionary<string, DateTimeOffset> markerSince = new(StringComparer.OrdinalIgnoreCase);
+    private bool recovered;
+
     private LockOwnership OwnershipOf(RemoteLock? held)
     {
         if (held is null || !held.IsLive) return LockOwnership.Free;
         if (!string.Equals(held.HolderEmail, state.Email, StringComparison.OrdinalIgnoreCase)) return LockOwnership.OtherPerson;
-        return held.HolderDeviceId == state.DeviceId ? LockOwnership.ThisDevice : LockOwnership.MyOtherDevice;
+        return state.IsMine(held.HolderDeviceId) ? LockOwnership.ThisDevice : LockOwnership.MyOtherDevice;
     }
 
     private static Revision? RevisionOf(RemoteFile? file)
@@ -451,6 +539,12 @@ public sealed partial class SyncEngine : IAsyncDisposable
         var entries = journal.Read().Entries.ToDictionary(e => e.Id, StringComparer.Ordinal);
         foreach (var id in st.Entries.ToArray())
             if (entries.TryGetValue(id, out var entry) && entry.Hash == hash) { state.Completed.Add(id); st.Entries.Remove(id); }
+    }
+
+    private void Remember(string kind, Guid? fileId, string path, string title, string detail)
+    {
+        state.Remembered.RemoveAll(n => n.Path == path && n.Title == title);
+        state.Remembered.Add(new RememberedNotice(kind, fileId, path, title, detail, deps.Clock.GetUtcNow()));
     }
 
     private void Notice(string kind, Guid? fileId, string path, string title, string detail)

@@ -20,6 +20,12 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
     public string Root { get; }
     public bool WriteMarkers { get; set; } = true;
     public List<string> OpenWriteViolations { get; } = [];
+    // The oracle for "never overwrite unpreserved bytes": before any replace or recovery move,
+    // the bytes being displaced must already be in server history.
+    public Func<string, bool>? IsPreserved { get; set; }
+    public List<string> UnpreservedOverwrites { get; } = [];
+    public int Moves { get; private set; }
+    public int Replaces { get; private set; }
     public Dictionary<string, LockOwnership> Attributes { get; } = new(StringComparer.OrdinalIgnoreCase);
     public List<string> Recovered { get; } = [];
 
@@ -38,6 +44,8 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
         var marker = Full(MarkerFor(relative));
         if (File.Exists(marker)) File.Delete(marker);
     }
+    // SolidWorks stopped without closing the document: no longer open, marker left behind.
+    public void CrashApp(string relative) { lock (gate) open.Remove(P(relative).Value); }
     public bool IsOpenNow(string relative) { lock (gate) return open.Contains(P(relative).Value); }
     public IReadOnlyList<string> OpenFiles() { lock (gate) return open.ToArray(); }
     private static string MarkerFor(string relative)
@@ -75,6 +83,11 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
     public Stream OpenRead(VaultPath path) => new FileStream(Full(path.Value), FileMode.Open, FileAccess.Read, FileShare.Read);
 
     private string? HashOf(string full) => File.Exists(full) ? Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(full))) : null;
+    private void RecordIfUnpreserved(VaultPath path, string? hash, string what)
+    {
+        if (hash is null || IsPreserved is null || IsPreserved(hash)) return;
+        lock (gate) UnpreservedOverwrites.Add($"{what} {path} {hash[..8]}");
+    }
     private void RecordIfOpen(VaultPath path, string what)
     {
         lock (gate) if (open.Contains(path.Value)) OpenWriteViolations.Add($"{what} {path}");
@@ -85,6 +98,8 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
         var full = Full(path.Value);
         if (HashOf(full) != expectedHash) return ReplaceOutcome.Refused("Destination changed since the plan was made.");
         RecordIfOpen(path, "replace");
+        RecordIfUnpreserved(path, expectedHash, "replace");
+        Replaces++;
         Directory.CreateDirectory(Path.GetDirectoryName(full)!);
         var temp = Full(".armory/staging/" + Guid.NewGuid().ToString("N") + ".pending");
         Directory.CreateDirectory(Path.GetDirectoryName(temp)!);
@@ -98,6 +113,7 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
         var full = Full(path.Value);
         if (HashOf(full) != expectedHash) return ReplaceOutcome.Refused("File changed.");
         RecordIfOpen(path, "recovery");
+        RecordIfUnpreserved(path, expectedHash, "recovery");
         var target = Full($".armory/recovery/{Interlocked.Increment(ref recoveries)}/{path.Value}");
         Directory.CreateDirectory(Path.GetDirectoryName(target)!);
         File.Move(full, target);
@@ -112,6 +128,7 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
         if (HashOf(source) != expectedHash) return ReplaceOutcome.Refused("File changed.");
         if (File.Exists(target) && !string.Equals(Path.GetFullPath(source), Path.GetFullPath(target), StringComparison.OrdinalIgnoreCase)) return ReplaceOutcome.Refused("Destination exists.");
         RecordIfOpen(from, "move");
+        Moves++;
         Directory.CreateDirectory(Path.GetDirectoryName(target)!);
         File.Move(source, target);
         return ReplaceOutcome.Done;

@@ -192,8 +192,13 @@ create function public.armory_commit_version_with_release(p_file uuid,p_parent u
 declare r jsonb; v uuid; a boolean; solidworks boolean;
 begin r:=public.armory_replay(p_operation,'armory_commit_version_with_release'); if r is not null then return query select (r->>'version_id')::uuid,(r->>'advanced')::boolean; return; end if;
  solidworks:=public.armory_check_release(p_file,p_saved_release);
- -- 002's armory_commit_version stays the one source of the lock and parent rules.
- select c.version_id,c.advanced into v,a from public.armory_commit_version(p_file,p_parent,p_key,p_hash,p_bytes,p_device,public.armory_derived_operation(p_operation,'commit')) c;
+ if exists(select 1 from public.armory_files where id=p_file and deleted_at is not null) then
+  -- A removed file never advances, even for its lock holder: the bytes become a side version.
+  v:=public.armory_save_side_version(p_file,p_parent,p_key,p_hash,p_bytes,'file deleted',p_device,public.armory_derived_operation(p_operation,'commit-deleted')); a:=false;
+ else
+  -- 002's armory_commit_version stays the one source of the lock and parent rules.
+  select c.version_id,c.advanced into v,a from public.armory_commit_version(p_file,p_parent,p_key,p_hash,p_bytes,p_device,public.armory_derived_operation(p_operation,'commit')) c;
+ end if;
  if solidworks then perform public.armory_record_release(v,p_file,not a,p_saved_release); end if;
  perform public.armory_remember(p_operation,'armory_commit_version_with_release',jsonb_build_object('version_id',v,'advanced',a));
  return query select v,a; end $$;

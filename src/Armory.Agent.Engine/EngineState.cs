@@ -33,6 +33,15 @@ internal sealed class EngineState
     public Dictionary<string, FileState> Files { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public HashSet<string> Completed { get; set; } = new(StringComparer.Ordinal);
     public List<PendingMove> Moves { get; set; } = [];
+    // Device ids this vault was synced under before a reconnect. Their locks are still this
+    // computer's, and writes under those locks use the holding id (the server accepts any
+    // device the same person registered).
+    public List<Guid> FormerDevices { get; set; } = [];
+    // One-off events a student should still see on the next screen, such as a rename that
+    // was put back. Shown for a while, then dropped.
+    public List<RememberedNotice> Remembered { get; set; } = [];
+
+    internal bool IsMine(Guid device) => device == DeviceId || FormerDevices.Contains(device);
 
     internal string NextId(string kind) => $"{DeviceId}:{kind}:{++Sequence}";
 
@@ -85,17 +94,28 @@ internal sealed class FileState
     public LockOwnership? AppliedOwnership { get; set; }
     public List<SideRecord> Sides { get; set; } = [];
     public Inflight? Inflight { get; set; }
+    // Consecutive scans that did not find a file this computer had: a deletion is planned
+    // only after two, so one bad scan never deletes for the team.
+    public int AbsentScans { get; set; }
+    // An Explorer rename or move of this file to another path, being sent as a server move.
+    public string? LocalMoveTo { get; set; }
+    // Journaled saves the release gate refused: private drafts kept on this computer. They
+    // never hold the lock and are offered again whenever the gate would allow them.
+    public List<string> Drafts { get; set; } = [];
 
     [JsonIgnore] public Revision? Base => BaseId is null ? null : new(BaseId, BaseHash, "");
     public void SetBase(Revision? revision) { BaseId = revision?.Id; BaseHash = revision?.Hash; }
 }
 
+internal sealed record RememberedNotice(string Kind, Guid? FileId, string Path, string Title, string Detail, DateTimeOffset At);
 internal sealed record SideRecord(Guid VersionId, string Hash, string Reason, DateTimeOffset At);
 
 // One server write that was about to be sent. Re-sent with the same operation id on the
 // next pass if the engine stopped before recording its answer.
 internal sealed record Inflight(string Kind, Guid Operation, string? EntryId = null, Guid? ProjectId = null, Guid? FileId = null,
     string? Folder = null, string? Name = null, string? ParentId = null, string? Hash = null, long Bytes = 0, string? SnapshotId = null,
-    int? SavedRelease = null, string? Reason = null, bool ReleaseNotChecked = false);
+    int? SavedRelease = null, string? Reason = null, bool ReleaseNotChecked = false, Guid? Device = null);
 
-internal sealed record PendingMove(Guid Operation, Guid FileId, string From, string To);
+// A rename sent through armory_move_file: requested with MoveAsync, or an Explorer rename the
+// engine detected (Local), whose bytes already sit at To.
+internal sealed record PendingMove(Guid Operation, Guid FileId, string From, string To, bool Local = false);

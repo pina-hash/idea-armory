@@ -6,7 +6,11 @@ public sealed record LocalFile(VaultPath Path, string Hash, long Size);
 // Files excludes the platform's ignore list (Armory.Platform.Windows.VaultIgnore). Markers
 // are the vault-relative paths of "~$<name>" files, which SolidWorks creates beside a
 // document it has open (docs/spike/solidworks-lock-file.md). Problems never imply deletion.
-public sealed record VaultScan(IReadOnlyList<LocalFile> Files, IReadOnlyList<string> Markers, IReadOnlyList<string> Problems);
+// Renames are moves the platform proved by file identity (NTFS file id); the engine also
+// recognizes a tracked file's exact bytes reappearing at one new path in the same project.
+public sealed record VaultScan(IReadOnlyList<LocalFile> Files, IReadOnlyList<string> Markers, IReadOnlyList<string> Problems,
+    IReadOnlyList<LocalMove>? Renames = null);
+public sealed record LocalMove(VaultPath From, VaultPath To);
 public sealed record ReplaceOutcome(bool Succeeded, string? Problem)
 {
     public static ReplaceOutcome Done { get; } = new(true, null);

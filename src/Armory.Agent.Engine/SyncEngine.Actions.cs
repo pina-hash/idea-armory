@@ -1,3 +1,4 @@
+using System.Globalization;
 using Armory.Agent.Engine.View;
 using Armory.Client;
 using Armory.Core;
@@ -8,55 +9,52 @@ namespace Armory.Agent.Engine;
 public sealed partial class SyncEngine
 {
     private const string EarlierSaveReason = "earlier save, kept";
+    internal const string GateKind = "gate", TooLargeKind = "tooLarge";
+    private static string Text(int value) => value.ToString(CultureInfo.InvariantCulture);
 
     // Executes one Core action. Returns false to stop this file's plan until the next pass.
     private async Task<bool> ExecuteAsync(SyncAction action, SyncInput input, FileState st, ProjectState project, RemoteFile? remote, CancellationToken ct)
     {
         var path = input.Path;
-        try
+        switch (action.Kind)
         {
-            switch (action.Kind)
-            {
-                case SyncActionKind.None:
-                    if (input.LocalHash == input.Remote?.Hash) st.SetBase(input.Remote);
-                    if (input.LocalHash is null) st.BreakNotice = false;
-                    if (input.LocalHash is not null && input.LocalHash == st.BaseHash) Complete(st, input.LocalHash);
-                    return true;
-                case SyncActionKind.NotifyNewerVersionWaiting:
-                    st.NewerWaiting = true;
-                    st.NewerAuthor = remote?.Current?.Author;
-                    return true;
-                case SyncActionKind.Refuse:
-                    st.Refusal = action.Reason;
-                    st.RefusalKind = AttentionKinds.Refused;
-                    refused++;
-                    return false;
-                case SyncActionKind.Download:
-                    return await DownloadAsync(st, project, path, input, remote!, ct);
-                case SyncActionKind.Upload:
-                case SyncActionKind.AcquireLockThenUpload:
-                    return await UploadAsync(st, project, path, input, action, ct);
-                case SyncActionKind.SaveSideVersion:
-                    return await PreserveAsync(st, project, path, input.LocalHash!, action.ReleaseNotChecked, input.SavedRelease, ct);
-                case SyncActionKind.MoveLocalToRecovery:
-                    if (IsOpenNow(path)) { st.NewerWaiting = true; return false; }
-                    var moved = fs.MoveToRecovery(path, input.LocalHash!);
-                    if (!moved.Succeeded) { problems.Add($"{path}: {moved.Problem}"); return false; }
-                    local.Remove(path.Value);
-                    st.SetBase(input.Remote);
-                    st.Preserved = null;
-                    st.BreakNotice = false;
-                    return true;
-                case SyncActionKind.ProposeTombstone:
-                    return await TombstoneAsync(st, path, input, ct);
-                default:
-                    throw new InvalidOperationException($"Unknown action {action.Kind}.");
-            }
+            case SyncActionKind.None:
+                if (input.LocalHash == input.Remote?.Hash) st.SetBase(input.Remote);
+                if (input.LocalHash is null) st.BreakNotice = false;
+                if (input.LocalHash is not null && input.LocalHash == st.BaseHash) Complete(st, input.LocalHash);
+                return true;
+            case SyncActionKind.NotifyNewerVersionWaiting:
+                st.NewerWaiting = true;
+                st.NewerAuthor = remote?.Current?.Author;
+                return true;
+            case SyncActionKind.Refuse:
+                st.Refusal = action.Reason;
+                // A SolidWorks file with bytes on disk is refused only by the release gate:
+                // those bytes are a private draft, kept here and never holding the lock.
+                st.RefusalKind = input.LocalHash is not null && Reconciler.IsSolidWorks(path) ? GateKind : AttentionKinds.Refused;
+                refused++;
+                return false;
+            case SyncActionKind.Download:
+                return await DownloadAsync(st, project, path, input, remote!, ct);
+            case SyncActionKind.Upload:
+            case SyncActionKind.AcquireLockThenUpload:
+                return await UploadAsync(st, project, path, input, action, ct);
+            case SyncActionKind.SaveSideVersion:
+                return await PreserveAsync(st, project, path, input.LocalHash!, action.ReleaseNotChecked, input.SavedRelease, remote, ct);
+            case SyncActionKind.MoveLocalToRecovery:
+                if (IsOpenNow(path)) { st.NewerWaiting = true; return false; }
+                var moved = fs.MoveToRecovery(path, input.LocalHash!);
+                if (!moved.Succeeded) { problems.Add($"{path}: {moved.Problem}"); return false; }
+                local.Remove(path.Value);
+                st.SetBase(input.Remote);
+                st.Preserved = null;
+                st.BreakNotice = false;
+                return true;
+            case SyncActionKind.ProposeTombstone:
+                return await TombstoneAsync(st, path, input, ct);
+            default:
+                throw new InvalidOperationException($"Unknown action {action.Kind}.");
         }
-        catch (ArmoryOfflineException error) { problems.Add($"{path}: {error.Message}"); online = false; return false; }
-        catch (BlobRefusedException error) { problems.Add($"{path}: {error.Message}"); return false; }
-        catch (HashMismatchException error) { problems.Add($"{path}: {error.Message}"); return false; }
-        catch (ArmoryRpcException error) { problems.Add($"{path}: {error.Message}"); return false; }
     }
 
     private async Task<bool> DownloadAsync(FileState st, ProjectState project, VaultPath path, SyncInput input, RemoteFile remote, CancellationToken ct)
@@ -70,6 +68,7 @@ public sealed partial class SyncEngine
             await deps.Blobs.DownloadAsync(project.Id, current.Hash, current.Bytes, staging, ct);
             staging.Position = 0;
             CrashPoint?.Invoke("before-replace");
+            if (IsOpenNow(path)) { st.NewerWaiting = true; st.NewerAuthor = current.Author; return false; }
             var outcome = fs.Replace(path, input.LocalHash, staging);
             if (!outcome.Succeeded) { problems.Add($"{path}: {outcome.Problem}"); return false; }
         }
@@ -96,27 +95,55 @@ public sealed partial class SyncEngine
         var hash = input.LocalHash!;
         var snapshot = EnsureSnapshot(st, path, hash);
         if (snapshot is null) return false;
+        var bytes = SizeOf(snapshot);
+        if (TooLarge(st, bytes)) return false;
         if (!await EnsureServerFileAsync(st, project, path, snapshot.Id, ct)) return false;
         if (action.Kind == SyncActionKind.AcquireLockThenUpload && !await AcquireAsync(st, snapshot.Id, ct)) return false;
-        var flight = new Inflight("commit", OperationIds.Derive(snapshot.Id, "commit"), snapshot.Id, project.Id, st.FileId, ParentId: ParentOf(st),
-            Hash: hash, Bytes: SizeOf(snapshot), SnapshotId: snapshot.Id, SavedRelease: input.SavedRelease?.Year, ReleaseNotChecked: action.ReleaseNotChecked);
+        // Parent and attempt are part of the id: a commit the server kept as a side version is
+        // finished, and any later commit of the same bytes is a new intent.
+        var parent = ParentOf(st);
+        var flight = new Inflight("commit", OperationIds.Derive(snapshot.Id, "commit", parent ?? "", Text(st.Attempt)), snapshot.Id, project.Id, st.FileId,
+            ParentId: parent, Hash: hash, Bytes: bytes, SnapshotId: snapshot.Id, SavedRelease: input.SavedRelease?.Year,
+            ReleaseNotChecked: action.ReleaseNotChecked, Device: HolderDevice(st));
         return await SendAsync(st, flight, ct);
     }
 
-    private async Task<bool> PreserveAsync(FileState st, ProjectState project, VaultPath path, string hash, bool releaseNotChecked, SolidWorksRelease? saved, CancellationToken ct)
+    private async Task<bool> PreserveAsync(FileState st, ProjectState project, VaultPath path, string hash, bool releaseNotChecked, SolidWorksRelease? saved, RemoteFile? remote, CancellationToken ct)
     {
+        // Already durable on the server (as this file's current version, or as a side version
+        // the server or this engine already acknowledged): the obligation is met.
+        if (st.Preserved == hash || remote?.Current?.Hash == hash || st.Sides.Any(s => s.Hash == hash))
+        {
+            st.Preserved = hash;
+            st.BreakNotice = false;
+            Complete(st, hash);
+            return true;
+        }
         var snapshot = EnsureSnapshot(st, path, hash);
         if (snapshot is null) return false;
+        var bytes = SizeOf(snapshot);
+        if (TooLarge(st, bytes)) return false;
         if (!await EnsureServerFileAsync(st, project, path, snapshot.Id, ct)) return false;
         var flight = new Inflight("side", OperationIds.Derive(snapshot.Id, "side"), snapshot.Id, project.Id, st.FileId, ParentId: ParentOf(st),
-            Hash: hash, Bytes: SizeOf(snapshot), SnapshotId: snapshot.Id, SavedRelease: saved?.Year,
+            Hash: hash, Bytes: bytes, SnapshotId: snapshot.Id, SavedRelease: saved?.Year,
             Reason: st.BreakNotice ? "lock broken" : "conflict", ReleaseNotChecked: releaseNotChecked);
         return await SendAsync(st, flight, ct);
+    }
+
+    private bool TooLarge(FileState st, long bytes)
+    {
+        if (bytes <= options.MaximumFileBytes) return false;
+        st.Refusal = "Files larger than 2 GB can't be saved to Armory yet. This one stays on this computer.";
+        st.RefusalKind = TooLargeKind;
+        refused++;
+        return true;
     }
 
     private async Task<bool> TombstoneAsync(FileState st, VaultPath path, SyncInput input, CancellationToken ct)
     {
         if (st.FileId is null) return true;
+        // A deletion goes to the whole team: look once more that the file is really gone.
+        if (Exists(path)) return false;
         if (st.DeleteEntry is null)
         {
             st.DeleteEntry = state.NextId("delete");
@@ -124,14 +151,24 @@ public sealed partial class SyncEngine
             Save();
         }
         if (input.Lock != LockOwnership.ThisDevice && !await AcquireAsync(st, st.DeleteEntry, ct)) return false;
-        var flight = new Inflight("tombstone", OperationIds.Derive(st.DeleteEntry, "tomb", st.Attempt.ToString(System.Globalization.CultureInfo.InvariantCulture)),
-            st.DeleteEntry, st.ProjectId, st.FileId, ParentId: ParentOf(st));
+        if (Exists(path)) return false;
+        var flight = new Inflight("tombstone", OperationIds.Derive(st.DeleteEntry, "tomb", Text(st.Attempt)),
+            st.DeleteEntry, st.ProjectId, st.FileId, ParentId: ParentOf(st), Device: HolderDevice(st));
         return await SendAsync(st, flight, ct);
+    }
+
+    private bool Exists(VaultPath path)
+    {
+        try { using var _ = fs.OpenRead(path); return true; }
+        catch (FileNotFoundException) { return false; }
+        catch (DirectoryNotFoundException) { return false; }
+        catch (IOException) { return true; } // present but held by another program
+        catch (UnauthorizedAccessException) { return true; }
     }
 
     private async Task<bool> AcquireAsync(FileState st, string entryId, CancellationToken ct)
     {
-        var flight = new Inflight("lock", OperationIds.Derive(entryId, "lock", st.Attempt.ToString(System.Globalization.CultureInfo.InvariantCulture)), entryId, st.ProjectId, st.FileId);
+        var flight = new Inflight("lock", OperationIds.Derive(entryId, "lock", Text(st.Attempt)), entryId, st.ProjectId, st.FileId);
         return await SendAsync(st, flight, ct);
     }
 
@@ -153,6 +190,7 @@ public sealed partial class SyncEngine
             if (snapshot.Hash == hash) return snapshot;
         }
         catch (IOException error) { problems.Add($"{path}: {error.Message}"); }
+        catch (UnauthorizedAccessException error) { problems.Add($"{path}: {error.Message}"); }
         return null; // the file changed since the scan; the next pass plans again
     }
 
@@ -172,10 +210,19 @@ public sealed partial class SyncEngine
         return stream.Length;
     }
 
+    // The device that holds this file's live lock when it is one of this computer's ids
+    // (a former id after a reconnect); otherwise this computer's current id.
+    private Guid? HolderDevice(FileState st)
+        => st.FileId is { } id && remoteById.TryGetValue(id, out var remote) && remote.File.Lock is { IsLive: true } held &&
+           string.Equals(held.HolderEmail, state.Email, StringComparison.OrdinalIgnoreCase) && state.IsMine(held.HolderDeviceId)
+            ? held.HolderDeviceId : null;
+
     // ---- In-flight writes ------------------------------------------------------------
 
     // Persist the write and its operation id, send it, apply the answer, clear it. A crash
-    // anywhere leaves the record; the next online pass re-sends the same id.
+    // anywhere leaves the record; the next online pass re-sends the same id. Being offline
+    // keeps the record; any other failure is an answer: nothing was written, the record is
+    // cleared, and Core plans again from fresh state (the same intent re-derives its id).
     private async Task<bool> SendAsync(FileState st, Inflight flight, CancellationToken ct)
     {
         st.Inflight = flight;
@@ -184,12 +231,13 @@ public sealed partial class SyncEngine
         CrashPoint?.Invoke($"before-{flight.Kind}");
         bool result;
         try { result = await SendRecordedAsync(st, flight, ct); }
-        catch (ArmoryRpcException error) when (error.IsInvalidInput || error.IsForbidden || flight.Kind == "create")
+        catch (ArmoryOfflineException) { online = false; throw; }
+        catch (Exception error) when (error is ArmoryClientException or HashMismatchException or InvalidDataException or IOException or UnauthorizedAccessException)
         {
-            // A refusal is an answer: nothing was written, so the record is cleared.
             st.Inflight = null;
-            if (flight.Kind == "create" && error.IsNameTaken) result = AdoptOrRefuseName(st, flight, error);
-            else { st.Refusal = error.Message; st.RefusalKind = AttentionKinds.Refused; refused++; result = false; }
+            if (flight.Kind == "create" && error is ArmoryRpcException { IsNameTaken: true } taken) result = AdoptOrRefuseName(st, flight, taken);
+            else if (flight.Kind is "lock" or "release" or "move") { problems.Add($"{st.Path}: {error.Message}"); result = false; }
+            else { st.Refusal = PlainRefusal(error); st.RefusalKind = AttentionKinds.Refused; refused++; result = false; }
             Save();
             return result;
         }
@@ -199,18 +247,29 @@ public sealed partial class SyncEngine
         return result;
     }
 
+    private static string PlainRefusal(Exception error) => error switch
+    {
+        BlobRefusedException { Status: 403 } => "Armory wouldn't take this file: you may no longer be in this project. Ask your CAD lead.",
+        BlobRefusedException => "Armory wouldn't take this file. It stays on this computer.",
+        ArmoryRpcException rpc => rpc.Message,
+        _ => "This save couldn't be read back from this computer's safe copy. It stays on this computer.",
+    };
+
     private async Task<bool> SendRecordedAsync(FileState st, Inflight f, CancellationToken ct)
     {
-        var device = state.DeviceId!.Value;
+        var device = f.Device ?? state.DeviceId!.Value;
         switch (f.Kind)
         {
             case "create":
                 st.FileId = await deps.Api.CreateFileAsync(f.ProjectId!.Value, f.Folder!, f.Name!, device, f.Operation, ct);
                 return true;
             case "lock":
-                if (await deps.Api.AcquireLockAsync(f.FileId!.Value, device, f.Operation, ct)) return true;
+            {
+                // Every answer spends the attempt: a later acquire is a new intent.
+                var held = await deps.Api.AcquireLockAsync(f.FileId!.Value, device, f.Operation, ct);
                 st.Attempt++;
-                return false;
+                return held;
+            }
             case "release":
                 await deps.Api.ReleaseLockAsync(f.FileId!.Value, device, f.Operation, ct);
                 return true;
@@ -241,8 +300,8 @@ public sealed partial class SyncEngine
                 {
                     // The server kept it as a side version (the lock or parent changed).
                     st.Preserved = f.Hash;
-                    st.Sides.Add(new(answer.VersionId, f.Hash!, "conflict", deps.Clock.GetUtcNow()));
-                    sideVersions++;
+                    AddSide(st, answer.VersionId, f.Hash!, "conflict");
+                    st.Attempt++;
                 }
                 st.ReleaseNotChecked = f.ReleaseNotChecked;
                 Complete(st, f.Hash!);
@@ -262,11 +321,11 @@ public sealed partial class SyncEngine
                     st.BreakNotice = false;
                     Complete(st, f.Hash!);
                 }
-                else state.Completed.Add(f.EntryId!);
+                state.Completed.Add(f.EntryId!);
                 st.Entries.Remove(f.EntryId!);
-                st.Sides.Add(new(id, f.Hash!, f.Reason ?? "conflict", deps.Clock.GetUtcNow()));
+                st.Drafts.Remove(f.EntryId!);
+                AddSide(st, id, f.Hash!, f.Reason ?? "conflict");
                 st.ReleaseNotChecked = f.ReleaseNotChecked;
-                sideVersions++;
                 lastActivity = deps.Clock.GetUtcNow();
                 return true;
             }
@@ -277,20 +336,29 @@ public sealed partial class SyncEngine
         }
     }
 
+    private void AddSide(FileState st, Guid versionId, string hash, string reason)
+    {
+        if (st.Sides.Any(s => s.VersionId == versionId)) return;
+        st.Sides.Add(new(versionId, hash, reason, deps.Clock.GetUtcNow()));
+        sideVersions++;
+    }
+
     private async Task UploadBlobAsync(Inflight f, CancellationToken ct)
         => await deps.Blobs.UploadAsync(f.ProjectId!.Value, f.Hash!, f.Bytes, () => deps.Snapshots.OpenRead(f.SnapshotId!), ct);
 
     private bool AdoptOrRefuseName(FileState st, Inflight f, ArmoryRpcException error)
     {
         var folder = ParseExistingFolder(error.Details, out var existingId, out var existingName);
-        if (existingId is { } id && string.Equals(folder, f.Folder, StringComparison.OrdinalIgnoreCase) && string.Equals(existingName, f.Name, StringComparison.OrdinalIgnoreCase))
+        var deleted = existingId is { } known && remoteById.TryGetValue(known, out var existing) && existing.File.Deleted;
+        if (existingId is { } id && !deleted && string.Equals(folder, f.Folder, StringComparison.OrdinalIgnoreCase) && string.Equals(existingName, f.Name, StringComparison.OrdinalIgnoreCase))
         {
             // Someone else created this same path first: it is one file. Core decides the rest.
             st.FileId = id;
             return false;
         }
-        var where = string.IsNullOrEmpty(folder) ? "the project's main folder" : "the folder " + folder;
-        st.Refusal = $"Another file named {existingName ?? f.Name} is already in {where}. Rename yours to keep both.";
+        st.Refusal = deleted
+            ? $"A file named {existingName ?? f.Name} was removed from this project, and names stay with their history. Rename yours to keep it."
+            : $"Another file named {existingName ?? f.Name} is already in {(string.IsNullOrEmpty(folder) ? "the project's main folder" : "the folder " + folder)}. Rename yours to keep both.";
         st.RefusalKind = AttentionKinds.NameTaken;
         refused++;
         return false;
@@ -298,55 +366,71 @@ public sealed partial class SyncEngine
 
     private static Guid? Parse(string? id) => Guid.TryParse(id, out var value) ? value : null;
 
-    private async Task ResumeInflightAsync(CancellationToken ct)
+    // Re-sends what a stopped process left in flight. Writes of immutable bytes and the
+    // create/lock/move steps are re-sent under their recorded id; a release or a deletion is
+    // dropped instead and planned again from fresh state, because the file may have changed.
+    // Returns true when anything was sent.
+    private async Task<bool> ResumeInflightAsync(CancellationToken ct)
     {
+        var sent = false;
         foreach (var st in state.Files.Values.Where(f => f.Inflight is not null).ToArray())
         {
-            try { await SendAsync(st, st.Inflight!, ct); }
-            catch (ArmoryOfflineException) { online = false; return; }
-            catch (ArmoryRpcException error) { problems.Add($"{st.Path}: {error.Message}"); st.Inflight = null; Save(); }
+            var project = state.Projects.GetValueOrDefault(st.ProjectId);
+            if (project is null || !project.Usable) continue;
+            if (st.Inflight!.Kind is "release" or "tombstone") { st.Inflight = null; Save(); continue; }
+            try { await SendAsync(st, st.Inflight, ct); sent = true; }
+            catch (ArmoryOfflineException) { online = false; return sent; }
         }
+        return sent;
     }
 
     // ---- Superseded saves ------------------------------------------------------------
 
     private async Task ArchiveSupersededAsync(Dictionary<string, JournalEntry> entries, CancellationToken ct)
     {
-        foreach (var st in state.Files.Values.Where(f => f.Entries.Count > 0 && f.Inflight is null).ToArray())
+        foreach (var st in state.Files.Values.Where(f => (f.Entries.Count > 0 || f.Drafts.Count > 0) && f.Inflight is null && f.LocalMoveTo is null).ToArray())
         {
             if (!VaultPath.TryCreate(st.Path, out var path, out _, options.VaultRoot)) continue;
             var project = state.Projects.GetValueOrDefault(st.ProjectId);
             if (project is null || !project.Usable) continue;
             local.TryGetValue(st.Path, out var current);
-            remoteByPath.TryGetValue(st.Path, out var remote);
-            foreach (var id in st.Entries.ToArray())
+            var remote = st.FileId is { } fid && remoteById.TryGetValue(fid, out var r) ? r.File : null;
+            foreach (var id in st.Entries.Concat(st.Drafts).ToArray())
             {
                 if (!entries.TryGetValue(id, out var entry) || entry.Hash is null) continue;
                 if (entry.Hash == current?.Hash) continue; // the plan uploads the bytes on disk
-                if (entry.Hash == remote.File?.Current?.Hash || entry.Hash == st.BaseHash || st.Sides.Any(s => s.Hash == entry.Hash))
+                if (entry.Hash == remote?.Current?.Hash || entry.Hash == st.BaseHash || st.Sides.Any(s => s.Hash == entry.Hash))
                 {
-                    state.Completed.Add(id); st.Entries.Remove(id); Save();
+                    state.Completed.Add(id); st.Entries.Remove(id); st.Drafts.Remove(id); Save();
                     continue;
                 }
                 SolidWorksRelease? saved = null;
                 var notChecked = false;
                 if (Reconciler.IsSolidWorks(path))
                 {
-                    saved = await ReadReleaseFromSnapshotAsync(entry.SnapshotId!, ct);
+                    try { saved = await ReadReleaseFromSnapshotAsync(entry.SnapshotId!, ct); }
+                    catch (Exception error) when (error is IOException or InvalidDataException) { problems.Add($"{st.Path}: {error.Message}"); continue; }
                     var gate = SolidWorksVersionGate.Decide(saved, new SolidWorksRelease(project.PinnedRelease), project.Enforce ? ReleaseGateMode.Enforce : ReleaseGateMode.Warn);
-                    if (!gate.Allowed) { st.Refusal = gate.Problem; st.RefusalKind = AttentionKinds.Refused; refused++; continue; }
+                    if (!gate.Allowed)
+                    {
+                        // Kept as a private draft on this computer; offered again if the gate changes.
+                        if (st.Entries.Remove(id)) { st.Drafts.Add(id); Save(); }
+                        continue;
+                    }
                     notChecked = gate.ReleaseNotChecked;
                 }
                 try
                 {
-                    if (!await EnsureServerFileAsync(st, project, path, id, ct)) break;
                     var snapshot = deps.Snapshots.Enumerate().First(s => s.Id == entry.SnapshotId);
+                    var bytes = SizeOf(snapshot);
+                    if (bytes > options.MaximumFileBytes) { if (st.Entries.Remove(id)) { st.Drafts.Add(id); Save(); } continue; }
+                    if (!await EnsureServerFileAsync(st, project, path, id, ct)) break;
                     var flight = new Inflight("archive", OperationIds.Derive(snapshot.Id, "side"), id, project.Id, st.FileId, ParentId: ParentOf(st),
-                        Hash: entry.Hash, Bytes: SizeOf(snapshot), SnapshotId: snapshot.Id, SavedRelease: saved?.Year, Reason: EarlierSaveReason, ReleaseNotChecked: notChecked);
+                        Hash: entry.Hash, Bytes: bytes, SnapshotId: snapshot.Id, SavedRelease: saved?.Year, Reason: EarlierSaveReason, ReleaseNotChecked: notChecked);
                     if (!await SendAsync(st, flight, ct)) break;
                 }
                 catch (ArmoryOfflineException) { online = false; return; }
-                catch (ArmoryRpcException error) { problems.Add($"{st.Path}: {error.Message}"); break; }
+                catch (Exception error) when (error is InvalidOperationException or IOException or InvalidDataException) { problems.Add($"{st.Path}: {error.Message}"); break; }
             }
         }
     }
@@ -362,11 +446,10 @@ public sealed partial class SyncEngine
 
     // A file whose server folder or name changed moves on this disk too: a move, never a
     // delete plus an add. Returns true when anything moved.
-    private async Task<bool> ApplyRemoteMovesAsync(CancellationToken ct)
+    private bool ApplyRemoteMoves()
     {
-        await Task.CompletedTask;
         var any = false;
-        foreach (var st in state.Files.Values.Where(f => f.FileId is not null).ToArray())
+        foreach (var st in state.Files.Values.Where(f => f.FileId is not null && f.LocalMoveTo is null).ToArray())
         {
             if (!remoteById.TryGetValue(st.FileId!.Value, out var remote) || string.Equals(remote.Path.Value, st.Path, StringComparison.Ordinal)) continue;
             if (!VaultPath.TryCreate(st.Path, out var from, out _, options.VaultRoot)) continue;
@@ -383,45 +466,125 @@ public sealed partial class SyncEngine
                 local.Remove(st.Path);
                 local[remote.Path.Value] = file with { Path = remote.Path };
             }
-            state.Files.Remove(st.Path);
-            st.Path = remote.Path.Value;
-            state.Files[st.Path] = st;
-            st.AppliedOwnership = null;
+            Rekey(st, remote.Path.Value);
             any = true;
-            Save();
         }
+        if (any) Save();
         return any;
     }
 
-    // Requested with MoveAsync: the holder renames through armory_move_file.
+    private void Rekey(FileState st, string to)
+    {
+        state.Files.Remove(st.Path);
+        st.Path = to;
+        state.Files[to] = st;
+        st.AppliedOwnership = null;
+        st.AbsentScans = 0;
+    }
+
+    // An Explorer rename or move: a tracked file vanished from its path and the same file
+    // (by NTFS file id, or by its exact bytes at exactly one new untracked path in the same
+    // project) appeared elsewhere. It is sent as a server move, never as a deletion.
+    private void DetectLocalMoves(VaultScan scan)
+    {
+        var platform = (scan.Renames ?? []).ToDictionary(r => r.From.Value, r => r.To.Value, StringComparer.OrdinalIgnoreCase);
+        foreach (var st in state.Files.Values.ToArray())
+        {
+            if (st.FileId is null || st.BaseHash is null || st.LocalMoveTo is not null || st.Inflight is not null || local.ContainsKey(st.Path)) continue;
+            if (state.Moves.Any(m => m.FileId == st.FileId)) continue;
+            var project = state.Projects.GetValueOrDefault(st.ProjectId);
+            if (project is null || !project.Usable) continue;
+            string? to = null;
+            if (platform.TryGetValue(st.Path, out var renamed) && local.ContainsKey(renamed)) to = renamed;
+            else
+            {
+                var candidates = local.Values.Where(f => f.Hash == st.BaseHash && !remoteByPath.ContainsKey(f.Path.Value) &&
+                    ProjectOf(f.Path)?.Id == st.ProjectId && (!state.Files.TryGetValue(f.Path.Value, out var other) || (other.FileId is null && other.Base is null)))
+                    .Select(f => f.Path.Value).ToArray();
+                if (candidates.Length == 1) to = candidates[0];
+            }
+            if (to is null || !VaultPath.TryCreate(to, out var target, out _, options.VaultRoot) || ProjectOf(target)?.Id != st.ProjectId) continue;
+            st.LocalMoveTo = target.Value;
+            state.Moves.Add(new PendingMove(Guid.NewGuid(), st.FileId.Value, st.Path, target.Value, Local: true));
+            Save();
+        }
+    }
+
+    // Requested with MoveAsync, or detected from Explorer: the holder renames through
+    // armory_move_file. A refused Explorer rename is put back where it was.
     private async Task ExecutePendingMovesAsync(CancellationToken ct)
     {
+        var any = false;
         foreach (var move in state.Moves.ToArray())
         {
             var st = state.Files.Values.FirstOrDefault(f => f.FileId == move.FileId);
-            if (st is null || !VaultPath.TryCreate(move.To, out var to, out _, options.VaultRoot)) { state.Moves.Remove(move); moveResults[move.Operation] = false; Save(); continue; }
+            if (st is null || !VaultPath.TryCreate(move.To, out var to, out _, options.VaultRoot) || !VaultPath.TryCreate(move.From, out var from, out _, options.VaultRoot))
+            { state.Moves.Remove(move); moveResults[move.Operation] = false; Save(); continue; }
             remoteById.TryGetValue(move.FileId, out var remote);
-            if (OwnershipOf(remote.File?.Lock) != LockOwnership.ThisDevice && !await AcquireAsync(st, move.Operation.ToString(), ct))
-            {
-                Notice(AttentionKinds.Refused, move.FileId, move.From, "This file can't be renamed right now", "Someone else is editing it.");
-                state.Moves.Remove(move); moveResults[move.Operation] = false; Save();
-                continue;
-            }
-            var (folder, name) = Split(to);
-            var flight = new Inflight("move", move.Operation, null, st.ProjectId, move.FileId, folder, name);
             bool done;
-            try { done = await SendAsync(st, flight, ct); }
-            catch (ArmoryRpcException error) when (error.IsNameTaken)
+            try
+            {
+                done = remote.File is { Deleted: false } && (OwnershipOf(remote.File.Lock) == LockOwnership.ThisDevice || await AcquireAsync(st, move.Operation.ToString(), ct));
+                if (done)
+                {
+                    var (folder, name) = Split(to);
+                    done = await SendAsync(st, new Inflight("move", move.Operation, null, st.ProjectId, move.FileId, folder, name, Device: HolderDevice(st)), ct);
+                }
+            }
+            catch (ArmoryOfflineException) { online = false; return; }
+            catch (ArmoryRpcException error)
             {
                 st.Inflight = null;
-                Notice(AttentionKinds.NameTaken, move.FileId, move.From, "That name is already used", error.Message);
+                Notice(AttentionKinds.NameTaken, move.FileId, move.From, "That name can't be used", error.Message);
                 done = false;
             }
+            any = true;
             state.Moves.Remove(move);
             moveResults[move.Operation] = done;
+            if (move.Local) FinishLocalMove(st, from, to, done);
+            else if (!done) Notice(AttentionKinds.Refused, move.FileId, move.From, "This file can't be renamed right now", "Someone else is editing it, or the new name is already used.");
             Save();
         }
-        if (moveResults.Count > 0) { await RefreshAsync(ct); await ApplyRemoteMovesAsync(ct); }
+        if (any && await RefreshAsync(ct)) ApplyRemoteMoves();
+    }
+
+    private void FinishLocalMove(FileState st, VaultPath from, VaultPath to, bool moved)
+    {
+        st.LocalMoveTo = null;
+        state.Files.TryGetValue(to.Value, out var newcomer);
+        if (moved)
+        {
+            // The bytes captured at the new path are this file's; fold that state into it.
+            if (newcomer is not null && !ReferenceEquals(newcomer, st))
+            {
+                state.Files.Remove(to.Value);
+                foreach (var id in newcomer.Entries) if (!st.Entries.Contains(id)) st.Entries.Add(id);
+                st.LastCaptured = newcomer.LastCaptured ?? st.LastCaptured;
+            }
+            Rekey(st, to.Value);
+            if (st.BaseHash is not null) Complete(st, st.BaseHash);
+            return;
+        }
+        // Put the file back where the team has it, so nothing is deleted for anyone.
+        if (local.TryGetValue(to.Value, out var file) && !IsOpenNow(to) && fs.Move(to, from, file.Hash).Succeeded)
+        {
+            local.Remove(to.Value);
+            local[from.Value] = file with { Path = from };
+            if (newcomer is not null && !ReferenceEquals(newcomer, st))
+            {
+                state.Files.Remove(to.Value);
+                foreach (var id in newcomer.Entries) if (!st.Entries.Contains(id)) st.Entries.Add(id);
+            }
+            if (st.BaseHash is not null) Complete(st, st.BaseHash);
+            Remember(AttentionKinds.Refused, st.FileId, from.Value, "Renamed back for now",
+                $"{from.Name} can't be renamed while someone else is editing it, so Armory put it back.");
+        }
+        else
+        {
+            st.LocalMoveTo = to.Value; // try again on the next pass; never delete the original
+            Notice(AttentionKinds.Refused, st.FileId, from.Value, "This rename is waiting", $"Close {to.Name} so Armory can finish or undo the rename.");
+            state.Moves.Add(new PendingMove(Guid.NewGuid(), st.FileId!.Value, from.Value, to.Value, Local: true));
+        }
     }
 
     private readonly Dictionary<Guid, bool> moveResults = [];
@@ -435,6 +598,8 @@ public sealed partial class SyncEngine
         {
             if (!state.Files.TryGetValue(from.Value, out var st) || st.FileId is null) return false;
             if (!string.Equals(ProjectOf(from)?.Name, ProjectOf(to)?.Name, StringComparison.OrdinalIgnoreCase)) return false;
+            // Never rename under an open document or onto a file this computer already has.
+            if (fs.IsOpen(from) || markerDocuments.Contains(from.Value) || state.Files.ContainsKey(to.Value) || Exists(to)) return false;
             operation = Guid.NewGuid();
             state.Moves.Add(new PendingMove(operation, st.FileId.Value, from.Value, to.Value));
             Save();
@@ -447,25 +612,25 @@ public sealed partial class SyncEngine
     // ---- Locks -------------------------------------------------------------------------
 
     // Without an add-in, SolidWorks' ~$ file beside a document means it was opened: take
-    // the lock while it is free, as the first edit would.
+    // the lock while it is free, as the first edit would, but only for a copy that is the
+    // current version (a stale copy waiting for a newer version must not block the team).
     private async Task AcquireForMarkersAsync(CancellationToken ct)
     {
         foreach (var st in state.Files.Values.ToArray())
         {
-            var hasMarker = markerDocuments.Contains(st.Path);
-            if (!hasMarker)
+            if (!markerDocuments.Contains(st.Path))
             {
                 if (st.MarkerEntry is not null) { state.Completed.Add(st.MarkerEntry); st.MarkerEntry = null; Save(); }
                 continue;
             }
-            if (st.FileId is null || st.Inflight is not null || !VaultPath.TryCreate(st.Path, out var path, out _, options.VaultRoot) || !Reconciler.IsSolidWorks(path)) continue;
-            remoteById.TryGetValue(st.FileId.Value, out var remote);
-            if (remote.File is null || remote.File.Deleted) continue;
+            if (st.FileId is null || st.Inflight is not null || st.NewerWaiting || !VaultPath.TryCreate(st.Path, out var path, out _, options.VaultRoot) || !Reconciler.IsSolidWorks(path)) continue;
+            if (!remoteById.TryGetValue(st.FileId.Value, out var remote) || remote.File.Deleted || remote.File.Current is not { } current) continue;
+            if (st.BaseId != current.Id.ToString()) continue;
             var held = remote.File.Lock;
-            FileLock current = held is null ? new FreeLock() : held.IsLive ? new HeldByOther(new(held.HolderEmail, held.HolderDeviceId.ToString()), held.AcquiredAt, true)
+            FileLock lockState = held is null ? new FreeLock() : held.IsLive ? new HeldByOther(new(held.HolderEmail, held.HolderDeviceId.ToString()), held.AcquiredAt, true)
                 : new Broken(new(held.BrokenHolderEmail ?? "", held.BrokenHolderDeviceId?.ToString() ?? ""), true);
             var actor = new LockActor(new(state.Email!, state.DeviceId.ToString()!), false);
-            if (!LockMachine.Apply(current, LockEvent.Acquire, actor, deps.Clock.GetUtcNow()).Succeeded) continue;
+            if (!LockMachine.Apply(lockState, LockEvent.Acquire, actor, deps.Clock.GetUtcNow()).Succeeded) continue;
             if (st.MarkerEntry is null)
             {
                 st.MarkerEntry = state.NextId("open");
@@ -474,29 +639,30 @@ public sealed partial class SyncEngine
             }
             try { await AcquireAsync(st, st.MarkerEntry, ct); }
             catch (ArmoryOfflineException) { online = false; return; }
-            catch (ArmoryRpcException error) { problems.Add($"{st.Path}: {error.Message}"); }
         }
     }
 
     // Closing the file, saved, releases the lock: Core's LockMachine allows a release only
-    // with no unsynced changes, and nothing for the file may be waiting or in flight.
+    // with no unsynced changes, and nothing for the file may be waiting or in flight. A
+    // private draft the release gate refused can never be the shared version, so it does
+    // not hold the lock.
     private async Task ReleaseFinishedLocksAsync(CancellationToken ct)
     {
-        foreach (var st in state.Files.Values.Where(f => f.FileId is not null && f.Inflight is null).ToArray())
+        foreach (var st in state.Files.Values.Where(f => f.FileId is not null && f.Inflight is null && f.LocalMoveTo is null).ToArray())
         {
             if (!remoteById.TryGetValue(st.FileId!.Value, out var remote) || remote.File.Lock is not { IsLive: true } held) continue;
             if (OwnershipOf(held) != LockOwnership.ThisDevice) continue;
             if (state.Moves.Any(m => m.FileId == st.FileId)) continue;
+            if (!VaultPath.TryCreate(st.Path, out var path, out _, options.VaultRoot) || IsOpenNow(path)) continue;
             local.TryGetValue(st.Path, out var file);
-            var clean = (file?.Hash == st.BaseHash || (file is not null && file.Hash == st.Preserved)) && st.Entries.Count == 0;
-            if (IsOpenNow(remote.Path)) continue;
-            var me = new LockHolder(state.Email!, state.DeviceId.ToString()!);
+            var draft = st.RefusalKind is GateKind or TooLargeKind;
+            var clean = (file?.Hash == st.BaseHash || (file is not null && file.Hash == st.Preserved) || draft) && st.Entries.Count == 0;
+            var me = new LockHolder(state.Email!, held.HolderDeviceId.ToString());
             if (!LockMachine.Apply(new HeldByMe(me, held.AcquiredAt, !clean), LockEvent.Release, new LockActor(me, false), deps.Clock.GetUtcNow()).Succeeded) continue;
-            var flight = new Inflight("release", OperationIds.Derive("release", state.DeviceId.ToString()!, st.FileId.ToString()!, held.AcquiredAt.UtcTicks.ToString(System.Globalization.CultureInfo.InvariantCulture)),
-                null, st.ProjectId, st.FileId);
+            var flight = new Inflight("release", OperationIds.Derive("release", held.HolderDeviceId.ToString(), st.FileId.ToString()!, held.AcquiredAt.UtcTicks.ToString(CultureInfo.InvariantCulture)),
+                null, st.ProjectId, st.FileId, Device: held.HolderDeviceId);
             try { await SendAsync(st, flight, ct); }
             catch (ArmoryOfflineException) { online = false; return; }
-            catch (ArmoryRpcException error) { problems.Add($"{st.Path}: {error.Message}"); }
         }
     }
 
@@ -505,9 +671,10 @@ public sealed partial class SyncEngine
         foreach (var st in state.Files.Values)
         {
             if (st.FileId is null || !local.ContainsKey(st.Path) || !remoteById.TryGetValue(st.FileId.Value, out var remote)) continue;
+            if (!VaultPath.TryCreate(st.Path, out var path, out _, options.VaultRoot)) continue;
             var ownership = OwnershipOf(remote.File.Lock);
             if (st.AppliedOwnership == ownership) continue;
-            try { fs.ApplyLockAttribute(remote.Path, ownership); st.AppliedOwnership = ownership; }
+            try { fs.ApplyLockAttribute(path, ownership); st.AppliedOwnership = ownership; }
             catch (IOException error) { problems.Add($"{st.Path}: {error.Message}"); }
             catch (UnauthorizedAccessException error) { problems.Add($"{st.Path}: {error.Message}"); }
         }

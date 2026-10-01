@@ -279,6 +279,27 @@ public sealed class AgentRpcTests(DatabaseFixture db)
     }
 
     [DatabaseFact]
+    public async Task ACommitToARemovedFileIsKeptAsASideVersion()
+    {
+        var (p, mentor) = await Team(); await using var _ = mentor;
+        await using var student = await db.Open("student@example.com"); var device = await Device(student);
+        var f = await CreateFile(student, p, "", "Gear.SLDPRT", device);
+        Assert.True(await Acquire(student, f, device));
+        var v1 = (Guid)(await Cmd(student, "select version_id from armory_commit_version_with_release(@f,null,'key',@h,3,@d,@o,null)", ("f", f), ("h", Hash), ("d", device), ("o", Guid.NewGuid())).ExecuteScalarAsync())!;
+        Assert.True((bool)(await Cmd(student, "select armory_tombstone(@f,@v,@d,@o)", ("f", f), ("v", v1), ("d", device), ("o", Guid.NewGuid())).ExecuteScalarAsync())!);
+        // The holder still holds the lock and the parent is still current, yet nothing advances.
+        var op = Guid.NewGuid();
+        await using (var row = await Cmd(student, "select * from armory_commit_version_with_release(@f,@v,'key',@h,3,@d,@o,null)", ("f", f), ("v", v1), ("h", Hash), ("d", device), ("o", op)).ExecuteReaderAsync())
+        {
+            Assert.True(await row.ReadAsync()); Assert.False(row.GetBoolean(1));
+        }
+        Assert.Equal(1L, await Count(student, "select count(*) from armory_versions where file_id=@f", ("f", f)));
+        Assert.Equal(1L, await Count(student, "select count(*) from armory_side_versions where file_id=@f and reason='file deleted'", ("f", f)));
+        await Cmd(student, "select * from armory_commit_version_with_release(@f,@v,'key',@h,3,@d,@o,null)", ("f", f), ("v", v1), ("h", Hash), ("d", device), ("o", op)).ExecuteNonQueryAsync();
+        Assert.Equal(1L, await Count(student, "select count(*) from armory_side_versions where file_id=@f", ("f", f))); // replay
+    }
+
+    [DatabaseFact]
     public async Task ReadSnapshotsAreMemberScoped()
     {
         var (p, mentor) = await Team(); await using var _ = mentor;

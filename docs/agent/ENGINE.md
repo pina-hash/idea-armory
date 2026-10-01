@@ -61,10 +61,31 @@ The engine re-decides nothing Core decides. It executes `Download` only after re
 that the file is closed and unchanged, and `SaveSideVersion` and `Upload` only from
 immutable snapshot bytes.
 
+## Rules added after review
+
+- Saves are captured before any network step; a refusal of one file (too large, removed
+  from the project, an unreadable snapshot) is shown for that file and never stalls the pass.
+- After any resumed write, the server snapshot is fetched again before planning.
+- A file this computer tracks is planned against its server record by id, wherever it now
+  lives; a server rename waits until the file is closed.
+- An Explorer rename or move (NTFS file id, or the same bytes at exactly one new untracked
+  path in the same project) is sent as `armory_move_file`; a refused one is renamed back.
+- A deletion is planned only after two consecutive scans miss the file, and the file is
+  probed again right before the tombstone is sent.
+- A brand-new file cannot take the name of a removed file (names stay with their history).
+- Saves the release gate refuses are private drafts: never sent, never holding the lock,
+  offered again if the gate later allows them.
+- A `~$` marker counts as "open" while the platform corroborates it and for 10 minutes after
+  it first appears; a marker left behind by a crash then stops holding the lock.
+- After a reconnect (a new device id), the old id's locks are still this computer's; writes
+  under them use the holding id.
+- An in-flight release or deletion is dropped on restart and planned again from fresh state.
+
 ## Operation ids (crash safety)
 
 Every server write carries an operation id derived (SHA-256, formatted as a UUID) from a
-Core journal entry id and the step: `create`, `lock#n`, `commit`, `side`, `tomb#n`. A
+Core journal entry id and the step: `create`, `lock#attempt`, `commit#parent#attempt`, `side`,
+`tomb#attempt`; every answer to a lock or commit spends the attempt. A
 release uses the lock's acquisition time, and a move a persisted id. The in-flight record
 is written before the call; a crash at any point replays the same id and the server
 returns its receipt, so a save becomes exactly one version.

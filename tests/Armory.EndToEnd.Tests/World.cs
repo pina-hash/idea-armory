@@ -63,6 +63,16 @@ internal sealed class World : IAsyncDisposable
         return Convert.ToInt64(await command.ExecuteScalarAsync(), System.Globalization.CultureInfo.InvariantCulture);
     }
 
+    // Whether these bytes are anywhere in server history (a version or a side version).
+    public bool HashOnServer(string hash)
+    {
+        using var c = new NpgsqlConnection(Database.ConnectionString);
+        c.Open();
+        using var command = new NpgsqlCommand("select exists(select 1 from armory_versions where content_sha256=@h) or exists(select 1 from armory_side_versions where content_sha256=@h)", c);
+        command.Parameters.AddWithValue("h", hash);
+        return (bool)command.ExecuteScalar()!;
+    }
+
     public async Task<List<T>> QueryAsync<T>(string sql, Func<NpgsqlDataReader, T> read, params (string, object)[] parameters)
     {
         await using var c = await Database.OpenAsync();
@@ -126,7 +136,7 @@ internal sealed class Computer : IAsyncDisposable
     {
         this.world = world;
         Name = name;
-        Disk = new PortableVaultFileSystem(root);
+        Disk = new PortableVaultFileSystem(root) { IsPreserved = world.HashOnServer };
         network = new OfflineHandler(new FakeNetworkHandler(world.S3));
         http = new HttpClient(network);
     }
@@ -138,6 +148,8 @@ internal sealed class Computer : IAsyncDisposable
     public InMemorySecretStore Secrets { get; } = new();
     public ISavedReleaseReader? ReleaseReader { get; set; }
     public Action<string>? CrashPoint { get; set; }
+    public TestClock Clock { get; } = new();
+    public long MaximumFileBytes { get; set; } = BlobClient.MaximumPutBytes;
     public SyncEngine Engine { get; private set; } = null!;
     public SessionManager Sessions { get; private set; } = null!;
     public bool Offline { get => network.Offline; set => network.Offline = value; }
@@ -160,10 +172,10 @@ internal sealed class Computer : IAsyncDisposable
     {
         Sessions = new SessionManager(http, Secrets);
         var api = new ArmoryApi(new PostgrestClient(http, Sessions));
-        Engine = new SyncEngine(new EngineOptions { VaultRoot = World.Root }, new EngineDependencies
+        Engine = new SyncEngine(new EngineOptions { VaultRoot = World.Root, MaximumFileBytes = MaximumFileBytes }, new EngineDependencies
         {
             Files = Disk, Journal = Journal, Snapshots = Snapshots, State = State, Sessions = Sessions, Api = api,
-            Blobs = new BlobClient(http, http, world.Site.BaseUri, Sessions), ReleaseReader = ReleaseReader,
+            Blobs = new BlobClient(http, http, world.Site.BaseUri, Sessions), ReleaseReader = ReleaseReader, Clock = Clock,
         })
         { CrashPoint = CrashPoint };
         Engines++;

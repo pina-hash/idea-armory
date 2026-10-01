@@ -81,7 +81,9 @@ public sealed partial class SyncEngine
 
     private IReadOnlyList<AttentionView> NeedsMe(FileState[] files)
     {
-        List<AttentionView> items = [.. notices];
+        var now = deps.Clock.GetUtcNow();
+        List<AttentionView> items = [.. notices, .. state.Remembered.Where(n => now - n.At < TimeSpan.FromMinutes(30))
+            .Select(n => new AttentionView(n.Kind, n.FileId?.ToString(), n.Path, n.Path[(n.Path.LastIndexOf('/') + 1)..], n.Title, n.Detail, n.At.ToString("O")))];
         foreach (var st in files.OrderBy(f => f.Path, StringComparer.OrdinalIgnoreCase))
         {
             var name = NameOf(st.Path);

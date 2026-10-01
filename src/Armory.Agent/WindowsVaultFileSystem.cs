@@ -79,7 +79,7 @@ public sealed class WindowsVaultFileSystem : IVaultFileSystem, IDisposable
             problems.AddRange(scan.Problems);
             var files = scan.Files.Select(f => new LocalFile(f.Path, f.Hash, f.Size)).ToArray();
             var markers = Markers(problems);
-            return new VaultScan(files, markers, problems);
+            return new VaultScan(files, markers, problems, scan.Renames.Select(r => new LocalMove(r.Before, r.After)).ToArray());
         }
     }
 

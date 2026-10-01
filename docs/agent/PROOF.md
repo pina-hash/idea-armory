@@ -32,6 +32,28 @@ to an open file is recorded as a violation.
 | g | A rename through `armory_move_file` arrives on B as a move | `A_rename_arrives_on_B_as_a_move` |
 | h | A 2026-release SolidWorks file is refused, naming both releases (fake release reader) | `A_2026_SolidWorks_file_is_refused_naming_both_releases` |
 
+## Hardening after an adversarial review
+
+A four-lens review (data safety, crash replay, Core fidelity, proof strength) of the engine
+and this proof confirmed 36 findings (6 refuted). Every confirmed engine finding is fixed,
+and `HardeningTests` adds one test per class of problem:
+
+| Test | Holds |
+|---|---|
+| `A_crash_during_a_second_version_replays_to_exactly_one_more_version` | 9 crash points on a second version: exactly one more version, no side version, no lock left |
+| `A_broken_lock_without_a_mentor_edit_still_preserves_and_then_moves_on` | a break with no edit still yields the student's side version |
+| `Renames_and_downloads_wait_for_an_open_file` | a rename or download never touches an open file, including one opened between plan and write |
+| `Files_someone_else_holds_are_read_only_until_they_release` | read-only follows the lock; reopening takes the lock again |
+| `A_stale_SolidWorks_marker_stops_holding_the_lock` | a `~$` file left by a crash stops counting as open after 10 minutes |
+| `An_Explorer_rename_is_a_move_and_a_refused_one_is_put_back` | an Explorer rename is a server move, never a team-wide delete |
+| `A_deletion_needs_two_scans_and_a_removed_name_is_not_reused` | one missed scan never deletes; a removed name is not silently reused |
+| `A_refused_draft_never_reaches_the_server_and_never_holds_the_lock` | a gate-refused draft writes nothing and does not block teammates; enforce refuses unknown |
+| `Reconnecting_keeps_the_old_device_locks_and_work` | a reconnect (new device id) keeps the old id's lock and commits as a shared version |
+| `A_refused_file_never_stops_other_files_from_syncing` | a refused file (too large, or after removal from a project) never stalls other files |
+
+The server gained `ACommitToARemovedFileIsKeptAsASideVersion`: a commit to a removed file
+becomes a side version instead of advancing it.
+
 ## Seeded run
 
 `SeededRunTests.Seeded_engines_preserve_every_save_and_converge_end_to_end` runs 200 seeds
@@ -47,25 +69,35 @@ and at the end it drains (everyone online, files closed, four rounds of syncing)
   version's bytes are in storage;
 - every saved byte sequence is on the server or still in its computer's snapshot store;
 - every shared advance was made by the device holding the file's lock (from the change feed);
+- nothing on disk is replaced or moved to recovery unless those bytes are already in server
+  history;
+- after every online pass, a file the other student holds is read-only and one this computer
+  holds is not;
+- across the 200 seeds, crashes landed at 13 named points inside uploads, side versions,
+  downloads and lock changes (the test fails if any is never reached);
 - after a drain: every capture from either computer is in server history, byte for byte;
   every save is on the server; both computers' files equal the server's latest state
   (a deleted file is absent).
 
-Result on 2026-10-01 at the step 4 commit: `E2E_SEEDS count=200 first=0 elapsed=116.0s failures=0`
-(84.0 s on an idle machine).
+Result on 2026-10-01 after hardening: `E2E_SEEDS count=200 first=0 elapsed=111.8s failures=0`, with
+crashes at 20 distinct points (`after-blob, after-capture, after-commit, after-commit-rpc,
+after-download, after-lock, after-release, after-side, after-tombstone, before-AcquireLockThenUpload,
+before-Download, before-MoveLocalToRecovery, before-None, before-ProposeTombstone,
+before-SaveSideVersion, before-commit, before-lock, before-release, before-replace, before-side`).
 
 ## Deliberate break
 
 `SyncEngine.IsOpenNow` (the engine's "never overwrite an open file" check, used for Core's
 input and again before every write) was changed to return `false`. SHA-256 of
 `src/Armory.Agent.Engine/SyncEngine.cs` before the break and after restoring it:
-`4c041107945c859d5b053a27a2d946b29892195803e20ab52972bfdabfc25c78` (the engine as committed in
-`c4b5573`; the break ran in a clean worktree of that commit).
+`c901b17a906bf2c9d778703297e76cba9903e0d0f08729dd793879b2caf9f627` (the hardened engine).
 
 ```text
-REPRO: ARMORY_E2E_SEED=0 dotnet test tests/Armory.EndToEnd.Tests --filter Seeded | open file overwritten at step 9 on B0: recovery Seed 0000/class/gear.SLDPRT
-E2E_SEEDS count=200 first=0 elapsed=99.2s failures=75
+REPRO: ARMORY_E2E_SEED=1 dotnet test tests/Armory.EndToEnd.Tests --filter Seeded | open file overwritten at step 10 on A1: replace Seed 0001/robot/plate.txt
+E2E_SEEDS count=200 first=0 elapsed=67.5s failures=81
 ```
 
-75 of 200 seeds failed; the first printed seed is 0. The source was restored byte-identical
-and the full run passed again.
+80 of 200 seeds failed; the first printed seed is 1. The source was restored byte-identical
+and the full run passed again. The same break against the first engine (`c4b5573`, SHA-256
+`4c041107945c859d5b053a27a2d946b29892195803e20ab52972bfdabfc25c78`) failed 75 of 200 seeds,
+first `ARMORY_E2E_SEED=0`.

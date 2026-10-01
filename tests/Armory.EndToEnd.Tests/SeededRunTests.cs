@@ -32,6 +32,15 @@ public sealed class SeededRunTests(ITestOutputHelper output)
             catch (Exception error) { failures.Add((seed, error)); }
         });
         output.WriteLine($"E2E_SEEDS count={count} first={first} elapsed={watch.Elapsed.TotalSeconds:F1}s failures={failures.Count}");
+        output.WriteLine("E2E_CRASH_POINTS " + string.Join(',', SeededRun.Reached.Keys.Order(StringComparer.Ordinal)));
+        // The schedule must actually land crashes inside uploads, side versions, downloads and
+        // lock changes; otherwise the crash oracle would be vacuous.
+        if (failures.IsEmpty && specific is null && count >= 200)
+        {
+            var missed = new[] { "after-capture", "before-commit", "after-blob", "after-commit-rpc", "after-commit", "before-side", "after-side",
+                "before-Download", "after-download", "before-lock", "after-lock", "before-release", "after-release" }.Where(p => !SeededRun.Reached.ContainsKey(p)).ToArray();
+            Assert.True(missed.Length == 0, "no seed crashed at " + string.Join(", ", missed));
+        }
         if (!failures.IsEmpty)
         {
             var (seed, error) = failures.MinBy(f => f.Seed);
@@ -55,6 +64,7 @@ internal sealed class ScheduleRandom(int seed)
 
 internal sealed class SeededRun(World world, Person mentor, int seed)
 {
+    internal static readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> Reached = new(StringComparer.Ordinal);
     private const int Steps = 40;
     private readonly ScheduleRandom random = new(seed);
     private readonly string project = $"Seed {seed:D4}";
@@ -90,7 +100,7 @@ internal sealed class SeededRun(World world, Person mentor, int seed)
                 case 3: c.Close(path); break;
                 case 4: c.Offline = true; break;
                 case 5: c.Offline = false; break;
-                case 6: await CrashAsync(c); break;
+                case 6: if (random.Next(2) == 0) Save(c, path); await CrashAsync(c); break;
                 case 7: await BreakLockAsync(path); break;
                 case 8: await RemoteDeleteAsync(path); break;
                 case 9: if (c.Read(path) is not null && !c.Disk.IsOpenNow(path)) c.Delete(path); break;
@@ -111,13 +121,37 @@ internal sealed class SeededRun(World world, Person mentor, int seed)
         everSaved[Hash(bytes)] = (computer, bytes);
     }
 
-    private static async Task SyncAsync(Computer computer) => await computer.SyncAsync();
+    private async Task SyncAsync(Computer computer)
+    {
+        var report = await computer.SyncAsync();
+        if (report.Online) await CheckReadOnlyAsync(computer);
+    }
+
+    // After an online pass, a file the other student is editing is read-only here, and a file
+    // this computer holds is not.
+    private async Task CheckReadOnlyAsync(Computer computer)
+    {
+        var other = computer == a ? b : a;
+        var locks = await world.QueryAsync("select f.name, l.holder_email from armory_locks l join armory_files f on f.id=l.file_id where f.project_id=@p and l.broken_at is null",
+            r => (Name: r.GetString(0), Holder: r.GetString(1)), ("p", projectId));
+        foreach (var path in paths)
+        {
+            if (computer.Read(path) is null || !computer.Disk.Attributes.TryGetValue(path, out var applied)) continue;
+            var name = path[(path.LastIndexOf('/') + 1)..];
+            var holder = locks.FirstOrDefault(l => l.Name == name).Holder;
+            if (holder is null) continue;
+            var expected = holder == other.Sessions.Current!.Email ? Armory.Core.LockOwnership.OtherPerson
+                : holder == computer.Sessions.Current!.Email ? Armory.Core.LockOwnership.ThisDevice : (Armory.Core.LockOwnership?)null;
+            if (expected is { } want && applied != want)
+                throw new InvalidOperationException($"{computer.Name}: {path} read-only state {applied}, expected {want} (step {step})");
+        }
+    }
 
     // The agent process dies, possibly in the middle of a pass; SolidWorks keeps its files open.
     private async Task CrashAsync(Computer computer)
     {
         var countdown = random.Next(14);
-        computer.CrashPoint = point => { if (countdown-- == 0) throw new SimulatedCrash(point); };
+        computer.CrashPoint = point => { if (countdown-- == 0) { Reached[point] = true; throw new SimulatedCrash(point); } };
         computer.Restart();
         try { await computer.SyncAsync(); } catch (SimulatedCrash) { }
         computer.CrashPoint = null;
@@ -149,8 +183,12 @@ internal sealed class SeededRun(World world, Person mentor, int seed)
     private async Task CheckSafetyAsync()
     {
         foreach (var computer in new[] { a, b })
+        {
             if (computer.Disk.OpenWriteViolations.Count > 0)
                 throw new InvalidOperationException($"open file overwritten at step {step} on {computer.Name}: {string.Join("; ", computer.Disk.OpenWriteViolations)}");
+            if (computer.Disk.UnpreservedOverwrites.Count > 0)
+                throw new InvalidOperationException($"unpreserved bytes replaced at step {step} on {computer.Name}: {string.Join("; ", computer.Disk.UnpreservedOverwrites)}");
+        }
         // History is an immutable, growing prefix and every version's bytes are stored.
         var rows = await world.QueryAsync("select x.id, x.content_sha256 from (select v.id, v.content_sha256, v.created_at from armory_versions v join armory_files f on f.id=v.file_id where f.project_id=@p union all select s.id, s.content_sha256, s.created_at from armory_side_versions s join armory_files f on f.id=s.file_id where f.project_id=@p) x order by x.created_at, x.id",
             r => (r.GetGuid(0), r.GetString(1)), ("p", projectId));
