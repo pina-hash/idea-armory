@@ -16,6 +16,11 @@ public sealed class ServerSimulationTests(DatabaseFixture database, ITestOutputH
         var specific = Environment.GetEnvironmentVariable("ARMORY_SERVER_SEED");
         var count = specific is not null ? 1 : Environment.GetEnvironmentVariable("ARMORY_SERVER_STRESS") == "1" ? 5_000 : 300;
         var start = specific is null ? 0 : int.Parse(specific, System.Globalization.CultureInfo.InvariantCulture);
+        // The budget below measures the simulation alone: wait until no end-to-end run is using
+        // the cluster (HeavyRunLock), then start the clock.
+        var waited = Stopwatch.StartNew();
+        using var heavy = HeavyRunLock.Exclusive();
+        output.WriteLine($"SERVER SIMULATION waited {waited.Elapsed.TotalSeconds:F1}s for the end-to-end suite");
         var watch = Stopwatch.StartNew();
         using var server = new PostgresSimulationServer(database);
         for (var seed = start; seed < start + count; seed++)

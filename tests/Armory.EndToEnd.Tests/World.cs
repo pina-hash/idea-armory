@@ -19,24 +19,36 @@ internal sealed class World : IAsyncDisposable
 {
     public const string Root = @"C:\IDEA\Armory";
     private readonly List<IAsyncDisposable> owned = [];
-    private World(ArmoryTestDatabase database, FakeSupabase supabase, FakeIdeaBosco site, FakeS3 s3)
-    { Database = database; Supabase = supabase; Site = site; S3 = s3; }
+    private readonly HeavyRunLock heavy;
+    private World(HeavyRunLock heavy, ArmoryTestDatabase database, FakeSupabase supabase, FakeIdeaBosco site, FakeS3 s3)
+    { this.heavy = heavy; Database = database; Supabase = supabase; Site = site; S3 = s3; }
     public ArmoryTestDatabase Database { get; }
     public FakeSupabase Supabase { get; }
     public FakeIdeaBosco Site { get; }
     public FakeS3 S3 { get; }
     public string Temp { get; } = Path.Combine(Path.GetTempPath(), "armory-e2e-" + Guid.NewGuid().ToString("N"));
 
+    // Every world holds the heavy-run lock shared, so the server simulation (which takes it
+    // exclusively) never shares the cluster with an end-to-end run; see HeavyRunLock.
     public static async Task<World> StartAsync()
     {
-        var database = await ArmoryTestDatabase.CreateAsync();
-        var supabase = new FakeSupabase(database);
-        await supabase.StartAsync();
-        var s3 = new FakeS3();
-        var site = new FakeIdeaBosco(supabase, database, s3);
-        await site.StartAsync();
-        site.RateLimits.StartPerIp = site.RateLimits.StartPerUser = site.RateLimits.ExchangePerIp = 100_000;
-        return new World(database, supabase, site, s3);
+        var heavy = await HeavyRunLock.SharedAsync();
+        try
+        {
+            var database = await ArmoryTestDatabase.CreateAsync();
+            var supabase = new FakeSupabase(database);
+            await supabase.StartAsync();
+            var s3 = new FakeS3();
+            var site = new FakeIdeaBosco(supabase, database, s3);
+            await site.StartAsync();
+            site.RateLimits.StartPerIp = site.RateLimits.StartPerUser = site.RateLimits.ExchangePerIp = 100_000;
+            return new World(heavy, database, supabase, site, s3);
+        }
+        catch
+        {
+            await heavy.DisposeAsync();
+            throw;
+        }
     }
 
     public async Task<Person> PersonAsync(string email, bool admin = false)
@@ -91,6 +103,7 @@ internal sealed class World : IAsyncDisposable
         await Supabase.DisposeAsync();
         await Database.DisposeAsync();
         try { if (Directory.Exists(Temp)) Directory.Delete(Temp, true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        await heavy.DisposeAsync();
     }
 }
 

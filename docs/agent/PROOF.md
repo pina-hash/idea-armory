@@ -85,6 +85,13 @@ after-download, after-lock, after-release, after-side, after-tombstone, before-A
 before-Download, before-MoveLocalToRecovery, before-None, before-ProposeTombstone,
 before-SaveSideVersion, before-commit, before-lock, before-release, before-replace, before-side`).
 
+The end-to-end suite and the server simulation (`ServerSimulationTests`, five-minute budget)
+share one PostgreSQL cluster from separate test processes. On a four-core CI runner, a full
+overlap made the simulation 3.8 times slower (321 s against 84 to 98 s), and it failed its
+budget twice. Every end-to-end world now holds a cluster-wide advisory lock shared
+(`Armory.TestSupport.HeavyRunLock`), and the simulation takes it exclusively before its
+clock starts, so the two never run at once. The budget and the 300 scenarios are unchanged.
+
 ## Deliberate break
 
 `SyncEngine.IsOpenNow` (the engine's "never overwrite an open file" check, used for Core's
