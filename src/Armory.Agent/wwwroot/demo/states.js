@@ -344,7 +344,7 @@
 		},
 
 		refused: {
-			label: "Uploads Armory can't take",
+			label: "Files Armory can't send, with the reason",
 			screens: ['home'],
 			view: signedIn({
 				sync: { state: 'attention', line: "2 files can't be sent.", detail: 'Everything else is saved to Armory. Your changes are safe on this computer.', pendingCount: 2 },

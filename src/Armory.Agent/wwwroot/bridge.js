@@ -364,8 +364,12 @@
 					deliver({ type: 'fileDetail', detail: demo.detailFor(stateName, message.fileId) });
 					break;
 				case 'saveSettings':
+					var movedOut = view.connection === 'vaultOwnedByOther' && message.vaultRoot !== view.settings.vaultRoot;
 					view.settings = { vaultRoot: message.vaultRoot, startAtSignIn: !!message.startAtSignIn, theme: message.theme };
 					view.vaultRoot = message.vaultRoot;
+					// A folder of the student's own ends the "folder belongs to someone else"
+					// stop, as the engine would: the demo goes on as if connected.
+					if (movedOut) useState(demo.afterConnect);
 					postView();
 					break;
 				case 'chooseVaultRoot':

@@ -18,25 +18,12 @@
 		     around them, so every icon follows the theme. -->
 		<svg class="sprite" width="0" height="0" aria-hidden="true" focusable="false">
 			<defs>
-				<!-- The IDEA emblem, as idea-app ships it (static/IDEA/favicon.svg): an
-				     identity color, so it looks the same in every theme. -->
-				<linearGradient id="emblem-pl" x1="0" y1="0" x2="0" y2="1">
-					<stop offset="0" stop-color="#3C7A4C" />
-					<stop offset="1" stop-color="#1F4A2C" />
-				</linearGradient>
-				<linearGradient id="emblem-st" x1="0" y1="0" x2="1" y2="1">
-					<stop offset="0" stop-color="#CBD2C4" />
-					<stop offset="1" stop-color="#87928A" />
-				</linearGradient>
-				<symbol id="i-emblem" viewBox="0 0 512 512">
-					<path d="M 69.12 168.96 L 442.88 168.96 L 486.4 212.48 L 486.4 299.52 L 442.88 343.04 L 69.12 343.04 L 25.6 299.52 L 25.6 212.48 Z" fill="url(#emblem-pl)" stroke="#0A0F0B" stroke-width="15.4" stroke-linejoin="round" />
-					<path d="M 81.408 189.44 L 430.592 189.44 M 81.408 322.56 L 430.592 322.56" fill="none" stroke="#9FE29A" stroke-opacity="0.9" stroke-width="11.3" />
-					<path d="M 215.9 125.6 L 222.9 74.7 L 289.1 74.7 L 296.1 125.6 L 319.8 135.5 L 360.8 104.4 L 407.6 151.2 L 376.5 192.2 L 386.4 215.9 L 437.3 222.9 L 437.3 289.1 L 386.4 296.1 L 376.5 319.8 L 407.6 360.8 L 360.8 407.6 L 319.8 376.5 L 296.1 386.4 L 289.1 437.3 L 222.9 437.3 L 215.9 386.4 L 192.2 376.5 L 151.2 407.6 L 104.4 360.8 L 135.5 319.8 L 125.6 296.1 L 74.7 289.1 L 74.7 222.9 L 125.6 215.9 L 135.5 192.2 L 104.4 151.2 L 151.2 104.4 L 192.2 135.5 Z M 171.2 256.0 A 84.8 84.8 0 1 0 340.8 256.0 A 84.8 84.8 0 1 0 171.2 256.0 Z" fill-rule="evenodd" fill="url(#emblem-st)" stroke="#0A0F0B" stroke-width="15.4" stroke-linejoin="round" />
-					<circle cx="256" cy="256" r="77.1" fill="url(#emblem-pl)" />
-				</symbol>
 				<symbol id="i-folder" viewBox="0 0 16 16"><path d="M1.75 4.25a1 1 0 0 1 1-1h3.5l1.5 1.5h5.5a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1H2.75a1 1 0 0 1-1-1z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" /></symbol>
 				<symbol id="i-settings" viewBox="0 0 16 16"><g fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M2 4h6.5M12.5 4H14M2 8h1.5M7.5 8H14M2 12h8.5M14.5 12H14" /><circle cx="10.5" cy="4" r="1.6" /><circle cx="5.5" cy="8" r="1.6" /><circle cx="12.5" cy="12" r="1.6" /></g></symbol>
 				<symbol id="i-chev-right" viewBox="0 0 16 16"><path d="M6 3.5 10.5 8 6 12.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" /></symbol>
+				<symbol id="i-chev-down" viewBox="0 0 16 16"><path d="M3.5 6 8 10.5 12.5 6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" /></symbol>
+				<!-- A folder with an arrow out of it: this row opens its folder, not a page. -->
+				<symbol id="i-folder-go" viewBox="0 0 16 16"><path d="M1.75 4.25a1 1 0 0 1 1-1h3.5l1.5 1.5h5.5a1 1 0 0 1 1 1v2M7.5 12.75H2.75a1 1 0 0 1-1-1v-7.5M10 11.5h4.5M12.5 9.25l2 2.25-2 2.25" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></symbol>
 				<symbol id="i-chev-left" viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" /></symbol>
 				<symbol id="i-check" viewBox="0 0 16 16"><path d="m3.5 8.5 3 3 6-7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></symbol>
 				<symbol id="i-pause" viewBox="0 0 16 16"><path d="M5.5 3.5v9M10.5 3.5v9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" /></symbol>
@@ -58,8 +45,11 @@
 		</svg>
 		<div class="window plate-slab" id="window">
 			<header class="plate-header">
+				<!-- The IDEA lockup (gear and plate, drawn from idea-app tools/idea_logo_vector.py,
+				     the light copy on Space White), a thin rule, then this window's name. -->
 				<div class="brand">
-					<svg class="emblem" aria-hidden="true" focusable="false"><use href="#i-emblem" /></svg>
+					<span class="wordmark" role="img" aria-label="IDEA"></span>
+					<span class="brand-rule" aria-hidden="true"></span>
 					<span class="brand-word">Armory</span>
 				</div>
 				<div class="header-keys" id="header-keys"></div>
@@ -67,6 +57,9 @@
 			<div class="scroller" id="scroller">
 				<main id="main" class="screen-root"></main>
 			</div>
+			<!-- "More below": a fade and a small tag at the window's foot while the window
+			     has more to scroll to. Paint only; app.js fills in the count. -->
+			<div class="scroll-cue window-cue" id="window-cue" data-on="false" aria-hidden="true"><span class="cue-chip"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-chev-down" /></svg><span class="cue-word"></span></span></div>
 		</div>
 		<dialog id="settings" class="housing" tabindex="-1" aria-labelledby="settings-title"></dialog>
 		<noscript><p>Armory needs JavaScript turned on in this window.</p></noscript>

@@ -70,13 +70,16 @@
 	--space-7: 2.5rem;
 	--space-8: 3.5rem;
 
-	/* Type (typography.css 12-47). idea-app names Rajdhani and Share Tech Mono, which it
-	   loads from Google Fonts; this window loads no web fonts, so the families are the
-	   Windows system faces (Armory, not idea-app). Sizes, weights and tracking are idea-app's.
-	   Liberation Sans and Arial come before system-ui only so a review render on a machine
-	   without Segoe UI is close to Segoe's width; Windows never reaches them. */
-	--font-display: 'Segoe UI Variable Text', 'Segoe UI', 'Liberation Sans', Arial, system-ui, sans-serif;
-	--font-mono: 'Cascadia Mono', Consolas, ui-monospace, monospace;
+	/* Type (typography.css 12-47). idea-app names Rajdhani (titles and body) and Share Tech
+	   Mono (labels, chips, keys, tabs, readouts), both loaded from Google Fonts, and no local
+	   stack. This window loads no web fonts and uses the Windows system stack only, as its
+	   lane asks (Armory, not idea-app): Segoe UI Variable, then Segoe UI, for the reading
+	   voice; Cascadia Mono, then Consolas (both ship with Windows), for the label voice.
+	   Sizes, weights and tracking are idea-app's. Liberation Sans and DejaVu Sans Mono come
+	   before the generic families only so a review render on a machine without the Windows
+	   faces stays close in width; Windows never reaches them. */
+	--font-display: 'Segoe UI Variable Text', 'Segoe UI Variable', 'Segoe UI', 'Liberation Sans', Arial, system-ui, sans-serif;
+	--font-mono: 'Cascadia Mono', Consolas, 'DejaVu Sans Mono', ui-monospace, monospace;
 	--fw-regular: 400;
 	--fw-medium: 500;
 	--fw-semibold: 600;
@@ -305,8 +308,29 @@
 	--plate-knob-on-icon: #0a0c0b;
 	--plate-knob-shade: rgba(0, 0, 0, 0.6);
 
-	/* Armory: the settings sheet's scrim (plate.css has none; a flat color, no blur). */
-	--scrim: rgba(0, 0, 0, 0.55);
+	/* Armory: the settings sheet's scrim (plate.css has none): dark enough that the page
+	   under the sheet steps back, with a light blur in the rule. The sheet's own edge is
+	   --sheet-hair, held at 3:1 against the dimmed page. */
+	--scrim: rgba(0, 0, 0, 0.66);
+	--sheet-hair: var(--plate-hair);
+
+	/* Armory: ONE SEVERITY SCALE (ok green, look amber, bad red). Inks for glyphs and words
+	   on a card (3:1 or more on the card face), the colored edge a problem card carries
+	   (decoration: the hairline stays the card's load-bearing edge), and a faint tint. */
+	--ink-ok: var(--green);
+	--ink-look: var(--amber);
+	--ink-bad: var(--plate-danger-ink);
+	--edge-ok: #78b870;
+	--edge-look: #d08030;
+	--edge-bad: #d95f5f;
+	--tint-look: rgba(208, 128, 48, 0.1);
+	--tint-bad: rgba(217, 95, 95, 0.1);
+
+	/* The IDEA lockup: idea-app's emblem, gear behind plate, drawn by idea-app
+	   tools/idea_logo_vector.py in its DARK palette (the art static/IDEA/idea-logo-text.png
+	   and idea-gear.png are rendered from). An identity mark, so its art changes with the
+	   theme exactly as the site's does (AnimatedLogo.svelte) and its box never does. */
+	--brand-lockup: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 -20 2560 1204'%3E%3Cdefs%3E%3ClinearGradient id='ksteel' x1='0' y1='0' x2='1' y2='1'%3E  %3Cstop offset='0' stop-color='%23B4BBAC'/%3E%3Cstop offset='0.5' stop-color='%238E978A'/%3E%3Cstop offset='1' stop-color='%235C665C'/%3E%3C/linearGradient%3E%3ClinearGradient id='krim' x1='0' y1='0' x2='1' y2='1'%3E  %3Cstop offset='0' stop-color='%23A9DDA0'/%3E%3Cstop offset='1' stop-color='%234F944F'/%3E%3C/linearGradient%3E%3ClinearGradient id='kplate' x1='0' y1='0' x2='0' y2='1'%3E  %3Cstop offset='0' stop-color='%233B6748'/%3E%3Cstop offset='0.45' stop-color='%232C4B36'/%3E%3Cstop offset='1' stop-color='%231E3627'/%3E%3C/linearGradient%3E%3ClinearGradient id='kglow' x1='0' y1='0' x2='0' y2='1'%3E  %3Cstop offset='0' stop-color='%23D5FBCA'/%3E%3Cstop offset='0.5' stop-color='%23B2DCA6'/%3E%3Cstop offset='1' stop-color='%2376B978'/%3E%3C/linearGradient%3E%3ClinearGradient id='kivory' x1='0' y1='0' x2='0' y2='1'%3E  %3Cstop offset='0' stop-color='%23F2EEE5'/%3E%3Cstop offset='1' stop-color='%23D3CBBC'/%3E%3C/linearGradient%3E%3ClinearGradient id='ktile' x1='0' y1='0' x2='0.3' y2='1'%3E  %3Cstop offset='0' stop-color='%231C2123'/%3E%3Cstop offset='1' stop-color='%23070909'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cdefs%3E%3CclipPath id='kclip_i_top'%3E%3Cpath d='M 576.5 355.0 L 569.2 362.3 L 569.2 518.3 L 666.0 421.5 L 666.0 355.0 Z'/%3E%3C/clipPath%3E%3CclipPath id='kclip_i_bar'%3E%3Cpath d='M 645.5 493.5 L 575.0 564.0 L 575.0 782.5 L 656.5 782.5 L 664.0 775.0 L 664.0 505.5 L 678.0 505.5 L 666.0 493.5 Z'/%3E%3C/clipPath%3E%3CclipPath id='kclip_D'%3E%3Cpath d='M 710.0 376.5 L 789.5 456.0 L 1096.5 456.0 L 1161.0 520.5 L 1161.0 629.0 L 1145.0 629.0 L 1090.5 683.5 L 823.0 683.5 L 807.0 699.5 L 807.0 522.5 L 819.0 510.5 L 719.0 510.5 L 719.0 782.0 L 1129.5 782.0 L 1243.0 668.5 L 1243.0 486.5 L 1254.2 475.2 L 1137.0 358.0 L 710.0 358.0 Z'/%3E%3C/clipPath%3E%3CclipPath id='kclip_E_top'%3E%3Cpath d='M 1804.0 355.5 L 1403.0 355.5 L 1286.8 471.8 L 1298.5 483.5 L 1298.5 597.0 L 1439.5 456.0 L 1732.0 456.0 L 1818.2 369.8 Z'/%3E%3C/clipPath%3E%3CclipPath id='kclip_E_mid'%3E%3Cpath d='M 1505.5 625.0 L 1734.0 625.0 L 1815.5 543.5 L 1797.0 525.0 L 1430.0 525.0 L 1417.8 537.2 Z'/%3E%3C/clipPath%3E%3CclipPath id='kclip_E_bot'%3E%3Cpath d='M 1414.5 783.5 L 1796.5 783.5 L 1816.0 764.0 L 1736.0 684.0 L 1447.0 684.0 L 1391.0 628.0 L 1378.0 628.0 L 1378.0 577.5 L 1361.5 577.5 L 1285.0 654.0 Z'/%3E%3C/clipPath%3E%3CclipPath id='kclip_A'%3E%3Cpath d='M 1855.5 489.0 L 1855.5 778.5 L 1937.5 778.5 L 1937.5 524.0 L 2005.5 456.0 L 2215.5 456.0 L 2275.5 516.0 L 2275.5 543.0 L 2260.0 558.5 L 2067.5 558.5 L 1966.4 659.6 L 2276.0 659.6 L 2276.0 779.0 L 2363.0 779.0 L 2363.0 466.0 L 2253.0 356.0 L 1960.5 356.0 L 1841.5 475.0 Z'/%3E%3C/clipPath%3E%3C/defs%3E%3Cg transform='translate(0,-14.4)'%3E%3Cg%3E%3Cpath d='M 583.3 101.5 L 616.6 33.2 L 742.5 50.9 L 755.7 125.7 L 801.8 143.3 L 861.4 96.2 L 967.2 166.8 L 946.6 239.9 L 980.5 275.7 L 1054.6 259.2 L 1119.3 368.7 L 1069.1 425.6 L 1084.1 472.6 L 1158.0 489.8 L 1168.8 616.6 L 1098.8 646.1 L 1091.9 694.9 L 1151.1 742.5 L 1105.8 861.4 L 1030.0 857.6 L 1002.6 898.6 L 1035.2 967.2 L 942.8 1054.6 L 876.2 1018.3 L 833.7 1043.4 L 833.3 1119.3 L 712.2 1158.0 L 667.8 1096.3 L 618.7 1100.5 L 585.4 1168.8 L 459.5 1151.1 L 446.3 1076.3 L 400.2 1058.7 L 340.6 1105.8 L 234.8 1035.2 L 255.4 962.1 L 221.5 926.3 L 147.4 942.8 L 82.7 833.3 L 132.9 776.4 L 117.9 729.4 L 44.0 712.2 L 33.2 585.4 L 103.2 555.9 L 110.1 507.1 L 50.9 459.5 L 96.2 340.6 L 172.0 344.4 L 199.4 303.4 L 166.8 234.8 L 259.2 147.4 L 325.8 183.7 L 368.3 158.6 L 368.7 82.7 L 489.8 44.0 L 534.2 105.7 Z M 198.9 601.0 A 402.1 402.1 0 1 0 1003.1 601.0 A 402.1 402.1 0 1 0 198.9 601.0 Z' fill-rule='evenodd' fill='%231E2A20' stroke='%231E2A20' stroke-width='22.5' stroke-linejoin='round'/%3E%3Cpath d='M 583.7 113.6 L 616.2 47.0 L 739.1 64.2 L 752.0 137.2 L 796.9 154.3 L 855.1 108.4 L 958.3 177.3 L 938.2 248.6 L 971.3 283.6 L 1043.6 267.4 L 1106.8 374.3 L 1057.7 429.8 L 1072.4 475.7 L 1144.5 492.5 L 1155.0 616.2 L 1086.8 645.0 L 1080.1 692.6 L 1137.8 739.1 L 1093.6 855.1 L 1019.6 851.4 L 992.9 891.4 L 1024.7 958.3 L 934.6 1043.6 L 869.5 1008.2 L 828.0 1032.7 L 827.7 1106.8 L 709.5 1144.5 L 666.2 1084.4 L 618.3 1088.4 L 585.8 1155.0 L 462.9 1137.8 L 450.0 1064.8 L 405.1 1047.7 L 346.9 1093.6 L 243.7 1024.7 L 263.8 953.4 L 230.7 918.4 L 158.4 934.6 L 95.2 827.7 L 144.3 772.2 L 129.6 726.3 L 57.5 709.5 L 47.0 585.8 L 115.2 557.0 L 121.9 509.4 L 64.2 462.9 L 108.4 346.9 L 182.4 350.6 L 209.1 310.6 L 177.3 243.7 L 267.4 158.4 L 332.5 193.8 L 374.0 169.3 L 374.3 95.2 L 492.5 57.5 L 535.8 117.6 Z M 190.1 601.0 A 410.9 410.9 0 1 0 1011.9 601.0 A 410.9 410.9 0 1 0 190.1 601.0 Z' fill-rule='evenodd' fill='url(%23ksteel)'/%3E%3Cpath d='M 584.2 126.8 L 615.8 62.0 L 735.4 78.8 L 747.9 149.8 L 791.6 166.4 L 848.2 121.8 L 948.7 188.8 L 929.1 258.2 L 961.3 292.2 L 1031.7 276.5 L 1093.1 380.4 L 1045.4 434.5 L 1059.6 479.1 L 1129.8 495.5 L 1140.0 615.8 L 1073.6 643.8 L 1067.1 690.2 L 1123.2 735.4 L 1080.2 848.2 L 1008.2 844.6 L 982.3 883.6 L 1013.2 948.7 L 925.5 1031.7 L 862.2 997.2 L 821.9 1021.0 L 821.6 1093.1 L 706.5 1129.8 L 664.5 1071.3 L 617.8 1075.2 L 586.2 1140.0 L 466.6 1123.2 L 454.1 1052.2 L 410.4 1035.6 L 353.8 1080.2 L 253.3 1013.2 L 272.9 943.8 L 240.7 909.8 L 170.3 925.5 L 108.9 821.6 L 156.6 767.5 L 142.4 722.9 L 72.2 706.5 L 62.0 586.2 L 128.4 558.2 L 134.9 511.8 L 78.8 466.6 L 121.8 353.8 L 193.8 357.4 L 219.7 318.4 L 188.8 253.3 L 276.5 170.3 L 339.8 204.8 L 380.1 181.0 L 380.4 108.9 L 495.5 72.2 L 537.5 130.7 Z M 176.4 601.0 A 424.6 424.6 0 1 0 1025.6 601.0 A 424.6 424.6 0 1 0 176.4 601.0 Z' fill-rule='evenodd' fill='none' stroke='%23B4BBAC' stroke-opacity='0.35' stroke-width='8.8'/%3E%3Cpath d='M 198.9 601.0 A 402.1 402.1 0 1 0 1003.1 601.0 A 402.1 402.1 0 1 0 198.9 601.0 Z M 229.0 601.0 A 372.0 372.0 0 1 0 973.0 601.0 A 372.0 372.0 0 1 0 229.0 601.0 Z' fill-rule='evenodd' fill='url(%23krim)' stroke='%231E2A20' stroke-width='4.0'/%3E%3C/g%3E%3C/g%3E%3Cg%3E%3Cpath d='M 531 248 L 2357 248 L 2522 413 L 2522 753 L 2357 918 L 531 918 L 366 753 L 366 413 Z' fill='%230E1C13' stroke='%230E1C13' stroke-width='10' stroke-linejoin='round'/%3E%3Cpath d='M 533 252 L 2355 252 L 2518 415 L 2518 751 L 2355 914 L 533 914 L 370 751 L 370 415 Z' fill='url(%23kplate)'/%3E%3Cpath d='M 549.752 280 L 2338.248 280 L 2490 431.752 L 2490 734.248 L 2338.248 886 L 549.752 886 L 398 734.248 L 398 431.752 Z' fill='none' stroke='%230E1C13' stroke-opacity='0.6' stroke-width='28.5'/%3E%3Cpath d='M 549.752 280 L 2338.248 280 L 2490 431.752 L 2490 734.248 L 2338.248 886 L 549.752 886 L 398 734.248 L 398 431.752 Z' fill='none' stroke='%23B2DCA6' stroke-opacity='0.22' stroke-width='48.0' stroke-linejoin='round'/%3E%3Cpath d='M 549.752 280 L 2338.248 280 L 2490 431.752 L 2490 734.248 L 2338.248 886 L 549.752 886 L 398 734.248 L 398 431.752 Z' fill='none' stroke='url(%23kglow)' stroke-width='15' stroke-linejoin='round'/%3E%3Crect x='1961.0' y='871.0' width='97.0' height='30.0' fill='%231E3627'/%3E%3Cpath d='M 1961.0 886.0 L 2075.0 770.0' stroke='url(%23kglow)' stroke-width='15' stroke-linecap='butt'/%3E%3Cpath d='M 1991.0 890.0 L 2108.0 771.0' stroke='url(%23kglow)' stroke-width='15' stroke-linecap='butt'/%3E%3C/g%3E%3Cg%3E%3Cpath d='M 576.5 355.0 L 569.2 362.3 L 569.2 518.3 L 666.0 421.5 L 666.0 355.0 Z' transform='translate(5,6)' fill='%230F1A12' fill-opacity='0.8' stroke='%230F1A12' stroke-opacity='0.8' stroke-width='7.0' stroke-linejoin='round'/%3E%3Cpath d='M 645.5 493.5 L 575.0 564.0 L 575.0 782.5 L 656.5 782.5 L 664.0 775.0 L 664.0 505.5 L 678.0 505.5 L 666.0 493.5 Z' transform='translate(5,6)' fill='%230F1A12' fill-opacity='0.8' stroke='%230F1A12' stroke-opacity='0.8' stroke-width='7.0' stroke-linejoin='round'/%3E%3Cpath d='M 710.0 376.5 L 789.5 456.0 L 1096.5 456.0 L 1161.0 520.5 L 1161.0 629.0 L 1145.0 629.0 L 1090.5 683.5 L 823.0 683.5 L 807.0 699.5 L 807.0 522.5 L 819.0 510.5 L 719.0 510.5 L 719.0 782.0 L 1129.5 782.0 L 1243.0 668.5 L 1243.0 486.5 L 1254.2 475.2 L 1137.0 358.0 L 710.0 358.0 Z' transform='translate(5,6)' fill='%230F1A12' fill-opacity='0.8' stroke='%230F1A12' stroke-opacity='0.8' stroke-width='7.0' stroke-linejoin='round'/%3E%3Cpath d='M 1804.0 355.5 L 1403.0 355.5 L 1286.8 471.8 L 1298.5 483.5 L 1298.5 597.0 L 1439.5 456.0 L 1732.0 456.0 L 1818.2 369.8 Z' transform='translate(5,6)' fill='%230F1A12' fill-opacity='0.8' stroke='%230F1A12' stroke-opacity='0.8' stroke-width='7.0' stroke-linejoin='round'/%3E%3Cpath d='M 1505.5 625.0 L 1734.0 625.0 L 1815.5 543.5 L 1797.0 525.0 L 1430.0 525.0 L 1417.8 537.2 Z' transform='translate(5,6)' fill='%230F1A12' fill-opacity='0.8' stroke='%230F1A12' stroke-opacity='0.8' stroke-width='7.0' stroke-linejoin='round'/%3E%3Cpath d='M 1414.5 783.5 L 1796.5 783.5 L 1816.0 764.0 L 1736.0 684.0 L 1447.0 684.0 L 1391.0 628.0 L 1378.0 628.0 L 1378.0 577.5 L 1361.5 577.5 L 1285.0 654.0 Z' transform='translate(5,6)' fill='%230F1A12' fill-opacity='0.8' stroke='%230F1A12' stroke-opacity='0.8' stroke-width='7.0' stroke-linejoin='round'/%3E%3Cpath d='M 1855.5 489.0 L 1855.5 778.5 L 1937.5 778.5 L 1937.5 524.0 L 2005.5 456.0 L 2215.5 456.0 L 2275.5 516.0 L 2275.5 543.0 L 2260.0 558.5 L 2067.5 558.5 L 1966.4 659.6 L 2276.0 659.6 L 2276.0 779.0 L 2363.0 779.0 L 2363.0 466.0 L 2253.0 356.0 L 1960.5 356.0 L 1841.5 475.0 Z' transform='translate(5,6)' fill='%230F1A12' fill-opacity='0.8' stroke='%230F1A12' stroke-opacity='0.8' stroke-width='7.0' stroke-linejoin='round'/%3E%3Cpath d='M 576.5 355.0 L 569.2 362.3 L 569.2 518.3 L 666.0 421.5 L 666.0 355.0 Z' fill='url(%23kivory)'/%3E%3Cpath d='M 576.5 355.0 L 569.2 362.3 L 569.2 518.3 L 666.0 421.5 L 666.0 355.0 Z' fill='none' stroke='%235F5D55' stroke-width='22.4' stroke-linejoin='round' clip-path='url(%23kclip_i_top)'/%3E%3Cpath d='M 576.5 355.0 L 569.2 362.3 L 569.2 518.3 L 666.0 421.5 L 666.0 355.0 Z' fill='none' stroke='%23B9B2A3' stroke-width='16.1' stroke-linejoin='round' transform='translate(2.1,2.1)' clip-path='url(%23kclip_i_top)'/%3E%3Cpath d='M 576.5 355.0 L 569.2 362.3 L 569.2 518.3 L 666.0 421.5 L 666.0 355.0 Z' fill='none' stroke='%23F2EEE5' stroke-width='16.1' stroke-linejoin='round' transform='translate(-2.1,-2.1)' clip-path='url(%23kclip_i_top)'/%3E%3Cpath d='M 576.5 355.0 L 569.2 362.3 L 569.2 518.3 L 666.0 421.5 L 666.0 355.0 Z' fill='none' stroke='%23262B24' stroke-width='7.0' stroke-linejoin='round'/%3E%3Cpath d='M 645.5 493.5 L 575.0 564.0 L 575.0 782.5 L 656.5 782.5 L 664.0 775.0 L 664.0 505.5 L 678.0 505.5 L 666.0 493.5 Z' fill='url(%23kivory)'/%3E%3Cpath d='M 645.5 493.5 L 575.0 564.0 L 575.0 782.5 L 656.5 782.5 L 664.0 775.0 L 664.0 505.5 L 678.0 505.5 L 666.0 493.5 Z' fill='none' stroke='%235F5D55' stroke-width='22.4' stroke-linejoin='round' clip-path='url(%23kclip_i_bar)'/%3E%3Cpath d='M 645.5 493.5 L 575.0 564.0 L 575.0 782.5 L 656.5 782.5 L 664.0 775.0 L 664.0 505.5 L 678.0 505.5 L 666.0 493.5 Z' fill='none' stroke='%23B9B2A3' stroke-width='16.1' stroke-linejoin='round' transform='translate(2.1,2.1)' clip-path='url(%23kclip_i_bar)'/%3E%3Cpath d='M 645.5 493.5 L 575.0 564.0 L 575.0 782.5 L 656.5 782.5 L 664.0 775.0 L 664.0 505.5 L 678.0 505.5 L 666.0 493.5 Z' fill='none' stroke='%23F2EEE5' stroke-width='16.1' stroke-linejoin='round' transform='translate(-2.1,-2.1)' clip-path='url(%23kclip_i_bar)'/%3E%3Cpath d='M 645.5 493.5 L 575.0 564.0 L 575.0 782.5 L 656.5 782.5 L 664.0 775.0 L 664.0 505.5 L 678.0 505.5 L 666.0 493.5 Z' fill='none' stroke='%23262B24' stroke-width='7.0' stroke-linejoin='round'/%3E%3Cpath d='M 710.0 376.5 L 789.5 456.0 L 1096.5 456.0 L 1161.0 520.5 L 1161.0 629.0 L 1145.0 629.0 L 1090.5 683.5 L 823.0 683.5 L 807.0 699.5 L 807.0 522.5 L 819.0 510.5 L 719.0 510.5 L 719.0 782.0 L 1129.5 782.0 L 1243.0 668.5 L 1243.0 486.5 L 1254.2 475.2 L 1137.0 358.0 L 710.0 358.0 Z' fill='url(%23kivory)'/%3E%3Cpath d='M 710.0 376.5 L 789.5 456.0 L 1096.5 456.0 L 1161.0 520.5 L 1161.0 629.0 L 1145.0 629.0 L 1090.5 683.5 L 823.0 683.5 L 807.0 699.5 L 807.0 522.5 L 819.0 510.5 L 719.0 510.5 L 719.0 782.0 L 1129.5 782.0 L 1243.0 668.5 L 1243.0 486.5 L 1254.2 475.2 L 1137.0 358.0 L 710.0 358.0 Z' fill='none' stroke='%235F5D55' stroke-width='22.4' stroke-linejoin='round' clip-path='url(%23kclip_D)'/%3E%3Cpath d='M 710.0 376.5 L 789.5 456.0 L 1096.5 456.0 L 1161.0 520.5 L 1161.0 629.0 L 1145.0 629.0 L 1090.5 683.5 L 823.0 683.5 L 807.0 699.5 L 807.0 522.5 L 819.0 510.5 L 719.0 510.5 L 719.0 782.0 L 1129.5 782.0 L 1243.0 668.5 L 1243.0 486.5 L 1254.2 475.2 L 1137.0 358.0 L 710.0 358.0 Z' fill='none' stroke='%23B9B2A3' stroke-width='16.1' stroke-linejoin='round' transform='translate(2.1,2.1)' clip-path='url(%23kclip_D)'/%3E%3Cpath d='M 710.0 376.5 L 789.5 456.0 L 1096.5 456.0 L 1161.0 520.5 L 1161.0 629.0 L 1145.0 629.0 L 1090.5 683.5 L 823.0 683.5 L 807.0 699.5 L 807.0 522.5 L 819.0 510.5 L 719.0 510.5 L 719.0 782.0 L 1129.5 782.0 L 1243.0 668.5 L 1243.0 486.5 L 1254.2 475.2 L 1137.0 358.0 L 710.0 358.0 Z' fill='none' stroke='%23F2EEE5' stroke-width='16.1' stroke-linejoin='round' transform='translate(-2.1,-2.1)' clip-path='url(%23kclip_D)'/%3E%3Cpath d='M 710.0 376.5 L 789.5 456.0 L 1096.5 456.0 L 1161.0 520.5 L 1161.0 629.0 L 1145.0 629.0 L 1090.5 683.5 L 823.0 683.5 L 807.0 699.5 L 807.0 522.5 L 819.0 510.5 L 719.0 510.5 L 719.0 782.0 L 1129.5 782.0 L 1243.0 668.5 L 1243.0 486.5 L 1254.2 475.2 L 1137.0 358.0 L 710.0 358.0 Z' fill='none' stroke='%23262B24' stroke-width='7.0' stroke-linejoin='round'/%3E%3Cpath d='M 1804.0 355.5 L 1403.0 355.5 L 1286.8 471.8 L 1298.5 483.5 L 1298.5 597.0 L 1439.5 456.0 L 1732.0 456.0 L 1818.2 369.8 Z' fill='url(%23kivory)'/%3E%3Cpath d='M 1804.0 355.5 L 1403.0 355.5 L 1286.8 471.8 L 1298.5 483.5 L 1298.5 597.0 L 1439.5 456.0 L 1732.0 456.0 L 1818.2 369.8 Z' fill='none' stroke='%235F5D55' stroke-width='22.4' stroke-linejoin='round' clip-path='url(%23kclip_E_top)'/%3E%3Cpath d='M 1804.0 355.5 L 1403.0 355.5 L 1286.8 471.8 L 1298.5 483.5 L 1298.5 597.0 L 1439.5 456.0 L 1732.0 456.0 L 1818.2 369.8 Z' fill='none' stroke='%23B9B2A3' stroke-width='16.1' stroke-linejoin='round' transform='translate(2.1,2.1)' clip-path='url(%23kclip_E_top)'/%3E%3Cpath d='M 1804.0 355.5 L 1403.0 355.5 L 1286.8 471.8 L 1298.5 483.5 L 1298.5 597.0 L 1439.5 456.0 L 1732.0 456.0 L 1818.2 369.8 Z' fill='none' stroke='%23F2EEE5' stroke-width='16.1' stroke-linejoin='round' transform='translate(-2.1,-2.1)' clip-path='url(%23kclip_E_top)'/%3E%3Cpath d='M 1804.0 355.5 L 1403.0 355.5 L 1286.8 471.8 L 1298.5 483.5 L 1298.5 597.0 L 1439.5 456.0 L 1732.0 456.0 L 1818.2 369.8 Z' fill='none' stroke='%23262B24' stroke-width='7.0' stroke-linejoin='round'/%3E%3Cpath d='M 1505.5 625.0 L 1734.0 625.0 L 1815.5 543.5 L 1797.0 525.0 L 1430.0 525.0 L 1417.8 537.2 Z' fill='url(%23kivory)'/%3E%3Cpath d='M 1505.5 625.0 L 1734.0 625.0 L 1815.5 543.5 L 1797.0 525.0 L 1430.0 525.0 L 1417.8 537.2 Z' fill='none' stroke='%235F5D55' stroke-width='22.4' stroke-linejoin='round' clip-path='url(%23kclip_E_mid)'/%3E%3Cpath d='M 1505.5 625.0 L 1734.0 625.0 L 1815.5 543.5 L 1797.0 525.0 L 1430.0 525.0 L 1417.8 537.2 Z' fill='none' stroke='%23B9B2A3' stroke-width='16.1' stroke-linejoin='round' transform='translate(2.1,2.1)' clip-path='url(%23kclip_E_mid)'/%3E%3Cpath d='M 1505.5 625.0 L 1734.0 625.0 L 1815.5 543.5 L 1797.0 525.0 L 1430.0 525.0 L 1417.8 537.2 Z' fill='none' stroke='%23F2EEE5' stroke-width='16.1' stroke-linejoin='round' transform='translate(-2.1,-2.1)' clip-path='url(%23kclip_E_mid)'/%3E%3Cpath d='M 1505.5 625.0 L 1734.0 625.0 L 1815.5 543.5 L 1797.0 525.0 L 1430.0 525.0 L 1417.8 537.2 Z' fill='none' stroke='%23262B24' stroke-width='7.0' stroke-linejoin='round'/%3E%3Cpath d='M 1414.5 783.5 L 1796.5 783.5 L 1816.0 764.0 L 1736.0 684.0 L 1447.0 684.0 L 1391.0 628.0 L 1378.0 628.0 L 1378.0 577.5 L 1361.5 577.5 L 1285.0 654.0 Z' fill='url(%23kivory)'/%3E%3Cpath d='M 1414.5 783.5 L 1796.5 783.5 L 1816.0 764.0 L 1736.0 684.0 L 1447.0 684.0 L 1391.0 628.0 L 1378.0 628.0 L 1378.0 577.5 L 1361.5 577.5 L 1285.0 654.0 Z' fill='none' stroke='%235F5D55' stroke-width='22.4' stroke-linejoin='round' clip-path='url(%23kclip_E_bot)'/%3E%3Cpath d='M 1414.5 783.5 L 1796.5 783.5 L 1816.0 764.0 L 1736.0 684.0 L 1447.0 684.0 L 1391.0 628.0 L 1378.0 628.0 L 1378.0 577.5 L 1361.5 577.5 L 1285.0 654.0 Z' fill='none' stroke='%23B9B2A3' stroke-width='16.1' stroke-linejoin='round' transform='translate(2.1,2.1)' clip-path='url(%23kclip_E_bot)'/%3E%3Cpath d='M 1414.5 783.5 L 1796.5 783.5 L 1816.0 764.0 L 1736.0 684.0 L 1447.0 684.0 L 1391.0 628.0 L 1378.0 628.0 L 1378.0 577.5 L 1361.5 577.5 L 1285.0 654.0 Z' fill='none' stroke='%23F2EEE5' stroke-width='16.1' stroke-linejoin='round' transform='translate(-2.1,-2.1)' clip-path='url(%23kclip_E_bot)'/%3E%3Cpath d='M 1414.5 783.5 L 1796.5 783.5 L 1816.0 764.0 L 1736.0 684.0 L 1447.0 684.0 L 1391.0 628.0 L 1378.0 628.0 L 1378.0 577.5 L 1361.5 577.5 L 1285.0 654.0 Z' fill='none' stroke='%23262B24' stroke-width='7.0' stroke-linejoin='round'/%3E%3Cpath d='M 1855.5 489.0 L 1855.5 778.5 L 1937.5 778.5 L 1937.5 524.0 L 2005.5 456.0 L 2215.5 456.0 L 2275.5 516.0 L 2275.5 543.0 L 2260.0 558.5 L 2067.5 558.5 L 1966.4 659.6 L 2276.0 659.6 L 2276.0 779.0 L 2363.0 779.0 L 2363.0 466.0 L 2253.0 356.0 L 1960.5 356.0 L 1841.5 475.0 Z' fill='url(%23kivory)'/%3E%3Cpath d='M 1855.5 489.0 L 1855.5 778.5 L 1937.5 778.5 L 1937.5 524.0 L 2005.5 456.0 L 2215.5 456.0 L 2275.5 516.0 L 2275.5 543.0 L 2260.0 558.5 L 2067.5 558.5 L 1966.4 659.6 L 2276.0 659.6 L 2276.0 779.0 L 2363.0 779.0 L 2363.0 466.0 L 2253.0 356.0 L 1960.5 356.0 L 1841.5 475.0 Z' fill='none' stroke='%235F5D55' stroke-width='22.4' stroke-linejoin='round' clip-path='url(%23kclip_A)'/%3E%3Cpath d='M 1855.5 489.0 L 1855.5 778.5 L 1937.5 778.5 L 1937.5 524.0 L 2005.5 456.0 L 2215.5 456.0 L 2275.5 516.0 L 2275.5 543.0 L 2260.0 558.5 L 2067.5 558.5 L 1966.4 659.6 L 2276.0 659.6 L 2276.0 779.0 L 2363.0 779.0 L 2363.0 466.0 L 2253.0 356.0 L 1960.5 356.0 L 1841.5 475.0 Z' fill='none' stroke='%23B9B2A3' stroke-width='16.1' stroke-linejoin='round' transform='translate(2.1,2.1)' clip-path='url(%23kclip_A)'/%3E%3Cpath d='M 1855.5 489.0 L 1855.5 778.5 L 1937.5 778.5 L 1937.5 524.0 L 2005.5 456.0 L 2215.5 456.0 L 2275.5 516.0 L 2275.5 543.0 L 2260.0 558.5 L 2067.5 558.5 L 1966.4 659.6 L 2276.0 659.6 L 2276.0 779.0 L 2363.0 779.0 L 2363.0 466.0 L 2253.0 356.0 L 1960.5 356.0 L 1841.5 475.0 Z' fill='none' stroke='%23F2EEE5' stroke-width='16.1' stroke-linejoin='round' transform='translate(-2.1,-2.1)' clip-path='url(%23kclip_A)'/%3E%3Cpath d='M 1855.5 489.0 L 1855.5 778.5 L 1937.5 778.5 L 1937.5 524.0 L 2005.5 456.0 L 2215.5 456.0 L 2275.5 516.0 L 2275.5 543.0 L 2260.0 558.5 L 2067.5 558.5 L 1966.4 659.6 L 2276.0 659.6 L 2276.0 779.0 L 2363.0 779.0 L 2363.0 466.0 L 2253.0 356.0 L 1960.5 356.0 L 1841.5 475.0 Z' fill='none' stroke='%23262B24' stroke-width='7.0' stroke-linejoin='round'/%3E%3C/g%3E%3C/svg%3E");
 }
 
 /* PLATE MATERIALS, SPACE WHITE.
@@ -427,25 +451,85 @@
 	--plate-knob-on-icon: #f7f9f9;
 	--plate-knob-shade: rgba(60, 68, 84, 0.45);
 
-	/* A light veil, not a dark one: the sheet's hairline must hold 3:1 against the page
-	   it floats over, and a darkened white page would pull the ground down to its edge. */
-	--scrim: rgba(236, 239, 243, 0.62);
+	/* A slate veil, so the white sheet stands clear of the page; the sheet's edge darkens
+	   with it to hold 3:1 against the dimmed page. */
+	--scrim: rgba(40, 46, 58, 0.42);
+	--sheet-hair: #3c424a;
+
+	/* One severity scale: the inks follow the register (--green, --amber, the danger ink);
+	   the edges are the lamps' brighter hues, decoration only. */
+	--edge-ok: #4f944f;
+	--edge-look: #e08a2e;
+	--edge-bad: #c43a3a;
+	--tint-look: rgba(224, 138, 46, 0.12);
+	--tint-bad: rgba(196, 58, 58, 0.1);
+
+	/* The light lockup the site ships on Space White (tools/idea_logo_vector.py, palette
+	   LIGHT = SLATE: a steel gear, a flat green plate, white letters). */
+	--brand-lockup: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 -20 2560 1204'%3E%3Cdefs%3E%3ClinearGradient id='ksteel' x1='0' y1='0' x2='1' y2='1'%3E  %3Cstop offset='0' stop-color='%235A6662'/%3E%3Cstop offset='0.5' stop-color='%235A6662'/%3E%3Cstop offset='1' stop-color='%235A6662'/%3E%3C/linearGradient%3E%3ClinearGradient id='krim' x1='0' y1='0' x2='1' y2='1'%3E  %3Cstop offset='0' stop-color='%2378B870'/%3E%3Cstop offset='1' stop-color='%2378B870'/%3E%3C/linearGradient%3E%3ClinearGradient id='kplate' x1='0' y1='0' x2='0' y2='1'%3E  %3Cstop offset='0' stop-color='%232F5A2B'/%3E%3Cstop offset='0.45' stop-color='%232F5A2B'/%3E%3Cstop offset='1' stop-color='%232F5A2B'/%3E%3C/linearGradient%3E%3ClinearGradient id='kglow' x1='0' y1='0' x2='0' y2='1'%3E  %3Cstop offset='0' stop-color='%23B2DCA6'/%3E%3Cstop offset='0.5' stop-color='%23B2DCA6'/%3E%3Cstop offset='1' stop-color='%23B2DCA6'/%3E%3C/linearGradient%3E%3ClinearGradient id='kivory' x1='0' y1='0' x2='0' y2='1'%3E  %3Cstop offset='0' stop-color='%23F7F9F9'/%3E%3Cstop offset='1' stop-color='%23F7F9F9'/%3E%3C/linearGradient%3E%3ClinearGradient id='ktile' x1='0' y1='0' x2='0.3' y2='1'%3E  %3Cstop offset='0' stop-color='%231C2123'/%3E%3Cstop offset='1' stop-color='%23070909'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cdefs%3E%3CclipPath id='kclip_i_top'%3E%3Cpath d='M 576.5 355.0 L 569.2 362.3 L 569.2 518.3 L 666.0 421.5 L 666.0 355.0 Z'/%3E%3C/clipPath%3E%3CclipPath id='kclip_i_bar'%3E%3Cpath d='M 645.5 493.5 L 575.0 564.0 L 575.0 782.5 L 656.5 782.5 L 664.0 775.0 L 664.0 505.5 L 678.0 505.5 L 666.0 493.5 Z'/%3E%3C/clipPath%3E%3CclipPath id='kclip_D'%3E%3Cpath d='M 710.0 376.5 L 789.5 456.0 L 1096.5 456.0 L 1161.0 520.5 L 1161.0 629.0 L 1145.0 629.0 L 1090.5 683.5 L 823.0 683.5 L 807.0 699.5 L 807.0 522.5 L 819.0 510.5 L 719.0 510.5 L 719.0 782.0 L 1129.5 782.0 L 1243.0 668.5 L 1243.0 486.5 L 1254.2 475.2 L 1137.0 358.0 L 710.0 358.0 Z'/%3E%3C/clipPath%3E%3CclipPath id='kclip_E_top'%3E%3Cpath d='M 1804.0 355.5 L 1403.0 355.5 L 1286.8 471.8 L 1298.5 483.5 L 1298.5 597.0 L 1439.5 456.0 L 1732.0 456.0 L 1818.2 369.8 Z'/%3E%3C/clipPath%3E%3CclipPath id='kclip_E_mid'%3E%3Cpath d='M 1505.5 625.0 L 1734.0 625.0 L 1815.5 543.5 L 1797.0 525.0 L 1430.0 525.0 L 1417.8 537.2 Z'/%3E%3C/clipPath%3E%3CclipPath id='kclip_E_bot'%3E%3Cpath d='M 1414.5 783.5 L 1796.5 783.5 L 1816.0 764.0 L 1736.0 684.0 L 1447.0 684.0 L 1391.0 628.0 L 1378.0 628.0 L 1378.0 577.5 L 1361.5 577.5 L 1285.0 654.0 Z'/%3E%3C/clipPath%3E%3CclipPath id='kclip_A'%3E%3Cpath d='M 1855.5 489.0 L 1855.5 778.5 L 1937.5 778.5 L 1937.5 524.0 L 2005.5 456.0 L 2215.5 456.0 L 2275.5 516.0 L 2275.5 543.0 L 2260.0 558.5 L 2067.5 558.5 L 1966.4 659.6 L 2276.0 659.6 L 2276.0 779.0 L 2363.0 779.0 L 2363.0 466.0 L 2253.0 356.0 L 1960.5 356.0 L 1841.5 475.0 Z'/%3E%3C/clipPath%3E%3C/defs%3E%3Cg transform='translate(0,-14.4)'%3E%3Cg%3E%3Cpath d='M 583.3 101.5 L 616.6 33.2 L 742.5 50.9 L 755.7 125.7 L 801.8 143.3 L 861.4 96.2 L 967.2 166.8 L 946.6 239.9 L 980.5 275.7 L 1054.6 259.2 L 1119.3 368.7 L 1069.1 425.6 L 1084.1 472.6 L 1158.0 489.8 L 1168.8 616.6 L 1098.8 646.1 L 1091.9 694.9 L 1151.1 742.5 L 1105.8 861.4 L 1030.0 857.6 L 1002.6 898.6 L 1035.2 967.2 L 942.8 1054.6 L 876.2 1018.3 L 833.7 1043.4 L 833.3 1119.3 L 712.2 1158.0 L 667.8 1096.3 L 618.7 1100.5 L 585.4 1168.8 L 459.5 1151.1 L 446.3 1076.3 L 400.2 1058.7 L 340.6 1105.8 L 234.8 1035.2 L 255.4 962.1 L 221.5 926.3 L 147.4 942.8 L 82.7 833.3 L 132.9 776.4 L 117.9 729.4 L 44.0 712.2 L 33.2 585.4 L 103.2 555.9 L 110.1 507.1 L 50.9 459.5 L 96.2 340.6 L 172.0 344.4 L 199.4 303.4 L 166.8 234.8 L 259.2 147.4 L 325.8 183.7 L 368.3 158.6 L 368.7 82.7 L 489.8 44.0 L 534.2 105.7 Z M 198.9 601.0 A 402.1 402.1 0 1 0 1003.1 601.0 A 402.1 402.1 0 1 0 198.9 601.0 Z' fill-rule='evenodd' fill='%235A6662' stroke='%235A6662' stroke-width='22.5' stroke-linejoin='round'/%3E%3Cpath d='M 583.7 113.6 L 616.2 47.0 L 739.1 64.2 L 752.0 137.2 L 796.9 154.3 L 855.1 108.4 L 958.3 177.3 L 938.2 248.6 L 971.3 283.6 L 1043.6 267.4 L 1106.8 374.3 L 1057.7 429.8 L 1072.4 475.7 L 1144.5 492.5 L 1155.0 616.2 L 1086.8 645.0 L 1080.1 692.6 L 1137.8 739.1 L 1093.6 855.1 L 1019.6 851.4 L 992.9 891.4 L 1024.7 958.3 L 934.6 1043.6 L 869.5 1008.2 L 828.0 1032.7 L 827.7 1106.8 L 709.5 1144.5 L 666.2 1084.4 L 618.3 1088.4 L 585.8 1155.0 L 462.9 1137.8 L 450.0 1064.8 L 405.1 1047.7 L 346.9 1093.6 L 243.7 1024.7 L 263.8 953.4 L 230.7 918.4 L 158.4 934.6 L 95.2 827.7 L 144.3 772.2 L 129.6 726.3 L 57.5 709.5 L 47.0 585.8 L 115.2 557.0 L 121.9 509.4 L 64.2 462.9 L 108.4 346.9 L 182.4 350.6 L 209.1 310.6 L 177.3 243.7 L 267.4 158.4 L 332.5 193.8 L 374.0 169.3 L 374.3 95.2 L 492.5 57.5 L 535.8 117.6 Z M 190.1 601.0 A 410.9 410.9 0 1 0 1011.9 601.0 A 410.9 410.9 0 1 0 190.1 601.0 Z' fill-rule='evenodd' fill='url(%23ksteel)'/%3E%3Cpath d='M 584.2 126.8 L 615.8 62.0 L 735.4 78.8 L 747.9 149.8 L 791.6 166.4 L 848.2 121.8 L 948.7 188.8 L 929.1 258.2 L 961.3 292.2 L 1031.7 276.5 L 1093.1 380.4 L 1045.4 434.5 L 1059.6 479.1 L 1129.8 495.5 L 1140.0 615.8 L 1073.6 643.8 L 1067.1 690.2 L 1123.2 735.4 L 1080.2 848.2 L 1008.2 844.6 L 982.3 883.6 L 1013.2 948.7 L 925.5 1031.7 L 862.2 997.2 L 821.9 1021.0 L 821.6 1093.1 L 706.5 1129.8 L 664.5 1071.3 L 617.8 1075.2 L 586.2 1140.0 L 466.6 1123.2 L 454.1 1052.2 L 410.4 1035.6 L 353.8 1080.2 L 253.3 1013.2 L 272.9 943.8 L 240.7 909.8 L 170.3 925.5 L 108.9 821.6 L 156.6 767.5 L 142.4 722.9 L 72.2 706.5 L 62.0 586.2 L 128.4 558.2 L 134.9 511.8 L 78.8 466.6 L 121.8 353.8 L 193.8 357.4 L 219.7 318.4 L 188.8 253.3 L 276.5 170.3 L 339.8 204.8 L 380.1 181.0 L 380.4 108.9 L 495.5 72.2 L 537.5 130.7 Z M 176.4 601.0 A 424.6 424.6 0 1 0 1025.6 601.0 A 424.6 424.6 0 1 0 176.4 601.0 Z' fill-rule='evenodd' fill='none' stroke='%235A6662' stroke-opacity='0.35' stroke-width='8.8'/%3E%3Cpath d='M 198.9 601.0 A 402.1 402.1 0 1 0 1003.1 601.0 A 402.1 402.1 0 1 0 198.9 601.0 Z M 229.0 601.0 A 372.0 372.0 0 1 0 973.0 601.0 A 372.0 372.0 0 1 0 229.0 601.0 Z' fill-rule='evenodd' fill='url(%23krim)' stroke='%235A6662' stroke-width='4.0'/%3E%3C/g%3E%3C/g%3E%3Cg%3E%3Cpath d='M 531 248 L 2357 248 L 2522 413 L 2522 753 L 2357 918 L 531 918 L 366 753 L 366 413 Z' fill='%232F5A2B' stroke='%232F5A2B' stroke-width='10' stroke-linejoin='round'/%3E%3Cpath d='M 533 252 L 2355 252 L 2518 415 L 2518 751 L 2355 914 L 533 914 L 370 751 L 370 415 Z' fill='url(%23kplate)'/%3E%3Cpath d='M 549.752 280 L 2338.248 280 L 2490 431.752 L 2490 734.248 L 2338.248 886 L 549.752 886 L 398 734.248 L 398 431.752 Z' fill='none' stroke='%233B6C36' stroke-opacity='0' stroke-width='34.2'/%3E%3Cpath d='M 549.752 280 L 2338.248 280 L 2490 431.752 L 2490 734.248 L 2338.248 886 L 549.752 886 L 398 734.248 L 398 431.752 Z' fill='none' stroke='%233B6C36' stroke-opacity='0' stroke-width='57.6' stroke-linejoin='round'/%3E%3Cpath d='M 549.752 280 L 2338.248 280 L 2490 431.752 L 2490 734.248 L 2338.248 886 L 549.752 886 L 398 734.248 L 398 431.752 Z' fill='none' stroke='url(%23kglow)' stroke-width='18' stroke-linejoin='round'/%3E%3Crect x='1961.0' y='868.0' width='97.0' height='36.0' fill='%232F5A2B'/%3E%3Cpath d='M 1961.0 886.0 L 2075.0 770.0' stroke='url(%23kglow)' stroke-width='18' stroke-linecap='butt'/%3E%3Cpath d='M 1991.0 890.0 L 2108.0 771.0' stroke='url(%23kglow)' stroke-width='18' stroke-linecap='butt'/%3E%3C/g%3E%3Cg%3E%3Cpath d='M 576.5 355.0 L 569.2 362.3 L 569.2 518.3 L 666.0 421.5 L 666.0 355.0 Z' transform='translate(5,6)' fill='%233B6C36' fill-opacity='0' stroke='%233B6C36' stroke-opacity='0' stroke-width='7.0' stroke-linejoin='round'/%3E%3Cpath d='M 645.5 493.5 L 575.0 564.0 L 575.0 782.5 L 656.5 782.5 L 664.0 775.0 L 664.0 505.5 L 678.0 505.5 L 666.0 493.5 Z' transform='translate(5,6)' fill='%233B6C36' fill-opacity='0' stroke='%233B6C36' stroke-opacity='0' stroke-width='7.0' stroke-linejoin='round'/%3E%3Cpath d='M 710.0 376.5 L 789.5 456.0 L 1096.5 456.0 L 1161.0 520.5 L 1161.0 629.0 L 1145.0 629.0 L 1090.5 683.5 L 823.0 683.5 L 807.0 699.5 L 807.0 522.5 L 819.0 510.5 L 719.0 510.5 L 719.0 782.0 L 1129.5 782.0 L 1243.0 668.5 L 1243.0 486.5 L 1254.2 475.2 L 1137.0 358.0 L 710.0 358.0 Z' transform='translate(5,6)' fill='%233B6C36' fill-opacity='0' stroke='%233B6C36' stroke-opacity='0' stroke-width='7.0' stroke-linejoin='round'/%3E%3Cpath d='M 1804.0 355.5 L 1403.0 355.5 L 1286.8 471.8 L 1298.5 483.5 L 1298.5 597.0 L 1439.5 456.0 L 1732.0 456.0 L 1818.2 369.8 Z' transform='translate(5,6)' fill='%233B6C36' fill-opacity='0' stroke='%233B6C36' stroke-opacity='0' stroke-width='7.0' stroke-linejoin='round'/%3E%3Cpath d='M 1505.5 625.0 L 1734.0 625.0 L 1815.5 543.5 L 1797.0 525.0 L 1430.0 525.0 L 1417.8 537.2 Z' transform='translate(5,6)' fill='%233B6C36' fill-opacity='0' stroke='%233B6C36' stroke-opacity='0' stroke-width='7.0' stroke-linejoin='round'/%3E%3Cpath d='M 1414.5 783.5 L 1796.5 783.5 L 1816.0 764.0 L 1736.0 684.0 L 1447.0 684.0 L 1391.0 628.0 L 1378.0 628.0 L 1378.0 577.5 L 1361.5 577.5 L 1285.0 654.0 Z' transform='translate(5,6)' fill='%233B6C36' fill-opacity='0' stroke='%233B6C36' stroke-opacity='0' stroke-width='7.0' stroke-linejoin='round'/%3E%3Cpath d='M 1855.5 489.0 L 1855.5 778.5 L 1937.5 778.5 L 1937.5 524.0 L 2005.5 456.0 L 2215.5 456.0 L 2275.5 516.0 L 2275.5 543.0 L 2260.0 558.5 L 2067.5 558.5 L 1966.4 659.6 L 2276.0 659.6 L 2276.0 779.0 L 2363.0 779.0 L 2363.0 466.0 L 2253.0 356.0 L 1960.5 356.0 L 1841.5 475.0 Z' transform='translate(5,6)' fill='%233B6C36' fill-opacity='0' stroke='%233B6C36' stroke-opacity='0' stroke-width='7.0' stroke-linejoin='round'/%3E%3Cpath d='M 576.5 355.0 L 569.2 362.3 L 569.2 518.3 L 666.0 421.5 L 666.0 355.0 Z' fill='url(%23kivory)'/%3E%3Cpath d='M 576.5 355.0 L 569.2 362.3 L 569.2 518.3 L 666.0 421.5 L 666.0 355.0 Z' fill='none' stroke='%23F7F9F9' stroke-width='22.4' stroke-linejoin='round' clip-path='url(%23kclip_i_top)'/%3E%3Cpath d='M 576.5 355.0 L 569.2 362.3 L 569.2 518.3 L 666.0 421.5 L 666.0 355.0 Z' fill='none' stroke='%23F7F9F9' stroke-width='16.1' stroke-linejoin='round' transform='translate(2.1,2.1)' clip-path='url(%23kclip_i_top)'/%3E%3Cpath d='M 576.5 355.0 L 569.2 362.3 L 569.2 518.3 L 666.0 421.5 L 666.0 355.0 Z' fill='none' stroke='%23F7F9F9' stroke-width='16.1' stroke-linejoin='round' transform='translate(-2.1,-2.1)' clip-path='url(%23kclip_i_top)'/%3E%3Cpath d='M 576.5 355.0 L 569.2 362.3 L 569.2 518.3 L 666.0 421.5 L 666.0 355.0 Z' fill='none' stroke='%23F7F9F9' stroke-width='7.0' stroke-linejoin='round'/%3E%3Cpath d='M 645.5 493.5 L 575.0 564.0 L 575.0 782.5 L 656.5 782.5 L 664.0 775.0 L 664.0 505.5 L 678.0 505.5 L 666.0 493.5 Z' fill='url(%23kivory)'/%3E%3Cpath d='M 645.5 493.5 L 575.0 564.0 L 575.0 782.5 L 656.5 782.5 L 664.0 775.0 L 664.0 505.5 L 678.0 505.5 L 666.0 493.5 Z' fill='none' stroke='%23F7F9F9' stroke-width='22.4' stroke-linejoin='round' clip-path='url(%23kclip_i_bar)'/%3E%3Cpath d='M 645.5 493.5 L 575.0 564.0 L 575.0 782.5 L 656.5 782.5 L 664.0 775.0 L 664.0 505.5 L 678.0 505.5 L 666.0 493.5 Z' fill='none' stroke='%23F7F9F9' stroke-width='16.1' stroke-linejoin='round' transform='translate(2.1,2.1)' clip-path='url(%23kclip_i_bar)'/%3E%3Cpath d='M 645.5 493.5 L 575.0 564.0 L 575.0 782.5 L 656.5 782.5 L 664.0 775.0 L 664.0 505.5 L 678.0 505.5 L 666.0 493.5 Z' fill='none' stroke='%23F7F9F9' stroke-width='16.1' stroke-linejoin='round' transform='translate(-2.1,-2.1)' clip-path='url(%23kclip_i_bar)'/%3E%3Cpath d='M 645.5 493.5 L 575.0 564.0 L 575.0 782.5 L 656.5 782.5 L 664.0 775.0 L 664.0 505.5 L 678.0 505.5 L 666.0 493.5 Z' fill='none' stroke='%23F7F9F9' stroke-width='7.0' stroke-linejoin='round'/%3E%3Cpath d='M 710.0 376.5 L 789.5 456.0 L 1096.5 456.0 L 1161.0 520.5 L 1161.0 629.0 L 1145.0 629.0 L 1090.5 683.5 L 823.0 683.5 L 807.0 699.5 L 807.0 522.5 L 819.0 510.5 L 719.0 510.5 L 719.0 782.0 L 1129.5 782.0 L 1243.0 668.5 L 1243.0 486.5 L 1254.2 475.2 L 1137.0 358.0 L 710.0 358.0 Z' fill='url(%23kivory)'/%3E%3Cpath d='M 710.0 376.5 L 789.5 456.0 L 1096.5 456.0 L 1161.0 520.5 L 1161.0 629.0 L 1145.0 629.0 L 1090.5 683.5 L 823.0 683.5 L 807.0 699.5 L 807.0 522.5 L 819.0 510.5 L 719.0 510.5 L 719.0 782.0 L 1129.5 782.0 L 1243.0 668.5 L 1243.0 486.5 L 1254.2 475.2 L 1137.0 358.0 L 710.0 358.0 Z' fill='none' stroke='%23F7F9F9' stroke-width='22.4' stroke-linejoin='round' clip-path='url(%23kclip_D)'/%3E%3Cpath d='M 710.0 376.5 L 789.5 456.0 L 1096.5 456.0 L 1161.0 520.5 L 1161.0 629.0 L 1145.0 629.0 L 1090.5 683.5 L 823.0 683.5 L 807.0 699.5 L 807.0 522.5 L 819.0 510.5 L 719.0 510.5 L 719.0 782.0 L 1129.5 782.0 L 1243.0 668.5 L 1243.0 486.5 L 1254.2 475.2 L 1137.0 358.0 L 710.0 358.0 Z' fill='none' stroke='%23F7F9F9' stroke-width='16.1' stroke-linejoin='round' transform='translate(2.1,2.1)' clip-path='url(%23kclip_D)'/%3E%3Cpath d='M 710.0 376.5 L 789.5 456.0 L 1096.5 456.0 L 1161.0 520.5 L 1161.0 629.0 L 1145.0 629.0 L 1090.5 683.5 L 823.0 683.5 L 807.0 699.5 L 807.0 522.5 L 819.0 510.5 L 719.0 510.5 L 719.0 782.0 L 1129.5 782.0 L 1243.0 668.5 L 1243.0 486.5 L 1254.2 475.2 L 1137.0 358.0 L 710.0 358.0 Z' fill='none' stroke='%23F7F9F9' stroke-width='16.1' stroke-linejoin='round' transform='translate(-2.1,-2.1)' clip-path='url(%23kclip_D)'/%3E%3Cpath d='M 710.0 376.5 L 789.5 456.0 L 1096.5 456.0 L 1161.0 520.5 L 1161.0 629.0 L 1145.0 629.0 L 1090.5 683.5 L 823.0 683.5 L 807.0 699.5 L 807.0 522.5 L 819.0 510.5 L 719.0 510.5 L 719.0 782.0 L 1129.5 782.0 L 1243.0 668.5 L 1243.0 486.5 L 1254.2 475.2 L 1137.0 358.0 L 710.0 358.0 Z' fill='none' stroke='%23F7F9F9' stroke-width='7.0' stroke-linejoin='round'/%3E%3Cpath d='M 1804.0 355.5 L 1403.0 355.5 L 1286.8 471.8 L 1298.5 483.5 L 1298.5 597.0 L 1439.5 456.0 L 1732.0 456.0 L 1818.2 369.8 Z' fill='url(%23kivory)'/%3E%3Cpath d='M 1804.0 355.5 L 1403.0 355.5 L 1286.8 471.8 L 1298.5 483.5 L 1298.5 597.0 L 1439.5 456.0 L 1732.0 456.0 L 1818.2 369.8 Z' fill='none' stroke='%23F7F9F9' stroke-width='22.4' stroke-linejoin='round' clip-path='url(%23kclip_E_top)'/%3E%3Cpath d='M 1804.0 355.5 L 1403.0 355.5 L 1286.8 471.8 L 1298.5 483.5 L 1298.5 597.0 L 1439.5 456.0 L 1732.0 456.0 L 1818.2 369.8 Z' fill='none' stroke='%23F7F9F9' stroke-width='16.1' stroke-linejoin='round' transform='translate(2.1,2.1)' clip-path='url(%23kclip_E_top)'/%3E%3Cpath d='M 1804.0 355.5 L 1403.0 355.5 L 1286.8 471.8 L 1298.5 483.5 L 1298.5 597.0 L 1439.5 456.0 L 1732.0 456.0 L 1818.2 369.8 Z' fill='none' stroke='%23F7F9F9' stroke-width='16.1' stroke-linejoin='round' transform='translate(-2.1,-2.1)' clip-path='url(%23kclip_E_top)'/%3E%3Cpath d='M 1804.0 355.5 L 1403.0 355.5 L 1286.8 471.8 L 1298.5 483.5 L 1298.5 597.0 L 1439.5 456.0 L 1732.0 456.0 L 1818.2 369.8 Z' fill='none' stroke='%23F7F9F9' stroke-width='7.0' stroke-linejoin='round'/%3E%3Cpath d='M 1505.5 625.0 L 1734.0 625.0 L 1815.5 543.5 L 1797.0 525.0 L 1430.0 525.0 L 1417.8 537.2 Z' fill='url(%23kivory)'/%3E%3Cpath d='M 1505.5 625.0 L 1734.0 625.0 L 1815.5 543.5 L 1797.0 525.0 L 1430.0 525.0 L 1417.8 537.2 Z' fill='none' stroke='%23F7F9F9' stroke-width='22.4' stroke-linejoin='round' clip-path='url(%23kclip_E_mid)'/%3E%3Cpath d='M 1505.5 625.0 L 1734.0 625.0 L 1815.5 543.5 L 1797.0 525.0 L 1430.0 525.0 L 1417.8 537.2 Z' fill='none' stroke='%23F7F9F9' stroke-width='16.1' stroke-linejoin='round' transform='translate(2.1,2.1)' clip-path='url(%23kclip_E_mid)'/%3E%3Cpath d='M 1505.5 625.0 L 1734.0 625.0 L 1815.5 543.5 L 1797.0 525.0 L 1430.0 525.0 L 1417.8 537.2 Z' fill='none' stroke='%23F7F9F9' stroke-width='16.1' stroke-linejoin='round' transform='translate(-2.1,-2.1)' clip-path='url(%23kclip_E_mid)'/%3E%3Cpath d='M 1505.5 625.0 L 1734.0 625.0 L 1815.5 543.5 L 1797.0 525.0 L 1430.0 525.0 L 1417.8 537.2 Z' fill='none' stroke='%23F7F9F9' stroke-width='7.0' stroke-linejoin='round'/%3E%3Cpath d='M 1414.5 783.5 L 1796.5 783.5 L 1816.0 764.0 L 1736.0 684.0 L 1447.0 684.0 L 1391.0 628.0 L 1378.0 628.0 L 1378.0 577.5 L 1361.5 577.5 L 1285.0 654.0 Z' fill='url(%23kivory)'/%3E%3Cpath d='M 1414.5 783.5 L 1796.5 783.5 L 1816.0 764.0 L 1736.0 684.0 L 1447.0 684.0 L 1391.0 628.0 L 1378.0 628.0 L 1378.0 577.5 L 1361.5 577.5 L 1285.0 654.0 Z' fill='none' stroke='%23F7F9F9' stroke-width='22.4' stroke-linejoin='round' clip-path='url(%23kclip_E_bot)'/%3E%3Cpath d='M 1414.5 783.5 L 1796.5 783.5 L 1816.0 764.0 L 1736.0 684.0 L 1447.0 684.0 L 1391.0 628.0 L 1378.0 628.0 L 1378.0 577.5 L 1361.5 577.5 L 1285.0 654.0 Z' fill='none' stroke='%23F7F9F9' stroke-width='16.1' stroke-linejoin='round' transform='translate(2.1,2.1)' clip-path='url(%23kclip_E_bot)'/%3E%3Cpath d='M 1414.5 783.5 L 1796.5 783.5 L 1816.0 764.0 L 1736.0 684.0 L 1447.0 684.0 L 1391.0 628.0 L 1378.0 628.0 L 1378.0 577.5 L 1361.5 577.5 L 1285.0 654.0 Z' fill='none' stroke='%23F7F9F9' stroke-width='16.1' stroke-linejoin='round' transform='translate(-2.1,-2.1)' clip-path='url(%23kclip_E_bot)'/%3E%3Cpath d='M 1414.5 783.5 L 1796.5 783.5 L 1816.0 764.0 L 1736.0 684.0 L 1447.0 684.0 L 1391.0 628.0 L 1378.0 628.0 L 1378.0 577.5 L 1361.5 577.5 L 1285.0 654.0 Z' fill='none' stroke='%23F7F9F9' stroke-width='7.0' stroke-linejoin='round'/%3E%3Cpath d='M 1855.5 489.0 L 1855.5 778.5 L 1937.5 778.5 L 1937.5 524.0 L 2005.5 456.0 L 2215.5 456.0 L 2275.5 516.0 L 2275.5 543.0 L 2260.0 558.5 L 2067.5 558.5 L 1966.4 659.6 L 2276.0 659.6 L 2276.0 779.0 L 2363.0 779.0 L 2363.0 466.0 L 2253.0 356.0 L 1960.5 356.0 L 1841.5 475.0 Z' fill='url(%23kivory)'/%3E%3Cpath d='M 1855.5 489.0 L 1855.5 778.5 L 1937.5 778.5 L 1937.5 524.0 L 2005.5 456.0 L 2215.5 456.0 L 2275.5 516.0 L 2275.5 543.0 L 2260.0 558.5 L 2067.5 558.5 L 1966.4 659.6 L 2276.0 659.6 L 2276.0 779.0 L 2363.0 779.0 L 2363.0 466.0 L 2253.0 356.0 L 1960.5 356.0 L 1841.5 475.0 Z' fill='none' stroke='%23F7F9F9' stroke-width='22.4' stroke-linejoin='round' clip-path='url(%23kclip_A)'/%3E%3Cpath d='M 1855.5 489.0 L 1855.5 778.5 L 1937.5 778.5 L 1937.5 524.0 L 2005.5 456.0 L 2215.5 456.0 L 2275.5 516.0 L 2275.5 543.0 L 2260.0 558.5 L 2067.5 558.5 L 1966.4 659.6 L 2276.0 659.6 L 2276.0 779.0 L 2363.0 779.0 L 2363.0 466.0 L 2253.0 356.0 L 1960.5 356.0 L 1841.5 475.0 Z' fill='none' stroke='%23F7F9F9' stroke-width='16.1' stroke-linejoin='round' transform='translate(2.1,2.1)' clip-path='url(%23kclip_A)'/%3E%3Cpath d='M 1855.5 489.0 L 1855.5 778.5 L 1937.5 778.5 L 1937.5 524.0 L 2005.5 456.0 L 2215.5 456.0 L 2275.5 516.0 L 2275.5 543.0 L 2260.0 558.5 L 2067.5 558.5 L 1966.4 659.6 L 2276.0 659.6 L 2276.0 779.0 L 2363.0 779.0 L 2363.0 466.0 L 2253.0 356.0 L 1960.5 356.0 L 1841.5 475.0 Z' fill='none' stroke='%23F7F9F9' stroke-width='16.1' stroke-linejoin='round' transform='translate(-2.1,-2.1)' clip-path='url(%23kclip_A)'/%3E%3Cpath d='M 1855.5 489.0 L 1855.5 778.5 L 1937.5 778.5 L 1937.5 524.0 L 2005.5 456.0 L 2215.5 456.0 L 2275.5 516.0 L 2275.5 543.0 L 2260.0 558.5 L 2067.5 558.5 L 1966.4 659.6 L 2276.0 659.6 L 2276.0 779.0 L 2363.0 779.0 L 2363.0 466.0 L 2253.0 356.0 L 1960.5 356.0 L 1841.5 475.0 Z' fill='none' stroke='%23F7F9F9' stroke-width='7.0' stroke-linejoin='round'/%3E%3C/g%3E%3C/svg%3E");
 }
 
 /* LAMP AND READOUT COLORS (Armory extension of plate.css 561-563's rule: a lamp is a
-   light, not a word, so a lamp keeps IDEA's own hue in every theme). Red and cyan lamps
-   are not in idea-app; they are colors.css's IDEA --crimson and --cyan, declared once
-   here, theme-independent. The readout inks are lighter steps of the same hues so the
-   words clear 4.5:1 on the display's dark glass in both themes. The word beside a lamp
-   always carries the meaning. */
+   light, not a word, so a lamp keeps IDEA's own hue in every theme). The red lamp is not
+   in idea-app; it is colors.css's IDEA --crimson, declared once here, theme-independent.
+   The readout inks are lighter steps of the same hues so the words clear 4.5:1 on the
+   display's dark glass, which is dark in both themes. The word beside a lamp always
+   carries the meaning. The avatar discs (a person's initials) are lamps too: the same
+   bright fills in every theme, with dark initials on them. */
 :root {
 	--lamp-red: #d95f5f;
-	--lamp-cyan: #5abda8;
-	--readout-busy: #6cc9b5;
-	--readout-hold: #d9b84e;
-	--readout-warn: #e8a05a;
+	--readout-look: #e8a05a;
 	--readout-bad: #f09a9a;
 	--readout-off: #b9c0bb;
+	--avatar-ok: #78b870;
+	--avatar-look: #d9a04e;
+	--avatar-off: #9aa49d;
+	--avatar-ink: #0d1311;
+	/* The theme picker's swatches show each theme's own plate, so they are the same in
+	   every theme (plate.css 183-184 and 476-477). */
+	--swatch-idea-top: #2f3431;
+	--swatch-idea-bot: #121413;
+	--swatch-sw-top: #f6f8fb;
+	--swatch-sw-bot: #dfe3ea;
+}
+
+/* THE SEVERITY SCALE, AS ONE SET OF NAMES. Anything that shows a state takes
+   data-tone="ok | look | bad | off", and reads these. Colors only. */
+[data-tone='ok'] {
+	--readout: var(--plate-screen-ink);
+	--readout-glow: rgba(120, 184, 112, 0.6);
+	--tone-ink: var(--ink-ok);
+	--tone-edge: var(--edge-ok);
+	--tone-tint: rgba(0, 0, 0, 0);
+	--tone-lamp: var(--plate-accent);
+	--tone-avatar: var(--avatar-ok);
+}
+[data-tone='look'] {
+	--readout: var(--readout-look);
+	--readout-glow: rgba(208, 128, 48, 0.6);
+	--tone-ink: var(--ink-look);
+	--tone-edge: var(--edge-look);
+	--tone-tint: var(--tint-look);
+	--tone-lamp: var(--plate-led-amber);
+	--tone-avatar: var(--avatar-look);
+}
+[data-tone='bad'] {
+	--readout: var(--readout-bad);
+	--readout-glow: rgba(217, 95, 95, 0.6);
+	--tone-ink: var(--ink-bad);
+	--tone-edge: var(--edge-bad);
+	--tone-tint: var(--tint-bad);
+	--tone-lamp: var(--lamp-red);
+	--tone-avatar: var(--lamp-red);
+}
+[data-tone='off'] {
+	--readout: var(--readout-off);
+	--readout-glow: rgba(185, 192, 187, 0.3);
+	--tone-ink: var(--plate-ink-2);
+	--tone-edge: var(--plate-hair);
+	--tone-tint: rgba(0, 0, 0, 0);
+	--tone-lamp: var(--plate-led-off);
+	--tone-avatar: var(--avatar-off);
 }
 
 /* ===================================================================== RULES */
@@ -752,6 +836,13 @@ button {
 	right: 0;
 	transform: scaleX(-1);
 }
+/* Armory: DECORATION STAYS ON THE WINDOW'S MAIN PLATE. The Settings sheet is a housing
+   over that plate, not the plate, so its title bar keeps its title and groove and drops
+   the hazard hatch. The hatch is absolutely placed, so no box moves. */
+dialog .plate-title::before,
+dialog .plate-title::after {
+	content: none;
+}
 
 /* SECTION HEADINGS AND LABELS. A label is always caps at the 11px floor, tracked
    (plate.css 659-676). A label that names a section sits ABOVE it and reads from the
@@ -942,45 +1033,6 @@ button {
 		0 0 8px 1px var(--plate-bloom),
 		0 2px 3px 0 var(--plate-drop);
 }
-/* THE BROKEN, TICKED RING for a wide lit key (plate.css 810-846; the accent-tint band is
-   the approved mockup's, written here to win, see the brief's finding 2). */
-.key.ring:is([aria-pressed='true'], [aria-checked='true'], [aria-selected='true']):not(:disabled, [aria-disabled='true']) {
-	box-shadow:
-		inset 0 0 0 1px var(--plate-bezel-mid),
-		inset 0 0 0 2px var(--plate-accent-tint),
-		inset 0 3px 0 0 var(--plate-panel-hi),
-		0 0 0 1px var(--plate-rim-out),
-		0 2px 3px 0 var(--plate-drop),
-		0 6px 10px -5px var(--plate-drop-far);
-}
-.key.ring:is([aria-pressed='true'], [aria-checked='true'], [aria-selected='true']):not(:disabled, [aria-disabled='true'])::after {
-	content: '';
-	position: absolute;
-	inset: calc(var(--plate-ring-inset) - 1px);
-	border: 2px solid var(--plate-accent);
-	border-radius: calc(var(--plate-r-control) - var(--plate-ring-inset) + 2px);
-	box-shadow: inset 0 0 0 1px var(--plate-accent-glow);
-	pointer-events: none;
-	mask:
-		linear-gradient(118deg, #000 calc(100% - 4px), transparent calc(100% - 3.5px)) right 10px top 0 / 36px 5px no-repeat,
-		linear-gradient(118deg, #000 calc(100% - 4px), transparent calc(100% - 3.5px)) left 10px bottom 0 / 17px 5px no-repeat,
-		linear-gradient(#000, #000);
-	mask-composite: exclude;
-}
-.key.ring:is([aria-pressed='true'], [aria-checked='true'], [aria-selected='true']):not(:disabled, [aria-disabled='true'])::before {
-	content: '';
-	position: absolute;
-	inset: calc(var(--plate-ring-inset) - 1px);
-	pointer-events: none;
-	background:
-		linear-gradient(118deg, var(--plate-accent) calc(100% - 3px), transparent calc(100% - 2.5px)) right 15px top 0 / 13px 3.5px,
-		linear-gradient(var(--plate-accent), var(--plate-accent)) right 31px top 0 / 2px 2px,
-		linear-gradient(var(--plate-accent), var(--plate-accent)) right 35px top 0 / 2px 2px,
-		linear-gradient(var(--plate-accent), var(--plate-accent)) right 39px top 0 / 2px 2px,
-		linear-gradient(var(--plate-accent), var(--plate-accent)) left 11px bottom 0 / 2px 2px,
-		linear-gradient(var(--plate-accent), var(--plate-accent)) left 15px bottom 0 / 2px 2px;
-	background-repeat: no-repeat;
-}
 /* Armory: a key's icon is drawn in its ink. */
 .key svg {
 	flex: none;
@@ -1126,7 +1178,7 @@ button {
 		radial-gradient(circle at 50% 30%, var(--plate-cup-in) 0 2.1px, var(--plate-cup) 3.5px);
 	box-shadow: 0 1px 0 0 var(--plate-bezel-hi);
 }
-.pad:is([aria-current='page'], [aria-selected='true']) {
+.pad:is([aria-current='page'], [aria-selected='true'], [aria-pressed='true']) {
 	font-weight: 700;
 	background:
 		linear-gradient(to bottom, var(--plate-lit-top), var(--plate-lit-bot)) padding-box,
@@ -1142,7 +1194,7 @@ button {
 		0 2px 3px 1px var(--plate-drop),
 		0 5px 8px -3px var(--plate-drop-far);
 }
-.pad:is([aria-current='page'], [aria-selected='true'])::after {
+.pad:is([aria-current='page'], [aria-selected='true'], [aria-pressed='true'])::after {
 	background:
 		radial-gradient(circle, var(--plate-accent-glow) 0 0.5px, var(--plate-accent) 1.5px, var(--plate-led-ring) 2.1px 2.4px, transparent 2.8px),
 		radial-gradient(circle at 50% 30%, var(--plate-cup-in) 0 2.1px, var(--plate-cup) 3.5px);
@@ -1170,26 +1222,6 @@ button {
 		-2px 18px 30px -14px var(--plate-drop-far);
 }
 
-/* WELLS: a field sits in a recessed trough (plate.css 1126-1206). A crisp top shadow two
-   or three pixels deep, a graded face, a light lip OUTSIDE the foot. The border stays the
-   hairline all round. Sizes from classroom.css 760-783. */
-.well {
-	box-sizing: border-box;
-	min-height: 44px;
-	padding: 0.45rem 0.8rem;
-	border: 1px solid var(--plate-hair);
-	border-radius: var(--plate-r-control);
-	background-color: var(--plate-well-ground);
-	background-image: linear-gradient(to bottom, var(--plate-well-top), var(--plate-well-face) 30%);
-	box-shadow:
-		inset 0 1px 0 0 var(--plate-well-shade),
-		inset 0 2px 3px -1px var(--plate-well-shade),
-		0 1px 0 0 var(--plate-well-lip);
-	color: var(--plate-ink);
-	font-family: var(--font-display);
-	font-size: 0.95rem;
-}
-
 /* THE LIST WELL AND ITS ROWS (plate.css 1229-1326; sizes from idea-app
    src/lib/classroom/ClassView.svelte 2799-2806, 2884-2898, 3022-3030). The group is the
    well, lit from the upper left; rows are divided by ETCHED lines that stop short of its
@@ -1210,44 +1242,57 @@ button {
 		inset 0 -1px 0 0 var(--plate-well-lip),
 		0 1px 0 0 var(--plate-well-lip);
 }
-/* A LIST IN THE RECESSED COLUMN IS A CARD: the panel's material (plate.css 1093-1124),
-   so the column is the darkest surface and each list a clear step lighter, the way the
-   approved page holds raised cards in its recessed column (brief section 5: "a region
-   reads by value before it reads by edge"). Raised, not pressable: the rows inside are
-   the pressable part. Production values, nothing lightened. The hairline stays
-   --plate-hair on the same recess ground, so its 3:1 is unchanged; a chip on the card
-   face is now a shade darker than its ground, recessed as 3.12 asks. Paint only. */
-.plate-recess .list-well {
-	background-color: var(--plate-panel-ground);
-	background-image: linear-gradient(to bottom, var(--plate-panel-top), var(--plate-panel-bot));
-	box-shadow:
-		inset 0 1px 0 0 var(--plate-panel-hi),
-		0 1px 2px 0 var(--plate-drop),
-		0 8px 14px -6px var(--plate-drop),
-		-2px 18px 30px -14px var(--plate-drop-far);
-}
-/* A row: 44px floor (a row opens a detail, so it is a control). */
+/* A LIST STAYS SET INTO THE SURFACE, in the recessed column too. Standards 14(b) and
+   plate.css 42-47 name "a chip, a well, a list and the recessed column" as inset, never
+   raised: a raised list with a drop shadow reads as one big key and promises a click the
+   list itself does not answer (its rows do). So there is no recess override here; the
+   list keeps the well recipe above (plate.css 1234-1246) wherever it sits. Paint only. */
+/* A ROW IS ONE CLICK TARGET. Its words and chips are plain text, and an invisible key
+   laid over the whole row (.row-hit) takes the click, so any extra key on the row can
+   sit above it. 44px floor: a row opens something, so it is a control. Hover turns the
+   name to the hover ink (ClassView.svelte 3032-3034). */
 .row {
 	position: relative;
+	/* Armory: the row's key, its chips and any extra key stack inside the row, so the
+	   recessed column's tabs and the "more below" fade still paint over a row that
+	   scrolls under them. Paint only. */
+	isolation: isolate;
 }
-.row > .row-main {
-	display: flex;
+.row-main {
+	position: relative;
+	display: grid;
+	grid-template-columns: 20px minmax(0, 1fr) 16px;
+	grid-template-areas: 'icon body go';
 	align-items: center;
-	gap: 0.55rem;
+	column-gap: 0.75rem;
 	box-sizing: border-box;
-	width: 100%;
 	min-height: 44px;
-	padding: 0.3rem 0.2rem;
-	border: 0;
-	background: none;
-	font: inherit;
-	text-align: left;
-	text-decoration: none;
+	padding: 0.65rem 0.4rem;
 	color: var(--plate-ink);
 }
-.row > button.row-main {
-	cursor: pointer;
+.row-main.has-extra {
+	grid-template-columns: 20px minmax(0, 1fr) auto 16px;
+	grid-template-areas: 'icon body extra go';
+}
+.row-hit {
+	position: absolute;
+	inset: 0;
+	z-index: 1;
+	width: 100%;
+	height: 100%;
+	margin: 0;
+	padding: 0;
+	border: 0;
 	border-radius: var(--plate-r-small);
+	background: transparent;
+	cursor: pointer;
+}
+.row-hit:focus-visible {
+	outline-offset: -2px;
+}
+.row-hit:hover ~ .row-body .row-name,
+.row-hit:hover ~ .row-go {
+	color: var(--hover-ink);
 }
 .row .row-name {
 	font-weight: 600;
@@ -1256,65 +1301,15 @@ button {
 	color: var(--plate-head-ink);
 	text-shadow: 0 0 6px var(--plate-text-bloom);
 }
-/* Hover turns the name to the hover ink (ClassView.svelte 3032-3034). */
-.row > button.row-main:hover .row-name {
-	color: var(--hover-ink);
-}
-/* THE ETCHED DIVIDER: the dark line holds the 3:1 boundary floor (it is the only
-   separator between two interactive rows), with a light line under it so it reads as
-   a cut in the well, not a rule on it (plate.css 1253-1264). One line per row, never
-   a repeating pattern. Armory: the history list's entries take the same cut. */
-.row,
-.history-list > li {
-	background-image:
-		linear-gradient(to right, transparent 0, var(--plate-divider) 12px, var(--plate-divider) calc(100% - 12px), transparent 100%),
-		linear-gradient(to right, transparent 0, var(--plate-well-lip) 12px, var(--plate-well-lip) calc(100% - 12px), transparent 100%);
-	background-size: calc(100% - 4px) 1px, calc(100% - 4px) 1px;
-	background-position: 2px 0, 2px 1px;
+/* THE DIVIDER: one hairline between two rows, which holds the 3:1 boundary floor (it is
+   the only separator between two interactive rows) and fades out 12px from each end
+   (plate.css 1253-1264, drawn once, not doubled). Never a repeating pattern. */
+.row + .row,
+.history-list > li + li {
+	background-image: linear-gradient(to right, transparent 0, var(--plate-divider) 12px, var(--plate-divider) calc(100% - 12px), transparent 100%);
+	background-size: calc(100% - 4px) 1px;
+	background-position: 2px 0;
 	background-repeat: no-repeat;
-}
-.row:first-child,
-.history-list > li:first-child {
-	background-image: none;
-}
-
-/* A TALL LIST WELL (the history list on File detail) takes the field well's recipe plus
-   a deeper shade band, on the list face; its head is etched off the rows by a groove
-   (plate.css 1667-1705). */
-.history-well {
-	margin: 0;
-	padding: 0;
-	border: 1px solid var(--plate-hair);
-	border-radius: var(--plate-r-control);
-	background-color: var(--plate-list-face);
-	background-image: linear-gradient(to bottom, var(--plate-well-top), var(--plate-list-face) 12px);
-	box-shadow:
-		inset 0 1px 0 0 var(--plate-well-shade),
-		inset 0 2px 3px -1px var(--plate-well-shade),
-		inset 0 10px 12px -8px var(--plate-inset-shade),
-		0 1px 0 0 var(--plate-well-lip);
-}
-.history-well > .history-head {
-	display: flex;
-	align-items: baseline;
-	gap: var(--space-3);
-	margin: 0;
-	font-weight: 400;
-	line-height: 1.6;
-	padding: 0.6rem 0.9rem;
-	background: transparent;
-	border-bottom: 1px solid var(--plate-groove-dk);
-	box-shadow: 0 1px 0 0 var(--plate-groove-lt);
-	color: var(--plate-caption);
-	font-family: var(--font-mono);
-	font-size: var(--plate-label-size);
-	letter-spacing: var(--plate-label-track);
-	text-transform: uppercase;
-}
-.history-list {
-	margin: 0;
-	padding: 0;
-	list-style: none;
 }
 
 /* THE STATUS CHIP: a RECESSED tag, never a key (plate.css 858-897, 905-915, 965-992).
@@ -1383,8 +1378,41 @@ button {
 .chip.lamp.red {
 	--plate-led-color: var(--lamp-red);
 }
-.chip.lamp.cyan {
-	--plate-led-color: var(--lamp-cyan);
+/* Armory: a kind chip (Part, Assembly, Drawing) is a plain recessed tag, as the site's
+   ASSIGNMENT and MATERIAL tags are; its word is quieter than a status. */
+.chip.kind {
+	padding: 0 6px;
+	color: var(--plate-ink-2);
+}
+/* Armory: WHO IS EDITING. The person's initials in a lit disc (the site's AN avatar),
+   then the words: green when it is you, amber when it is someone else. Still a recessed
+   tag: the disc is flat and nothing on it is pressable. */
+.chip.who {
+	gap: 5px;
+	padding: 0 7px 0 2px;
+	letter-spacing: var(--plate-led-word-track);
+}
+.avatar {
+	flex: none;
+	display: inline-grid;
+	place-items: center;
+	box-sizing: border-box;
+	width: 18px;
+	height: 18px;
+	border-radius: 50%;
+	font-family: var(--font-mono);
+	font-size: var(--plate-label-size);
+	font-weight: 700;
+	line-height: 1;
+	letter-spacing: 0;
+	text-transform: uppercase;
+	color: var(--avatar-ink);
+	background-color: var(--tone-avatar, var(--avatar-off));
+	box-shadow: 0 0 0 1px var(--plate-led-ring);
+}
+.avatar svg {
+	width: 55%;
+	height: 55%;
 }
 
 /* THE HOUSING: a sheet or a dialog is one floating housing with a molded frame, its
@@ -1431,9 +1459,14 @@ button {
 		0 8px 14px -5px var(--plate-drop),
 		-3px 22px 34px -12px var(--plate-drop-far);
 }
-.display .screen {
+/* THE GLASS SCREEN (plate.css 1565-1665, the display's screen, on its own so it can also
+   head Needs you and carry Connect's status). Dark tinted glass in both themes; the
+   readout in mono caps with its lamp. Armory: the readout is bold and carries a second,
+   wider glow, as the site's RETURNED: 18 / 20 PTS does on the approved page. Its color is
+   the severity scale's (data-tone on it or on the display around it). */
+.lcd {
 	position: relative;
-	margin: -0.95rem -0.7rem 0;
+	margin: 0;
 	padding: 0.95rem 1rem 1.25rem 2.1rem;
 	border-radius: 7px 7px var(--plate-cut-screen) var(--plate-cut-screen);
 	background-color: var(--plate-screen-top);
@@ -1451,15 +1484,18 @@ button {
 		0 0 3px 1px var(--plate-drop),
 		0 1px 0 2px var(--plate-panel-hi);
 	color: var(--readout, var(--plate-screen-ink));
-	text-shadow: 0 0 6px var(--readout-glow, var(--plate-screen-glow));
+	text-shadow:
+		0 0 2px var(--readout-glow, var(--plate-screen-glow)),
+		0 0 10px var(--readout-glow, var(--plate-screen-glow));
 	font-family: var(--font-mono);
 	font-size: var(--plate-readout-size);
+	font-weight: 700;
 	line-height: 1.35;
-	letter-spacing: 0.04em;
+	letter-spacing: 0.06em;
 	text-transform: uppercase;
 	font-variant-numeric: tabular-nums;
 }
-.display .screen::before {
+.lcd::before {
 	content: '';
 	position: absolute;
 	left: 0.85rem;
@@ -1473,31 +1509,41 @@ button {
 	pointer-events: none;
 }
 @supports (corner-shape: bevel) {
-	.display .screen {
+	.lcd {
 		corner-shape: round round var(--plate-soft) var(--plate-soft);
 	}
 }
-/* Armory: the readout's tone. The word always carries the meaning; the ink and its glow
-   follow it (colors only). */
-.display[data-tone='busy'] {
-	--readout: var(--readout-busy);
-	--readout-glow: rgba(90, 189, 168, 0.55);
+.display > .lcd {
+	margin: -0.95rem -0.7rem 0;
 }
-.display[data-tone='hold'] {
-	--readout: var(--readout-hold);
-	--readout-glow: rgba(217, 184, 78, 0.5);
+/* A screen that carries a glyph shows it in place of the lamp. */
+.lcd:has(> .lcd-icon) {
+	display: flex;
+	align-items: center;
+	gap: 0.6rem;
+	padding-left: 1rem;
 }
-.display[data-tone='warn'] {
-	--readout: var(--readout-warn);
-	--readout-glow: rgba(208, 128, 48, 0.55);
+.lcd:has(> .lcd-icon)::before {
+	content: none;
 }
-.display[data-tone='bad'] {
-	--readout: var(--readout-bad);
-	--readout-glow: rgba(217, 95, 95, 0.55);
+.lcd-icon {
+	flex: none;
+	width: 18px;
+	height: 18px;
+	color: var(--readout, var(--plate-screen-ink));
+	filter: drop-shadow(0 0 3px var(--readout-glow, var(--plate-screen-glow)));
 }
-.display[data-tone='off'] {
-	--readout: var(--readout-off);
-	--readout-glow: rgba(185, 192, 187, 0.3);
+/* A screen that is waiting breathes: its glyph's light eases, nothing moves (plate.css
+   847-856: color may ease, never a box). */
+@media (prefers-reduced-motion: no-preference) {
+	.lcd.live .lcd-icon {
+		animation: lcd-breathe 1.6s ease-in-out infinite;
+	}
+}
+@keyframes lcd-breathe {
+	50% {
+		opacity: 0.3;
+	}
 }
 
 /* ===================================================================== ARMORY LAYOUT */
@@ -1529,7 +1575,7 @@ button {
 	/* 6px of room on every side: the focus ring's reach (2px + 2px) and a hair more,
 	   so a control at the edge is never cut (plate.css 1386-1391). */
 	margin: 0 -6px;
-	padding: var(--space-4) 6px 6px;
+	padding: var(--space-3) 6px 6px;
 }
 /* A region that scrolls shows its place with a thin accent position bar, as the approved
    list well does (shapes-v3-detail-space-white-2x.png: "the position bar"). */
@@ -1543,25 +1589,36 @@ button {
 	margin: 0 auto;
 }
 
-/* Header: the emblem and the window's name, then the window's keys. The name is in the
-   title-bar voice: mono caps, regular weight, never bold (brief section 5). */
+/* THE HEADER: the IDEA lockup at the site's masthead height (44px), a thin engraved
+   rule, then the window's name in the title voice (mono caps, regular weight), then the
+   window's keys. */
 .brand {
 	display: flex;
 	align-items: center;
-	gap: 0.6rem;
+	gap: 0.8rem;
 	margin-right: auto;
 	min-width: 0;
 }
-.emblem {
+.wordmark {
 	flex: none;
-	width: 40px;
-	height: 40px;
+	display: block;
+	width: 94px;
+	height: 44px;
+	background: var(--brand-lockup) center / contain no-repeat;
+}
+.brand-rule {
+	flex: none;
+	width: 2px;
+	height: 28px;
+	box-shadow:
+		inset 1px 0 0 0 var(--plate-groove-dk),
+		inset -1px 0 0 0 var(--plate-groove-lt);
 }
 .brand-word {
 	font-family: var(--font-mono);
 	font-size: 0.95rem;
 	font-weight: 400;
-	letter-spacing: var(--plate-title-track);
+	letter-spacing: 0.22em;
 	text-transform: uppercase;
 	color: var(--plate-head-ink);
 	white-space: nowrap;
@@ -1571,26 +1628,107 @@ button {
 	align-items: center;
 	gap: var(--space-3);
 }
-/* A narrow window keeps the keys whole (their full tracking and padding) and lets the
-   emblem carry the brand; the word stays for a screen reader. Connect has no header
-   keys, so it keeps the word. */
-@media (max-width: 480px) {
+/* A narrow window keeps the lockup and the name, and its two header keys become icon
+   keys (44 by 44); the words stay for screen readers, and a tooltip says where each
+   one goes. */
+@media (max-width: 560px) {
 	.plate-header {
 		gap: var(--space-2);
 	}
-	body:not([data-screen='connect']) .brand-word {
+	.brand {
+		gap: 0.6rem;
+	}
+	.brand-word {
+		letter-spacing: 0.14em;
+	}
+	.header-keys {
+		gap: var(--space-2);
+	}
+	.hdr-key {
+		padding: 0;
+		width: 44px;
+	}
+	.hdr-key .key-word {
 		position: absolute;
 		width: 1px;
 		height: 1px;
 		margin: -1px;
-		padding: 0;
 		overflow: hidden;
 		clip-path: inset(50%);
+		white-space: nowrap;
 	}
 }
 
-/* Shared text pieces. A help line prints straight on the recess, with no box around it:
-   nothing is drawn as an empty container. */
+/* THE TITLE BAR on every screen: the page title between two hatched rails, over a
+   groove (plate.css 1707-1763). A key may sit at either end (Back on a file's page, Done
+   on Settings); the two ends are the same width, so the title stays centered. */
+.title-bar {
+	--tb-side: 44px;
+	display: grid;
+	grid-template-columns: minmax(0, 1fr);
+	align-items: center;
+	column-gap: var(--space-2);
+	margin-bottom: var(--space-4);
+	background: linear-gradient(to bottom, var(--plate-plate-hi), transparent 3px);
+	box-shadow:
+		inset 0 -1px 0 0 var(--plate-groove-dk),
+		inset 0 -2px 0 0 var(--plate-groove-lt);
+}
+.title-bar.has-keys {
+	grid-template-columns: var(--tb-side) minmax(0, 1fr) var(--tb-side);
+	padding-bottom: 4px;
+}
+.title-bar:not(.has-keys) > :is(.tb-lead, .tb-end) {
+	display: none;
+}
+.tb-lead,
+.tb-end {
+	display: flex;
+	align-items: center;
+}
+.tb-end {
+	justify-content: flex-end;
+}
+.title-bar > .plate-title {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	min-height: 44px;
+	min-width: 44px;
+	overflow-wrap: anywhere;
+	background: none;
+	box-shadow: none;
+}
+.back-key {
+	width: 44px;
+	padding: 0;
+}
+
+/* THE BRACKETED REGION: thin L ticks at the corners and a tick at each mid edge
+   (plate-v3.css 133-161), for a tray that is a page's working area. Paint only. */
+.brackets {
+	position: relative;
+}
+.brackets::before {
+	content: '';
+	position: absolute;
+	inset: 0;
+	pointer-events: none;
+	background:
+		linear-gradient(var(--plate-bracket), var(--plate-bracket)) 0 0 / 9px 1px,
+		linear-gradient(var(--plate-bracket), var(--plate-bracket)) 0 0 / 1px 9px,
+		linear-gradient(var(--plate-bracket), var(--plate-bracket)) 100% 0 / 9px 1px,
+		linear-gradient(var(--plate-bracket), var(--plate-bracket)) 100% 0 / 1px 9px,
+		linear-gradient(var(--plate-bracket), var(--plate-bracket)) 0 100% / 9px 1px,
+		linear-gradient(var(--plate-bracket), var(--plate-bracket)) 0 100% / 1px 9px,
+		linear-gradient(var(--plate-bracket), var(--plate-bracket)) 100% 100% / 9px 1px,
+		linear-gradient(var(--plate-bracket), var(--plate-bracket)) 100% 100% / 1px 9px,
+		linear-gradient(var(--plate-bracket), var(--plate-bracket)) 0 50% / 4px 1px,
+		linear-gradient(var(--plate-bracket), var(--plate-bracket)) 100% 50% / 4px 1px;
+	background-repeat: no-repeat;
+}
+
+/* Shared text pieces. A help line prints straight on the recess, with no box around it. */
 .group-help {
 	max-width: 62ch;
 	font-size: 0.9rem;
@@ -1598,11 +1736,72 @@ button {
 	color: var(--plate-ink-2);
 	text-wrap: pretty;
 }
+/* A value a student may need to read exactly (a folder, an email): mono, in a recessed
+   tag, never a field, because it can't be typed into. */
+.mono-plate,
+.path-plate {
+	box-sizing: border-box;
+	border-radius: var(--plate-r-small);
+	font-family: var(--font-mono);
+	font-size: 0.85rem;
+	letter-spacing: 0.02em;
+	line-height: 1.35;
+	color: var(--plate-ink);
+	overflow-wrap: anywhere;
+	background-color: var(--plate-chip-ground);
+	background-image: linear-gradient(to bottom, var(--plate-chip-top), var(--plate-chip-bot));
+	box-shadow:
+		inset 0 0 0 1px var(--plate-chip-edge),
+		inset 0 2px 2px -1px var(--plate-chip-shade),
+		inset 0 -1px 0 0 var(--plate-chip-lip),
+		0 1px 0 0 var(--plate-chip-lip);
+}
+.mono-plate {
+	display: inline-block;
+	padding: 0.3rem 0.55rem;
+}
+.mono-inline {
+	font-family: var(--font-mono);
+	font-size: 0.92em;
+	letter-spacing: 0.01em;
+	white-space: nowrap;
+}
+/* A QUIET LINK: words that act, underlined, for an action that should not shout (Sign
+   out). Still a 44px target, and the focus ring like every control. */
+.textlink {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.4rem;
+	box-sizing: border-box;
+	min-height: 44px;
+	min-width: 44px;
+	padding: 0 0.3rem;
+	border: 0;
+	border-radius: var(--plate-r-small);
+	background: none;
+	cursor: pointer;
+	font-family: var(--font-display);
+	font-size: 0.9rem;
+	line-height: 1.3;
+	color: var(--plate-ink-2);
+	text-decoration: underline;
+	text-decoration-color: var(--plate-hair);
+	text-underline-offset: 3px;
+}
+.textlink:hover {
+	color: var(--hover-ink);
+	text-decoration-color: currentColor;
+}
+.textlink svg {
+	flex: none;
+	width: 14px;
+	height: 14px;
+}
 
-/* Home: the status display and this computer on the left, the recessed column on the
-   right. One column, in reading order, when the window is narrow. One gap between groups
-   everywhere (a group's 14px foot + 0.75rem + the next group's 8px head = 34px), and
-   one label-to-content gap (the group's 0.6rem). */
+/* Home: the status display, the up-to-date ring and this computer on the left, the
+   recessed column on the right. One column, in reading order, when the window is
+   narrow. One gap between groups everywhere (a group's 14px foot + 0.75rem + the next
+   group's 8px head = 34px), and one label-to-content gap (the group's 0.6rem). */
 .home {
 	position: relative;
 	display: grid;
@@ -1612,7 +1811,7 @@ button {
 		'status main'
 		'account main';
 	column-gap: var(--space-5);
-	row-gap: var(--space-3);
+	row-gap: var(--space-2);
 	align-items: start;
 }
 .home > .plate-engrave {
@@ -1649,13 +1848,14 @@ button {
 }
 /* Brackets mark a region, not every list in it: none inside the recessed column (the
    side column keeps its own). Paint only, no box moves. */
-.plate-recess .group::before {
+.recess-scroll .group::before {
 	content: none;
 }
 /* In a wide window Home fills the window and only the recessed column scrolls, inside
    its frame: its edges and tabs hold still, the status stays in sight, and the side
    column never leaves a bare strip beside a long list. A window too short for the side
-   column still scrolls as a whole. */
+   column still scrolls as a whole. Connect fills the window the same way, so its tray
+   can center what it holds. */
 @media (min-width: 761px) {
 	body[data-screen='home'] .scroller {
 		display: flex;
@@ -1684,27 +1884,78 @@ button {
 		scrollbar-gutter: stable;
 	}
 }
-@media (max-width: 760px) {
-	.home {
-		grid-template-columns: minmax(0, 1fr);
-		grid-template-rows: none;
-		grid-template-areas:
-			'status'
-			'main'
-			'account';
-	}
-	.home > .plate-engrave {
-		display: none;
-	}
-	.status-group {
-		margin-top: 0;
-	}
+body[data-screen='connect'] .scroller {
+	display: flex;
+	flex-direction: column;
+}
+body[data-screen='connect'] .screen-root {
+	flex: 1 0 auto;
+	display: flex;
+	flex-direction: column;
+	width: 100%;
 }
 
-/* The status display on Home holds the readout and its words only; Pause sits under the
-   housing, centered, as the approved page centers OPEN TO-DO under its group (brief
-   section 5). In a narrow window Pause moves up to the label's row, so the first thing
-   that needs the student is a key row nearer the top. */
+/* "MORE BELOW": a fade at the foot of a region that has more to scroll to, and a small
+   recessed tag counting the files out of sight. Paint only: no pointer events, hidden
+   from screen readers, and it shows by color (opacity), never by moving a box. The
+   recessed column has its own; the window has one for every other screen. */
+.scroll-cue {
+	position: absolute;
+	z-index: 1;
+	display: flex;
+	align-items: flex-end;
+	justify-content: center;
+	box-sizing: border-box;
+	height: 56px;
+	padding-bottom: 10px;
+	pointer-events: none;
+	background: linear-gradient(to bottom, transparent, var(--cue-ground) 78%);
+	opacity: 0;
+}
+.scroll-cue[data-on='true'] {
+	opacity: 1;
+}
+.cue-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	min-height: 22px;
+	padding: 0 9px 0 6px;
+	border-radius: 11px;
+	font-family: var(--font-mono);
+	font-size: var(--plate-label-size);
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	white-space: nowrap;
+	color: var(--plate-ink);
+	background-color: var(--plate-chip-ground);
+	background-image: linear-gradient(to bottom, var(--plate-chip-top), var(--plate-chip-bot));
+	box-shadow:
+		inset 0 0 0 1px var(--plate-chip-edge),
+		inset 0 2px 2px -1px var(--plate-chip-shade),
+		0 1px 0 0 var(--plate-chip-lip);
+}
+.cue-chip svg {
+	width: 12px;
+	height: 12px;
+}
+.main-col > .scroll-cue {
+	left: 3px;
+	right: 3px;
+	bottom: 3px;
+	border-radius: 0 0 4px 4px;
+	--cue-ground: var(--plate-inset-bot);
+}
+.window-cue {
+	left: var(--plate-band);
+	right: var(--plate-band);
+	bottom: var(--plate-band);
+	--cue-ground: var(--plate-plate-bot);
+}
+
+/* STATUS. The display holds the readout and its words; its one key sits under it,
+   centered, as the approved page centers OPEN TO-DO under its group: Pause sending, or
+   Resume sending as the screen's green primary while paused. */
 .status-group {
 	grid-template-areas:
 		'label'
@@ -1720,20 +1971,7 @@ button {
 .status-group > .status-key {
 	grid-area: key;
 	justify-self: center;
-	margin-top: var(--space-2);
-}
-@media (max-width: 480px) {
-	.status-group {
-		grid-template-columns: minmax(0, 1fr) auto;
-		grid-template-areas:
-			'label key'
-			'display display';
-		align-items: center;
-	}
-	.status-group > .status-key {
-		justify-self: end;
-		margin-top: 0;
-	}
+	margin-top: var(--space-1);
 }
 .sync-line {
 	font-size: 1rem;
@@ -1749,10 +1987,99 @@ button {
 	text-wrap: pretty;
 }
 
-/* This computer: a card (the panel recipe) holding a label over each value, so nothing
-   but labels is printed straight on the plate. Sign out sits under it, centered. */
+/* UP TO DATE: a ring gauge after the site's GRADE ring, at the top of This computer. A
+   raised bezel, a recessed track, the arc in the severity color, and a dark glass center
+   whose count glows like the readout. It says how many team files are current here; an
+   etched line sets it off from the account under it. */
+.gauge {
+	display: grid;
+	grid-template-columns: 76px minmax(0, 1fr);
+	align-items: center;
+	column-gap: 0.9rem;
+	padding-bottom: 0.9rem;
+	box-shadow:
+		inset 0 -1px 0 0 var(--plate-groove-dk),
+		inset 0 -2px 0 0 var(--plate-groove-lt);
+}
+.ring {
+	position: relative;
+	width: 76px;
+	height: 76px;
+	border-radius: 50%;
+	background-color: var(--plate-face-ground);
+	background-image: linear-gradient(to bottom, var(--plate-face-top), var(--plate-face-bot));
+	box-shadow:
+		inset 0 0 0 1px var(--plate-bezel-mid),
+		inset 0 2px 0 0 var(--plate-bezel-hi),
+		0 0 0 1px var(--plate-hair),
+		0 2px 3px 0 var(--plate-drop),
+		0 6px 10px -5px var(--plate-drop-far);
+}
+.ring svg {
+	position: absolute;
+	inset: 0;
+	width: 100%;
+	height: 100%;
+}
+.ring-track,
+.ring-arc {
+	fill: none;
+	stroke-width: 7;
+}
+.ring-track {
+	stroke: var(--plate-track);
+}
+.ring-arc {
+	stroke: var(--tone-lamp);
+	stroke-linecap: round;
+	filter: drop-shadow(0 0 2px var(--readout-glow));
+}
+.ring-glass {
+	position: absolute;
+	inset: 14px;
+	display: grid;
+	place-content: center;
+	justify-items: center;
+	border-radius: 50%;
+	background-color: var(--plate-screen-top);
+	background-image:
+		linear-gradient(165deg, var(--plate-glass) 0 38%, transparent 62%),
+		linear-gradient(to bottom, var(--plate-screen-top), var(--plate-screen-bot));
+	box-shadow:
+		inset 0 2px 2px -1px var(--plate-screen-shade),
+		inset 0 -2px 2px -1px var(--plate-screen-rim),
+		0 0 0 1px var(--plate-hair);
+	font-family: var(--font-mono);
+	text-transform: uppercase;
+	color: var(--readout);
+	text-shadow:
+		0 0 2px var(--readout-glow),
+		0 0 8px var(--readout-glow);
+}
+.ring-value {
+	font-size: 1.05rem;
+	font-weight: 700;
+	line-height: 1;
+	font-variant-numeric: tabular-nums;
+}
+.ring-of {
+	font-size: 0.5625rem;
+	letter-spacing: 0.06em;
+	line-height: 1.3;
+}
+.gauge-words {
+	font-size: 0.9rem;
+	line-height: 1.45;
+	color: var(--plate-ink);
+	text-wrap: pretty;
+}
+
+/* This computer: a card holding a label over each value, and Sign out as a quiet link
+   at its foot. */
 .acct-panel {
-	padding: 1rem 1.25rem;
+	display: grid;
+	gap: var(--space-3);
+	padding: 1rem 1.25rem 0.35rem;
 }
 .acct {
 	display: grid;
@@ -1772,72 +2099,158 @@ button {
 .acct-email {
 	font-weight: 600;
 }
-.account-group > .key {
-	justify-self: center;
-	margin-top: var(--space-2);
+.acct-signout {
+	justify-self: start;
+	margin-left: -0.3rem;
 }
 
-/* Rows. Every row has the same columns (a glyph, the words, a chevron that says
-   "opens"), so the text of every list starts on one line. The glyph is centered on the
-   row in the row's ink; a chip sits at the right end of the title line, and the lines
-   under the title take the row's full width. Three voices: the title in the reading
-   face at 600, a sentence at 400, and the meta line in the mono label voice (as typed,
-   never uppercased, since it carries file and people's names). */
-.row-main.file,
-.row-main.attn {
+/* NEEDS YOU. The section's head is its own small screen, lit amber, or red when
+   something can't be sent. Each thing is a card with a colored left edge (decoration;
+   the hairline stays the card's edge), its glyph in a recessed disc of the same color,
+   the title, what to do, which file, and labeled keys for the next step. */
+.needs-strip.lcd {
+	padding: 0.6rem 1rem 0.75rem;
+	border-radius: 7px 7px 14px 14px;
+	font-size: 0.875rem;
+	letter-spacing: 0.08em;
+}
+.attn-list {
 	display: grid;
-	grid-template-columns: 20px minmax(0, 1fr) 16px;
-	grid-template-areas: 'icon body go';
+	gap: var(--space-3);
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+.attn-card.panel {
+	display: grid;
+	grid-template-columns: 36px minmax(0, 1fr);
+	align-items: start;
+	column-gap: 0.9rem;
+	padding: 1rem 1.15rem 1rem 1.35rem;
+	background-image:
+		linear-gradient(to right, var(--tone-tint), transparent 45%),
+		linear-gradient(to bottom, var(--plate-panel-top), var(--plate-panel-bot));
+	box-shadow:
+		inset 5px 0 0 0 var(--tone-edge),
+		inset 0 1px 0 0 var(--plate-panel-hi),
+		0 1px 2px 0 var(--plate-drop),
+		0 8px 14px -6px var(--plate-drop),
+		-2px 18px 30px -14px var(--plate-drop-far);
+}
+.attn-glyph {
+	display: grid;
+	place-items: center;
+	width: 36px;
+	height: 36px;
+	border-radius: 50%;
+	color: var(--tone-ink);
+	background-color: var(--plate-chip-ground);
+	box-shadow:
+		inset 0 0 0 1.5px var(--tone-ink),
+		inset 0 2px 3px -1px var(--plate-chip-shade),
+		0 1px 0 0 var(--plate-chip-lip);
+}
+.attn-glyph svg {
+	width: 20px;
+	height: 20px;
+}
+.attn-body {
+	display: grid;
+	gap: 0.35rem;
+	min-width: 0;
+}
+.attn-title {
+	font-size: 1rem;
+	font-weight: 600;
+	line-height: 1.35;
+	color: var(--plate-head-ink);
+	text-wrap: balance;
+}
+.attn-detail {
+	max-width: 62ch;
+	font-size: 0.9rem;
+	line-height: 1.45;
+	color: var(--plate-ink);
+	text-wrap: pretty;
+}
+.attn-meta,
+.title-sub {
+	display: flex;
 	align-items: center;
-	column-gap: 0.7rem;
-	padding: 0.55rem 0.35rem;
+	gap: 0.5rem;
+	min-width: 0;
+	font-size: 0.85rem;
+	line-height: 1.4;
+	color: var(--plate-ink-2);
 }
-.row-main.attn.has-key {
-	grid-template-columns: 20px minmax(0, 1fr) auto;
+.attn-meta > .chip,
+.title-sub > .chip {
+	flex: none;
 }
+.meta-text {
+	min-width: 0;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.attn-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-2);
+	margin-top: var(--space-1);
+}
+
+/* ROWS. Every row has the same columns (a glyph, the words, any extra key, then a glyph
+   that says where a click goes), so the text of every list starts on one line. The name
+   has its own line; the chips always sit at the start of the line under it, followed by
+   who and when in the reading face, muted, on one line that ends in an ellipsis rather
+   than breaking a path. A sentence, when there is one, comes last. */
 .row-icon {
 	grid-area: icon;
 	width: 20px;
 	height: 20px;
-	color: var(--plate-ink);
+	color: var(--plate-ink-2);
 }
 .row-body {
 	grid-area: body;
 	display: flex;
 	flex-direction: column;
-	gap: 3px;
+	gap: 5px;
 	min-width: 0;
-}
-/* The name and its chip share the title line, pushed apart. A name too long to sit
-   beside its chip (a narrow window) takes the line itself, and the chip wraps under it
-   at the left, never squeezing the name into pieces. */
-.row-head {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: flex-start;
-	justify-content: space-between;
-	gap: 4px 0.75rem;
-}
-.row-head > .chip {
-	flex: none;
-}
-.row-go {
-	grid-area: go;
-	width: 16px;
-	height: 16px;
-	color: var(--plate-ink-2);
-}
-.row-key {
-	grid-area: go;
 }
 .row-name {
 	min-width: 0;
 	overflow-wrap: anywhere;
 }
-.row-main.attn .row-name {
-	text-wrap: balance;
+.row-line {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 4px 6px;
+	min-width: 0;
 }
-.row-detail,
+.row-line > .chip {
+	flex: none;
+}
+/* Armory: A CHIP IN A ROW STAYS A TAG UNDER THE MOUSE. The row's invisible key covers the
+   whole row, so without this a chip showed the key's pointer hand. The chip sits above
+   the key, keeps the arrow, and a click on it still opens the row (app.js hands it to
+   the row's key). Paint and stacking only: no box moves. */
+.row .chip {
+	position: relative;
+	z-index: 2;
+}
+.row-meta {
+	flex: 1 1 11rem;
+	min-width: 0;
+	padding-left: 2px;
+	font-size: 0.85rem;
+	line-height: 1.4;
+	color: var(--plate-ink-2);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
 .row-note {
 	max-width: 62ch;
 	font-size: 0.875rem;
@@ -1846,99 +2259,110 @@ button {
 	overflow-wrap: anywhere;
 	text-wrap: pretty;
 }
-.row-meta {
-	font-family: var(--font-mono);
-	font-size: 0.75rem;
-	line-height: 1.45;
-	letter-spacing: 0.02em;
+.row-go {
+	grid-area: go;
+	width: 16px;
+	height: 16px;
 	color: var(--plate-ink-2);
-	overflow-wrap: anywhere;
-	text-wrap: pretty;
 }
-@media (max-width: 560px) {
-	.row-main.attn.has-key {
-		grid-template-columns: 20px minmax(0, 1fr);
-		grid-template-areas:
-			'icon body'
-			'. go';
-		row-gap: var(--space-2);
-	}
-	.row-main.attn.has-key > .row-key {
-		justify-self: start;
-	}
+.row-key {
+	grid-area: extra;
+	position: relative;
+	z-index: 2;
 }
 
-/* Projects: the label row carries the project pads at its right end, right above the
-   card they switch. One card per project; each folder starts with a header row inside
-   it (the name as typed, the count in the label voice), cut off from its rows by the
-   same etched line the rows use, drawn the full width. */
-.group-head {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	justify-content: space-between;
-	gap: var(--space-2) var(--space-3);
+/* The empty list: a dashed recessed tile (an empty slot, not a box drawn around nothing),
+   a glyph, one sentence, the folder in a mono plate and the key that opens it. */
+.empty-tile {
+	display: grid;
+	grid-template-columns: 40px minmax(0, 1fr);
+	align-items: start;
+	column-gap: 1rem;
+	padding: 1.1rem 1.25rem;
+	border: 1px dashed var(--plate-divider);
+	border-radius: var(--plate-r-panel);
+	box-shadow: inset 0 6px 8px -4px var(--plate-inset-shade);
 }
+.empty-glyph {
+	width: 40px;
+	height: 40px;
+	color: var(--plate-ink-2);
+}
+.empty-words {
+	display: grid;
+	justify-items: start;
+	gap: var(--space-2);
+	font-size: 0.9rem;
+	line-height: 1.5;
+	color: var(--plate-ink);
+}
+.empty-where {
+	color: var(--plate-ink-2);
+}
+
+/* TEAM FILES. The project tabs sit at the top left, over the card they switch: the
+   site's class pads, two lines in mono (the name, then how many files), with the LED
+   and the lit ring on the current one. One card per project; each folder starts with a
+   small label row inside it. */
 .pads {
 	display: flex;
 	flex-wrap: wrap;
 	gap: var(--space-2);
-	margin-left: auto;
 	padding: 3px;
 }
 .pad.project-pad {
-	font-family: var(--font-display);
-	font-size: 0.875rem;
-	font-weight: 400;
-	letter-spacing: 0;
-	text-transform: none;
+	flex-direction: column;
+	align-items: flex-start;
+	justify-content: center;
+	gap: 2px;
+	min-height: 50px;
+	padding: 0.35rem calc(0.85rem + 7px) 0.4rem 0.85rem;
+	text-align: left;
 }
-.pad.project-pad[aria-selected='true'] {
-	font-weight: 600;
+.pad-name {
+	font-size: 0.75rem;
+	letter-spacing: 0.08em;
+	line-height: 1.2;
 }
-.project-name {
-	font-size: 0.95rem;
-	font-weight: 600;
-	line-height: 1.4;
-	color: var(--plate-head-ink);
+.pad-sub {
+	font-size: var(--plate-label-size);
+	letter-spacing: var(--plate-label-track);
+	line-height: 1.2;
+	color: var(--plate-caption);
+}
+.project-card.list-well {
+	padding: var(--space-2) var(--space-3) var(--space-3);
 }
 .folder + .folder {
 	margin-top: var(--space-3);
 }
 .folder-row {
-	display: grid;
-	grid-template-columns: 20px minmax(0, 1fr) auto;
+	display: flex;
 	align-items: center;
-	column-gap: 0.7rem;
+	gap: 0.5rem;
 	box-sizing: border-box;
-	min-height: 36px;
+	min-height: 30px;
 	margin: 0;
-	padding: 0.5rem 0.35rem 0.45rem;
-	font-size: 0.9rem;
-	font-weight: 600;
-	line-height: 1.3;
-	color: var(--plate-head-ink);
-	box-shadow:
-		inset 0 -1px 0 0 var(--plate-well-lip),
-		inset 0 -2px 0 0 var(--plate-divider);
+	padding: 0.4rem 0.4rem 0.15rem;
+	font-family: var(--font-mono);
+	font-size: var(--plate-label-size);
+	font-weight: 400;
+	letter-spacing: var(--plate-label-track);
+	line-height: 1.4;
+	text-transform: uppercase;
+	color: var(--plate-caption);
 }
 .folder-row svg {
-	justify-self: center;
-	width: 16px;
-	height: 16px;
-	color: var(--plate-ink-2);
+	flex: none;
+	width: 14px;
+	height: 14px;
 }
 .folder-name {
 	min-width: 0;
 	overflow-wrap: anywhere;
 }
 .folder-count {
-	font-family: var(--font-mono);
-	font-size: var(--plate-label-size);
-	font-weight: 400;
-	letter-spacing: var(--plate-label-track);
-	text-transform: uppercase;
-	color: var(--plate-caption);
+	margin-left: auto;
 }
 .folder-list {
 	margin: 0;
@@ -1946,55 +2370,31 @@ button {
 	list-style: none;
 }
 
-/* File detail. The display is the file's status, said once; its one action sits under
-   it, centered. */
+/* FILE DETAIL. Under the title bar, the folder it is in; then the file's status display,
+   any warning (amber edge, above the action so it is read first), Show in folder as the
+   screen's primary with what to do next under it, and who's editing; and on the right
+   the history in a bracketed recessed tray. */
 .detail {
 	display: grid;
-	gap: var(--space-4);
 }
-.detail-top {
-	display: flex;
-	align-items: center;
-	gap: var(--space-3);
-}
-.detail-title {
-	display: grid;
-	gap: 2px;
-}
-.detail-title h1 {
-	display: flex;
-	align-items: center;
-	min-height: 44px;
-	min-width: 44px;
-	font-family: var(--font-display);
-	font-size: 1.6rem;
-	font-weight: 600;
-	line-height: 1.25;
-	color: var(--plate-head-ink);
-	overflow-wrap: anywhere;
-	text-wrap: balance;
-}
-.detail-path {
-	font-family: var(--font-mono);
-	font-size: 0.8125rem;
-	line-height: 1.45;
-	letter-spacing: 0.02em;
-	color: var(--plate-ink-2);
+.title-sub {
+	justify-content: center;
+	margin: calc(-1 * var(--space-2)) 0 var(--space-4);
 }
 .detail-grid {
 	display: grid;
 	grid-template-columns: minmax(18rem, 24rem) minmax(0, 1fr);
 	gap: var(--space-5);
-	align-items: start;
+	align-items: stretch;
 }
-.detail-side,
-.detail-main {
+.detail-side {
 	display: grid;
 	gap: var(--space-4);
+	align-content: start;
 	min-width: 0;
 }
-.detail-side > .side-key {
-	justify-self: center;
+.detail-side > .display {
+	padding: 1.25rem 1.4rem 1.3rem;
 }
 .holder-line {
 	font-size: 1.05rem;
@@ -2003,18 +2403,39 @@ button {
 	color: var(--plate-head-ink);
 	text-wrap: balance;
 }
-.holder-meta,
-.holder-help {
+.holder-meta {
 	font-size: 0.9rem;
 	line-height: 1.5;
-	color: var(--plate-ink-2);
+	color: var(--plate-ink);
 	text-wrap: pretty;
 }
-.holder-help {
-	color: var(--plate-ink);
+.detail-act {
+	display: grid;
+	justify-items: center;
+	gap: var(--space-2);
+	text-align: center;
 }
-.note-panel {
-	padding: 1rem 1.25rem;
+.detail-act > .key.primary {
+	padding-inline: 1.8rem;
+}
+.act-help {
+	max-width: 36ch;
+	font-size: 0.875rem;
+	line-height: 1.45;
+	color: var(--plate-ink-2);
+	text-wrap: balance;
+}
+.note-panel.panel {
+	padding: 0.9rem 1.15rem 0.9rem 1.35rem;
+	background-image:
+		linear-gradient(to right, var(--tone-tint), transparent 45%),
+		linear-gradient(to bottom, var(--plate-panel-top), var(--plate-panel-bot));
+	box-shadow:
+		inset 5px 0 0 0 var(--tone-edge),
+		inset 0 1px 0 0 var(--plate-panel-hi),
+		0 1px 2px 0 var(--plate-drop),
+		0 8px 14px -6px var(--plate-drop),
+		-2px 18px 30px -14px var(--plate-drop-far);
 }
 .note-panel > h3 {
 	display: flex;
@@ -2023,22 +2444,94 @@ button {
 	font-size: 0.95rem;
 	line-height: 1.4;
 }
+.note-panel > h3 svg {
+	flex: none;
+	width: 18px;
+	height: 18px;
+	color: var(--tone-ink);
+}
 .note-panel p {
 	font-size: 0.9rem;
 	line-height: 1.5;
+	color: var(--plate-ink);
+	text-wrap: pretty;
+}
+.who-group {
+	padding-inline: 0;
+}
+.who-group::before {
+	content: none;
+}
+.who-panel {
+	display: flex;
+	align-items: center;
+	gap: 0.85rem;
+	padding: 0.7rem 1rem;
+}
+.avatar.big {
+	width: 36px;
+	height: 36px;
+	font-size: 0.8125rem;
+}
+.who-words {
+	display: grid;
+	gap: 2px;
+	min-width: 0;
+}
+.who-name {
+	font-size: 0.95rem;
+	font-weight: 600;
+	line-height: 1.35;
+	color: var(--plate-head-ink);
+}
+.who-where {
+	font-size: 0.85rem;
+	line-height: 1.4;
 	color: var(--plate-ink-2);
 	text-wrap: pretty;
 }
-/* A history entry: who and when is the title (what a student scans for); the event
-   word and size drop to the meta line. A kept copy is its own title. Chips sit at the
-   title line's right end, as on a row. */
+/* Armory: an email breaks at any character before it would push the card sideways. */
+.who-email {
+	overflow-wrap: anywhere;
+}
+.detail-main.plate-recess {
+	display: flex;
+	flex-direction: column;
+	padding: 14px 12px 18px;
+}
+/* The tray runs as tall as the column beside it, so both columns end on one line; the
+   bracketed area fills it. */
+.history-group {
+	flex: 1 0 auto;
+	display: grid;
+	align-content: start;
+	gap: 0.6rem;
+	padding: 10px 12px 14px;
+}
+.history-head {
+	display: flex;
+	align-items: baseline;
+	gap: var(--space-3);
+}
+.history-head .count {
+	margin-left: auto;
+}
+.history-list.list-well {
+	padding: var(--space-1) var(--space-3);
+}
 .history-list > li {
 	display: grid;
 	gap: 2px;
-	padding: 0.65rem 0.9rem;
+	padding: 0.65rem 0.55rem;
+}
+/* The student's own kept copy is easy to find: a faint amber row and its YOUR COPY tag. */
+.history-list > li[data-copy='true'] {
+	background-color: var(--tint-look);
+	border-radius: var(--plate-r-small);
 }
 .hist-top {
 	display: flex;
+	flex-wrap: wrap;
 	align-items: flex-start;
 	gap: 0.4rem 0.75rem;
 }
@@ -2059,10 +2552,8 @@ button {
 	margin-left: auto;
 }
 .hist-meta {
-	font-family: var(--font-mono);
-	font-size: 0.75rem;
-	line-height: 1.45;
-	letter-spacing: 0.02em;
+	font-size: 0.85rem;
+	line-height: 1.4;
 	color: var(--plate-ink-2);
 }
 .hist-loading {
@@ -2070,58 +2561,96 @@ button {
 	color: var(--plate-ink-2);
 	font-size: 0.9rem;
 }
-@media (max-width: 760px) {
-	.detail-grid {
-		grid-template-columns: minmax(0, 1fr);
-	}
-	.detail-title h1 {
-		font-size: 1.35rem;
-	}
-}
 
-/* Connect: the title bar is the screen's one heading, and the card under it goes
-   straight to the steps. The one key is content-width and centered, as keys are on the
-   approved page. */
-.connect {
+/* CONNECT: the title bar, then a recessed tray filling the window with its working area
+   bracketed and everything centered in it: the IDEA Armory mark, what Armory is in one
+   sentence, three step tiles, a lit status plate while something is happening, and one
+   key. */
+.connect.plate-recess {
+	flex: 1 0 auto;
+	display: grid;
+	place-items: center;
+	padding: 18px;
+}
+.connect-inner {
+	box-sizing: border-box;
 	display: grid;
 	justify-items: center;
-	gap: var(--space-5);
-	padding-top: var(--space-5);
-}
-.connect-card {
-	box-sizing: border-box;
-	width: min(100%, 36rem);
-	display: grid;
 	gap: var(--space-4);
+	width: min(100%, 62rem);
+	padding: 1.5rem 2rem 1.75rem;
+	text-align: center;
+}
+.hero {
+	display: grid;
+	justify-items: center;
+	gap: var(--space-2);
+}
+.wordmark-hero {
+	width: 160px;
+	height: 75px;
+}
+.hero-word {
+	font-family: var(--font-mono);
+	font-size: 1.15rem;
+	letter-spacing: 0.4em;
+	margin-right: -0.4em;
+	text-transform: uppercase;
+	color: var(--plate-ink-2);
+}
+.hero-line {
+	margin-top: var(--space-1);
+	font-size: 1.3rem;
+	font-weight: 600;
+	line-height: 1.3;
+	color: var(--plate-head-ink);
+	text-wrap: balance;
 }
 .lead {
+	max-width: 52ch;
 	font-size: var(--fs-lead);
 	line-height: 1.55;
+	color: var(--plate-ink);
 	text-wrap: pretty;
 }
 .steps {
 	display: grid;
-	gap: var(--space-3);
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: var(--space-4);
+	width: 100%;
+	margin: var(--space-2) 0 0;
 	padding: 0;
 	list-style: none;
 }
-.step {
+.step.panel {
 	display: grid;
-	grid-template-columns: 28px minmax(0, 1fr);
-	align-items: center;
+	grid-template-columns: 30px minmax(0, 1fr);
+	align-items: start;
 	gap: var(--space-3);
+	padding: 1rem 1.1rem;
+	text-align: left;
 	font-size: 0.95rem;
 	line-height: 1.45;
+}
+/* The current step is lit, as the current tab is: the accent ring inside its edge. */
+.step.panel[data-step='current'] {
+	box-shadow:
+		inset 0 0 0 2px var(--plate-accent),
+		inset 0 1px 0 0 var(--plate-panel-hi),
+		0 0 10px 1px var(--plate-bloom),
+		0 1px 2px 0 var(--plate-drop),
+		0 8px 14px -6px var(--plate-drop);
 }
 .step-num {
 	display: grid;
 	place-items: center;
-	width: 28px;
-	height: 28px;
+	width: 30px;
+	height: 30px;
 	box-sizing: border-box;
 	border-radius: 50%;
 	font-family: var(--font-mono);
-	font-size: 0.8rem;
+	font-size: 0.85rem;
+	font-weight: 700;
 	color: var(--plate-ink-2);
 	background-color: var(--plate-chip-ground);
 	background-image: linear-gradient(to bottom, var(--plate-chip-top), var(--plate-chip-bot));
@@ -2133,6 +2662,9 @@ button {
 .step-num svg {
 	width: 14px;
 	height: 14px;
+}
+.step-text {
+	padding-top: 3px;
 }
 .step[data-step='current'] .step-num {
 	color: var(--plate-sel-ink);
@@ -2152,6 +2684,23 @@ button {
 .step[data-step='done'] .step-text {
 	color: var(--plate-ink-2);
 }
+.lcd-plate {
+	display: grid;
+	gap: var(--space-2);
+	width: min(100%, 40rem);
+	text-align: left;
+}
+.lcd-plate > .lcd {
+	padding: 0.75rem 1.1rem 0.95rem;
+	border-radius: 7px 7px 18px 18px;
+}
+.lcd-words {
+	padding-inline: 0.25rem;
+	font-size: 0.95rem;
+	line-height: 1.5;
+	color: var(--plate-ink);
+	text-wrap: pretty;
+}
 .connect-actions {
 	display: flex;
 	flex-wrap: wrap;
@@ -2161,51 +2710,64 @@ button {
 .connect-actions .key.primary {
 	padding-inline: 2rem;
 }
-.connect-msg {
-	font-size: 0.95rem;
-	line-height: 1.5;
-	padding-bottom: 0.4rem;
-	box-shadow: inset 0 -1px 0 0 var(--plate-groove-dk), inset 0 -2px 0 0 var(--plate-groove-lt);
+.key-path {
+	text-transform: none;
+	letter-spacing: 0.02em;
 }
-.connect-msg[data-tone='bad'] {
-	color: var(--plate-danger-ink);
+.accounts {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: var(--space-3) var(--space-5);
+	width: min(100%, 40rem);
+	margin: 0;
+	text-align: left;
 }
-.connect-where {
-	font-size: 0.85rem;
+.accounts > div {
+	display: grid;
+	justify-items: start;
+	gap: 4px;
+	min-width: 0;
+}
+.accounts dt {
+	color: var(--plate-caption);
+}
+.accounts dd {
+	margin: 0;
+	max-width: 100%;
+}
+.connect-where,
+.connect-foot {
+	font-size: 0.9rem;
 	line-height: 1.45;
 	color: var(--plate-ink-2);
 }
 
-/* The settings sheet: a housing over Home. Every control is content-width and starts on
-   the same left edge; only the folder's path well fills its row, as a field does. */
+/* THE SETTINGS SHEET: a housing over Home, under a strong scrim with a light blur, so
+   the page steps back. Its title is the engraved bar with Done at its right end. Every
+   setting starts on the same left edge. */
 dialog.housing {
 	box-sizing: border-box;
-	width: min(34rem, calc(100vw - 2rem));
+	width: min(36rem, calc(100vw - 2rem));
 	max-width: none;
 	max-height: calc(100vh - 2rem);
-	padding: 1.25rem 1.5rem 1.5rem;
+	padding: 0.5rem 1.5rem 1.5rem;
 	overflow-y: auto;
+	border-color: var(--sheet-hair);
 }
 dialog.housing::backdrop {
 	background: var(--scrim);
+	backdrop-filter: blur(3px);
 }
-.sheet-head {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: var(--space-3);
-	margin-bottom: var(--space-4);
-}
-.sheet-title {
-	font-size: var(--fs-h3);
-	font-weight: 600;
-	line-height: 1.3;
-	color: var(--plate-head-ink);
+dialog.housing > .title-bar {
+	--tb-side: 5.5rem;
+	margin-bottom: var(--space-1);
 }
 .setting {
 	display: grid;
 	gap: var(--space-2);
 	padding: var(--space-4) 0;
+}
+.setting + .setting {
 	box-shadow: inset 0 1px 0 0 var(--plate-groove-dk), inset 0 2px 0 0 var(--plate-groove-lt);
 }
 .setting-row {
@@ -2214,12 +2776,22 @@ dialog.housing::backdrop {
 	align-items: center;
 	gap: var(--space-3);
 }
-.path-well {
+.path-plate {
 	display: flex;
 	align-items: center;
+	gap: 0.5rem;
 	flex: 1 1 14rem;
 	min-width: 0;
-	overflow-wrap: anywhere;
+	min-height: 44px;
+	margin: 0;
+	padding: 0.5rem 0.75rem;
+	font-size: 0.9rem;
+}
+.path-plate svg {
+	flex: none;
+	width: 16px;
+	height: 16px;
+	color: var(--plate-ink-2);
 }
 .setting-help {
 	font-size: 0.85rem;
@@ -2230,49 +2802,315 @@ dialog.housing::backdrop {
 .setting .switch {
 	justify-self: start;
 }
-.theme-keys {
+/* The theme is one choice of three: a row of pads, each with a swatch of its plate and
+   a word for what it is, the picked one lit (the site's selected tab: the clean glowing
+   ring and the green LED, plus aria-pressed). */
+.segmented {
 	display: grid;
-	grid-template-columns: repeat(3, auto);
-	justify-content: start;
-	gap: var(--space-3);
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: var(--space-2);
+	padding: 3px;
 }
-@media (max-width: 480px) {
-	dialog.housing {
-		padding: 1rem 1rem 1.25rem;
-	}
-	.theme-keys {
+.pad.seg {
+	display: grid;
+	grid-template-columns: 24px minmax(0, 1fr);
+	align-items: center;
+	gap: 0.6rem;
+	min-height: 58px;
+	padding: 0.45rem calc(0.6rem + 7px) 0.45rem 0.65rem;
+	text-align: left;
+}
+.seg-words {
+	display: grid;
+	gap: 2px;
+	min-width: 0;
+}
+.seg-name {
+	font-size: 0.75rem;
+	letter-spacing: 0.06em;
+	line-height: 1.2;
+	overflow-wrap: anywhere;
+}
+.seg-sub {
+	font-family: var(--font-display);
+	font-size: 0.8rem;
+	letter-spacing: 0;
+	line-height: 1.2;
+	text-transform: none;
+	color: var(--plate-ink-2);
+}
+.pad.seg[aria-pressed='true'] .seg-name {
+	font-weight: 700;
+}
+.swatch {
+	width: 24px;
+	height: 24px;
+	border-radius: 50%;
+	box-shadow:
+		0 0 0 1px var(--plate-hair),
+		inset 0 1px 0 0 rgba(255, 255, 255, 0.25);
+}
+.swatch[data-swatch='idea'] {
+	background:
+		radial-gradient(circle, #78b870 0 3px, transparent 3.6px),
+		linear-gradient(to bottom, var(--swatch-idea-top), var(--swatch-idea-bot));
+}
+.swatch[data-swatch='spaceWhite'] {
+	background:
+		radial-gradient(circle, #3b6c36 0 3px, transparent 3.6px),
+		linear-gradient(to bottom, var(--swatch-sw-top), var(--swatch-sw-bot));
+}
+.swatch[data-swatch='system'] {
+	background: linear-gradient(135deg, var(--swatch-idea-top) 0 50%, var(--swatch-sw-top) 50% 100%);
+}
+
+/* ------------------------------------------------------------ Narrow windows */
+
+/* One column (a window snapped beside SolidWorks, or phone width). Home stacks status,
+   lists, this computer. The status becomes one lit strip with its key beside it and the
+   sentence under it; the ring is left out (the strip already says it). */
+@media (max-width: 760px) {
+	.home {
 		grid-template-columns: minmax(0, 1fr);
-		justify-content: stretch;
+		grid-template-rows: none;
+		grid-template-areas:
+			'status'
+			'main'
+			'account';
+	}
+	.home > .plate-engrave {
+		display: none;
+	}
+	.status-group {
+		margin-top: 0;
+		padding-top: 4px;
+		grid-template-columns: minmax(0, 1fr) auto;
+		grid-template-areas:
+			'screen key'
+			'line line'
+			'detail detail';
+		align-items: center;
+		column-gap: var(--space-2);
+		row-gap: 0.4rem;
+	}
+	.status-group.no-key {
+		grid-template-areas:
+			'screen screen'
+			'line line'
+			'detail detail';
+	}
+	/* The strip says it, so the label is for screen readers only: clipped to nothing,
+	   but at its own width, so its word never spills out of its box. */
+	.status-group > .section-label {
+		position: absolute;
+		top: 0;
+		left: 0;
+		height: 1px;
+		margin: 0;
+		overflow: hidden;
+		clip-path: inset(50%);
+		white-space: nowrap;
+	}
+	.status-group > .display {
+		display: contents;
+	}
+	.status-group .lcd {
+		grid-area: screen;
+		margin: 0;
+		padding: 0.7rem 1rem 0.8rem 2.1rem;
+		border-radius: 7px 7px 16px 16px;
+	}
+	.status-group .sync-line {
+		grid-area: line;
+		padding-inline: 2px;
+		font-size: 0.95rem;
+	}
+	.status-group .sync-detail {
+		grid-area: detail;
+		padding-inline: 2px;
+	}
+	.status-group > .status-key {
+		grid-area: key;
+		justify-self: end;
+		margin: 0;
+	}
+	.status-group > .status-key:not(.primary) {
+		width: 44px;
+		padding: 0;
+	}
+	.status-group > .status-key:not(.primary) .key-word {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		margin: -1px;
+		overflow: hidden;
+		clip-path: inset(50%);
+		white-space: nowrap;
+	}
+	.detail-grid {
+		grid-template-columns: minmax(0, 1fr);
+	}
+	/* Who's editing moves under the history in one column, so the history comes sooner. */
+	.detail-side {
+		display: contents;
+	}
+	.detail-grid > .detail-main {
+		order: 1;
+	}
+	.detail-side > .who-group {
+		order: 2;
+	}
+	.steps,
+	.accounts {
+		grid-template-columns: minmax(0, 1fr);
+	}
+	.steps {
+		gap: var(--space-2);
+		margin-top: 0;
+	}
+	.step.panel {
+		align-items: center;
+		padding: 0.6rem 0.9rem;
+		font-size: 0.9rem;
+	}
+	.step-text {
+		padding-top: 0;
 	}
 }
 
-/* Narrow windows (a phone-width window, or Armory snapped beside SolidWorks): the same
-   parts, with the room between them taken in so the words get the width. Viewport only,
-   never the theme. */
+/* Phone width: the same parts with the room between them taken in, so the words get the
+   width. Viewport only, never the theme. */
 @media (max-width: 480px) {
 	.scroller {
-		padding-top: var(--space-3);
+		padding-top: var(--space-2);
+	}
+	.title-bar {
+		margin-bottom: var(--space-3);
 	}
 	.recess-scroll {
 		padding: 15px 3px 19px;
 	}
 	.list-well {
-		padding-inline: var(--space-3);
+		padding-inline: var(--space-2);
+	}
+	.project-card.list-well {
+		padding-inline: var(--space-2);
+	}
+	.row-main {
+		column-gap: 0.6rem;
+		padding-inline: 0.3rem;
+	}
+	.row-main.has-extra .row-key {
+		width: 44px;
+		padding: 0;
+	}
+	.row-main.has-extra .row-key .key-word {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		margin: -1px;
+		overflow: hidden;
+		clip-path: inset(50%);
+		white-space: nowrap;
+	}
+	.attn-card.panel {
+		grid-template-columns: 28px minmax(0, 1fr);
+		column-gap: 0.7rem;
+		padding: 0.9rem 0.85rem 0.9rem 1.05rem;
+	}
+	.attn-glyph {
+		width: 28px;
+		height: 28px;
+	}
+	.attn-glyph svg {
+		width: 16px;
+		height: 16px;
+	}
+	.empty-tile {
+		grid-template-columns: minmax(0, 1fr);
+		row-gap: var(--space-2);
+		padding: 1rem;
 	}
 	.display {
 		padding: 0.9rem 1rem;
 	}
-	.display .screen {
+	.display > .lcd {
 		margin: -0.35rem -0.45rem 0;
 	}
-	.connect {
-		padding-top: var(--space-3);
+	.detail-side,
+	.detail-grid {
+		gap: var(--space-3);
 	}
-	.connect-card {
-		padding: 1.1rem;
+	.detail-side > .display {
+		gap: 0.4rem;
+		padding: 0.75rem 0.9rem 0.85rem;
 	}
-	.history-list > li,
-	.history-well > .history-head {
-		padding-inline: 0.75rem;
+	.detail-side > .display > .lcd {
+		margin: -0.3rem -0.4rem 0;
+		padding: 0.6rem 0.9rem 0.75rem 2rem;
+		border-radius: 7px 7px 16px 16px;
+	}
+	.holder-line {
+		font-size: 1rem;
+	}
+	.note-panel.panel {
+		padding: 0.75rem 0.9rem 0.8rem 1.15rem;
+	}
+	.note-panel p {
+		font-size: 0.875rem;
+		line-height: 1.45;
+	}
+	.detail-main.plate-recess {
+		padding: 10px 6px 12px;
+	}
+	.history-group {
+		padding: 8px 8px 10px;
+	}
+	.history-list > li {
+		padding-inline: 0.4rem;
+	}
+	.connect.plate-recess {
+		padding: 10px 6px;
+	}
+	.connect-inner {
+		gap: var(--space-3);
+		padding: 1.1rem 0.9rem 1.25rem;
+	}
+	.wordmark-hero {
+		width: 112px;
+		height: 53px;
+	}
+	.hero {
+		gap: var(--space-1);
+	}
+	/* Once something is happening, the header's lockup right above is mark enough, and
+	   the status plate and its key get the room. */
+	.connect-inner:has(.lcd-plate) .hero > :is(.wordmark, .hero-word) {
+		display: none;
+	}
+	.hero-word {
+		font-size: 0.875rem;
+	}
+	.hero-line {
+		margin-top: 0;
+		font-size: 1.1rem;
+	}
+	.lead,
+	.lcd-words {
+		font-size: 0.9rem;
+		line-height: 1.5;
+	}
+	dialog.housing {
+		padding: 0.4rem 1rem 1.25rem;
+	}
+	dialog.housing > .title-bar {
+		--tb-side: 5rem;
+	}
+	.pad.seg {
+		grid-template-columns: minmax(0, 1fr);
+		justify-items: start;
+		align-content: center;
+		gap: 0.4rem;
+		min-height: 76px;
 	}
 }
