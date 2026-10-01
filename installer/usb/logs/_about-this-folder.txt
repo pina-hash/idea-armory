@@ -1,0 +1,3 @@
+One file per computer appears here, named after the computer.
+Each line is one install, check or uninstall, with the date, the Windows
+account, the version, PASS or FAIL, and how many seconds it took.

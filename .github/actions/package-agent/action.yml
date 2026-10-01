@@ -1,0 +1,75 @@
+name: Build and package the IDEA Armory agent
+description: >-
+  Restores with the lock files, builds with warnings as errors, runs the agent's tests,
+  publishes the self-contained win-x64 app, and builds both installers into dist/ with a
+  .sha256 file beside each. Used by agent.yml and release.yml after actions/checkout, on
+  windows-latest.
+outputs:
+  version:
+    description: The agent version, the Version of src/Armory.Agent.
+    value: ${{ steps.package.outputs.version }}
+  usb-zip:
+    description: Path of dist/IDEA-Armory-USB-v<version>.zip.
+    value: ${{ steps.package.outputs.usb_zip }}
+  usb-sha256:
+    description: SHA-256 of the flash-drive zip.
+    value: ${{ steps.package.outputs.usb_sha256 }}
+  setup-exe:
+    description: Path of dist/IDEA-Armory-Setup-v<version>.exe.
+    value: ${{ steps.package.outputs.setup_exe }}
+  setup-sha256:
+    description: SHA-256 of the installer.
+    value: ${{ steps.package.outputs.setup_sha256 }}
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-dotnet@v4
+      with:
+        global-json-file: global.json
+
+    - name: Restore with the lock files
+      shell: pwsh
+      run: dotnet restore --locked-mode
+
+    - name: Build (warnings are errors)
+      shell: pwsh
+      run: dotnet build --no-restore -warnaserror
+
+    - name: Agent tests
+      shell: pwsh
+      run: dotnet test tests/Armory.Agent.Tests --logger "console;verbosity=normal" --logger "trx;LogFileName=agent-tests.trx"
+
+    # The restore inside publish adds empty win-x64 sections to the referenced projects'
+    # lock files on the runner; package versions stay the ones the locked restore proved.
+    - name: Publish the self-contained win-x64 app
+      shell: pwsh
+      run: dotnet publish src/Armory.Agent -c Release -r win-x64 --self-contained true -o publish/agent
+
+    - name: Inno Setup 6.3 or later
+      shell: pwsh
+      run: |
+        $known = @((Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'), (Join-Path $env:ProgramFiles 'Inno Setup 6\ISCC.exe'))
+        function Find-Iscc { $known | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1 }
+        function Get-IsccVersion([string]$path) { [version]((Get-Item -LiteralPath $path).VersionInfo.ProductVersion -replace '[^\d.].*$', '') }
+        $iscc = Find-Iscc
+        if (-not $iscc) {
+          Write-Host 'Inno Setup is not on this runner; installing it with Chocolatey.'
+          choco install innosetup --no-progress -y
+          if ($LASTEXITCODE -ne 0) { throw "choco install innosetup failed with exit code $LASTEXITCODE" }
+          $iscc = Find-Iscc
+        } elseif ((Get-IsccVersion $iscc) -lt [version]'6.3') {
+          Write-Host ('Inno Setup ' + (Get-IsccVersion $iscc) + ' is older than 6.3; upgrading it with Chocolatey.')
+          choco upgrade innosetup --no-progress -y
+          if ($LASTEXITCODE -ne 0) { throw "choco upgrade innosetup failed with exit code $LASTEXITCODE" }
+          $iscc = Find-Iscc
+        }
+        if (-not $iscc) { throw 'ISCC.exe was not found after installing Inno Setup.' }
+        Write-Host ('Inno Setup ' + (Get-IsccVersion $iscc) + ': ' + $iscc)
+        "ARMORY_ISCC=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+    - name: Package the flash-drive zip and the installer
+      id: package
+      shell: pwsh
+      run: |
+        New-Item -ItemType Directory -Force evidence | Out-Null
+        ./tools/package-agent.ps1 -PublishDir publish/agent -OutDir dist | Tee-Object -FilePath evidence/package.txt

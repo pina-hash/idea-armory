@@ -1,0 +1,56 @@
+name: Agent installers
+# The Windows agent end to end on a clean windows-latest runner: locked restore, build with
+# warnings as errors, the agent's tests, the self-contained win-x64 publish, both installers,
+# then an install, launch and uninstall cycle for each (tools/test-agent-install.ps1), with
+# C:\IDEA\Armory\Proof\ proving that uninstall keeps the vault. Needs no secret.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: agent-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  installers:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build, test, publish and package
+        id: package
+        uses: ./.github/actions/package-agent
+
+      - name: Install, launch and uninstall from the flash-drive zip
+        run: ./tools/test-agent-install.ps1 -Kind Usb
+
+      - name: Install, launch and uninstall with IDEA-Armory-Setup
+        run: ./tools/test-agent-install.ps1 -Kind Setup
+
+      - name: Upload the installers
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-dist
+          path: |
+            dist/*.zip
+            dist/*.exe
+            dist/*.sha256
+          if-no-files-found: warn
+
+      - name: Upload the evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-evidence
+          path: |
+            evidence/
+            tests/Armory.Agent.Tests/TestResults/*.trx
+          if-no-files-found: warn

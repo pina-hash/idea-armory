@@ -1,0 +1,87 @@
+name: Agent release
+# A pushed tag v<version> (pushed by a person; nothing here creates a tag) builds and packages
+# the agent exactly as agent.yml does, checks that the tag is v<Version of src/Armory.Agent>,
+# runs the same install, launch and uninstall cycles, and then publishes a GitHub Release with
+# both installers, their .sha256 files, and the SHA-256 values in the notes.
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+concurrency:
+  group: agent-release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The tag must be v<Version of src/Armory.Agent>
+        run: |
+          $project = [xml](Get-Content -LiteralPath src/Armory.Agent/Armory.Agent.csproj -Raw)
+          $version = @($project.Project.PropertyGroup | ForEach-Object { $_.Version } | Where-Object { $_ }) | Select-Object -First 1
+          if (-not $version) { throw 'src/Armory.Agent/Armory.Agent.csproj has no <Version>.' }
+          if ($env:GITHUB_REF_NAME -cne "v$version") { throw "The tag $env:GITHUB_REF_NAME does not match the agent version $version. Push the tag v$version instead." }
+          Write-Host "The tag $env:GITHUB_REF_NAME matches the agent version $version."
+
+      - name: Build, test, publish and package
+        id: package
+        uses: ./.github/actions/package-agent
+
+      - name: The packaged version matches the tag
+        env:
+          PACKAGED: ${{ steps.package.outputs.version }}
+        run: |
+          if ("v$env:PACKAGED" -cne $env:GITHUB_REF_NAME) { throw "Packaged version $env:PACKAGED does not match the tag $env:GITHUB_REF_NAME." }
+
+      - name: Install, launch and uninstall from the flash-drive zip
+        run: ./tools/test-agent-install.ps1 -Kind Usb
+
+      - name: Install, launch and uninstall with IDEA-Armory-Setup
+        run: ./tools/test-agent-install.ps1 -Kind Setup
+
+      - name: Upload the evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-release-evidence
+          path: |
+            evidence/
+            tests/Armory.Agent.Tests/TestResults/*.trx
+          if-no-files-found: warn
+
+      - name: Publish the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          USB_ZIP: ${{ steps.package.outputs.usb-zip }}
+          USB_SHA256: ${{ steps.package.outputs.usb-sha256 }}
+          SETUP_EXE: ${{ steps.package.outputs.setup-exe }}
+          SETUP_SHA256: ${{ steps.package.outputs.setup-sha256 }}
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          foreach ($file in @($env:USB_ZIP, "$env:USB_ZIP.sha256", $env:SETUP_EXE, "$env:SETUP_EXE.sha256")) {
+            if (-not $file -or -not (Test-Path -LiteralPath $file)) { throw "Missing release asset $file" }
+          }
+          $zipName = Split-Path -Leaf $env:USB_ZIP
+          $exeName = Split-Path -Leaf $env:SETUP_EXE
+          $notes = @(
+            "IDEA Armory $tag, the Windows agent for the team and class CAD vault.",
+            '',
+            '## Install',
+            "- **$zipName**: the flash-drive installer for lab computers. Extract All onto the drive, then on each computer double-click ``Install IDEA Armory.cmd``, signed in as the Windows account that will use Armory. README.txt inside explains each step.",
+            "- **$exeName**: the normal installer, for a student's own laptop.",
+            '',
+            'Both install for one Windows account and never ask for an administrator password. Uninstall never deletes the vault folder (C:\IDEA\Armory) or any file in it. There is no self-update yet; see docs/agent/INSTALL.md.',
+            '',
+            '## SHA-256',
+            "- ``$zipName``: ``$env:USB_SHA256``",
+            "- ``$exeName``: ``$env:SETUP_SHA256``",
+            '',
+            "Built from $env:GITHUB_SHA. Before publishing, both assets were installed, launched and uninstalled on windows-latest, and the vault's proof files kept their bytes through each uninstall.")
+          $notes -join "`n" | Set-Content -LiteralPath release-notes.md -Encoding utf8
+          gh release create $tag $env:USB_ZIP "$env:USB_ZIP.sha256" $env:SETUP_EXE "$env:SETUP_EXE.sha256" --verify-tag --title "IDEA Armory $tag" --notes-file release-notes.md

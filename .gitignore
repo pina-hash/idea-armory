@@ -6,3 +6,11 @@ TestResults/
 artifacts/
 *.user
 *.suo
+
+# Agent packaging output (tools/package-agent.ps1, tools/test-agent-install.ps1)
+/dist/
+/publish/
+/evidence/
+
+# Python bytecode (tools/agent-icon/make_icon.py)
+__pycache__/

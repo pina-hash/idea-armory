@@ -1,0 +1,6 @@
+# Windows installer sources. cmd.exe needs CRLF line endings, and the flash drive's text
+# files are read in Notepad. tools/package-agent.ps1 also enforces CRLF when it stages them.
+*.cmd text eol=crlf
+installer/**/*.txt text eol=crlf
+installer/**/*.ps1 text eol=crlf
+installer/**/*.iss text eol=crlf
