@@ -3,9 +3,13 @@ name: Agent release
 # the agent exactly as agent.yml does, checks that the tag is v<Version of src/Armory.Agent>,
 # runs the same install, launch and uninstall cycles, and then publishes a GitHub Release with
 # both installers, their .sha256 files, and the SHA-256 values in the notes.
+# A tag can also arrive by publishing a release in GitHub's web page (the chat's container
+# cannot push tags). Then the release already exists, and this job attaches the assets to it.
 on:
   push:
     tags: ['v*']
+  release:
+    types: [published]
 permissions:
   contents: write
 concurrency:
@@ -84,4 +88,15 @@ jobs:
             '',
             "Built from $env:GITHUB_SHA. Before publishing, both assets were installed, launched and uninstalled on windows-latest, and the vault's proof files kept their bytes through each uninstall.")
           $notes -join "`n" | Set-Content -LiteralPath release-notes.md -Encoding utf8
-          gh release create $tag $env:USB_ZIP "$env:USB_ZIP.sha256" $env:SETUP_EXE "$env:SETUP_EXE.sha256" --verify-tag --title "IDEA Armory $tag" --notes-file release-notes.md
+          $assets = @($env:USB_ZIP, "$env:USB_ZIP.sha256", $env:SETUP_EXE, "$env:SETUP_EXE.sha256")
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag @assets --clobber
+            if ($LASTEXITCODE -ne 0) { throw "Uploading assets to release $tag failed." }
+            gh release edit $tag --title "IDEA Armory $tag" --notes-file release-notes.md
+            if ($LASTEXITCODE -ne 0) { throw "Editing release $tag failed." }
+          } else {
+            $global:LASTEXITCODE = 0
+            gh release create $tag @assets --verify-tag --title "IDEA Armory $tag" --notes-file release-notes.md
+            if ($LASTEXITCODE -ne 0) { throw "Creating release $tag failed." }
+          }
