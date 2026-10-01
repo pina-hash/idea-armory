@@ -22,3 +22,18 @@ it does not pretend to parse or back-save real CAD documents.
 
 The two-release capability is confirmed in [official SOLIDWORKS help](https://help.solidworks.com/2026/English/WhatsNew/c_wn2026_fundamentals_saving_previous_versions.htm).
 Licensing and practical back-save behavior remain spike measurements.
+
+## Per-project gate mode (lane A)
+
+No standalone saved-release reader exists ([saved release](../spike/saved-release.md)), and
+refusing every SolidWorks file whose release is unknown would block every student, which
+Mr. Pina ruled out. `ReleaseGateMode` therefore has two values. `Enforce` keeps the rule above:
+an unknown release is refused. `Warn` uploads an unknown release and marks the action
+`ReleaseNotChecked`, which the agent and the server's version record show as "release not
+checked". A release known to be newer than the pin is refused in both modes, and `Warn`
+never overrides a missing or invalid pin. `SyncInput.ReleaseGate` defaults to `Enforce` so
+the library stays fail-closed; projects default to `Warn` on the server
+(`armory_projects.release_gate`), and `Enforce` is for when the SolidWorks add-in stamps
+releases. `SolidWorksVersionGate.Decide` is the one decision both the reconciler and the
+agent's archive of superseded saves use. `ReleaseGateModeTests` covers the table, every
+upload route and lock disposition, and the offline path.

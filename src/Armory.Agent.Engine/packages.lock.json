@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0": {
+      "armory.client": {
+        "type": "Project",
+        "dependencies": {
+          "Armory.Storage": "[1.0.0, )"
+        }
+      },
+      "armory.core": {
+        "type": "Project"
+      },
+      "armory.storage": {
+        "type": "Project"
+      }
+    }
+  }
+}

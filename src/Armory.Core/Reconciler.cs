@@ -10,8 +10,10 @@ public enum IntentKind { AcquireLock, Upload, Tombstone }
 public sealed record PendingIntent(IntentKind Kind, VaultPath Path, string? Hash);
 public sealed record SyncInput(VaultPath Path, Revision? Base, string? LocalHash, Revision? Remote,
     LockOwnership Lock, bool IsOpen, bool IsOnline, bool LockWasBroken = false,
-    SolidWorksRelease? SavedRelease = null, SolidWorksRelease? PinnedRelease = null, string? PreservedLocalHash = null);
-public sealed record SyncAction(SyncActionKind Kind, string? Reason = null);
+    SolidWorksRelease? SavedRelease = null, SolidWorksRelease? PinnedRelease = null, string? PreservedLocalHash = null,
+    ReleaseGateMode ReleaseGate = ReleaseGateMode.Enforce);
+// ReleaseNotChecked marks a SolidWorks upload accepted by a Warn gate without a readable release.
+public sealed record SyncAction(SyncActionKind Kind, string? Reason = null, bool ReleaseNotChecked = false);
 public sealed record SyncPlan(SyncInput Expected, IReadOnlyList<SyncAction> Actions, IReadOnlyList<PendingIntent> Intents);
 
 public static class Reconciler
@@ -47,24 +49,24 @@ public static class Reconciler
         {
             if (input.Remote?.IsTombstone == true && input.PreservedLocalHash == input.LocalHash)
                 return Actions(Recover());
+            var releaseNotChecked = false;
             if (IsSolidWorks(input.Path))
             {
-                if (input.PinnedRelease is null)
-                    return Actions(Action(SyncActionKind.Refuse, "The vault has no pinned SolidWorks release; upload is unsafe."));
-                var problem = SolidWorksVersionGate.UploadProblem(input.SavedRelease, input.PinnedRelease.Value);
-                if (problem is not null) return Actions(Action(SyncActionKind.Refuse, problem));
+                var gate = SolidWorksVersionGate.Decide(input.SavedRelease, input.PinnedRelease, input.ReleaseGate);
+                if (!gate.Allowed) return Actions(Action(SyncActionKind.Refuse, gate.Problem));
+                releaseNotChecked = gate.ReleaseNotChecked;
             }
             var mustPreserve = input.LockWasBroken || remoteChanged || input.Remote?.IsTombstone == true ||
                 input.Lock is LockOwnership.MyOtherDevice or LockOwnership.OtherPerson;
             if (mustPreserve)
             {
-                var preserve = Action(SyncActionKind.SaveSideVersion, "Keep local bytes as this student's named side version.");
+                var preserve = new SyncAction(SyncActionKind.SaveSideVersion, "Keep local bytes as this student's named side version.", releaseNotChecked);
                 // A tombstone never authorizes removing changed local bytes. After side-version
                 // acknowledgement, a fresh plan may move the now-preserved local copy to recovery.
                 if (input.Remote is null || input.Remote.IsTombstone) return Actions(preserve);
                 return Actions(preserve, Refresh()); // MUTATION: conflict preservation
             }
-            return Actions(Action(input.Lock == LockOwnership.ThisDevice ? SyncActionKind.Upload : SyncActionKind.AcquireLockThenUpload));
+            return Actions(new SyncAction(input.Lock == LockOwnership.ThisDevice ? SyncActionKind.Upload : SyncActionKind.AcquireLockThenUpload, null, releaseNotChecked));
         }
         if (input.LocalHash is null)
         {

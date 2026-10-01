@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="../Armory.Core/Armory.Core.csproj" />
+    <ProjectReference Include="../Armory.Client/Armory.Client.csproj" />
+    <ProjectReference Include="../Armory.Storage/Armory.Storage.csproj" />
+    <InternalsVisibleTo Include="Armory.Agent.Engine.Tests" />
+    <InternalsVisibleTo Include="Armory.EndToEnd.Tests" />
+  </ItemGroup>
+</Project>
