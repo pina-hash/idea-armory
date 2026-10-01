@@ -47,6 +47,19 @@ public sealed class FakeSupabaseTests(TestDatabaseFixture fixture) : IClassFixtu
         Assert.Equal(2, h.Supabase.TokenRequestCount);
     }
 
+    // GoTrue's body is {"code": 400, "error_code", "msg"}; it has no OAuth "error" field, so
+    // a client keyed on "invalid_grant" would never see one from real Supabase either.
+    private static async Task AssertGoTrueError(HttpResponseMessage response, string errorCode, string message)
+    {
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var body = (await Harness.Json(response))!.AsObject();
+        Assert.Equal(["code", "error_code", "msg"], body.Select(p => p.Key).Order(StringComparer.Ordinal));
+        Assert.Equal(400, (int)body["code"]!);
+        Assert.Equal(errorCode, (string?)body["error_code"]);
+        Assert.Equal(message, (string?)body["msg"]);
+    }
+
+    // Guarded name kept: "invalid grant" is CLIENT.md's word for these refusals.
     [PostgresFact]
     public async Task ReusedUnknownOrRevokedRefreshTokensAre400InvalidGrant()
     {
@@ -54,26 +67,56 @@ public sealed class FakeSupabaseTests(TestDatabaseFixture fixture) : IClassFixtu
         var session = h.Supabase.IssueSession(Harness.Email("student"));
         (await h.RefreshToken(session.RefreshToken)).Dispose();
 
-        async Task AssertGrant(HttpResponseMessage response, string description)
-        {
-            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-            var body = (await Harness.Json(response))!;
-            Assert.Equal("invalid_grant", (string?)body["error"]);
-            Assert.Equal(description, (string?)body["error_description"]);
-        }
-        await AssertGrant(await h.RefreshToken(session.RefreshToken), "Invalid Refresh Token: Already Used");
-        await AssertGrant(await h.RefreshToken("refresh-never-issued"), "Invalid Refresh Token: Not Found");
+        await AssertGoTrueError(await h.RefreshToken(session.RefreshToken), "refresh_token_already_used", "Invalid Refresh Token: Already Used");
+        await AssertGoTrueError(await h.RefreshToken("refresh-never-issued"), "refresh_token_not_found", "Invalid Refresh Token: Refresh Token Not Found");
 
         var revoked = h.Supabase.IssueSession(Harness.Email("student"));
         h.Supabase.RevokeRefreshToken(revoked.RefreshToken);
-        await AssertGrant(await h.RefreshToken(revoked.RefreshToken), "Invalid Refresh Token: Not Found");
+        await AssertGoTrueError(await h.RefreshToken(revoked.RefreshToken), "refresh_token_not_found", "Invalid Refresh Token: Refresh Token Not Found");
 
-        using var missing = await h.Refresh("{}", h.Supabase.AnonKey);
-        Assert.Equal(HttpStatusCode.BadRequest, missing.StatusCode);
-        Assert.Equal("invalid_request", (string?)(await Harness.Json(missing))!["error"]);
-        using var password = await h.Refresh("{}", h.Supabase.AnonKey, grantType: "password");
-        Assert.Equal(HttpStatusCode.BadRequest, password.StatusCode);
-        Assert.Equal("unsupported_grant_type", (string?)(await Harness.Json(password))!["error"]);
+        await AssertGoTrueError(await h.Refresh("{}", h.Supabase.AnonKey), "validation_failed", "refresh_token required");
+        await AssertGoTrueError(await h.Refresh("{}", h.Supabase.AnonKey, grantType: "password"), "validation_failed", "unsupported_grant_type");
+
+        // supabase-js asks for API version 2024-01-01, which answers {"code": error_code, "message"}.
+        using var versioned = new HttpRequestMessage(HttpMethod.Post, new Uri(h.Supabase.BaseUri, "auth/v1/token?grant_type=refresh_token"))
+        {
+            Content = Harness.JsonBody("""{"refresh_token":"refresh-never-issued"}"""),
+        };
+        versioned.Headers.Add("apikey", h.Supabase.AnonKey);
+        versioned.Headers.Add("X-Supabase-Api-Version", "2024-01-01");
+        using var answer = await h.Http.SendAsync(versioned);
+        Assert.Equal(HttpStatusCode.BadRequest, answer.StatusCode);
+        Assert.Equal("""{"code":"refresh_token_not_found","message":"Invalid Refresh Token: Refresh Token Not Found"}""", await answer.Content.ReadAsStringAsync());
+    }
+
+    [PostgresFact]
+    public async Task ReusingARotatedRefreshTokenRevokesTheWholeFamily()
+    {
+        await using var h = await Harness.StartAsync(fixture.Database);
+        var email = Harness.Email("student");
+        var first = h.Supabase.IssueSession(email);
+        var other = h.Supabase.IssueSession(email); // another computer: its own family
+        using var rotated = await h.RefreshToken(first.RefreshToken);
+        var second = (string)(await Harness.Json(rotated))!["refresh_token"]!;
+
+        // A stale copy of the first token comes back (say, a second process that never saw
+        // the rotation): GoTrue's reuse detection revokes every token of that session.
+        await AssertGoTrueError(await h.RefreshToken(first.RefreshToken), "refresh_token_already_used", "Invalid Refresh Token: Already Used");
+        await AssertGoTrueError(await h.RefreshToken(second), "refresh_token_already_used", "Invalid Refresh Token: Already Used");
+
+        using var unaffected = await h.RefreshToken(other.RefreshToken);
+        Assert.Equal(HttpStatusCode.OK, unaffected.StatusCode);
+    }
+
+    [PostgresFact]
+    public async Task ConcurrentRefreshesOfOneTokenSucceedExactlyOnce()
+    {
+        await using var h = await Harness.StartAsync(fixture.Database);
+        var session = h.Supabase.IssueSession(Harness.Email("student"));
+        var answers = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => h.RefreshToken(session.RefreshToken)));
+        Assert.Single(answers, a => a.StatusCode == HttpStatusCode.OK);
+        Assert.Equal(7, answers.Count(a => a.StatusCode == HttpStatusCode.BadRequest));
+        foreach (var answer in answers) answer.Dispose();
     }
 
     [PostgresFact]
@@ -191,6 +234,8 @@ public sealed class FakeSupabaseTests(TestDatabaseFixture fixture) : IClassFixtu
             await AssertPostgrestError(badJson, HttpStatusCode.BadRequest, "PGRST102");
     }
 
+    // Guarded name kept: unknown tokens are PGRST301; expired ones are PGRST303 by default
+    // and PGRST301 when ExpiredTokenCode says so.
     [PostgresFact]
     public async Task ExpiredOrUnknownTokensAre401Pgrst301()
     {
@@ -198,14 +243,23 @@ public sealed class FakeSupabaseTests(TestDatabaseFixture fixture) : IClassFixtu
         var expired = h.Supabase.IssueSession(Harness.Email("student"));
         h.Supabase.ExpireAccessToken(expired.AccessToken);
         using (var response = await h.Rpc("armory_my_projects", "{}", expired.AccessToken))
-            await AssertPostgrestError(response, HttpStatusCode.Unauthorized, "PGRST301", "JWT expired");
+        {
+            await AssertPostgrestError(response, HttpStatusCode.Unauthorized, "PGRST303", "JWT expired");
+            Assert.Equal("Bearer error=\"invalid_token\", error_description=\"JWT expired\"", Assert.Single(response.Headers.GetValues("WWW-Authenticate")));
+        }
 
         var timedOut = h.Supabase.IssueSession(Harness.Email("student"), TimeSpan.FromMinutes(5));
         using (var live = await h.Rpc("armory_my_projects", "{}", timedOut.AccessToken)) Assert.Equal(HttpStatusCode.OK, live.StatusCode);
         h.Clock.Advance(TimeSpan.FromMinutes(5));
         Assert.Null(h.Supabase.EmailForAccessToken(timedOut.AccessToken));
         using (var response = await h.Rpc("armory_my_projects", "{}", timedOut.AccessToken))
+            await AssertPostgrestError(response, HttpStatusCode.Unauthorized, "PGRST303", "JWT expired");
+
+        // Older PostgREST answered PGRST301 for an expired JWT; CLIENT.md allows both.
+        h.Supabase.ExpiredTokenCode = "PGRST301";
+        using (var response = await h.Rpc("armory_my_projects", "{}", timedOut.AccessToken))
             await AssertPostgrestError(response, HttpStatusCode.Unauthorized, "PGRST301", "JWT expired");
+        Assert.Throws<ArgumentException>(() => h.Supabase.ExpiredTokenCode = "PGRST302");
 
         using (var unknown = await h.Rpc("armory_my_projects", "{}", "access-never-issued"))
             await AssertPostgrestError(unknown, HttpStatusCode.Unauthorized, "PGRST301", "JWT invalid");
@@ -237,9 +291,12 @@ public sealed class FakeSupabaseTests(TestDatabaseFixture fixture) : IClassFixtu
             await AssertPostgrestError(r, HttpStatusCode.BadRequest, "PGRST102");
     }
 
+    // Every code CLIENT.md names, plus the rest of PostgREST's table where CLIENT.md says
+    // only "anything else".
     [Fact]
     public void PostgrestStatusMappingFollowsClientMd()
     {
+        // Every code CLIENT.md names.
         Assert.Equal(403, FakeSupabase.PostgrestStatusFor("42501", anonymous: false));
         Assert.Equal(401, FakeSupabase.PostgrestStatusFor("42501", anonymous: true));
         Assert.Equal(409, FakeSupabase.PostgrestStatusFor("23505", false));
@@ -251,8 +308,130 @@ public sealed class FakeSupabaseTests(TestDatabaseFixture fixture) : IClassFixtu
         Assert.Equal(500, FakeSupabase.PostgrestStatusFor("P0002", false));
         Assert.Equal(503, FakeSupabase.PostgrestStatusFor("08006", false));
         Assert.Equal(503, FakeSupabase.PostgrestStatusFor("53300", false));
-        Assert.Equal(400, FakeSupabase.PostgrestStatusFor("55000", false));
-        Assert.Equal(400, FakeSupabase.PostgrestStatusFor("42P01", true));
+        Assert.Equal(400, FakeSupabase.PostgrestStatusFor("23514", false)); // anything else
+        Assert.Equal(400, FakeSupabase.PostgrestStatusFor("42P10", false));
+        // The rest of PostgREST's table, which CLIENT.md's "anything else" does not cover.
+        Assert.Equal(404, FakeSupabase.PostgrestStatusFor("42P01", true));
+        Assert.Equal(500, FakeSupabase.PostgrestStatusFor("55000", false)); // the immutable-version trigger
+        Assert.Equal(500, FakeSupabase.PostgrestStatusFor("40001", false));
+        Assert.Equal(500, FakeSupabase.PostgrestStatusFor("40P01", false));
+        Assert.Equal(500, FakeSupabase.PostgrestStatusFor("57014", false));
+        Assert.Equal(500, FakeSupabase.PostgrestStatusFor("XX000", false));
+        Assert.Equal(500, FakeSupabase.PostgrestStatusFor("54000", false));
+        Assert.Equal(500, FakeSupabase.PostgrestStatusFor("53400", false));
+        Assert.Equal(500, FakeSupabase.PostgrestStatusFor("42P17", false));
+        Assert.Equal(405, FakeSupabase.PostgrestStatusFor("25006", false));
+        Assert.Equal(500, FakeSupabase.PostgrestStatusFor("25P02", false));
+        Assert.Equal(403, FakeSupabase.PostgrestStatusFor("28000", false));
+        Assert.Equal(403, FakeSupabase.PostgrestStatusFor("0P000", false));
+    }
+
+    [PostgresFact]
+    public async Task RpcBodiesMustBeJson415()
+    {
+        await using var h = await Harness.StartAsync(fixture.Database);
+        var token = h.Supabase.IssueSession(Harness.Email("student")).AccessToken;
+        async Task<HttpResponseMessage> Send(HttpContent content)
+        {
+            var request = new HttpRequestMessage(HttpMethod.Post, new Uri(h.Supabase.BaseUri, "rest/v1/rpc/armory_my_projects")) { Content = content };
+            request.Headers.Add("apikey", h.Supabase.AnonKey);
+            request.Headers.Add("Authorization", "Bearer " + token);
+            return await h.Http.SendAsync(request);
+        }
+
+        // new StringContent(json) without a media type is text/plain: PostgREST refuses it.
+        using (var plain = await Send(new StringContent("{}")))
+            await AssertPostgrestError(plain, HttpStatusCode.UnsupportedMediaType, "PGRST107");
+        using (var form = await Send(new StringContent("{}", System.Text.Encoding.UTF8, "application/x-www-form-urlencoded")))
+            await AssertPostgrestError(form, HttpStatusCode.UnsupportedMediaType, "PGRST107");
+        using (var json = await Send(System.Net.Http.Json.JsonContent.Create(new Dictionary<string, object>())))
+            Assert.Equal(HttpStatusCode.OK, json.StatusCode);
+        using (var upper = await Send(new StringContent("{}", System.Text.Encoding.UTF8, "Application/JSON")))
+            Assert.Equal(HttpStatusCode.OK, upper.StatusCode);
+        var untyped = new ByteArrayContent("{}"u8.ToArray()); // no Content-Type header: PostgREST assumes JSON
+        using (var none = await Send(untyped)) Assert.Equal(HttpStatusCode.OK, none.StatusCode);
+
+        using var get = new HttpRequestMessage(HttpMethod.Put, new Uri(h.Supabase.BaseUri, "rest/v1/rpc/armory_my_projects")) { Content = Harness.JsonBody("{}") };
+        get.Headers.Add("apikey", h.Supabase.AnonKey);
+        get.Headers.Add("Authorization", "Bearer " + token);
+        using var refused = await h.Http.SendAsync(get);
+        await AssertPostgrestError(refused, HttpStatusCode.MethodNotAllowed, "PGRST101");
+    }
+
+    [PostgresFact]
+    public async Task ConcurrentCallersNeverSeeEachOthersIdentity()
+    {
+        await using var h = await Harness.StartAsync(fixture.Database);
+        var (project, mentor, _) = await h.SeedProjectAsync();
+        var mentorToken = h.Supabase.IssueSession(mentor).AccessToken;
+        var outsider = Harness.Email("outsider");
+        var outsiderToken = h.Supabase.IssueSession(outsider).AccessToken;
+
+        // Two agents and an anonymous caller hammer the same pool at once. Identity is
+        // transaction-local, so every answer belongs to its own caller.
+        var calls = Enumerable.Range(0, 60).Select(async i =>
+        {
+            var who = (i % 3) switch { 0 => mentorToken, 1 => outsiderToken, _ => null };
+            using var response = await h.Rpc("armory_my_projects", "{}", who);
+            return (i % 3, response.StatusCode, await response.Content.ReadAsStringAsync());
+        });
+        foreach (var (kind, status, body) in await Task.WhenAll(calls))
+        {
+            switch (kind)
+            {
+                case 0:
+                    Assert.Equal(HttpStatusCode.OK, status);
+                    Assert.Contains(project.ToString(), body);
+                    break;
+                case 1:
+                    Assert.Equal((HttpStatusCode.OK, "[]"), (status, body));
+                    break;
+                default:
+                    Assert.Equal(HttpStatusCode.Unauthorized, status);
+                    break;
+            }
+        }
+
+        // And nothing is left on a pooled connection afterwards.
+        for (var i = 0; i < 5; i++)
+        {
+            await using var connection = await h.Database.OpenAsync();
+            Assert.Equal("", await Harness.Command(connection, "select coalesce(current_setting('armory.test_email', true), '')").ExecuteScalarAsync());
+            Assert.Equal("", await Harness.Command(connection, "select coalesce(current_setting('armory.test_admins', true), '')").ExecuteScalarAsync());
+            Assert.NotEqual("authenticated", await Harness.Command(connection, "select current_user::text").ExecuteScalarAsync());
+        }
+    }
+
+    [PostgresFact]
+    public async Task FunctionAndArgumentNamesCannotInjectSql()
+    {
+        await using var h = await Harness.StartAsync(fixture.Database);
+        var token = h.Supabase.IssueSession(Harness.Email("student")).AccessToken;
+        await using (var connection = await h.Database.OpenAsync())
+        {
+            await Harness.Command(connection, """
+                create or replace function public.armory_v2_echo(p_text2 text) returns text language sql security definer set search_path='' as $$ select p_text2 $$;
+                grant execute on function public.armory_v2_echo(text) to authenticated;
+                """).ExecuteNonQueryAsync();
+        }
+        using (var digits = await h.Rpc("armory_v2_echo", """{"p_text2":"'); drop table public.armory_projects; --"}""", token))
+        {
+            Assert.Equal(HttpStatusCode.OK, digits.StatusCode); // names with digits resolve; values are parameters
+            Assert.Equal("'); drop table public.armory_projects; --", (string?)await Harness.Json(digits));
+        }
+
+        foreach (var function in new[] { "armory_my_projects();drop table public.armory_projects;--", "armory_my_projects%28%29", "ARMORY_MY_PROJECTS", "public.armory_my_projects" })
+        {
+            using var response = await h.Rpc(function, "{}", token);
+            Assert.True(response.StatusCode == HttpStatusCode.NotFound, $"{function} answered {(int)response.StatusCode}");
+        }
+        foreach (var name in new[] { "p_text2 => null); drop table public.armory_projects; --", "p_text2\"", "p_text2--", "\"p_text2\"" })
+        {
+            using var response = await h.Rpc("armory_v2_echo", new JsonObject { [name] = "x" }.ToJsonString(), token);
+            await AssertPostgrestError(response, HttpStatusCode.NotFound, "PGRST202");
+        }
+        await using var check = await h.Database.OpenAsync();
+        Assert.Equal(1L, await Harness.Command(check, "select count(*) from pg_class where oid = 'public.armory_projects'::regclass").ExecuteScalarAsync());
     }
 
     [PostgresFact]

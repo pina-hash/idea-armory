@@ -43,6 +43,24 @@ public sealed class ArmoryTestDatabaseTests(TestDatabaseFixture fixture) : IClas
     }
 
     [PostgresFact]
+    public async Task IdentityFromOpenAsDoesNotSurviveThePool()
+    {
+        // OpenAs sets the identity for the whole session; the pool must reset it (and any
+        // role a test switched to) before the connection serves anyone else, including the
+        // superuser lookups the fakes make.
+        for (var i = 0; i < 3; i++)
+        {
+            await using (var leaky = await fixture.Database.OpenAs("leak@example.com", isAdmin: true))
+                await Harness.Command(leaky, "set role authenticated").ExecuteNonQueryAsync();
+            await using var next = await fixture.Database.OpenAsync();
+            Assert.Equal("", await Harness.Command(next, "select coalesce(current_setting('armory.test_email', true), '')").ExecuteScalarAsync());
+            Assert.Equal("", await Harness.Command(next, "select coalesce(current_setting('armory.test_admins', true), '')").ExecuteScalarAsync());
+            Assert.Null(await Harness.Command(next, "select public.current_user_email()").ExecuteScalarAsync() as string);
+            Assert.True((bool)(await Harness.Command(next, "select rolsuper from pg_roles where rolname = current_user").ExecuteScalarAsync())!);
+        }
+    }
+
+    [PostgresFact]
     public async Task CreateAppliesTheSqlAndDisposeDropsOnlyThatDatabase()
     {
         var database = await ArmoryTestDatabase.CreateAsync();

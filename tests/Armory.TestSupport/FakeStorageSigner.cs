@@ -37,8 +37,6 @@ internal sealed class FakeStorageSigner
         return signer;
     }
 
-    public static bool IsPrivate(FakeS3 s3) => Registry.TryGetValue(s3, out var signers) && !signers.IsEmpty;
-
     /// <summary>A URL for <paramref name="method"/> on <paramref name="key"/>, valid from <paramref name="issuedAt"/> (whole seconds) for <paramref name="lifetime"/>.</summary>
     public Uri Sign(string key, string method, DateTimeOffset issuedAt, TimeSpan lifetime, IReadOnlyDictionary<string, string> headers, long? contentLength)
     {

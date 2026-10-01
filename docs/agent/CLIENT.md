@@ -27,8 +27,8 @@ with no arguments gets `{}`. Answers follow PostgREST:
 Errors are `{"code": sqlstate, "message": text, "details": text|null, "hint": text|null}`
 with PostgREST's status mapping: `42501` 403 (401 when anonymous), `23505` and `23503`
 409, `P0001` and `22xxx` 400, `42883` 404, `P0xxx` other than `P0001` 500, `08xxx` and
-`53xxx` 503, anything else 400. An expired or invalid JWT is 401 with code `PGRST301`
-(or `PGRST303`). The client maps these to `ArmoryRpcException` (with `SqlState`,
+`53xxx` 503, and the rest of PostgREST's table (for example `55000` and `XX000` 500,
+`42P01` 404). An expired JWT is 401 with code `PGRST303` (older PostgREST: `PGRST301`). The client maps these to `ArmoryRpcException` (with `SqlState`,
 `Message`, `Details`, `Hint`, `Status`), refreshes once and retries on 401 PGRST30x, and
 throws `ArmoryOfflineException` for a network failure, timeout, 502, 503 or 504.
 
@@ -49,7 +49,8 @@ Content-Type: application/json
 200 answers `{"access_token", "token_type": "bearer", "expires_in", "expires_at", "refresh_token", "user": {"email", ...}}`.
 `expires_at` is Unix seconds. Supabase rotates the refresh token, so the client writes the
 new session to `ISecretStore` before it uses the new access token. A 400 or 401
-(`invalid_grant`, `refresh_token_already_used`, `refresh_token_not_found`) means this
+(`{"code":400,"error_code":"refresh_token_already_used","msg"}`, `refresh_token_not_found`, or the
+older `invalid_grant` form) means this
 computer is signed out; the client raises `SignedOut` and never retries with the old token.
 Refresh is single-flight and starts 60 seconds before `expires_at`.
 

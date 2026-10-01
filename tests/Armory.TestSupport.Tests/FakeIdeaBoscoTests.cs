@@ -33,11 +33,16 @@ public sealed class FakeIdeaBoscoTests(TestDatabaseFixture fixture) : IClassFixt
         Assert.Equal(HttpStatusCode.OK, first.StatusCode);
         var body = (await Harness.Json(first))!.AsObject();
         Assert.Equal(["exists", "expiresAt", "headers", "url"], body.Select(p => p.Key).Order(StringComparer.Ordinal));
-        Assert.Equal($"https://fake-s3.armory.test/blobs/sha256/{hash[..2]}/{hash[2..4]}/{hash}?op=put", (string?)body["url"]);
-        Assert.Equal($"https://fake-s3.armory.test/{key}?op=put", (string?)body["url"]);
+        var url = (string)body["url"]!;
+        Assert.StartsWith($"https://fake-s3.armory.test/blobs/sha256/{hash[..2]}/{hash[2..4]}/{hash}?X-Amz-Algorithm=AWS4-HMAC-SHA256&", url);
+        Assert.StartsWith($"https://fake-s3.armory.test/{key}?", url);
+        Assert.StartsWith(FakeIdeaBosco.ObjectUrlFor(hash) + "?", url);
+        Assert.Contains("&X-Amz-Expires=900&", url);
+        Assert.Contains("&X-Amz-SignedHeaders=content-length%3Bhost&", url); // a PUT is bound to its byte count
         Assert.Empty(body["headers"]!.AsObject());
         var expiresAt = DateTimeOffset.Parse((string)body["expiresAt"]!, CultureInfo.InvariantCulture);
-        Assert.Equal(h.Clock.GetUtcNow().AddMinutes(15), expiresAt, TimeSpan.FromMilliseconds(1));
+        Assert.Equal(h.Clock.GetUtcNow().AddMinutes(15), expiresAt, TimeSpan.FromSeconds(1));
+        Assert.True(expiresAt <= h.Clock.GetUtcNow().AddMinutes(15));
         Assert.EndsWith("Z", (string)body["expiresAt"]!);
         Assert.False((bool)body["exists"]!);
 
@@ -73,7 +78,8 @@ public sealed class FakeIdeaBoscoTests(TestDatabaseFixture fixture) : IClassFixt
         {
             Assert.Equal(HttpStatusCode.OK, get.StatusCode);
             var body = (await Harness.Json(get))!;
-            Assert.Equal($"https://fake-s3.armory.test/{ContentObjectKey.FromHash(version)}?op=get", (string?)body["url"]);
+            Assert.StartsWith($"https://fake-s3.armory.test/{ContentObjectKey.FromHash(version)}?X-Amz-Algorithm=", (string?)body["url"]);
+            Assert.Contains("&X-Amz-SignedHeaders=host&", (string?)body["url"]);
             Assert.False((bool)body["exists"]!);
         }
         h.S3.Objects[ContentObjectKey.FromHash(version)] = bytes;
@@ -356,7 +362,7 @@ public sealed class FakeIdeaBoscoTests(TestDatabaseFixture fixture) : IClassFixt
     public async Task ExchangeRejectsBadInput400()
     {
         await using var h = await Harness.StartAsync(fixture.Database);
-        foreach (var json in new[] { "not json", "[]", "{}", """{"code":"abc"}""", """{"verifier":"abc"}""", """{"code":1,"verifier":"abc"}""", """{"code":"abc","verifier":null}""" })
+        foreach (var json in new[] { "not json", "[]", "{}", """{"code":"abc"}""", """{"verifier":"abc"}""", """{"code":1,"verifier":"abc"}""", """{"code":"abc","verifier":null}""", """{"code":"","verifier":"abc"}""", """{"code":"abc","verifier":""}""" })
         {
             using var response = await h.Exchange(json);
             Assert.True(response.StatusCode == HttpStatusCode.BadRequest, $"{json} answered {(int)response.StatusCode}");
@@ -447,14 +453,249 @@ public sealed class FakeIdeaBoscoTests(TestDatabaseFixture fixture) : IClassFixt
     public async Task FakeNetworkHandlerRoutesS3AndPassesEverythingElseThrough()
     {
         await using var h = await Harness.StartAsync(fixture.Database);
-        using var network = new HttpClient(new FakeNetworkHandler(h.S3));
         var key = ContentObjectKey.FromHash(Harness.RandomHash());
+
+        // A FakeS3 with no site is public, as Armory.Storage.Tests uses it.
+        using var publicS3 = new FakeS3();
+        using (var open = new HttpClient(new FakeNetworkHandler(publicS3)))
         using (var head = new HttpRequestMessage(HttpMethod.Head, $"https://{FakeNetworkHandler.S3Host}/{key}"))
-        using (var missing = await network.SendAsync(head))
+        using (var missing = await open.SendAsync(head))
             Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
-        Assert.Equal(1, h.S3.Heads);
+        Assert.Equal(1, publicS3.Heads);
+
+        // The site's FakeS3 is private: an unsigned request never reaches it.
+        using var network = new HttpClient(new FakeNetworkHandler(h.S3));
+        using (var head = new HttpRequestMessage(HttpMethod.Head, $"https://{FakeNetworkHandler.S3Host}/{key}"))
+        using (var refused = await network.SendAsync(head))
+            Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
+        using (var put = await network.PutAsync($"https://{FakeNetworkHandler.S3Host}/{key}", new ByteArrayContent([1, 2, 3])))
+            await AssertS3Error(put, HttpStatusCode.Forbidden, "AccessDenied");
+        Assert.Equal((0, 0), (h.S3.Heads, h.S3.Puts));
+        Assert.Empty(h.S3.Objects);
+
         using var passthrough = await network.GetAsync(new Uri(h.Supabase.BaseUri, "nowhere"));
         Assert.Equal(HttpStatusCode.NotFound, passthrough.StatusCode);
         Assert.Equal(1, h.Supabase.RequestCount("/nowhere"));
     }
+
+    private static async Task AssertS3Error(HttpResponseMessage response, HttpStatusCode status, string code, string? message = null)
+    {
+        Assert.Equal(status, response.StatusCode);
+        var error = System.Xml.Linq.XDocument.Parse(await response.Content.ReadAsStringAsync()).Root!;
+        Assert.Equal("Error", error.Name.LocalName);
+        Assert.Equal(code, error.Element("Code")!.Value);
+        if (message is not null) Assert.Equal(message, error.Element("Message")!.Value);
+    }
+
+    private static async Task<string> SignedUrlAsync(Harness h, Guid project, string hash, long bytes, string method, string token)
+    {
+        using var response = await h.BlobUrl(project, hash, bytes, method, token);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        return (string)(await Harness.Json(response))!["url"]!;
+    }
+
+    [PostgresFact]
+    public async Task BlobUrlsAreSignedForOneMethodObjectAndLength()
+    {
+        await using var h = await Harness.StartAsync(fixture.Database);
+        var (project, _, student) = await h.SeedProjectAsync();
+        var token = h.Supabase.IssueSession(student).AccessToken;
+        using var network = new HttpClient(new FakeNetworkHandler(h.S3));
+        var bytes = Encoding.UTF8.GetBytes("signed bytes");
+        var hash = Convert.ToHexStringLower(SHA256.HashData(bytes));
+        var put = await SignedUrlAsync(h, project, hash, bytes.Length, "PUT", token);
+
+        // The PUT URL does not read, and a GET or HEAD is a different signature.
+        using (var get = await network.GetAsync(put)) await AssertS3Error(get, HttpStatusCode.Forbidden, "SignatureDoesNotMatch");
+        using (var head = await network.SendAsync(new HttpRequestMessage(HttpMethod.Head, put))) Assert.Equal(HttpStatusCode.Forbidden, head.StatusCode);
+        // Another object, a longer life, or a different length all break the signature.
+        var otherKey = put.Replace(hash, Harness.RandomHash(), StringComparison.Ordinal);
+        using (var elsewhere = await network.PutAsync(otherKey, new ByteArrayContent(bytes))) await AssertS3Error(elsewhere, HttpStatusCode.Forbidden, "SignatureDoesNotMatch");
+        using (var longer = await network.PutAsync(put.Replace("X-Amz-Expires=900", "X-Amz-Expires=86400", StringComparison.Ordinal), new ByteArrayContent(bytes)))
+            await AssertS3Error(longer, HttpStatusCode.Forbidden, "SignatureDoesNotMatch");
+        using (var bigger = await network.PutAsync(put, new ByteArrayContent([.. bytes, 0]))) await AssertS3Error(bigger, HttpStatusCode.Forbidden, "SignatureDoesNotMatch");
+        using (var unsigned = await network.PutAsync(put[..put.IndexOf('?')], new ByteArrayContent(bytes))) await AssertS3Error(unsigned, HttpStatusCode.Forbidden, "AccessDenied");
+        using (var forged = await network.PutAsync(put[..^1] + (put[^1] == '0' ? "1" : "0"), new ByteArrayContent(bytes))) await AssertS3Error(forged, HttpStatusCode.Forbidden, "SignatureDoesNotMatch");
+
+        // Streaming without a length, or a body that is not the declared length, is refused.
+        var chunked = new StreamContent(new NonSeekableStream(bytes));
+        using (var noLength = await network.PutAsync(put, chunked)) await AssertS3Error(noLength, HttpStatusCode.LengthRequired, "MissingContentLength");
+        var lying = new StreamContent(new MemoryStream([.. bytes, 1, 2]));
+        lying.Headers.ContentLength = bytes.Length;
+        using (var mismatch = await network.PutAsync(put, lying)) await AssertS3Error(mismatch, HttpStatusCode.BadRequest, "IncompleteBody");
+        Assert.Equal(0, h.S3.Puts);
+        Assert.Empty(h.S3.Objects);
+
+        using (var stored = await network.PutAsync(put, new ByteArrayContent(bytes))) Assert.Equal(HttpStatusCode.OK, stored.StatusCode);
+        Assert.Equal(bytes, h.S3.Objects[ContentObjectKey.FromHash(hash)]);
+
+        // A URL from another site's bucket is not this bucket's credential.
+        await using var otherSupabase = new FakeSupabase(h.Database);
+        using var otherS3 = new FakeS3();
+        await using var otherSite = new FakeIdeaBosco(otherSupabase, h.Database, otherS3);
+        using var otherNetwork = new HttpClient(new FakeNetworkHandler(otherS3));
+        using (var foreign = await otherNetwork.PutAsync(put, new ByteArrayContent(bytes))) await AssertS3Error(foreign, HttpStatusCode.Forbidden, "InvalidAccessKeyId");
+    }
+
+    [PostgresFact]
+    public async Task BlobUrlsExpire15MinutesAfterIssue()
+    {
+        await using var h = await Harness.StartAsync(fixture.Database);
+        h.Clock.Set(new DateTimeOffset(2026, 10, 1, 12, 0, 0, 400, TimeSpan.Zero));
+        var (project, _, student) = await h.SeedProjectAsync();
+        var token = h.Supabase.IssueSession(student, TimeSpan.FromHours(2)).AccessToken;
+        using var network = new HttpClient(new FakeNetworkHandler(h.S3));
+        var bytes = Encoding.UTF8.GetBytes("expiring");
+        var hash = Convert.ToHexStringLower(SHA256.HashData(bytes));
+        using var answer = await h.BlobUrl(project, hash, bytes.Length, "PUT", token);
+        var body = (await Harness.Json(answer))!;
+        Assert.Equal("2026-10-01T12:15:00.000Z", (string?)body["expiresAt"]); // whole seconds, like the SigV4 date
+        var put = (string)body["url"]!;
+        Assert.Contains("X-Amz-Date=20261001T120000Z", put);
+
+        h.Clock.Set(new DateTimeOffset(2026, 10, 1, 12, 15, 0, TimeSpan.Zero));
+        using (var late = await network.PutAsync(put, new ByteArrayContent(bytes))) await AssertS3Error(late, HttpStatusCode.Forbidden, "AccessDenied", "Request has expired");
+        h.Clock.Set(new DateTimeOffset(2026, 10, 1, 12, 14, 59, 999, TimeSpan.Zero));
+        using (var inTime = await network.PutAsync(put, new ByteArrayContent(bytes))) Assert.Equal(HttpStatusCode.OK, inTime.StatusCode);
+        Assert.Equal(1, h.S3.Puts);
+
+        await h.AddVersionsAsync(project, hash, Harness.RandomHash());
+        var get = await SignedUrlAsync(h, project, hash, bytes.Length, "GET", token);
+        h.Clock.Advance(TimeSpan.FromMinutes(15));
+        using (var stale = await network.GetAsync(get)) await AssertS3Error(stale, HttpStatusCode.Forbidden, "AccessDenied", "Request has expired");
+        using (var fresh = await network.GetAsync(await SignedUrlAsync(h, project, hash, bytes.Length, "GET", token))) Assert.Equal(bytes, await fresh.Content.ReadAsByteArrayAsync());
+    }
+
+    [PostgresFact]
+    public async Task BlobUrlHeadersAreSignedAndMustBeSent()
+    {
+        await using var h = await Harness.StartAsync(fixture.Database);
+        var (project, _, student) = await h.SeedProjectAsync();
+        var token = h.Supabase.IssueSession(student).AccessToken;
+        h.Site.BlobUrlHeaders["x-amz-meta-armory"] = "v1";
+        h.Site.BlobUrlHeaders["Content-Type"] = "application/octet-stream";
+        var bytes = Encoding.UTF8.GetBytes("with headers");
+        var hash = Convert.ToHexStringLower(SHA256.HashData(bytes));
+        using var answer = await h.BlobUrl(project, hash, bytes.Length, "PUT", token);
+        var body = (await Harness.Json(answer))!;
+        Assert.Equal("v1", (string?)body["headers"]!["x-amz-meta-armory"]);
+        var put = (string)body["url"]!;
+        Assert.Contains("X-Amz-SignedHeaders=content-length%3Bcontent-type%3Bhost%3Bx-amz-meta-armory&", put);
+
+        using var network = new HttpClient(new FakeNetworkHandler(h.S3));
+        using (var bare = await network.PutAsync(put, new ByteArrayContent(bytes))) await AssertS3Error(bare, HttpStatusCode.Forbidden, "SignatureDoesNotMatch");
+        var content = new ByteArrayContent(bytes);
+        content.Headers.TryAddWithoutValidation("Content-Type", "application/octet-stream");
+        using var request = new HttpRequestMessage(HttpMethod.Put, put) { Content = content };
+        request.Headers.TryAddWithoutValidation("x-amz-meta-armory", "v1");
+        using var sent = await network.SendAsync(request);
+        Assert.Equal(HttpStatusCode.OK, sent.StatusCode);
+        Assert.Equal(1, h.S3.Puts);
+    }
+
+    [Fact]
+    public async Task FakeS3KeepsEachMultipartUploadsPartsApart()
+    {
+        using var s3 = new FakeS3();
+        using var http = new HttpMessageInvoker(s3, disposeHandler: false);
+        async Task<string> Create(string key)
+        {
+            using var created = await http.SendAsync(new HttpRequestMessage(HttpMethod.Post, $"https://fake/{key}?uploads"), default);
+            return System.Xml.Linq.XDocument.Parse(await created.Content.ReadAsStringAsync()).Root!.Element("UploadId")!.Value;
+        }
+        async Task Part(string key, string upload, int number, byte[] bytes)
+        {
+            using var response = await http.SendAsync(new HttpRequestMessage(HttpMethod.Put, $"https://fake/{key}?uploadId={upload}&partNumber={number}") { Content = new ByteArrayContent(bytes) }, default);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        }
+        async Task Complete(string key, string upload)
+        {
+            using var response = await http.SendAsync(new HttpRequestMessage(HttpMethod.Post, $"https://fake/{key}?uploadId={upload}&complete=1"), default);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        }
+
+        // Two agents upload at once, interleaved.
+        var a = await Create("a");
+        var b = await Create("b");
+        Assert.NotEqual(a, b);
+        await Part("a", a, 1, [1, 1]);
+        await Part("b", b, 1, [2]);
+        await Part("a", a, 2, [1]);
+        await Part("b", b, 2, [2, 2]);
+        await Part("b", b, 3, [2]);
+        await Complete("a", a);
+        await Complete("b", b);
+        Assert.Equal([1, 1, 1], s3.Objects["a"]);
+        Assert.Equal([2, 2, 2, 2], s3.Objects["b"]);
+
+        // A later, smaller upload of a key gets none of the earlier parts.
+        var c = await Create("a");
+        await Part("a", c, 1, [3]);
+        await Complete("a", c);
+        Assert.Equal([3], s3.Objects["a"]);
+        Assert.Equal(0, s3.OpenUploads);
+
+        var aborted = await Create("d");
+        await Part("d", aborted, 1, [4]);
+        using (await http.SendAsync(new HttpRequestMessage(HttpMethod.Delete, $"https://fake/d?uploadId={aborted}"), default)) { }
+        Assert.Equal(0, s3.OpenUploads);
+        using var gone = await http.SendAsync(new HttpRequestMessage(HttpMethod.Post, $"https://fake/d?uploadId={aborted}&complete=1"), default);
+        Assert.Equal(HttpStatusCode.NotFound, gone.StatusCode);
+        Assert.False(s3.Objects.ContainsKey("d"));
+    }
+
+    [PostgresFact]
+    public async Task ExchangeIsRateLimitedPerUserOfTheCode429()
+    {
+        await using var h = await Harness.StartAsync(fixture.Database);
+        h.Site.RateLimits.ExchangePerUser = 2;
+        var busy = Harness.Email("busy");
+        var codes = new List<(string Code, string Verifier)>();
+        for (var i = 0; i < 4; i++) codes.Add(await h.IssueCodeAsync(busy));
+        var other = await h.IssueCodeAsync(Harness.Email("other"));
+
+        // Each exchange comes from a different address, so only the per-user limit applies.
+        async Task<HttpResponseMessage> Exchange((string Code, string Verifier) grant, string ip) =>
+            await h.Exchange(new JsonObject { ["code"] = grant.Code, ["verifier"] = grant.Verifier }.ToJsonString(), ip);
+        using (var first = await Exchange(codes[0], "10.1.0.1")) Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        using (var second = await Exchange(codes[1], "10.1.0.2")) Assert.Equal(HttpStatusCode.OK, second.StatusCode);
+        using (var third = await Exchange(codes[2], "10.1.0.3")) await AssertError(third, (HttpStatusCode)429, "rate_limited");
+        using (var someoneElse = await Exchange(other, "10.1.0.4")) Assert.Equal(HttpStatusCode.OK, someoneElse.StatusCode);
+        using (var unknown = await Exchange((Pkce.NewSecret(), Pkce.NewSecret()), "10.1.0.5")) await AssertError(unknown, HttpStatusCode.Unauthorized);
+
+        h.Clock.Advance(TimeSpan.FromMinutes(1));
+        using (var later = await Exchange(codes[2], "10.1.0.6")) Assert.Equal(HttpStatusCode.OK, later.StatusCode); // a 429 did not consume the code
+        using (var fourth = await Exchange(codes[3], "10.1.0.7")) Assert.Equal(HttpStatusCode.OK, fourth.StatusCode);
+    }
+
+    [PostgresFact]
+    public async Task RacingExchangesOfOneCodeSucceedOnce()
+    {
+        await using var h = await Harness.StartAsync(fixture.Database);
+        h.Site.RateLimits.ExchangePerIp = 1000;
+        var email = Harness.Email("student");
+        var (code, verifier) = await h.IssueCodeAsync(email);
+        var answers = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => h.ExchangeCode(code, verifier)));
+        Assert.Single(answers, a => a.StatusCode == HttpStatusCode.OK);
+        Assert.Equal(7, answers.Count(a => a.StatusCode == HttpStatusCode.Unauthorized));
+        foreach (var answer in answers) answer.Dispose();
+        await using var connection = await h.Database.OpenAsync();
+        Assert.Equal(1L, (long)(await Harness.Command(connection, "select count(*) from armory_devices where owner_email=$1", email).ExecuteScalarAsync())!);
+    }
+}
+
+/// <summary>A stream with no length, so HttpClient would send it chunked.</summary>
+internal sealed class NonSeekableStream(byte[] bytes) : Stream
+{
+    private readonly MemoryStream _inner = new(bytes);
+    public override bool CanRead => true;
+    public override bool CanSeek => false;
+    public override bool CanWrite => false;
+    public override long Length => throw new NotSupportedException();
+    public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+    public override void Flush() { }
+    public override int Read(byte[] buffer, int offset, int count) => _inner.Read(buffer, offset, count);
+    public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+    public override void SetLength(long value) => throw new NotSupportedException();
+    public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
 }

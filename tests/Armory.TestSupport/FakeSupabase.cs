@@ -21,6 +21,13 @@ public sealed record FakeSession(string AccessToken, string RefreshToken, DateTi
 /// <see cref="ArmoryTestDatabase"/>, one transaction per request, under the caller's identity
 /// as role <c>authenticated</c> (or <c>anon</c> without a token). Tokens are opaque random
 /// strings held in memory; FakeIdeaBosco shares this registry.
+/// <para>
+/// Refresh is stricter than GoTrue on purpose: GoTrue also accepts a reused refresh token
+/// within its reuse interval (10 s by default) or when it is the parent of the active token,
+/// and answers with the active token; this fake refuses every reuse and, like GoTrue's reuse
+/// detection, revokes the whole token family. A client proven here never depends on that
+/// leniency. A refresh whose answer is lost (DropAfterHandling) therefore signs the client out.
+/// </para>
 /// </summary>
 public sealed partial class FakeSupabase : FakeHttpServer
 {
@@ -32,6 +39,7 @@ public sealed partial class FakeSupabase : FakeHttpServer
     private readonly ConcurrentDictionary<string, Guid> _userIds = new(StringComparer.Ordinal);
     private readonly object _refreshGate = new();
     private long _accessTokenLifetimeTicks = TimeSpan.FromHours(1).Ticks;
+    private volatile string _expiredTokenCode = "PGRST303";
 
     public FakeSupabase(ArmoryTestDatabase database)
     {
@@ -57,6 +65,16 @@ public sealed partial class FakeSupabase : FakeHttpServer
         }
     }
 
+    /// <summary>
+    /// The PostgREST code for an expired access token: <c>PGRST303</c> (PostgREST 13 and later,
+    /// the default) or <c>PGRST301</c> (earlier versions). CLIENT.md allows both.
+    /// </summary>
+    public string ExpiredTokenCode
+    {
+        get => _expiredTokenCode;
+        set => _expiredTokenCode = value is "PGRST301" or "PGRST303" ? value : throw new ArgumentException("PostgREST answers PGRST301 or PGRST303 for an expired JWT.", nameof(value));
+    }
+
     /// <summary>The base URL a client is given (<c>supabase_url</c>), without a trailing slash.</summary>
     public string SupabaseUrl => BaseUri.ToString().TrimEnd('/');
 
@@ -74,23 +92,28 @@ public sealed partial class FakeSupabase : FakeHttpServer
     {
         var normalized = EmailSet.Normalize(email);
         if (normalized.Length == 0) throw new ArgumentException("An email is required.", nameof(email));
-        var life = lifetime ?? AccessTokenLifetime;
-        var expiresAt = DateTimeOffset.FromUnixTimeSeconds(Clock.GetUtcNow().Add(life).ToUnixTimeSeconds());
+        return IssueSession(normalized, lifetime ?? AccessTokenLifetime, family: Guid.NewGuid());
+    }
+
+    // A refresh continues its token's family (GoTrue's session); a sign-in starts a new one.
+    private FakeSession IssueSession(string normalized, TimeSpan lifetime, Guid family)
+    {
+        var expiresAt = DateTimeOffset.FromUnixTimeSeconds(Clock.GetUtcNow().Add(lifetime).ToUnixTimeSeconds());
         var access = "access-" + RandomToken(32);
         var refresh = "refresh-" + RandomToken(32);
         _accessTokens[access] = new AccessTokenState(normalized, expiresAt, Expired: false);
-        lock (_refreshGate) _refreshTokens[refresh] = new RefreshTokenState(normalized, Used: false);
+        lock (_refreshGate) _refreshTokens[refresh] = new RefreshTokenState(normalized, family, Used: false, Revoked: false);
         return new FakeSession(access, refresh, expiresAt) { Email = normalized, UserId = UserIdFor(normalized) };
     }
 
-    /// <summary>Makes an access token answer 401 PGRST301 "JWT expired" from now on.</summary>
+    /// <summary>Makes an access token answer 401 "JWT expired" (<see cref="ExpiredTokenCode"/>) from now on.</summary>
     public void ExpireAccessToken(string accessToken)
     {
-        if (!_accessTokens.TryGetValue(accessToken, out var state)) throw new ArgumentException("Unknown access token.", nameof(accessToken));
-        _accessTokens[accessToken] = state with { Expired = true };
+        if (!_accessTokens.ContainsKey(accessToken)) throw new ArgumentException("Unknown access token.", nameof(accessToken));
+        _accessTokens.AddOrUpdate(accessToken, static _ => throw new InvalidOperationException(), static (_, state) => state with { Expired = true });
     }
 
-    /// <summary>Forgets a refresh token, so using it answers 400 "Invalid Refresh Token: Not Found".</summary>
+    /// <summary>Forgets a refresh token, so using it answers 400 "Invalid Refresh Token: Refresh Token Not Found".</summary>
     public void RevokeRefreshToken(string refreshToken)
     {
         lock (_refreshGate) _refreshTokens.Remove(refreshToken);
@@ -103,20 +126,32 @@ public sealed partial class FakeSupabase : FakeHttpServer
     public void DropRpcAcknowledgement(string function, int callNumber) =>
         ScheduleFault(RpcPathPrefix + function, callNumber, FakeFault.DropAfterHandling);
 
-    /// <summary>PostgREST's HTTP status for a SQLSTATE (docs/agent/CLIENT.md section 1).</summary>
+    /// <summary>
+    /// PostgREST's HTTP status for a SQLSTATE: its documented table, which agrees with every
+    /// code docs/agent/CLIENT.md section 1 names. CLIENT.md's "anything else 400" is the
+    /// table's last row; the classes it does not list (for example 40xxx, 55xxx, 57xxx and
+    /// XXxxx, which PostgREST answers 500) follow PostgREST.
+    /// </summary>
     public static int PostgrestStatusFor(string sqlState, bool anonymous)
     {
         ArgumentNullException.ThrowIfNull(sqlState);
+        var group = sqlState.Length >= 2 ? sqlState[..2] : sqlState;
         return sqlState switch
         {
             "42501" => anonymous ? 401 : 403,
             "23505" or "23503" => 409,
             "P0001" => 400,
-            "42883" => 404,
-            _ when sqlState.StartsWith("22", StringComparison.Ordinal) => 400,
-            _ when sqlState.StartsWith("P0", StringComparison.Ordinal) => 500,
-            _ when sqlState.StartsWith("08", StringComparison.Ordinal) || sqlState.StartsWith("53", StringComparison.Ordinal) => 503,
-            _ => 400,
+            "42883" or "42P01" => 404,
+            "42P17" => 500,
+            "25006" => 405,
+            "53400" => 500,
+            _ => group switch
+            {
+                "08" or "53" => 503,
+                "0L" or "0P" or "28" => 403,
+                "09" or "25" or "2D" or "38" or "39" or "3B" or "40" or "54" or "55" or "57" or "58" or "F0" or "HV" or "P0" or "XX" => 500,
+                _ => 400,
+            },
         };
     }
 
@@ -151,29 +186,36 @@ public sealed partial class FakeSupabase : FakeHttpServer
         if (!ApiKeyMatches(request)) return InvalidApiKey();
         if (!HttpMethods.IsPost(request.Method)) return FakeResponse.Json(405, new JsonObject { ["message"] = "method not allowed" });
         if (request.Query["grant_type"].ToString() != "refresh_token")
-            return AuthError(400, "unsupported_grant_type", "grant_type must be refresh_token", "validation_failed");
+            return AuthError(request, 400, "validation_failed", "unsupported_grant_type");
 
         var (_, json) = await ReadJsonAsync(request);
         if (json is not { ValueKind: JsonValueKind.Object } body
             || !body.TryGetProperty("refresh_token", out var tokenElement)
             || tokenElement.ValueKind != JsonValueKind.String
             || string.IsNullOrEmpty(tokenElement.GetString()))
-            return AuthError(400, "invalid_request", "refresh_token is required", "validation_failed");
+            return AuthError(request, 400, "validation_failed", "refresh_token required");
 
         var presented = tokenElement.GetString()!;
         string email;
+        Guid family;
         lock (_refreshGate)
         {
             if (!_refreshTokens.TryGetValue(presented, out var state))
-                return AuthError(400, "invalid_grant", "Invalid Refresh Token: Not Found", "refresh_token_not_found");
-            if (state.Used)
-                return AuthError(400, "invalid_grant", "Invalid Refresh Token: Already Used", "refresh_token_already_used");
+                return AuthError(request, 400, "refresh_token_not_found", "Invalid Refresh Token: Refresh Token Not Found");
+            if (state.Used || state.Revoked)
+            {
+                // GoTrue's reuse detection: the whole family (its session) is revoked.
+                foreach (var (token, other) in _refreshTokens.Where(t => t.Value.Family == state.Family).ToList())
+                    _refreshTokens[token] = other with { Revoked = true };
+                return AuthError(request, 400, "refresh_token_already_used", "Invalid Refresh Token: Already Used");
+            }
             _refreshTokens[presented] = state with { Used = true };
             email = state.Email;
+            family = state.Family;
         }
 
         var lifetime = AccessTokenLifetime;
-        var session = IssueSession(email, lifetime);
+        var session = IssueSession(email, lifetime, family);
         return FakeResponse.Json(200, new JsonObject
         {
             ["access_token"] = session.AccessToken,
@@ -191,13 +233,17 @@ public sealed partial class FakeSupabase : FakeHttpServer
         });
     }
 
-    private static FakeResponse AuthError(int status, string error, string description, string errorCode) =>
-        FakeResponse.Json(status, new JsonObject { ["error"] = error, ["error_description"] = description, ["error_code"] = errorCode });
+    // GoTrue's error body: {"code": status, "error_code", "msg"}, or {"code": error_code,
+    // "message"} when the request asks for API version 2024-01-01 (as supabase-js does).
+    private static FakeResponse AuthError(HttpRequest request, int status, string errorCode, string message) =>
+        request.Headers["X-Supabase-Api-Version"].ToString() == "2024-01-01"
+            ? FakeResponse.Json(status, new JsonObject { ["code"] = errorCode, ["message"] = message })
+            : FakeResponse.Json(status, new JsonObject { ["code"] = status, ["error_code"] = errorCode, ["msg"] = message });
 
-    [GeneratedRegex(@"^armory_[a-z_]+\z")]
+    [GeneratedRegex(@"^armory_[a-z0-9_]+\z")]
     private static partial Regex FunctionNamePattern();
 
-    [GeneratedRegex(@"^p_[a-z_]+\z")]
+    [GeneratedRegex(@"^p_[a-z0-9_]+\z")]
     private static partial Regex ArgumentNamePattern();
 
     // POST /rest/v1/rpc/{function} (CLIENT.md section 1).
@@ -211,12 +257,16 @@ public sealed partial class FakeSupabase : FakeHttpServer
         if (bearer is not null && !FixedTimeEquals(bearer, AnonKey))
         {
             var check = CheckAccessToken(bearer, out email);
-            if (check == TokenCheck.Expired) return PostgrestError(401, "PGRST301", "JWT expired", null, null);
-            if (check != TokenCheck.Live) return PostgrestError(401, "PGRST301", "JWT invalid", null, null);
+            if (check == TokenCheck.Expired) return JwtError(ExpiredTokenCode, "JWT expired");
+            if (check != TokenCheck.Live) return JwtError("PGRST301", "JWT invalid");
         }
         var anonymous = email is null;
 
-        if (!HttpMethods.IsPost(request.Method)) return PostgrestError(405, "PGRST117", $"Unsupported HTTP method: {request.Method}", null, null);
+        if (!HttpMethods.IsPost(request.Method)) return PostgrestError(405, "PGRST101", "This fake accepts only POST for RPC", null, null);
+        // PostgREST reads a JSON body only when Content-Type says so (an absent header means JSON).
+        if (request.ContentType is { Length: > 0 } contentType
+            && !string.Equals(contentType.Split(';')[0].Trim(), "application/json", StringComparison.OrdinalIgnoreCase))
+            return PostgrestError(415, "PGRST107", $"The request's Content-Type is not acceptable: {contentType}", null, null);
 
         var (empty, json) = await ReadJsonAsync(request);
         JsonElement body;
@@ -262,6 +312,13 @@ public sealed partial class FakeSupabase : FakeHttpServer
 
     private static FakeResponse PostgrestError(int status, string code, string message, string? details, string? hint) =>
         FakeResponse.Json(status, new JsonObject { ["code"] = code, ["message"] = message, ["details"] = details, ["hint"] = hint });
+
+    private static FakeResponse JwtError(string code, string message)
+    {
+        var response = PostgrestError(401, code, message, null, null);
+        response.Headers["WWW-Authenticate"] = $"Bearer error=\"invalid_token\", error_description=\"{message}\"";
+        return response;
+    }
 
     private static FakeResponse FunctionNotFound(string function, IEnumerable<string> names)
     {
@@ -369,5 +426,5 @@ public sealed partial class FakeSupabase : FakeHttpServer
 
     private sealed record AccessTokenState(string Email, DateTimeOffset ExpiresAt, bool Expired);
 
-    private sealed record RefreshTokenState(string Email, bool Used);
+    private sealed record RefreshTokenState(string Email, Guid Family, bool Used, bool Revoked);
 }

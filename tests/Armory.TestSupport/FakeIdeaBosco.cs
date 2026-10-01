@@ -12,15 +12,20 @@ using Npgsql;
 
 namespace Armory.TestSupport;
 
-/// <summary>Connect rate limits: at most N requests per sliding window, per key.</summary>
+/// <summary>
+/// Connect rate limits (CONTRACT.md 3h: both endpoints per IP and per user): at most N
+/// requests per sliding window, per key. The exchange has no signed-in user, so its user is
+/// the one the presented code was issued to.
+/// </summary>
 public sealed class ConnectRateLimits
 {
-    private int _startPerIp = 10, _startPerUser = 10, _exchangePerIp = 10;
+    private int _startPerIp = 10, _startPerUser = 10, _exchangePerIp = 10, _exchangePerUser = 10;
     private long _windowTicks = TimeSpan.FromMinutes(1).Ticks;
 
     public int StartPerIp { get => Volatile.Read(ref _startPerIp); set => Volatile.Write(ref _startPerIp, value); }
     public int StartPerUser { get => Volatile.Read(ref _startPerUser); set => Volatile.Write(ref _startPerUser, value); }
     public int ExchangePerIp { get => Volatile.Read(ref _exchangePerIp); set => Volatile.Write(ref _exchangePerIp, value); }
+    public int ExchangePerUser { get => Volatile.Read(ref _exchangePerUser); set => Volatile.Write(ref _exchangePerUser, value); }
     public TimeSpan Window { get => TimeSpan.FromTicks(Interlocked.Read(ref _windowTicks)); set => Interlocked.Exchange(ref _windowTicks, value.Ticks); }
 }
 
@@ -29,12 +34,16 @@ public sealed class ConnectRateLimits
 /// sections 2 (blob URLs) and 3 (connecting a computer). Access tokens are checked against
 /// the shared <see cref="FakeSupabase"/> registry, membership and device registration run
 /// against the real Armory SQL, and blob URLs point at <see cref="S3Host"/>, which a
-/// <see cref="FakeNetworkHandler"/> routes to the shared <see cref="FakeS3"/>.
+/// <see cref="FakeNetworkHandler"/> routes to the shared <see cref="FakeS3"/>. Building this
+/// site makes that FakeS3 private: each blob URL is signed for one method, one object, the
+/// returned headers and (for a PUT) the exact requested byte count, and expires 15 minutes
+/// after issue on <see cref="FakeHttpServer.Clock"/> (see <see cref="FakeNetworkHandler"/>).
 /// <para>
 /// Checks run in this order. blob-url: 401, 400 (including a PUT over 2 GiB), 403 (not a
 /// member, then for GET a hash outside the project), 503, 200. connect/start: 401, 429 (per
-/// IP, then per user), 400, 303. connect/exchange: 429 (per IP), 400, then 401 unknown or
-/// used code, 410 expired code, 401 wrong verifier (which also consumes the code), 200.
+/// IP, then per user), 400, 303. connect/exchange: 429 (per IP), 400, 401 unknown code, 429
+/// (per user of the code, which is not consumed), 401 used code, 410 expired code, 401 wrong
+/// verifier (which also consumes the code), 200.
 /// </para>
 /// <para>
 /// Test-only: the site's own Google sign-in is simulated by the request header
@@ -60,12 +69,14 @@ public sealed partial class FakeIdeaBosco : FakeHttpServer
     private readonly Dictionary<string, Queue<DateTimeOffset>> _rateWindows = new(StringComparer.Ordinal);
     private readonly object _rateGate = new();
     private volatile bool _storageConfigured = true;
+    private readonly FakeStorageSigner _signer;
 
     public FakeIdeaBosco(FakeSupabase supabase, ArmoryTestDatabase database, FakeS3 s3)
     {
         Supabase = supabase ?? throw new ArgumentNullException(nameof(supabase));
         Database = database ?? throw new ArgumentNullException(nameof(database));
         S3 = s3 ?? throw new ArgumentNullException(nameof(s3));
+        _signer = FakeStorageSigner.Attach(s3, () => Clock.GetUtcNow());
     }
 
     public FakeSupabase Supabase { get; }
@@ -77,7 +88,7 @@ public sealed partial class FakeIdeaBosco : FakeHttpServer
 
     public ConnectRateLimits RateLimits { get; } = new();
 
-    /// <summary>Extra headers blob-url returns for the client to send with the S3 request. Empty by default.</summary>
+    /// <summary>Extra headers blob-url returns, and signs, for the client to send with the S3 request. Empty by default.</summary>
     public IDictionary<string, string> BlobUrlHeaders { get; } = new System.Collections.Concurrent.ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>The SHA-256 (lowercase hex) of every connect code issued; the codes themselves are never kept.</summary>
@@ -87,9 +98,8 @@ public sealed partial class FakeIdeaBosco : FakeHttpServer
     public Uri ConnectUrl(int port, string state, string challenge, string device) =>
         new(BaseUri, $"{ConnectPagePath.TrimStart('/')}?port={port}&state={Uri.EscapeDataString(state)}&challenge={Uri.EscapeDataString(challenge)}&device={Uri.EscapeDataString(device)}");
 
-    /// <summary>The object key and presigned URL the fake hands out for a hash.</summary>
-    public static Uri BlobUrlFor(string hash, string method) =>
-        new($"https://{S3Host}/{ContentObjectKey.FromHash(hash)}?op={method.ToLowerInvariant()}");
+    /// <summary>The object's URL without a signature (a signed blob URL is this plus its X-Amz-* query).</summary>
+    public static Uri ObjectUrlFor(string hash) => new($"https://{S3Host}/{ContentObjectKey.FromHash(hash)}");
 
     private protected override Task<FakeResponse> HandleAsync(HttpContext context)
     {
@@ -158,13 +168,17 @@ public sealed partial class FakeIdeaBosco : FakeHttpServer
         if (!StorageConfigured) return FakeResponse.Json(503, new JsonObject { ["error"] = "armory_storage_not_configured" });
 
         var key = ContentObjectKey.FromHash(hash);
+        var signedHeaders = new Dictionary<string, string>(BlobUrlHeaders, StringComparer.OrdinalIgnoreCase);
         var headers = new JsonObject();
-        foreach (var (name, value) in BlobUrlHeaders) headers[name] = value;
+        foreach (var (name, value) in signedHeaders) headers[name] = value;
+        // SigV4 dates are whole seconds, so the URL lives exactly 15 minutes from that second.
+        var issuedAt = DateTimeOffset.FromUnixTimeSeconds(Clock.GetUtcNow().ToUnixTimeSeconds());
+        var url = _signer.Sign(key, method, issuedAt, BlobUrlLifetime, signedHeaders, method == "PUT" ? bytes : null);
         return FakeResponse.Json(200, new JsonObject
         {
-            ["url"] = BlobUrlFor(hash, method).ToString(),
+            ["url"] = url.ToString(),
             ["headers"] = headers,
-            ["expiresAt"] = IsoTime(Clock.GetUtcNow().Add(BlobUrlLifetime)),
+            ["expiresAt"] = IsoTime(issuedAt.Add(BlobUrlLifetime)),
             ["exists"] = S3.Objects.ContainsKey(key),
         });
     }
@@ -276,15 +290,17 @@ public sealed partial class FakeIdeaBosco : FakeHttpServer
 
         var (_, json) = await ReadJsonAsync(context.Request);
         if (json is not { ValueKind: JsonValueKind.Object } body
-            || StringProperty(body, "code") is not { } code
-            || StringProperty(body, "verifier") is not { } verifier)
-            return Error(400, "bad_request", "code and verifier are required strings.");
+            || StringProperty(body, "code") is not { Length: > 0 } code
+            || StringProperty(body, "verifier") is not { Length: > 0 } verifier)
+            return Error(400, "bad_request", "code and verifier are required non-empty strings.");
 
         ConnectCode grant;
         lock (_codesGate)
         {
             var key = Sha256Hex(code);
             if (!_codes.TryGetValue(key, out var stored)) return Error(401, "invalid_code", "That connect code is not valid.");
+            if (!TryCount("exchange-user:" + stored.Email, RateLimits.ExchangePerUser, now))
+                return Error(429, "rate_limited", "Too many connect attempts. Wait a minute and try again.");
             if (stored.Used) return Error(401, "invalid_code", "That connect code was already used.");
             if (now >= stored.ExpiresAt) return Error(410, "code_expired", "That connect code expired. Start again from the app.");
             // A wrong verifier consumes the code too, so it cannot be brute forced.
