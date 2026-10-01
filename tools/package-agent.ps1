@@ -139,7 +139,7 @@ if (-not $NoSetupExe) {
         Write-Warning ('The Inno Setup version could not be read (' + ($found.Seen -join '; ') + '); ISCC itself refuses directives it does not know.')
         $isccVersion = 'unknown version'
     }
-    $arguments = @('/DAppVersion=' + $Version, '/DPayloadDir=' + $files, '/DOutputDir=' + $dist)
+    $arguments = @(('/DAppVersion=' + $Version), ('/DPayloadDir=' + $files), ('/DOutputDir=' + $dist))
     $icon = Join-Path $root 'src/Armory.Agent/Assets/armory.ico'
     if (Test-Path -LiteralPath $icon) { $arguments += '/DIconFile=' + $icon }
     Write-Output ('Inno Setup ' + $isccVersion + ': ' + $compiler)
@@ -161,7 +161,7 @@ Write-Output ('Flash drive layout (' + $name + '):')
 Get-ChildItem -LiteralPath $stage -Force | ForEach-Object { '  ' + $_.Name + $(if ($_.PSIsContainer) { '\' } else { '' }) }
 Write-Output ('  files\ holds ' + $payload.Count + ' files, listed with SHA-256 in files\scripts\payload.sha256')
 if ($env:GITHUB_OUTPUT) {
-    $out = @('version=' + $Version, 'usb_zip=' + $zip, 'usb_sha256=' + $zipHash)
-    if ($setupHash) { $out += @('setup_exe=' + $setupExe, 'setup_sha256=' + $setupHash) }
+    $out = @(('version=' + $Version), ('usb_zip=' + $zip), ('usb_sha256=' + $zipHash))
+    if ($setupHash) { $out += @(('setup_exe=' + $setupExe), ('setup_sha256=' + $setupHash)) }
     Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value $out -Encoding utf8
 }
