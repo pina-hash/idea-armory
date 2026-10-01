@@ -40,7 +40,7 @@ agent's ignore list (`~$*`, `.armory`, `desktop.ini`, `Thumbs.db`) is refused as
 | `armory_remove_member(project, email, operation_id)` | Mentor only; never removes the last mentor. Membership changes serialize on the project row. |
 | `armory_create_file(project, folder, name, device, operation_id)` | Any member with a registered device. |
 | `armory_move_file(file, folder, name, device, operation_id)` | Only the live lock holder pair; returns false otherwise. Writes `file_moved` with old and new folder and name. |
-| `armory_commit_version_with_release(..., saved_release)` | Calls 002's `armory_commit_version` (one source of the lock and parent rules) under a derived operation id, then records the SolidWorks release. |
+| `armory_commit_version_with_release(..., saved_release)` | Calls 002's `armory_commit_version` (one source of the lock and parent rules) under a derived operation id, then records the SolidWorks release. A commit to a file someone removed is kept as a side version with reason `file deleted` (`advanced` false), so a save made while the removal was in flight is never lost. |
 | `armory_save_side_version_with_release(..., saved_release)` | Same, around `armory_save_side_version`. |
 | `armory_set_release_gate(project, 'enforce' or 'warn', operation_id)` | Mentor only. New projects default to `warn`, pinned to SolidWorks 2025. |
 | `armory_raise_pinned_release(project, release, operation_id)` | Mentor only; the pin must strictly increase (Core's `TryRaise`). |

@@ -38,6 +38,10 @@ The S4 contract suite was run after each temporary mutation, followed by restora
 Each break edited `server/sql/004_armory_agent.sql` in the working tree, rebuilt, ran
 `AgentRpcTests` against a fresh throwaway database, and restored the saved copy. SHA-256
 before and after every restoration: `adfc31bbce432fc8293305320019d7abe90b246b0f5940446becb9d068e54024`.
+The engine hardening then changed 004 (a commit to a removed file is kept as a side
+version), so all three breaks were run again on the final file with the same results:
+SHA-256 before and after `f25ae4aca74a832f61520f4ee599d72e563ab4bfccd3cb3f6602b9570892bf2d`,
+12 of 13 `AgentRpcTests` green during each break and 13 of 13 after restoring.
 
 | Break | Test that turned red |
 |---|---|
