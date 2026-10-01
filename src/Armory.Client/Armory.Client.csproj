@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="../Armory.Storage/Armory.Storage.csproj" />
+    <InternalsVisibleTo Include="Armory.Client.Tests" />
+  </ItemGroup>
+</Project>

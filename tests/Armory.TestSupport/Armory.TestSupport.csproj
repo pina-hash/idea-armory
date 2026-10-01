@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+ <!-- Shared fakes for agent tests: a throwaway PostgreSQL database, a fake Supabase (auth and
+      PostgREST) and a fake ideabosco.com, all in process. A library, not a test project. -->
+ <PropertyGroup><IsPackable>false</IsPackable><IsTestProject>false</IsTestProject></PropertyGroup>
+ <ItemGroup>
+  <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  <PackageReference Include="Npgsql" Version="10.0.0" />
+  <PackageReference Include="xunit.extensibility.core" Version="2.9.3" />
+  <ProjectReference Include="../../src/Armory.Storage/Armory.Storage.csproj" />
+ </ItemGroup>
+ <ItemGroup>
+  <Compile Include="../Armory.Storage.Tests/FakeS3.cs" Link="FakeS3.cs" />
+ </ItemGroup>
+ <ItemGroup>
+  <None Include="../../server/sql/*.sql" Link="server-sql/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  <None Include="../Armory.Server.Tests/sql/*.sql" Link="test-sql/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+ </ItemGroup>
+</Project>
