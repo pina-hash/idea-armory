@@ -48,6 +48,11 @@
           "Newtonsoft.Json": "13.0.3"
         }
       },
+      "Microsoft.Web.WebView2": {
+        "type": "Transitive",
+        "resolved": "1.0.4258.31",
+        "contentHash": "sHVZ2MQrHT1J3q5/6csn0fIP27rzpTO/RRC+wPQDrZheB7T4t2n+vVbY6SdCKr4WRV9s/gmBM3PPMWWJtoDzMg=="
+      },
       "Newtonsoft.Json": {
         "type": "Transitive",
         "resolved": "13.0.3",
@@ -93,6 +98,14 @@
           "xunit.extensibility.core": "[2.9.3]"
         }
       },
+      "armory.agent.engine": {
+        "type": "Project",
+        "dependencies": {
+          "Armory.Client": "[1.0.0, )",
+          "Armory.Core": "[1.0.0, )",
+          "Armory.Storage": "[1.0.0, )"
+        }
+      },
       "armory.client": {
         "type": "Project",
         "dependencies": {
@@ -109,14 +122,18 @@
           "Armory.Core": "[1.0.0, )"
         }
       },
-      "armory.probe": {
-        "type": "Project",
-        "dependencies": {
-          "Armory.Platform.Windows": "[1.0.0, )"
-        }
-      },
       "armory.storage": {
         "type": "Project"
+      },
+      "IdeaArmory": {
+        "type": "Project",
+        "dependencies": {
+          "Armory.Agent.Engine": "[1.0.0, )",
+          "Armory.Client": "[1.0.0, )",
+          "Armory.Core": "[1.0.0, )",
+          "Armory.Platform.Windows": "[1.0.0, )",
+          "Microsoft.Web.WebView2": "[1.0.4258.31, )"
+        }
       }
     }
   }

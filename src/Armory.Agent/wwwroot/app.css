@@ -1,0 +1,2278 @@
+/*
+ * Armory Agent window: the Plate, IDEA's shape language
+ * (idea-app docs/standards/IDEA_INTERFACE_STANDARDS.md section 14), carried into one app window.
+ *
+ * Every token and recipe below is copied from idea-app (pina-hash/idea-app, read-only) with
+ * its values and names kept; each block names the file it came from. Blocks marked "Armory"
+ * are this window's own layout. Three kinds of block, as in idea-app's plate.css:
+ *
+ *   GEOMETRY  lengths, declared once on :root, with no theme selector near them. The only
+ *             lengths that move, move with the viewport, never with the theme.
+ *   COLOR     declared once for IDEA (the dark default, on :root) and once more for Space
+ *             White (:root[data-theme='spaceWhite']). Colors only: not one length.
+ *   RULES     written once, with no [data-theme] in any selector.
+ *
+ * So a theme changes color and material, never a length (standards section 14a), and
+ * tools/agent-ui/bbox-diff.mjs proves it: zero differing element boxes across the themes.
+ *
+ * The page loads nothing from the network: no web fonts, no remote images. Every image
+ * here is a data: URI or a gradient.
+ */
+
+/* ===================================================================== GEOMETRY */
+
+/* GEOMETRY. Declared once, on :root, with no theme selector anywhere near it.
+   Source: idea-app src/lib/classroom/plate.css 116-171 (corners, label floor, chips,
+   lamps, hazard), src/routes/dev/themes-shape/plate-v3.css 21-24 (band, group pad),
+   src/lib/design-system/effects.css 33-41 (spacing), src/lib/design-system/typography.css
+   10-48 (type). A theme block never repeats or changes anything in here. */
+:root {
+	/* Corners (plate.css 120-129). */
+	--plate-soft: superellipse(0.25);
+	--plate-r-control: 11px;
+	--plate-r-small: 5px;
+	--plate-r-pad: 8px;
+	--plate-r-panel: 12px;
+	--plate-r-plate: 6px;
+	--plate-cut-screen: 26px;
+	/* The 11px mono label floor and its tracking (plate.css 133-137). */
+	--plate-label-size: 0.6875rem;
+	--plate-label-track: 0.14em;
+	--plate-chip-h: 22px;
+	--plate-chip-track: 0.02em;
+	--plate-chip-track-tight: 0.01em;
+	/* The lit key's broken ring, inset from the outer edge (plate.css 139). */
+	--plate-ring-inset: 5px;
+	/* A chip's status lamp and its clear space (plate.css 144-150). */
+	--plate-led-chip: 4px;
+	--plate-led-gap: 5px;
+	--plate-led-word-track: -0.02em;
+	--plate-led-pad-end: 2px;
+	/* The title bar's hazard blocks and the title (plate.css 152-158). */
+	--plate-hazard-w: min(18%, 132px);
+	--plate-hazard-h: 15px;
+	--plate-hazard-pitch: 10px;
+	--plate-hazard-tail: 3px;
+	--plate-title-size: clamp(1.05rem, 0.85rem + 0.55vw, 1.35rem);
+	--plate-title-track: 0.12em;
+	--plate-readout-size: 1rem;
+	/* The slab's screw-and-hatch band and a bracketed group's side padding (plate-v3.css 21-24). */
+	--plate-band: 24px;
+	--plate-group-pad: 14px;
+
+	/* Spacing scale (effects.css 34-41). */
+	--space-1: 0.25rem;
+	--space-2: 0.5rem;
+	--space-3: 0.75rem;
+	--space-4: 1rem;
+	--space-5: 1.5rem;
+	--space-6: 2rem;
+	--space-7: 2.5rem;
+	--space-8: 3.5rem;
+
+	/* Type (typography.css 12-47). idea-app names Rajdhani and Share Tech Mono, which it
+	   loads from Google Fonts; this window loads no web fonts, so the families are the
+	   Windows system faces (Armory, not idea-app). Sizes, weights and tracking are idea-app's.
+	   Liberation Sans and Arial come before system-ui only so a review render on a machine
+	   without Segoe UI is close to Segoe's width; Windows never reaches them. */
+	--font-display: 'Segoe UI Variable Text', 'Segoe UI', 'Liberation Sans', Arial, system-ui, sans-serif;
+	--font-mono: 'Cascadia Mono', Consolas, ui-monospace, monospace;
+	--fw-regular: 400;
+	--fw-medium: 500;
+	--fw-semibold: 600;
+	--fw-bold: 700;
+	--fs-h1: 2.4rem;
+	--fs-h2: 1.4rem;
+	--fs-h3: 1.2rem;
+	--fs-lead: 1.05rem;
+	--fs-body: 1.05rem;
+	--fs-sm: 0.9rem;
+	--fs-label: 0.72rem;
+	--lh-tight: 1.15;
+	--lh-body: 1.6;
+	--track-label: 0.14em;
+	--track-wide: 0.22em;
+
+	/* Armory: the window's own lengths (layout only; still theme-independent). */
+	--win-gap: 8px;
+	--side-w: minmax(18rem, 21rem);
+}
+
+/* THE LENGTHS THAT MOVE, MOVE WITH THE VIEWPORT, NEVER THE THEME
+   (plate.css 160-171, plate-v3.css 25-30; the window margin is Armory). */
+@media (max-width: 480px) {
+	:root {
+		--plate-hazard-w: 24px;
+		--plate-hazard-h: 10px;
+		--plate-hazard-pitch: 6.667px;
+		--plate-hazard-tail: 2px;
+		--plate-title-size: 0.95rem;
+		--plate-title-track: 0.06em;
+		--plate-readout-size: 0.8125rem;
+		--plate-band: 16px;
+		--plate-group-pad: 6px;
+		--win-gap: 0px;
+	}
+}
+
+/* ===================================================================== COLOR */
+
+/* THE SITE REGISTER the plate tokens read through, IDEA (the default).
+   Source: idea-app src/lib/design-system/colors.css 18-21, 34, 39, 55, 83-86, 116-119,
+   184, 189-192, 209. Colors only. */
+:root {
+	--green: #78b870;
+	--gold: #c8a848;
+	--cyan: #5abda8;
+	--amber: #d08030;
+	--crimson: #d95f5f;
+	--ice: #a9bcab;
+	--surface-0: #0a0c0b;
+	--surface-1: #101312;
+	--surface-2: #161a18;
+	--surface-raised: #161a18;
+	--hairline: rgba(255, 255, 255, 0.08);
+	--boundary: #6f7b73;
+	--text-1: #e7eae8;
+	--text-2: #9aa49d;
+	--text-3: #5c665f;
+	--focus-ring: var(--cyan);
+	--hover-ink: var(--gold);
+	--status-ok: var(--green);
+	--status-warn: var(--amber);
+	--status-danger: var(--crimson);
+	--status-info: var(--cyan);
+	/* Armory: native scrollbars and form parts follow the theme (classroom.css 760-797
+	   sets the same on its select). */
+	color-scheme: dark;
+}
+
+/* THE SITE REGISTER, SPACE WHITE.
+   Source: idea-app src/lib/design-system/themes/space-white.css 96-99, 103-107, 114-115,
+   120-123, 127, 147. Colors only. */
+:root[data-theme='spaceWhite'] {
+	--green: #3b6c36;
+	--gold: #715d22;
+	--cyan: #2b6a5d;
+	--amber: #77491b;
+	--crimson: #b42b2b;
+	--ice: #43504b;
+	--surface-0: #e8eceb;
+	--surface-1: #f7f9f9;
+	--surface-2: #edf1f0;
+	--surface-raised: #fbfcfc;
+	--hairline: rgba(13, 19, 17, 0.16);
+	--boundary: #6f7c78;
+	--text-1: #0d1311;
+	--text-2: #384340;
+	--text-3: #56625e;
+	--hover-ink: var(--green);
+	color-scheme: light;
+}
+
+/* PLATE MATERIALS, IDEA (the dark default).
+   Source: idea-app src/lib/classroom/plate.css 183-355, values verbatim. Colors only,
+   shadows' colors included; not one length. The progress-ring tokens are left out:
+   the window has no ring. */
+:root {
+	--plate-plate-top: #161918;
+	--plate-plate-bot: #121413;
+
+	--plate-page-top: var(--plate-plate-top);
+	--plate-page-bot: var(--plate-plate-bot);
+	--plate-plate-hi: rgba(255, 255, 255, 0.12);
+	--plate-plate-edge: #262b28;
+	--plate-plate-side: rgba(0, 0, 0, 0.4);
+	--plate-inset-top: #0f1110;
+	--plate-inset-bot: #0c0e0d;
+	--plate-groove-dk: rgba(0, 0, 0, 0.8);
+	--plate-groove-lt: rgba(255, 255, 255, 0.09);
+	--plate-inset-shade: rgba(0, 0, 0, 0.55);
+
+	--plate-hair: #656f68;
+	--plate-hair-top: #7a857d;
+	--plate-bezel-mid: rgba(255, 255, 255, 0.06);
+	--plate-bezel-hi: rgba(255, 255, 255, 0.16);
+	--plate-tube-lo: rgba(0, 0, 0, 0.3);
+	--plate-foot: rgba(0, 0, 0, 0.5);
+	--plate-rim-out: rgba(0, 0, 0, 0.5);
+	--plate-drop: rgba(0, 0, 0, 0.55);
+	--plate-drop-far: rgba(0, 0, 0, 0.45);
+
+	--plate-band-top: #3a413c;
+	--plate-band-bot: #222624;
+	--plate-pad-lip: rgba(255, 255, 255, 0.16);
+
+	--plate-face-top: #2f3431;
+	--plate-face-bot: #252a27;
+	--plate-face-ground: #2f3431;
+	--plate-lit-top: #383f3a;
+	--plate-lit-bot: #2f3531;
+	--plate-lit-ground: #383f3a;
+	--plate-lit-glow: rgba(143, 224, 138, 0.38);
+	--plate-lit-core: rgba(143, 224, 138, 0.3);
+	--plate-bloom: rgba(120, 184, 112, 0.3);
+
+	--plate-press-top: #121413;
+	--plate-press-bot: #1c1f1d;
+	--plate-press-shade: rgba(0, 0, 0, 0.7);
+	--plate-disabled-face: #1a1d1b;
+	--plate-disabled-edge: #3e4540;
+
+	--plate-panel-top: #1c1f1d;
+	--plate-panel-bot: #171a18;
+	--plate-panel-ground: #1c1f1d;
+	--plate-panel-hi: rgba(255, 255, 255, 0.12);
+	--plate-frame: rgba(255, 255, 255, 0.04);
+	--plate-frame-in: rgba(0, 0, 0, 0.3);
+	--plate-frame-lo: rgba(0, 0, 0, 0.35);
+
+	--plate-well-shade: #050606;
+	--plate-well-top: #0a0b0b;
+	--plate-well-face: #0f1110;
+	--plate-well-ground: #0f1110;
+	--plate-well-lip: rgba(255, 255, 255, 0.2);
+	--plate-list-face: #0f1110;
+	--plate-divider: var(--boundary);
+
+	--plate-chip-top: #121413;
+	--plate-chip-bot: #171a18;
+	--plate-chip-ground: #171a18;
+	--plate-chip-edge: rgba(255, 255, 255, 0.13);
+	--plate-chip-shade: rgba(0, 0, 0, 0.6);
+	--plate-chip-lip: rgba(255, 255, 255, 0.1);
+
+	--plate-ink: var(--text-1);
+	--plate-ink-2: #b9c0bb;
+	--plate-caption: #b9c0bb;
+	--plate-btn-ink: var(--text-1);
+	--plate-head-ink: var(--text-1);
+	--plate-text-bloom: rgba(0, 0, 0, 0);
+	--plate-disabled: var(--ice);
+
+	--plate-accent: var(--green);
+	--plate-accent-tint: rgba(120, 184, 112, 0.35);
+	--plate-accent-glow: rgba(143, 224, 138, 0.55);
+
+	--plate-primary-face: #2f4b2c;
+	--plate-primary-ink: var(--text-1);
+	--plate-primary-hi: rgba(143, 224, 138, 0.35);
+	--plate-primary-foot: rgba(0, 0, 0, 0.35);
+	--plate-primary-glow: rgba(120, 184, 112, 0.28);
+	--plate-primary-inglow: rgba(120, 184, 112, 0.35);
+	--plate-sel-face: #2f4b2c;
+	--plate-sel-ink: var(--text-1);
+	--plate-sel-edge: rgba(143, 224, 138, 0.75);
+	--plate-sel-glow: rgba(120, 184, 112, 0.3);
+	--plate-sel-chip-edge: rgba(231, 234, 232, 0.5);
+	--plate-selchip-face: rgba(0, 0, 0, 0.28);
+
+	--plate-danger-ink: #e28383;
+
+	--plate-led-off: #2c332f;
+	--plate-led-off-hi: #48514b;
+	--plate-led-ring: #050706;
+	--plate-led-halo: rgba(143, 224, 138, 0.6);
+	--plate-led-amber: var(--amber);
+	--plate-led-gold: var(--gold);
+	--plate-cup: #0c0e0d;
+	--plate-cup-in: #000000;
+
+	--plate-screen-top: #16201a;
+	--plate-screen-bot: #0b100d;
+	--plate-screen-rim: rgba(143, 224, 138, 0.16);
+	--plate-screen-shade: rgba(0, 0, 0, 0.75);
+	--plate-screen-ink: #81bd79;
+	--plate-screen-glow: rgba(120, 184, 112, 0.65);
+	--plate-screen-wall: rgba(143, 224, 138, 0.1);
+	--plate-glass: rgba(255, 255, 255, 0.06);
+
+	--plate-hazard: #4c544f;
+	--plate-bracket: #66706a;
+	--plate-engrave-dk: rgba(0, 0, 0, 0.75);
+	--plate-engrave-lt: rgba(255, 255, 255, 0.1);
+	--plate-screw-face: #2c312e;
+	--plate-screw-hi: rgba(255, 255, 255, 0.16);
+	--plate-screw-dot: #070908;
+	--plate-screw-ring: rgba(0, 0, 0, 0.75);
+	--plate-screw-spec: rgba(255, 255, 255, 0.25);
+
+	--plate-track: #0a0b0b;
+	--plate-track-faint: rgba(0, 0, 0, 0.35);
+	--plate-knob-top: #4a524c;
+	--plate-knob-bot: #2c312e;
+	--plate-knob-icon: var(--text-1);
+	--plate-knob-on-icon: #0a0c0b;
+	--plate-knob-shade: rgba(0, 0, 0, 0.6);
+
+	/* Armory: the settings sheet's scrim (plate.css has none; a flat color, no blur). */
+	--scrim: rgba(0, 0, 0, 0.55);
+}
+
+/* PLATE MATERIALS, SPACE WHITE.
+   Source: idea-app src/lib/classroom/plate.css 476-610, values verbatim. Same names as
+   IDEA, colors only. Not redeclared, so they follow the register: --plate-page-top/bot,
+   --plate-ink, --plate-disabled, --plate-accent. */
+:root[data-theme='spaceWhite'] {
+	--plate-plate-top: #e4e8ee;
+	--plate-plate-bot: #dfe3ea;
+	--plate-plate-hi: #f6f8fb;
+	--plate-plate-edge: #c2c7ce;
+	--plate-plate-side: rgba(120, 128, 142, 0.5);
+	--plate-inset-top: #dee2e9;
+	--plate-inset-bot: #dadee6;
+	--plate-groove-dk: rgba(84, 92, 110, 0.42);
+	--plate-groove-lt: #f7f9fc;
+	--plate-inset-shade: rgba(84, 92, 110, 0.24);
+	--plate-hair: #757c86;
+	--plate-hair-top: #757c86;
+	--plate-bezel-mid: #a3a9b0;
+	--plate-bezel-hi: #cdd1d6;
+	--plate-tube-lo: rgba(120, 128, 138, 0.16);
+	--plate-foot: rgba(96, 104, 114, 0.45);
+	--plate-rim-out: rgba(80, 90, 104, 0.12);
+	--plate-drop: rgba(70, 80, 100, 0.24);
+	--plate-drop-far: rgba(70, 80, 100, 0.22);
+	--plate-band-top: #aeb3bb;
+	--plate-band-bot: #9ba1a9;
+	--plate-pad-lip: #d3d7dd;
+	--plate-face-top: #b8bdc5;
+	--plate-face-bot: #cdd2d9;
+	--plate-face-ground: #b8bdc5;
+	--plate-lit-top: #d8dbde;
+	--plate-lit-bot: #dde0e3;
+	--plate-lit-ground: #d8dbde;
+	--plate-lit-glow: #ffffff;
+	--plate-lit-core: rgba(255, 255, 255, 0.75);
+	--plate-bloom: rgba(255, 255, 255, 0);
+	--plate-press-top: #adb2ba;
+	--plate-press-bot: #c3c8cf;
+	--plate-press-shade: rgba(60, 68, 84, 0.5);
+	--plate-disabled-face: #dde1e7;
+	--plate-disabled-edge: #a0a6ad;
+	--plate-panel-top: #f5f7f9;
+	--plate-panel-bot: #e2e6ec;
+	--plate-panel-ground: #e2e6ec;
+	--plate-panel-hi: #ffffff;
+	--plate-frame: rgba(255, 255, 255, 0.55);
+	--plate-frame-in: rgba(128, 136, 148, 0.2);
+	--plate-frame-lo: rgba(110, 118, 130, 0.22);
+	--plate-well-shade: #a9aeb8;
+	--plate-well-top: #bfc4ce;
+	--plate-well-face: #c8ccd5;
+	--plate-well-ground: #bfc4ce;
+	--plate-well-lip: #eef1f6;
+	--plate-list-face: #e4e8ee;
+	--plate-divider: #7d848d;
+	--plate-chip-top: #dde0e6;
+	--plate-chip-bot: #e6e9ee;
+	--plate-chip-ground: #dde0e6;
+	--plate-chip-edge: #b3b8c0;
+	--plate-chip-shade: rgba(70, 80, 100, 0.3);
+	--plate-chip-lip: rgba(255, 255, 255, 0.85);
+	--plate-ink-2: var(--text-2);
+	--plate-caption: #545a61;
+	--plate-btn-ink: #2d3238;
+
+	--plate-danger-ink: #882020;
+	--plate-head-ink: var(--text-1);
+	--plate-text-bloom: rgba(255, 255, 255, 0);
+	--plate-accent-tint: rgba(59, 108, 54, 0.3);
+	--plate-accent-glow: #cfe5cb;
+	--plate-primary-face: var(--green);
+	--plate-primary-ink: var(--surface-1);
+	--plate-primary-hi: #9dc497;
+	--plate-primary-foot: rgba(20, 40, 18, 0.45);
+	--plate-primary-glow: rgba(255, 255, 255, 0);
+	--plate-primary-inglow: rgba(255, 255, 255, 0);
+	--plate-sel-face: var(--green);
+	--plate-sel-ink: var(--surface-1);
+	--plate-sel-edge: #cfe5cb;
+	--plate-sel-glow: rgba(255, 255, 255, 0);
+	--plate-sel-chip-edge: rgba(247, 249, 249, 0.7);
+	--plate-selchip-face: rgba(0, 0, 0, 0.2);
+	--plate-led-off: #9aa0a8;
+	--plate-led-off-hi: #b9bec5;
+	--plate-led-ring: #7c828a;
+	--plate-led-halo: rgba(120, 184, 112, 0.35);
+
+	/* A lamp is a light, not a word: Space White's lamps use IDEA's own amber and gold
+	   (plate.css 561-563). */
+	--plate-led-amber: #e08a2e;
+	--plate-led-gold: #d9b84e;
+	--plate-cup: #aeb4bc;
+	--plate-cup-in: #8c929a;
+	--plate-screen-top: #383c44;
+	--plate-screen-bot: #25282e;
+	--plate-screen-rim: rgba(255, 255, 255, 0.3);
+	--plate-screen-shade: rgba(0, 0, 0, 0.55);
+	--plate-screen-ink: #78b870;
+	--plate-screen-glow: rgba(120, 184, 112, 0.6);
+	--plate-screen-wall: rgba(255, 255, 255, 0.16);
+	--plate-glass: rgba(255, 255, 255, 0.06);
+	--plate-hazard: #585d63;
+	--plate-bracket: #8a9098;
+	--plate-engrave-dk: rgba(96, 104, 118, 0.55);
+	--plate-engrave-lt: rgba(255, 255, 255, 0.9);
+	--plate-screw-face: #dfe3e8;
+	--plate-screw-hi: #ffffff;
+	--plate-screw-dot: #6a7078;
+	--plate-screw-ring: #8a9098;
+	--plate-screw-spec: rgba(255, 255, 255, 0);
+	--plate-track: #a9aeb6;
+	--plate-track-faint: rgba(96, 104, 118, 0.18);
+	--plate-knob-top: #f6f7f9;
+	--plate-knob-bot: #d3d6db;
+	--plate-knob-icon: #3a3f45;
+	--plate-knob-on-icon: #f7f9f9;
+	--plate-knob-shade: rgba(60, 68, 84, 0.45);
+
+	/* A light veil, not a dark one: the sheet's hairline must hold 3:1 against the page
+	   it floats over, and a darkened white page would pull the ground down to its edge. */
+	--scrim: rgba(236, 239, 243, 0.62);
+}
+
+/* LAMP AND READOUT COLORS (Armory extension of plate.css 561-563's rule: a lamp is a
+   light, not a word, so a lamp keeps IDEA's own hue in every theme). Red and cyan lamps
+   are not in idea-app; they are colors.css's IDEA --crimson and --cyan, declared once
+   here, theme-independent. The readout inks are lighter steps of the same hues so the
+   words clear 4.5:1 on the display's dark glass in both themes. The word beside a lamp
+   always carries the meaning. */
+:root {
+	--lamp-red: #d95f5f;
+	--lamp-cyan: #5abda8;
+	--readout-busy: #6cc9b5;
+	--readout-hold: #d9b84e;
+	--readout-warn: #e8a05a;
+	--readout-bad: #f09a9a;
+	--readout-off: #b9c0bb;
+}
+
+/* ===================================================================== RULES */
+
+/* THE PAGE IS THE PLATE (plate.css 633-644; body type from idea-app src/app.css 24-34).
+   Armory: the window fills the viewport and scrolls inside its slab. */
+html,
+body {
+	margin: 0;
+	height: 100%;
+}
+body {
+	min-height: 100vh;
+	overflow: hidden;
+	background-color: var(--plate-plate-bot);
+	background-image: linear-gradient(to bottom, var(--plate-page-top), var(--plate-page-bot) 28rem);
+	background-repeat: no-repeat;
+	color: var(--plate-ink);
+	font-family: var(--font-display);
+	font-weight: 400;
+	font-size: 1.05rem;
+	line-height: 1.6;
+	-webkit-font-smoothing: antialiased;
+}
+/* Focus is drawn, in the theme's own focus ink, 2px out (app.css 419-422;
+   standards section 10). */
+:focus-visible {
+	outline: 2px solid var(--focus-ring);
+	outline-offset: 2px;
+}
+/* A heading (or the sheet itself) that takes focus when a screen opens is not a
+   control: the page moved focus there so a screen reader reads the new screen's name,
+   and Tab goes on to the first control after it. It draws no ring. */
+[tabindex='-1']:focus {
+	outline: none;
+}
+/* Colors and shadows may ease; nothing that moves a box does (plate.css 847-856). */
+@media (prefers-reduced-motion: no-preference) {
+	.key,
+	.switch,
+	.pad,
+	.row-main {
+		transition:
+			color 120ms ease-out,
+			border-color 120ms ease-out,
+			box-shadow 120ms ease-out,
+			background-color 120ms ease-out;
+	}
+}
+/* Armory: no easing while the first view paints, so a theme never fades in. */
+.preload *,
+.preload *::before,
+.preload *::after {
+	transition: none !important;
+}
+p,
+h1,
+h2,
+h3,
+ol,
+ul {
+	margin: 0;
+}
+button {
+	font: inherit;
+	color: inherit;
+}
+.sprite {
+	position: absolute;
+	width: 0;
+	height: 0;
+	overflow: hidden;
+}
+.icon {
+	flex: none;
+	width: 16px;
+	height: 16px;
+}
+.visually-hidden {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	margin: -1px;
+	padding: 0;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+	border: 0;
+}
+
+/* THE SLAB: one machined plate per page or major region (idea-app
+   src/routes/dev/themes-shape/plate-v3.css 32-125). A barely visible top-to-bottom
+   gradient, a 1px lighter top-left edge, four recessed screws in the corners, one
+   engraved diagonal crossing the left edge and a hatch stack on each side edge, all
+   inside the padding band. Rounded at every corner. Here it is the window's main
+   plate, the only place screws and hatch appear (standards 14e). */
+.plate-slab {
+	position: relative;
+	border: 1px solid var(--plate-plate-edge);
+	border-radius: var(--plate-r-plate);
+	padding-inline: var(--plate-band);
+	padding-top: calc(var(--plate-band) + 4px);
+	padding-bottom: var(--plate-band);
+	background-color: var(--plate-plate-bot);
+	/* Each screw is four layers: a pin-point specular, the dot and face, the ring's
+	   shadow up-left, its lit lip down-right. */
+	background-image:
+		radial-gradient(circle at 40% 38%, var(--plate-screw-spec) 0 0.9px, transparent 1.6px),
+		radial-gradient(circle, var(--plate-screw-dot) 0 1.9px, var(--plate-screw-face) 2.3px 4px, transparent 4.4px),
+		radial-gradient(circle at 47% 46%, var(--plate-screw-ring) 0 5.4px, transparent 5.8px),
+		radial-gradient(circle at 53% 54%, var(--plate-screw-hi) 0 5.7px, transparent 6.1px),
+		radial-gradient(circle at 40% 38%, var(--plate-screw-spec) 0 0.9px, transparent 1.6px),
+		radial-gradient(circle, var(--plate-screw-dot) 0 1.9px, var(--plate-screw-face) 2.3px 4px, transparent 4.4px),
+		radial-gradient(circle at 47% 46%, var(--plate-screw-ring) 0 5.4px, transparent 5.8px),
+		radial-gradient(circle at 53% 54%, var(--plate-screw-hi) 0 5.7px, transparent 6.1px),
+		radial-gradient(circle at 40% 38%, var(--plate-screw-spec) 0 0.9px, transparent 1.6px),
+		radial-gradient(circle, var(--plate-screw-dot) 0 1.9px, var(--plate-screw-face) 2.3px 4px, transparent 4.4px),
+		radial-gradient(circle at 47% 46%, var(--plate-screw-ring) 0 5.4px, transparent 5.8px),
+		radial-gradient(circle at 53% 54%, var(--plate-screw-hi) 0 5.7px, transparent 6.1px),
+		radial-gradient(circle at 40% 38%, var(--plate-screw-spec) 0 0.9px, transparent 1.6px),
+		radial-gradient(circle, var(--plate-screw-dot) 0 1.9px, var(--plate-screw-face) 2.3px 4px, transparent 4.4px),
+		radial-gradient(circle at 47% 46%, var(--plate-screw-ring) 0 5.4px, transparent 5.8px),
+		radial-gradient(circle at 53% 54%, var(--plate-screw-hi) 0 5.7px, transparent 6.1px),
+		linear-gradient(to top right, transparent calc(50% - 1px), var(--plate-engrave-dk) calc(50% - 1px) 50%, var(--plate-engrave-lt) 50% calc(50% + 1px), transparent calc(50% + 1px)),
+		linear-gradient(to bottom, var(--plate-plate-top), var(--plate-plate-bot));
+	background-size:
+		15px 15px, 15px 15px, 15px 15px, 15px 15px,
+		15px 15px, 15px 15px, 15px 15px, 15px 15px,
+		15px 15px, 15px 15px, 15px 15px, 15px 15px,
+		15px 15px, 15px 15px, 15px 15px, 15px 15px,
+		34px 34px,
+		100% 100%;
+	background-position:
+		6px 6px, 6px 6px, 6px 6px, 6px 6px,
+		calc(100% - 6px) 6px, calc(100% - 6px) 6px, calc(100% - 6px) 6px, calc(100% - 6px) 6px,
+		6px calc(100% - 6px), 6px calc(100% - 6px), 6px calc(100% - 6px), 6px calc(100% - 6px),
+		calc(100% - 6px) calc(100% - 6px), calc(100% - 6px) calc(100% - 6px), calc(100% - 6px) calc(100% - 6px), calc(100% - 6px) calc(100% - 6px),
+		-12px calc(100% - 70px),
+		0 0;
+	background-repeat: no-repeat;
+	/* Lit from the top left: a light top and left edge, a soft shade gathering toward the
+	   right and the foot (a blur, never a flat band), then the drop. */
+	box-shadow:
+		inset 1px 1px 0 0 var(--plate-plate-hi),
+		inset -14px -12px 18px -14px var(--plate-plate-side),
+		0 2px 4px 0 var(--plate-drop),
+		0 14px 28px -10px var(--plate-drop-far);
+}
+/* THE HATCH STACKS: nine round-capped diagonal strokes on each side edge, the theme's
+   hazard color seen through an SVG mask (plate-v3.css 32-125). Armory: they sit at the
+   middle of the side bands, clear of the header strip. */
+.plate-slab::before,
+.plate-slab::after {
+	content: '';
+	position: absolute;
+	top: calc(50% - 22px);
+	width: 8px;
+	height: 44px;
+	pointer-events: none;
+	background: var(--plate-hazard);
+	mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 44' width='8' height='44'%3E%3Cg stroke='black' stroke-width='1.3' stroke-linecap='round'%3E%3Cline x1='1' y1='5.0' x2='7' y2='1.0'/%3E%3Cline x1='1' y1='9.6' x2='7' y2='5.6'/%3E%3Cline x1='1' y1='14.2' x2='7' y2='10.2'/%3E%3Cline x1='1' y1='18.8' x2='7' y2='14.8'/%3E%3Cline x1='1' y1='23.4' x2='7' y2='19.4'/%3E%3Cline x1='1' y1='28.0' x2='7' y2='24.0'/%3E%3Cline x1='1' y1='32.6' x2='7' y2='28.6'/%3E%3Cline x1='1' y1='37.2' x2='7' y2='33.2'/%3E%3Cline x1='1' y1='41.8' x2='7' y2='37.8'/%3E%3C/g%3E%3C/svg%3E") center / 8px 44px no-repeat;
+}
+.plate-slab::before {
+	left: 9px;
+}
+.plate-slab::after {
+	right: 10px;
+}
+@media (max-width: 480px) {
+	.plate-slab::before {
+		left: 4px;
+	}
+	.plate-slab::after {
+		right: 4px;
+	}
+}
+
+/* THE ENGRAVED LINE (plate-v3.css 247-281; markup in idea-app
+   src/routes/dev/themes-shape/PlateV3View.svelte 241-244). Paint only: aria-hidden SVG,
+   no pointer events. */
+.plate-engrave {
+	position: absolute;
+	top: 4px;
+	left: 0;
+	width: 62%;
+	height: 22px;
+	pointer-events: none;
+	overflow: visible;
+}
+.plate-engrave path {
+	fill: none;
+	stroke-width: 1;
+	vector-effect: non-scaling-stroke;
+}
+.plate-engrave .e-dk {
+	stroke: var(--plate-engrave-dk);
+}
+.plate-engrave .e-lt {
+	stroke: var(--plate-engrave-lt);
+}
+
+/* THE RECESSED COLUMN (idea-app src/lib/classroom/plate.css 1328-1359; padding and the
+   foot tab from plate-v3.css 200-239). Darker than the plate, lit from the upper left,
+   an engraved groove where it meets the plate, a raised tab at its top and its foot. A
+   region, not a control: its groove is decoration. Armory: background-color names the
+   face's darker stop, so a contrast walk measures against the worse end (plate.css
+   108-110). */
+.plate-recess {
+	position: relative;
+	padding: 22px 14px 26px;
+	border-radius: 4px;
+	background-color: var(--plate-inset-bot);
+	background-image: linear-gradient(to bottom, var(--plate-inset-top), var(--plate-inset-bot));
+	box-shadow:
+		inset 0 0 0 1px var(--plate-groove-dk),
+		inset 18px 0 18px -16px var(--plate-inset-shade),
+		inset 0 8px 10px -8px var(--plate-inset-shade),
+		inset -2px 0 0 0 var(--plate-groove-lt),
+		0 0 0 1px var(--plate-groove-lt);
+}
+.plate-recess::before,
+.plate-recess::after {
+	content: '';
+	position: absolute;
+	left: 50%;
+	width: 120px;
+	height: 6px;
+	margin-left: -60px;
+	pointer-events: none;
+	border-radius: 0 0 6px 6px;
+	corner-shape: var(--plate-soft);
+	background: linear-gradient(to bottom, var(--plate-plate-top), var(--plate-plate-bot));
+	box-shadow: 0 1px 0 0 var(--plate-groove-dk);
+}
+.plate-recess::before {
+	top: 0;
+}
+.plate-recess::after {
+	bottom: 0;
+	border-radius: 6px 6px 0 0;
+	background: linear-gradient(to bottom, var(--plate-face-top), var(--plate-face-bot));
+	box-shadow: 0 -1px 0 0 var(--plate-groove-dk);
+}
+
+/* THE HEADER PLATE: a lighter plate strip with a groove under it (plate.css 1376-1385).
+   z-index keeps it above the slab's hatch (classroom.css 101-117 does the same). The
+   flex layout and padding are Armory. */
+.plate-header {
+	position: relative;
+	z-index: 1;
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	padding: 0.75rem 1rem;
+	background-color: var(--plate-plate-top);
+	background-image: linear-gradient(to bottom, var(--plate-plate-top), var(--plate-plate-bot));
+	border-bottom: 1px solid transparent;
+	box-shadow:
+		inset 0 1px 0 0 var(--plate-plate-hi),
+		inset 0 -1px 0 0 var(--plate-groove-dk),
+		inset 0 -2px 0 0 var(--plate-groove-lt);
+}
+
+/* THE PAGE TITLE: a title bar between two hazard blocks (plate.css 1707-1763). Centered,
+   spaced mono caps at regular weight, over a groove. Only where a screen has one page
+   title (standards 14e): here, the Connect screen. */
+.plate-title {
+	position: relative;
+	box-sizing: border-box;
+	max-width: none;
+	margin: 0;
+	padding: 0.55rem calc(var(--plate-hazard-w) + 14px);
+	font-family: var(--font-mono);
+	font-size: var(--plate-title-size);
+	font-weight: 400;
+	line-height: 1.35;
+	letter-spacing: var(--plate-title-track);
+	text-transform: uppercase;
+	text-align: center;
+	text-wrap: balance;
+	color: var(--plate-ink-2);
+	background: linear-gradient(to bottom, var(--plate-plate-hi), transparent 3px);
+	box-shadow:
+		inset 0 -1px 0 0 var(--plate-groove-dk),
+		inset 0 -2px 0 0 var(--plate-groove-lt);
+}
+.plate-title::before,
+.plate-title::after {
+	content: '';
+	position: absolute;
+	top: 50%;
+	width: calc(round(down, var(--plate-hazard-w) - var(--plate-hazard-tail), var(--plate-hazard-pitch)) + var(--plate-hazard-tail));
+	height: var(--plate-hazard-h);
+	margin-top: calc(var(--plate-hazard-h) / -2);
+	pointer-events: none;
+	clip-path: polygon(0 0, 100% 0, calc(100% - 2 * var(--plate-hazard-tail)) 100%, 0 100%);
+	background: var(--plate-hazard);
+	mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 203 15' width='203' height='15'%3E%3Cpolygon points='0,15 5,15 13,0 8,0'/%3E%3Cpolygon points='10,15 15,15 23,0 18,0'/%3E%3Cpolygon points='20,15 25,15 33,0 28,0'/%3E%3Cpolygon points='30,15 35,15 43,0 38,0'/%3E%3Cpolygon points='40,15 45,15 53,0 48,0'/%3E%3Cpolygon points='50,15 55,15 63,0 58,0'/%3E%3Cpolygon points='60,15 65,15 73,0 68,0'/%3E%3Cpolygon points='70,15 75,15 83,0 78,0'/%3E%3Cpolygon points='80,15 85,15 93,0 88,0'/%3E%3Cpolygon points='90,15 95,15 103,0 98,0'/%3E%3Cpolygon points='100,15 105,15 113,0 108,0'/%3E%3Cpolygon points='110,15 115,15 123,0 118,0'/%3E%3Cpolygon points='120,15 125,15 133,0 128,0'/%3E%3Cpolygon points='130,15 135,15 143,0 138,0'/%3E%3C/svg%3E") left center / auto 100% no-repeat;
+}
+.plate-title::before {
+	left: 0;
+}
+.plate-title::after {
+	right: 0;
+	transform: scaleX(-1);
+}
+
+/* SECTION HEADINGS AND LABELS. A label is always caps at the 11px floor, tracked
+   (plate.css 659-676). A label that names a section sits ABOVE it and reads from the
+   left (plate.css 659-662; plate-v3.css 330-340). */
+.label,
+.section-label {
+	font-family: var(--font-mono);
+	font-size: var(--plate-label-size);
+	letter-spacing: var(--plate-label-track);
+	text-transform: uppercase;
+	font-weight: 400;
+	line-height: 1.6;
+}
+.section-label {
+	color: var(--plate-caption);
+}
+/* A heading on a panel or a list title: the reading face, sentence case, in the heading
+   ink (plate.css 1321-1326; weight from idea-app src/lib/classroom/classroom.css 144-151). */
+.panel > :is(h2, h3),
+.list-title {
+	margin: 0 0 var(--space-2);
+	font-family: var(--font-display);
+	font-weight: 600;
+	color: var(--plate-head-ink);
+	text-shadow: 0 0 6px var(--plate-text-bloom);
+}
+
+/* A BRACKETED GROUP: thin L ticks at the corners, a tick at each mid edge
+   (plate-v3.css 133-161). The label sits above (.group.top). */
+.group {
+	position: relative;
+	display: grid;
+	gap: 0.6rem;
+	padding: 14px var(--plate-group-pad) 6px;
+}
+.group.top {
+	padding-top: 8px;
+	padding-bottom: 14px;
+}
+.group::before {
+	content: '';
+	position: absolute;
+	inset: 0;
+	pointer-events: none;
+	background:
+		linear-gradient(var(--plate-bracket), var(--plate-bracket)) 0 0 / 9px 1px,
+		linear-gradient(var(--plate-bracket), var(--plate-bracket)) 0 0 / 1px 9px,
+		linear-gradient(var(--plate-bracket), var(--plate-bracket)) 100% 0 / 9px 1px,
+		linear-gradient(var(--plate-bracket), var(--plate-bracket)) 100% 0 / 1px 9px,
+		linear-gradient(var(--plate-bracket), var(--plate-bracket)) 0 100% / 9px 1px,
+		linear-gradient(var(--plate-bracket), var(--plate-bracket)) 0 100% / 1px 9px,
+		linear-gradient(var(--plate-bracket), var(--plate-bracket)) 100% 100% / 9px 1px,
+		linear-gradient(var(--plate-bracket), var(--plate-bracket)) 100% 100% / 1px 9px,
+		linear-gradient(var(--plate-bracket), var(--plate-bracket)) 0 50% / 4px 1px,
+		linear-gradient(var(--plate-bracket), var(--plate-bracket)) 100% 50% / 4px 1px;
+	background-repeat: no-repeat;
+}
+.group > .section-label {
+	justify-self: start;
+	text-align: left;
+}
+/* Armory: a label row that carries a count ("2 things", "5 saves") sets the count apart
+   at its right end, as idea-app's list header sets "0 OF 3 DONE | 5 ITEMS" apart
+   (plate.css 1309-1320). */
+.group > .section-label:has(.count) {
+	justify-self: stretch;
+	display: flex;
+	align-items: baseline;
+	gap: var(--space-3);
+}
+.section-label .count,
+.history-head .count {
+	margin-left: auto;
+	color: var(--plate-caption);
+}
+
+/* THE RAISED KEY: every pressable control drawn as a box (plate.css 678-856). Size and
+   type from idea-app src/app.css 339-383 (.btn): a 44px floor via min-height, never a
+   height, so a wrapped label grows the box instead of clipping. Paint, top to bottom:
+   the hairline (the border itself, load-bearing, held at 3:1 on its ground), a light
+   ring inside it with a crisp top highlight, the face gradient, a soft darker foot;
+   outside, a faint dark tray and a soft cool drop shadow. */
+.key {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 0.5rem;
+	box-sizing: border-box;
+	min-height: 44px;
+	min-width: 44px;
+	padding: 0.7rem 1.3rem;
+	font-family: var(--font-mono);
+	font-size: 0.82rem;
+	line-height: 1.2;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	text-decoration: none;
+	cursor: pointer;
+	border: 1px solid;
+	border-color: var(--plate-hair-top) var(--plate-hair) var(--plate-hair);
+	border-radius: var(--plate-r-control);
+	background:
+		linear-gradient(to bottom, var(--plate-face-top), var(--plate-face-bot)) padding-box,
+		linear-gradient(to bottom, var(--plate-hair-top), var(--plate-hair)) border-box;
+	background-color: var(--plate-face-ground);
+	box-shadow:
+		inset 0 0 0 1px var(--plate-bezel-mid),
+		inset 0 2px 0 0 var(--plate-bezel-hi),
+		inset 0 -2px 2px -1px var(--plate-foot),
+		0 0 0 1px var(--plate-rim-out),
+		0 2px 3px 0 var(--plate-drop),
+		0 6px 10px -5px var(--plate-drop-far);
+	color: var(--plate-btn-ink);
+	text-shadow: none;
+	transform: none;
+}
+.key:hover {
+	border-color: var(--hover-ink);
+	color: var(--plate-btn-ink);
+}
+/* PRIMARY: the one flat accent face (plate.css 732-754). In idea-app the bare .btn is
+   primary; here it is opt-in with .primary, one per screen. */
+.key.primary:not(:disabled, [aria-disabled='true']) {
+	background:
+		linear-gradient(var(--plate-primary-face), var(--plate-primary-face)) padding-box,
+		linear-gradient(to bottom, var(--plate-hair-top), var(--plate-hair)) border-box;
+	background-color: var(--plate-primary-face);
+	color: var(--plate-primary-ink);
+	box-shadow:
+		inset 0 0 0 2px var(--plate-bezel-mid),
+		inset 0 3px 0 0 var(--plate-primary-hi),
+		inset 0 0 8px 2px var(--plate-primary-inglow),
+		inset 0 -3px 3px -1px var(--plate-primary-foot),
+		0 0 0 1px var(--plate-rim-out),
+		0 0 8px 1px var(--plate-primary-glow),
+		0 2px 3px 0 var(--plate-drop),
+		0 6px 10px -5px var(--plate-drop-far);
+}
+.key.primary:not(:disabled, [aria-disabled='true']):hover {
+	border-color: var(--hover-ink);
+}
+/* DANGER keeps the danger ink on a gray key (plate.css 755-760). */
+.key.danger:not(:disabled, [aria-disabled='true']) {
+	color: var(--plate-danger-ink);
+}
+/* PRESSED sinks: a darker face, the shadow inside at the top, the light moved to its
+   foot. Nothing moves (plate.css 761-774). */
+.key:active:not(:disabled, [aria-disabled='true']) {
+	transform: none;
+	background:
+		linear-gradient(to bottom, var(--plate-press-top), var(--plate-press-bot)) padding-box,
+		linear-gradient(to bottom, var(--plate-hair-top), var(--plate-hair)) border-box;
+	background-color: var(--plate-press-top);
+	box-shadow:
+		inset 0 3px 4px 0 var(--plate-press-shade),
+		inset 0 1px 1px 0 var(--plate-press-shade),
+		inset 0 -1px 0 0 var(--plate-bezel-hi),
+		0 0 0 1px var(--plate-rim-out);
+}
+/* DISABLED is an UNLIT key: a flat face, a quieter edge, no highlight, no drop, and the
+   word itself (plate.css 775-788). */
+.key:is(:disabled, [aria-disabled='true']),
+.key:is(:disabled, [aria-disabled='true']):hover {
+	opacity: 1;
+	cursor: not-allowed;
+	background: linear-gradient(var(--plate-disabled-face), var(--plate-disabled-face)) padding-box;
+	background-color: var(--plate-disabled-face);
+	box-shadow:
+		inset 0 1px 0 0 var(--plate-plate-hi),
+		inset 0 -2px 2px -1px var(--plate-tube-lo);
+	color: var(--plate-disabled);
+	border: 1px solid var(--plate-disabled-edge);
+}
+/* LIT: a key that is ON. The face shifts toward white and a solid accent ring sits inside
+   the bezel. aria-pressed and the word say it too (plate.css 789-809). */
+.key:is([aria-pressed='true'], [aria-checked='true'], [aria-selected='true']):not(:disabled, [aria-disabled='true']) {
+	position: relative;
+	background:
+		linear-gradient(to bottom, var(--plate-lit-top), var(--plate-lit-bot)) padding-box,
+		linear-gradient(to bottom, var(--plate-hair-top), var(--plate-hair)) border-box;
+	background-color: var(--plate-lit-ground);
+	color: var(--plate-btn-ink);
+	box-shadow:
+		inset 0 0 0 1px var(--plate-bezel-mid),
+		inset 0 0 0 3px var(--plate-accent),
+		inset 0 4px 0 0 var(--plate-panel-hi),
+		0 0 0 1px var(--plate-rim-out),
+		0 0 8px 1px var(--plate-bloom),
+		0 2px 3px 0 var(--plate-drop);
+}
+/* THE BROKEN, TICKED RING for a wide lit key (plate.css 810-846; the accent-tint band is
+   the approved mockup's, written here to win, see the brief's finding 2). */
+.key.ring:is([aria-pressed='true'], [aria-checked='true'], [aria-selected='true']):not(:disabled, [aria-disabled='true']) {
+	box-shadow:
+		inset 0 0 0 1px var(--plate-bezel-mid),
+		inset 0 0 0 2px var(--plate-accent-tint),
+		inset 0 3px 0 0 var(--plate-panel-hi),
+		0 0 0 1px var(--plate-rim-out),
+		0 2px 3px 0 var(--plate-drop),
+		0 6px 10px -5px var(--plate-drop-far);
+}
+.key.ring:is([aria-pressed='true'], [aria-checked='true'], [aria-selected='true']):not(:disabled, [aria-disabled='true'])::after {
+	content: '';
+	position: absolute;
+	inset: calc(var(--plate-ring-inset) - 1px);
+	border: 2px solid var(--plate-accent);
+	border-radius: calc(var(--plate-r-control) - var(--plate-ring-inset) + 2px);
+	box-shadow: inset 0 0 0 1px var(--plate-accent-glow);
+	pointer-events: none;
+	mask:
+		linear-gradient(118deg, #000 calc(100% - 4px), transparent calc(100% - 3.5px)) right 10px top 0 / 36px 5px no-repeat,
+		linear-gradient(118deg, #000 calc(100% - 4px), transparent calc(100% - 3.5px)) left 10px bottom 0 / 17px 5px no-repeat,
+		linear-gradient(#000, #000);
+	mask-composite: exclude;
+}
+.key.ring:is([aria-pressed='true'], [aria-checked='true'], [aria-selected='true']):not(:disabled, [aria-disabled='true'])::before {
+	content: '';
+	position: absolute;
+	inset: calc(var(--plate-ring-inset) - 1px);
+	pointer-events: none;
+	background:
+		linear-gradient(118deg, var(--plate-accent) calc(100% - 3px), transparent calc(100% - 2.5px)) right 15px top 0 / 13px 3.5px,
+		linear-gradient(var(--plate-accent), var(--plate-accent)) right 31px top 0 / 2px 2px,
+		linear-gradient(var(--plate-accent), var(--plate-accent)) right 35px top 0 / 2px 2px,
+		linear-gradient(var(--plate-accent), var(--plate-accent)) right 39px top 0 / 2px 2px,
+		linear-gradient(var(--plate-accent), var(--plate-accent)) left 11px bottom 0 / 2px 2px,
+		linear-gradient(var(--plate-accent), var(--plate-accent)) left 15px bottom 0 / 2px 2px;
+	background-repeat: no-repeat;
+}
+/* Armory: a key's icon is drawn in its ink. */
+.key svg {
+	flex: none;
+	width: 16px;
+	height: 16px;
+}
+
+/* THE SWITCH: a recessed pill track with a raised disc carrying its icon (a cross off, a
+   tick on), housed in a 44px key (plate.css 994-1091). The disc's side is the state;
+   aria-pressed and the word say it too. */
+.switch {
+	position: relative;
+	display: inline-flex;
+	align-items: center;
+	gap: 0.5rem;
+	min-height: 44px;
+	min-width: 44px;
+	padding: 0 0.7rem;
+	box-sizing: border-box;
+	font-family: var(--font-mono);
+	font-size: 0.72rem;
+	letter-spacing: 0.12em;
+	text-transform: uppercase;
+	line-height: 1;
+	cursor: pointer;
+	white-space: nowrap;
+	border: 1px solid;
+	border-color: var(--plate-hair-top) var(--plate-hair) var(--plate-hair);
+	border-radius: var(--plate-r-control);
+	background:
+		linear-gradient(to bottom, var(--plate-face-top), var(--plate-face-bot)) padding-box,
+		linear-gradient(to bottom, var(--plate-hair-top), var(--plate-hair)) border-box;
+	background-color: var(--plate-face-ground);
+	box-shadow:
+		inset 0 0 0 1px var(--plate-bezel-mid),
+		inset 0 2px 0 0 var(--plate-bezel-hi),
+		inset 0 -2px 2px -1px var(--plate-foot),
+		0 0 0 1px var(--plate-rim-out),
+		0 2px 3px 0 var(--plate-drop),
+		0 6px 10px -5px var(--plate-drop-far);
+	color: var(--plate-btn-ink);
+}
+.switch .ts-glyph {
+	flex: none;
+	display: block;
+	width: 40px;
+	height: 20px;
+	visibility: hidden;
+}
+.switch::before {
+	content: '';
+	position: absolute;
+	left: calc(0.7rem + 1px);
+	top: 50%;
+	width: 40px;
+	height: 20px;
+	margin-top: -10px;
+	border-radius: 10px;
+	pointer-events: none;
+	background:
+		radial-gradient(circle, var(--plate-knob-top) 0 3px, var(--plate-knob-bot) 8.3px, var(--plate-hair) 8.9px 9.5px, transparent 10px) 0 50% / 20px 20px no-repeat,
+		radial-gradient(circle, var(--plate-knob-shade) 0 7px, transparent 10.5px) 1px calc(50% + 2px) / 20px 20px no-repeat,
+		linear-gradient(to bottom, var(--plate-well-shade), var(--plate-track) 6px);
+	box-shadow:
+		inset 0 1px 2px 0 var(--plate-drop),
+		0 1px 0 0 var(--plate-well-lip);
+}
+.switch[aria-pressed='true']::before {
+	background:
+		radial-gradient(circle, var(--plate-accent) 0 9.3px, transparent 10px) 100% 50% / 20px 20px no-repeat,
+		radial-gradient(circle, var(--plate-knob-shade) 0 7px, transparent 10.5px) calc(100% + 1px) calc(50% + 2px) / 20px 20px no-repeat,
+		linear-gradient(to bottom, var(--plate-well-shade), var(--plate-track) 6px);
+}
+.switch::after {
+	content: '';
+	position: absolute;
+	left: calc(0.7rem + 1px + 5px);
+	top: 50%;
+	width: 10px;
+	height: 10px;
+	margin-top: -5px;
+	pointer-events: none;
+	background: var(--plate-knob-icon);
+	mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='M2 2l6 6M8 2l-6 6' stroke='%23000' stroke-width='1.2' stroke-linecap='round'/%3E%3C/svg%3E") center / 10px 10px no-repeat;
+}
+.switch[aria-pressed='true']::after {
+	left: calc(0.7rem + 1px + 40px - 15px);
+	background: var(--plate-knob-on-icon);
+	mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='M1.8 5.2l2.2 2.2 4.2-4.6' stroke='%23000' stroke-width='1.3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+.switch .ts-word {
+	font-size: var(--plate-label-size);
+	letter-spacing: var(--plate-label-track);
+}
+.switch:hover {
+	border-color: var(--hover-ink);
+}
+
+/* PADS: a tab in a strip (plate.css 1416-1523). A thick composite bezel (the hairline as
+   an outer ring, a 3px band, a bright inner lip, the face) and a recessed LED bottom
+   right in a lane of its own. The CURRENT tab is the LIT pad, plus aria-selected and a
+   heavier word, so the glow is never the only signal. */
+.pad {
+	position: relative;
+	display: inline-flex;
+	align-items: center;
+	min-height: 44px;
+	min-width: 44px;
+	padding: 0 calc(0.75rem + 7px) 0 0.75rem;
+	box-sizing: border-box;
+	font-family: var(--font-mono);
+	font-size: var(--plate-label-size);
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	text-decoration: none;
+	cursor: pointer;
+	border: 3px solid transparent;
+	border-radius: var(--plate-r-pad);
+	background:
+		linear-gradient(to bottom, var(--plate-face-top), var(--plate-face-bot)) padding-box,
+		linear-gradient(to bottom, var(--plate-band-top), var(--plate-band-bot)) border-box;
+	background-color: var(--plate-face-ground);
+	box-shadow:
+		0 0 0 1px var(--plate-hair),
+		inset 0 0 0 1px var(--plate-pad-lip),
+		inset 0 0 3px 1px var(--plate-tube-lo),
+		0 0 1px 2px var(--plate-rim-out),
+		0 2px 3px 1px var(--plate-drop),
+		0 5px 8px -3px var(--plate-drop-far);
+	color: var(--plate-ink);
+}
+.pad::after {
+	content: '';
+	position: absolute;
+	right: 2px;
+	bottom: 3px;
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	pointer-events: none;
+	background:
+		radial-gradient(circle, var(--plate-led-off-hi) 0 0.7px, var(--plate-led-off) 1.6px, var(--plate-led-ring) 2.1px 2.4px, transparent 2.8px),
+		radial-gradient(circle at 50% 30%, var(--plate-cup-in) 0 2.1px, var(--plate-cup) 3.5px);
+	box-shadow: 0 1px 0 0 var(--plate-bezel-hi);
+}
+.pad:is([aria-current='page'], [aria-selected='true']) {
+	font-weight: 700;
+	background:
+		linear-gradient(to bottom, var(--plate-lit-top), var(--plate-lit-bot)) padding-box,
+		linear-gradient(to bottom, var(--plate-band-top), var(--plate-band-bot)) border-box;
+	background-color: var(--plate-lit-ground);
+	box-shadow:
+		0 0 0 1px var(--plate-hair),
+		inset 0 0 0 1px var(--plate-lit-glow),
+		inset 0 0 0 3px var(--plate-lit-glow),
+		inset 0 0 6px 4px var(--plate-lit-core),
+		0 0 1px 2px var(--plate-rim-out),
+		0 0 10px 1px var(--plate-bloom),
+		0 2px 3px 1px var(--plate-drop),
+		0 5px 8px -3px var(--plate-drop-far);
+}
+.pad:is([aria-current='page'], [aria-selected='true'])::after {
+	background:
+		radial-gradient(circle, var(--plate-accent-glow) 0 0.5px, var(--plate-accent) 1.5px, var(--plate-led-ring) 2.1px 2.4px, transparent 2.8px),
+		radial-gradient(circle at 50% 30%, var(--plate-cup-in) 0 2.1px, var(--plate-cup) 3.5px);
+	box-shadow:
+		0 1px 0 0 var(--plate-bezel-hi),
+		0 0 4px 1px var(--plate-led-halo);
+}
+.pad:hover {
+	border-color: var(--hover-ink);
+}
+
+/* PANELS (cards): raised, not pressable (plate.css 1093-1124). A face gradient, the
+   hairline (load-bearing: a card on the plate), one light line inside the top edge, a
+   long soft cool shadow falling down and a little left. Padding from app.css 425-437. */
+.panel {
+	padding: 1.5rem;
+	border: 1px solid var(--plate-hair);
+	border-radius: var(--plate-r-panel);
+	background-color: var(--plate-panel-ground);
+	background-image: linear-gradient(to bottom, var(--plate-panel-top), var(--plate-panel-bot));
+	box-shadow:
+		inset 0 1px 0 0 var(--plate-panel-hi),
+		0 1px 2px 0 var(--plate-drop),
+		0 8px 14px -6px var(--plate-drop),
+		-2px 18px 30px -14px var(--plate-drop-far);
+}
+
+/* WELLS: a field sits in a recessed trough (plate.css 1126-1206). A crisp top shadow two
+   or three pixels deep, a graded face, a light lip OUTSIDE the foot. The border stays the
+   hairline all round. Sizes from classroom.css 760-783. */
+.well {
+	box-sizing: border-box;
+	min-height: 44px;
+	padding: 0.45rem 0.8rem;
+	border: 1px solid var(--plate-hair);
+	border-radius: var(--plate-r-control);
+	background-color: var(--plate-well-ground);
+	background-image: linear-gradient(to bottom, var(--plate-well-top), var(--plate-well-face) 30%);
+	box-shadow:
+		inset 0 1px 0 0 var(--plate-well-shade),
+		inset 0 2px 3px -1px var(--plate-well-shade),
+		0 1px 0 0 var(--plate-well-lip);
+	color: var(--plate-ink);
+	font-family: var(--font-display);
+	font-size: 0.95rem;
+}
+
+/* THE LIST WELL AND ITS ROWS (plate.css 1229-1326; sizes from idea-app
+   src/lib/classroom/ClassView.svelte 2799-2806, 2884-2898, 3022-3030). The group is the
+   well, lit from the upper left; rows are divided by ETCHED lines that stop short of its
+   edges. Titles stay sentence case in the reading face. No decoration on a row. */
+.list-well {
+	margin: 0;
+	padding: var(--space-2) var(--space-4);
+	list-style: none;
+	border: 1px solid var(--plate-hair);
+	border-radius: var(--plate-r-panel);
+	background-color: var(--plate-list-face);
+	background-image: none;
+	box-shadow:
+		inset 0 1px 0 0 var(--plate-groove-dk),
+		inset 0 6px 8px -4px var(--plate-inset-shade),
+		inset 8px 0 10px -8px var(--plate-inset-shade),
+		inset -1px 0 0 0 var(--plate-well-lip),
+		inset 0 -1px 0 0 var(--plate-well-lip),
+		0 1px 0 0 var(--plate-well-lip);
+}
+/* A LIST IN THE RECESSED COLUMN IS A CARD: the panel's material (plate.css 1093-1124),
+   so the column is the darkest surface and each list a clear step lighter, the way the
+   approved page holds raised cards in its recessed column (brief section 5: "a region
+   reads by value before it reads by edge"). Raised, not pressable: the rows inside are
+   the pressable part. Production values, nothing lightened. The hairline stays
+   --plate-hair on the same recess ground, so its 3:1 is unchanged; a chip on the card
+   face is now a shade darker than its ground, recessed as 3.12 asks. Paint only. */
+.plate-recess .list-well {
+	background-color: var(--plate-panel-ground);
+	background-image: linear-gradient(to bottom, var(--plate-panel-top), var(--plate-panel-bot));
+	box-shadow:
+		inset 0 1px 0 0 var(--plate-panel-hi),
+		0 1px 2px 0 var(--plate-drop),
+		0 8px 14px -6px var(--plate-drop),
+		-2px 18px 30px -14px var(--plate-drop-far);
+}
+/* A row: 44px floor (a row opens a detail, so it is a control). */
+.row {
+	position: relative;
+}
+.row > .row-main {
+	display: flex;
+	align-items: center;
+	gap: 0.55rem;
+	box-sizing: border-box;
+	width: 100%;
+	min-height: 44px;
+	padding: 0.3rem 0.2rem;
+	border: 0;
+	background: none;
+	font: inherit;
+	text-align: left;
+	text-decoration: none;
+	color: var(--plate-ink);
+}
+.row > button.row-main {
+	cursor: pointer;
+	border-radius: var(--plate-r-small);
+}
+.row .row-name {
+	font-weight: 600;
+	font-size: 1rem;
+	line-height: 1.3;
+	color: var(--plate-head-ink);
+	text-shadow: 0 0 6px var(--plate-text-bloom);
+}
+/* Hover turns the name to the hover ink (ClassView.svelte 3032-3034). */
+.row > button.row-main:hover .row-name {
+	color: var(--hover-ink);
+}
+/* THE ETCHED DIVIDER: the dark line holds the 3:1 boundary floor (it is the only
+   separator between two interactive rows), with a light line under it so it reads as
+   a cut in the well, not a rule on it (plate.css 1253-1264). One line per row, never
+   a repeating pattern. Armory: the history list's entries take the same cut. */
+.row,
+.history-list > li {
+	background-image:
+		linear-gradient(to right, transparent 0, var(--plate-divider) 12px, var(--plate-divider) calc(100% - 12px), transparent 100%),
+		linear-gradient(to right, transparent 0, var(--plate-well-lip) 12px, var(--plate-well-lip) calc(100% - 12px), transparent 100%);
+	background-size: calc(100% - 4px) 1px, calc(100% - 4px) 1px;
+	background-position: 2px 0, 2px 1px;
+	background-repeat: no-repeat;
+}
+.row:first-child,
+.history-list > li:first-child {
+	background-image: none;
+}
+
+/* A TALL LIST WELL (the history list on File detail) takes the field well's recipe plus
+   a deeper shade band, on the list face; its head is etched off the rows by a groove
+   (plate.css 1667-1705). */
+.history-well {
+	margin: 0;
+	padding: 0;
+	border: 1px solid var(--plate-hair);
+	border-radius: var(--plate-r-control);
+	background-color: var(--plate-list-face);
+	background-image: linear-gradient(to bottom, var(--plate-well-top), var(--plate-list-face) 12px);
+	box-shadow:
+		inset 0 1px 0 0 var(--plate-well-shade),
+		inset 0 2px 3px -1px var(--plate-well-shade),
+		inset 0 10px 12px -8px var(--plate-inset-shade),
+		0 1px 0 0 var(--plate-well-lip);
+}
+.history-well > .history-head {
+	display: flex;
+	align-items: baseline;
+	gap: var(--space-3);
+	margin: 0;
+	font-weight: 400;
+	line-height: 1.6;
+	padding: 0.6rem 0.9rem;
+	background: transparent;
+	border-bottom: 1px solid var(--plate-groove-dk);
+	box-shadow: 0 1px 0 0 var(--plate-groove-lt);
+	color: var(--plate-caption);
+	font-family: var(--font-mono);
+	font-size: var(--plate-label-size);
+	letter-spacing: var(--plate-label-track);
+	text-transform: uppercase;
+}
+.history-list {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+/* THE STATUS CHIP: a RECESSED tag, never a key (plate.css 858-897, 905-915, 965-992).
+   A face a shade darker than its ground, a soft shadow under its top lip, a light lip at
+   its foot, a quiet lighter edge and NO drop shadow. 22px tall, every band drawn INSIDE
+   the box, the label at the 11px floor in caps. Not pressable: no hover, no lift, and
+   the arrow cursor even inside a clickable row. */
+.chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 3px;
+	box-sizing: border-box;
+	min-height: var(--plate-chip-h);
+	padding: 0 4px;
+	border: 0;
+	border-radius: var(--plate-r-small);
+	font-family: var(--font-mono);
+	font-size: var(--plate-label-size);
+	font-weight: 400;
+	line-height: 1;
+	letter-spacing: var(--plate-chip-track-tight);
+	text-transform: uppercase;
+	white-space: nowrap;
+	cursor: default;
+	color: var(--plate-ink);
+	background-color: var(--plate-chip-ground);
+	background-image: linear-gradient(to bottom, var(--plate-chip-top), var(--plate-chip-bot));
+	box-shadow:
+		inset 0 0 0 1px var(--plate-chip-edge),
+		inset 0 2px 2px -1px var(--plate-chip-shade),
+		inset 0 -1px 0 0 var(--plate-chip-lip),
+		0 1px 0 0 var(--plate-chip-lip);
+}
+/* THE LAMP CHIP: a 4px status lamp with real clear space on both sides, paid for by the
+   word's tracking and the end padding, never by the 11px floor. */
+.chip.lamp {
+	gap: var(--plate-led-gap);
+	padding: 0 var(--plate-led-pad-end) 0 var(--plate-led-gap);
+	letter-spacing: var(--plate-led-word-track);
+}
+.chip.lamp::before {
+	content: '';
+	flex: none;
+	width: var(--plate-led-chip);
+	height: var(--plate-led-chip);
+	border-radius: 50%;
+	background: radial-gradient(circle at 42% 36%, rgba(255, 255, 255, 0.8) 0 0.6px, var(--plate-led-color) 1.3px);
+	box-shadow:
+		0 0 0 1px var(--plate-led-ring),
+		0 0 4px 1px var(--plate-led-color);
+	pointer-events: none;
+}
+/* Armory: the lamp's word keeps a hair of room before the chip's end. */
+.chip.lamp {
+	padding-right: calc(var(--plate-led-pad-end) + 3px);
+}
+.chip.lamp.amber {
+	--plate-led-color: var(--plate-led-amber);
+}
+.chip.lamp.gold {
+	--plate-led-color: var(--plate-led-gold);
+}
+.chip.lamp.green {
+	--plate-led-color: var(--plate-accent);
+}
+.chip.lamp.red {
+	--plate-led-color: var(--lamp-red);
+}
+.chip.lamp.cyan {
+	--plate-led-color: var(--lamp-cyan);
+}
+
+/* THE HOUSING: a sheet or a dialog is one floating housing with a molded frame, its
+   contents sitting in the recess the frame makes (plate.css 1528-1563). */
+.housing {
+	border: 1px solid var(--plate-hair);
+	border-radius: var(--plate-r-panel);
+	background-color: var(--plate-panel-ground);
+	background-image: linear-gradient(to bottom, var(--plate-panel-top), var(--plate-panel-bot));
+	box-shadow:
+		inset 0 1px 0 0 var(--plate-panel-hi),
+		inset 0 0 0 3px var(--plate-frame),
+		inset 0 0 3px 4px var(--plate-frame-in),
+		inset 0 -4px 4px -2px var(--plate-frame-lo),
+		0 0 0 1px var(--plate-rim-out),
+		0 10px 24px -4px var(--plate-drop),
+		0 22px 40px -18px var(--plate-drop-far);
+	color: var(--plate-ink);
+}
+
+/* THE DISPLAY: a housing with a molded frame and a dark tinted glass screen whose readout
+   glows (plate.css 1565-1665, 1771-1779; padding and gap from app.css 425-437). At most
+   one per screen; the one dark island on a Space White page. Armory: no screws and no
+   perforation here (decoration stays on the window's main plate), so its foot needs no
+   44px screw band. */
+.display {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	gap: 0.6rem;
+	padding: 1.5rem;
+	border: 1px solid var(--plate-hair);
+	border-radius: 14px;
+	background-color: var(--plate-panel-ground);
+	background-image: linear-gradient(to bottom, var(--plate-panel-top), var(--plate-panel-bot));
+	box-shadow:
+		inset 0 1px 0 0 var(--plate-panel-hi),
+		inset 1px 0 0 0 var(--plate-panel-hi),
+		inset 0 0 0 3px var(--plate-frame),
+		inset 0 0 6px 4px var(--plate-frame-in),
+		inset 0 -5px 4px -2px var(--plate-frame-lo),
+		inset -2px 0 3px -1px var(--plate-frame-lo),
+		0 1px 2px 0 var(--plate-drop),
+		0 8px 14px -5px var(--plate-drop),
+		-3px 22px 34px -12px var(--plate-drop-far);
+}
+.display .screen {
+	position: relative;
+	margin: -0.95rem -0.7rem 0;
+	padding: 0.95rem 1rem 1.25rem 2.1rem;
+	border-radius: 7px 7px var(--plate-cut-screen) var(--plate-cut-screen);
+	background-color: var(--plate-screen-top);
+	background-image:
+		linear-gradient(165deg, var(--plate-glass) 0 38%, transparent 62%),
+		linear-gradient(to bottom, var(--plate-screen-top), var(--plate-screen-bot));
+	box-shadow:
+		inset 0 2px 2px -1px var(--plate-screen-shade),
+		inset 0 -3px 2px -1px var(--plate-screen-rim),
+		inset 5px 0 4px -3px var(--plate-screen-wall),
+		inset -5px 0 4px -3px var(--plate-screen-wall),
+		inset 1px 0 0 0 var(--plate-screen-rim),
+		inset -1px 0 0 0 var(--plate-screen-rim),
+		0 0 0 1px var(--plate-hair),
+		0 0 3px 1px var(--plate-drop),
+		0 1px 0 2px var(--plate-panel-hi);
+	color: var(--readout, var(--plate-screen-ink));
+	text-shadow: 0 0 6px var(--readout-glow, var(--plate-screen-glow));
+	font-family: var(--font-mono);
+	font-size: var(--plate-readout-size);
+	line-height: 1.35;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	font-variant-numeric: tabular-nums;
+}
+.display .screen::before {
+	content: '';
+	position: absolute;
+	left: 0.85rem;
+	top: 50%;
+	width: 7px;
+	height: 7px;
+	margin-top: -4px;
+	border-radius: 50%;
+	background: radial-gradient(circle at 45% 40%, #ffffffaa 0 0.8px, var(--readout, var(--plate-screen-ink)) 2.2px);
+	box-shadow: 0 0 6px 1px var(--readout-glow, var(--plate-screen-glow));
+	pointer-events: none;
+}
+@supports (corner-shape: bevel) {
+	.display .screen {
+		corner-shape: round round var(--plate-soft) var(--plate-soft);
+	}
+}
+/* Armory: the readout's tone. The word always carries the meaning; the ink and its glow
+   follow it (colors only). */
+.display[data-tone='busy'] {
+	--readout: var(--readout-busy);
+	--readout-glow: rgba(90, 189, 168, 0.55);
+}
+.display[data-tone='hold'] {
+	--readout: var(--readout-hold);
+	--readout-glow: rgba(217, 184, 78, 0.5);
+}
+.display[data-tone='warn'] {
+	--readout: var(--readout-warn);
+	--readout-glow: rgba(208, 128, 48, 0.55);
+}
+.display[data-tone='bad'] {
+	--readout: var(--readout-bad);
+	--readout-glow: rgba(217, 95, 95, 0.55);
+}
+.display[data-tone='off'] {
+	--readout: var(--readout-off);
+	--readout-glow: rgba(185, 192, 187, 0.3);
+}
+
+/* ===================================================================== ARMORY LAYOUT */
+
+/* Everything below is Armory: this window's own layout, built from the recipes above.
+   Lengths here move with the viewport only, never with the theme. */
+
+/* The window: the main plate fills the viewport, the header runs edge to edge across it,
+   and only the region under the header scrolls. Nothing scrolls sideways. */
+.window {
+	box-sizing: border-box;
+	display: flex;
+	flex-direction: column;
+	height: calc(100vh - 2 * var(--win-gap));
+	margin: var(--win-gap);
+	overflow: hidden;
+}
+.window > .plate-header {
+	flex: none;
+	margin-inline: calc(-1 * var(--plate-band));
+	padding-inline: var(--plate-band);
+}
+.scroller {
+	position: relative;
+	flex: 1 1 auto;
+	min-height: 0;
+	overflow-x: hidden;
+	overflow-y: auto;
+	/* 6px of room on every side: the focus ring's reach (2px + 2px) and a hair more,
+	   so a control at the edge is never cut (plate.css 1386-1391). */
+	margin: 0 -6px;
+	padding: var(--space-4) 6px 6px;
+}
+/* A region that scrolls shows its place with a thin accent position bar, as the approved
+   list well does (shapes-v3-detail-space-white-2x.png: "the position bar"). */
+.scroller,
+.recess-scroll {
+	scrollbar-width: thin;
+	scrollbar-color: var(--plate-accent) transparent;
+}
+.screen-root {
+	max-width: 76rem;
+	margin: 0 auto;
+}
+
+/* Header: the emblem and the window's name, then the window's keys. The name is in the
+   title-bar voice: mono caps, regular weight, never bold (brief section 5). */
+.brand {
+	display: flex;
+	align-items: center;
+	gap: 0.6rem;
+	margin-right: auto;
+	min-width: 0;
+}
+.emblem {
+	flex: none;
+	width: 40px;
+	height: 40px;
+}
+.brand-word {
+	font-family: var(--font-mono);
+	font-size: 0.95rem;
+	font-weight: 400;
+	letter-spacing: var(--plate-title-track);
+	text-transform: uppercase;
+	color: var(--plate-head-ink);
+	white-space: nowrap;
+}
+.header-keys {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+}
+/* A narrow window keeps the keys whole (their full tracking and padding) and lets the
+   emblem carry the brand; the word stays for a screen reader. Connect has no header
+   keys, so it keeps the word. */
+@media (max-width: 480px) {
+	.plate-header {
+		gap: var(--space-2);
+	}
+	body:not([data-screen='connect']) .brand-word {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		margin: -1px;
+		padding: 0;
+		overflow: hidden;
+		clip-path: inset(50%);
+	}
+}
+
+/* Shared text pieces. A help line prints straight on the recess, with no box around it:
+   nothing is drawn as an empty container. */
+.group-help {
+	max-width: 62ch;
+	font-size: 0.9rem;
+	line-height: 1.5;
+	color: var(--plate-ink-2);
+	text-wrap: pretty;
+}
+
+/* Home: the status display and this computer on the left, the recessed column on the
+   right. One column, in reading order, when the window is narrow. One gap between groups
+   everywhere (a group's 14px foot + 0.75rem + the next group's 8px head = 34px), and
+   one label-to-content gap (the group's 0.6rem). */
+.home {
+	position: relative;
+	display: grid;
+	grid-template-columns: var(--side-w) minmax(0, 1fr);
+	grid-template-rows: auto 1fr;
+	grid-template-areas:
+		'status main'
+		'account main';
+	column-gap: var(--space-5);
+	row-gap: var(--space-3);
+	align-items: start;
+}
+.home > .plate-engrave {
+	width: 13rem;
+}
+/* The side column's first label and box share their lines with the recessed column's
+   first label and card: the recess frame's 3px plus its scroll padding's 19px. */
+.status-group {
+	grid-area: status;
+	margin-top: 22px;
+}
+.account-group {
+	grid-area: account;
+}
+.main-col {
+	grid-area: main;
+	min-width: 0;
+}
+/* The recessed column is a frame (the recess recipe: its groove, shade and two tabs)
+   around one scrolling region. The two paddings add up to the recipe's 22px 14px 26px
+   (plate-v3.css 200-239). The tabs stay above whatever scrolls under them. */
+.main-col.plate-recess {
+	padding: 3px;
+}
+.main-col.plate-recess::before,
+.main-col.plate-recess::after {
+	z-index: 1;
+}
+.recess-scroll {
+	display: grid;
+	align-content: start;
+	gap: var(--space-3);
+	padding: 19px 11px 23px;
+}
+/* Brackets mark a region, not every list in it: none inside the recessed column (the
+   side column keeps its own). Paint only, no box moves. */
+.plate-recess .group::before {
+	content: none;
+}
+/* In a wide window Home fills the window and only the recessed column scrolls, inside
+   its frame: its edges and tabs hold still, the status stays in sight, and the side
+   column never leaves a bare strip beside a long list. A window too short for the side
+   column still scrolls as a whole. */
+@media (min-width: 761px) {
+	body[data-screen='home'] .scroller {
+		display: flex;
+		flex-direction: column;
+	}
+	body[data-screen='home'] .screen-root {
+		flex: 1 0 auto;
+		display: flex;
+		flex-direction: column;
+		width: 100%;
+	}
+	.home {
+		flex: 1 0 auto;
+	}
+	.main-col.plate-recess {
+		align-self: stretch;
+		display: flex;
+		flex-direction: column;
+		contain: size;
+	}
+	.recess-scroll {
+		flex: 1 1 auto;
+		min-height: 0;
+		overflow-x: hidden;
+		overflow-y: auto;
+		scrollbar-gutter: stable;
+	}
+}
+@media (max-width: 760px) {
+	.home {
+		grid-template-columns: minmax(0, 1fr);
+		grid-template-rows: none;
+		grid-template-areas:
+			'status'
+			'main'
+			'account';
+	}
+	.home > .plate-engrave {
+		display: none;
+	}
+	.status-group {
+		margin-top: 0;
+	}
+}
+
+/* The status display on Home holds the readout and its words only; Pause sits under the
+   housing, centered, as the approved page centers OPEN TO-DO under its group (brief
+   section 5). In a narrow window Pause moves up to the label's row, so the first thing
+   that needs the student is a key row nearer the top. */
+.status-group {
+	grid-template-areas:
+		'label'
+		'display'
+		'key';
+}
+.status-group > .section-label {
+	grid-area: label;
+}
+.status-group > .display {
+	grid-area: display;
+}
+.status-group > .status-key {
+	grid-area: key;
+	justify-self: center;
+	margin-top: var(--space-2);
+}
+@media (max-width: 480px) {
+	.status-group {
+		grid-template-columns: minmax(0, 1fr) auto;
+		grid-template-areas:
+			'label key'
+			'display display';
+		align-items: center;
+	}
+	.status-group > .status-key {
+		justify-self: end;
+		margin-top: 0;
+	}
+}
+.sync-line {
+	font-size: 1rem;
+	font-weight: 600;
+	line-height: 1.4;
+	color: var(--plate-head-ink);
+	text-wrap: balance;
+}
+.sync-detail {
+	font-size: 0.9rem;
+	line-height: 1.45;
+	color: var(--plate-ink-2);
+	text-wrap: pretty;
+}
+
+/* This computer: a card (the panel recipe) holding a label over each value, so nothing
+   but labels is printed straight on the plate. Sign out sits under it, centered. */
+.acct-panel {
+	padding: 1rem 1.25rem;
+}
+.acct {
+	display: grid;
+	gap: var(--space-3);
+	margin: 0;
+}
+.acct dt {
+	color: var(--plate-caption);
+}
+.acct dd {
+	margin: 0;
+	font-size: 0.95rem;
+	line-height: 1.4;
+	color: var(--plate-head-ink);
+	overflow-wrap: anywhere;
+}
+.acct-email {
+	font-weight: 600;
+}
+.account-group > .key {
+	justify-self: center;
+	margin-top: var(--space-2);
+}
+
+/* Rows. Every row has the same columns (a glyph, the words, a chevron that says
+   "opens"), so the text of every list starts on one line. The glyph is centered on the
+   row in the row's ink; a chip sits at the right end of the title line, and the lines
+   under the title take the row's full width. Three voices: the title in the reading
+   face at 600, a sentence at 400, and the meta line in the mono label voice (as typed,
+   never uppercased, since it carries file and people's names). */
+.row-main.file,
+.row-main.attn {
+	display: grid;
+	grid-template-columns: 20px minmax(0, 1fr) 16px;
+	grid-template-areas: 'icon body go';
+	align-items: center;
+	column-gap: 0.7rem;
+	padding: 0.55rem 0.35rem;
+}
+.row-main.attn.has-key {
+	grid-template-columns: 20px minmax(0, 1fr) auto;
+}
+.row-icon {
+	grid-area: icon;
+	width: 20px;
+	height: 20px;
+	color: var(--plate-ink);
+}
+.row-body {
+	grid-area: body;
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+	min-width: 0;
+}
+/* The name and its chip share the title line, pushed apart. A name too long to sit
+   beside its chip (a narrow window) takes the line itself, and the chip wraps under it
+   at the left, never squeezing the name into pieces. */
+.row-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 4px 0.75rem;
+}
+.row-head > .chip {
+	flex: none;
+}
+.row-go {
+	grid-area: go;
+	width: 16px;
+	height: 16px;
+	color: var(--plate-ink-2);
+}
+.row-key {
+	grid-area: go;
+}
+.row-name {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+.row-main.attn .row-name {
+	text-wrap: balance;
+}
+.row-detail,
+.row-note {
+	max-width: 62ch;
+	font-size: 0.875rem;
+	line-height: 1.45;
+	color: var(--plate-ink);
+	overflow-wrap: anywhere;
+	text-wrap: pretty;
+}
+.row-meta {
+	font-family: var(--font-mono);
+	font-size: 0.75rem;
+	line-height: 1.45;
+	letter-spacing: 0.02em;
+	color: var(--plate-ink-2);
+	overflow-wrap: anywhere;
+	text-wrap: pretty;
+}
+@media (max-width: 560px) {
+	.row-main.attn.has-key {
+		grid-template-columns: 20px minmax(0, 1fr);
+		grid-template-areas:
+			'icon body'
+			'. go';
+		row-gap: var(--space-2);
+	}
+	.row-main.attn.has-key > .row-key {
+		justify-self: start;
+	}
+}
+
+/* Projects: the label row carries the project pads at its right end, right above the
+   card they switch. One card per project; each folder starts with a header row inside
+   it (the name as typed, the count in the label voice), cut off from its rows by the
+   same etched line the rows use, drawn the full width. */
+.group-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--space-2) var(--space-3);
+}
+.pads {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-2);
+	margin-left: auto;
+	padding: 3px;
+}
+.pad.project-pad {
+	font-family: var(--font-display);
+	font-size: 0.875rem;
+	font-weight: 400;
+	letter-spacing: 0;
+	text-transform: none;
+}
+.pad.project-pad[aria-selected='true'] {
+	font-weight: 600;
+}
+.project-name {
+	font-size: 0.95rem;
+	font-weight: 600;
+	line-height: 1.4;
+	color: var(--plate-head-ink);
+}
+.folder + .folder {
+	margin-top: var(--space-3);
+}
+.folder-row {
+	display: grid;
+	grid-template-columns: 20px minmax(0, 1fr) auto;
+	align-items: center;
+	column-gap: 0.7rem;
+	box-sizing: border-box;
+	min-height: 36px;
+	margin: 0;
+	padding: 0.5rem 0.35rem 0.45rem;
+	font-size: 0.9rem;
+	font-weight: 600;
+	line-height: 1.3;
+	color: var(--plate-head-ink);
+	box-shadow:
+		inset 0 -1px 0 0 var(--plate-well-lip),
+		inset 0 -2px 0 0 var(--plate-divider);
+}
+.folder-row svg {
+	justify-self: center;
+	width: 16px;
+	height: 16px;
+	color: var(--plate-ink-2);
+}
+.folder-name {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+.folder-count {
+	font-family: var(--font-mono);
+	font-size: var(--plate-label-size);
+	font-weight: 400;
+	letter-spacing: var(--plate-label-track);
+	text-transform: uppercase;
+	color: var(--plate-caption);
+}
+.folder-list {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+/* File detail. The display is the file's status, said once; its one action sits under
+   it, centered. */
+.detail {
+	display: grid;
+	gap: var(--space-4);
+}
+.detail-top {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+}
+.detail-title {
+	display: grid;
+	gap: 2px;
+}
+.detail-title h1 {
+	display: flex;
+	align-items: center;
+	min-height: 44px;
+	min-width: 44px;
+	font-family: var(--font-display);
+	font-size: 1.6rem;
+	font-weight: 600;
+	line-height: 1.25;
+	color: var(--plate-head-ink);
+	overflow-wrap: anywhere;
+	text-wrap: balance;
+}
+.detail-path {
+	font-family: var(--font-mono);
+	font-size: 0.8125rem;
+	line-height: 1.45;
+	letter-spacing: 0.02em;
+	color: var(--plate-ink-2);
+}
+.detail-grid {
+	display: grid;
+	grid-template-columns: minmax(18rem, 24rem) minmax(0, 1fr);
+	gap: var(--space-5);
+	align-items: start;
+}
+.detail-side,
+.detail-main {
+	display: grid;
+	gap: var(--space-4);
+	min-width: 0;
+}
+.detail-side > .side-key {
+	justify-self: center;
+}
+.holder-line {
+	font-size: 1.05rem;
+	font-weight: 600;
+	line-height: 1.35;
+	color: var(--plate-head-ink);
+	text-wrap: balance;
+}
+.holder-meta,
+.holder-help {
+	font-size: 0.9rem;
+	line-height: 1.5;
+	color: var(--plate-ink-2);
+	text-wrap: pretty;
+}
+.holder-help {
+	color: var(--plate-ink);
+}
+.note-panel {
+	padding: 1rem 1.25rem;
+}
+.note-panel > h3 {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	font-size: 0.95rem;
+	line-height: 1.4;
+}
+.note-panel p {
+	font-size: 0.9rem;
+	line-height: 1.5;
+	color: var(--plate-ink-2);
+	text-wrap: pretty;
+}
+/* A history entry: who and when is the title (what a student scans for); the event
+   word and size drop to the meta line. A kept copy is its own title. Chips sit at the
+   title line's right end, as on a row. */
+.history-list > li {
+	display: grid;
+	gap: 2px;
+	padding: 0.65rem 0.9rem;
+}
+.hist-top {
+	display: flex;
+	align-items: flex-start;
+	gap: 0.4rem 0.75rem;
+}
+.hist-title {
+	min-width: 0;
+	font-size: 0.95rem;
+	font-weight: 600;
+	line-height: 1.4;
+	color: var(--plate-head-ink);
+	overflow-wrap: anywhere;
+	text-wrap: balance;
+}
+.hist-chips {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+	gap: 0.4rem;
+	margin-left: auto;
+}
+.hist-meta {
+	font-family: var(--font-mono);
+	font-size: 0.75rem;
+	line-height: 1.45;
+	letter-spacing: 0.02em;
+	color: var(--plate-ink-2);
+}
+.hist-loading {
+	padding: 0.65rem 0.9rem;
+	color: var(--plate-ink-2);
+	font-size: 0.9rem;
+}
+@media (max-width: 760px) {
+	.detail-grid {
+		grid-template-columns: minmax(0, 1fr);
+	}
+	.detail-title h1 {
+		font-size: 1.35rem;
+	}
+}
+
+/* Connect: the title bar is the screen's one heading, and the card under it goes
+   straight to the steps. The one key is content-width and centered, as keys are on the
+   approved page. */
+.connect {
+	display: grid;
+	justify-items: center;
+	gap: var(--space-5);
+	padding-top: var(--space-5);
+}
+.connect-card {
+	box-sizing: border-box;
+	width: min(100%, 36rem);
+	display: grid;
+	gap: var(--space-4);
+}
+.lead {
+	font-size: var(--fs-lead);
+	line-height: 1.55;
+	text-wrap: pretty;
+}
+.steps {
+	display: grid;
+	gap: var(--space-3);
+	padding: 0;
+	list-style: none;
+}
+.step {
+	display: grid;
+	grid-template-columns: 28px minmax(0, 1fr);
+	align-items: center;
+	gap: var(--space-3);
+	font-size: 0.95rem;
+	line-height: 1.45;
+}
+.step-num {
+	display: grid;
+	place-items: center;
+	width: 28px;
+	height: 28px;
+	box-sizing: border-box;
+	border-radius: 50%;
+	font-family: var(--font-mono);
+	font-size: 0.8rem;
+	color: var(--plate-ink-2);
+	background-color: var(--plate-chip-ground);
+	background-image: linear-gradient(to bottom, var(--plate-chip-top), var(--plate-chip-bot));
+	box-shadow:
+		inset 0 0 0 1px var(--plate-chip-edge),
+		inset 0 2px 2px -1px var(--plate-chip-shade),
+		0 1px 0 0 var(--plate-chip-lip);
+}
+.step-num svg {
+	width: 14px;
+	height: 14px;
+}
+.step[data-step='current'] .step-num {
+	color: var(--plate-sel-ink);
+	background-color: var(--plate-sel-face);
+	background-image: none;
+	box-shadow:
+		0 0 0 1px var(--plate-sel-edge),
+		0 0 8px 1px var(--plate-sel-glow);
+}
+.step[data-step='current'] .step-text {
+	font-weight: 600;
+	color: var(--plate-head-ink);
+}
+.step[data-step='done'] .step-num {
+	color: var(--plate-accent);
+}
+.step[data-step='done'] .step-text {
+	color: var(--plate-ink-2);
+}
+.connect-actions {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: center;
+	gap: var(--space-3);
+}
+.connect-actions .key.primary {
+	padding-inline: 2rem;
+}
+.connect-msg {
+	font-size: 0.95rem;
+	line-height: 1.5;
+	padding-bottom: 0.4rem;
+	box-shadow: inset 0 -1px 0 0 var(--plate-groove-dk), inset 0 -2px 0 0 var(--plate-groove-lt);
+}
+.connect-msg[data-tone='bad'] {
+	color: var(--plate-danger-ink);
+}
+.connect-where {
+	font-size: 0.85rem;
+	line-height: 1.45;
+	color: var(--plate-ink-2);
+}
+
+/* The settings sheet: a housing over Home. Every control is content-width and starts on
+   the same left edge; only the folder's path well fills its row, as a field does. */
+dialog.housing {
+	box-sizing: border-box;
+	width: min(34rem, calc(100vw - 2rem));
+	max-width: none;
+	max-height: calc(100vh - 2rem);
+	padding: 1.25rem 1.5rem 1.5rem;
+	overflow-y: auto;
+}
+dialog.housing::backdrop {
+	background: var(--scrim);
+}
+.sheet-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--space-3);
+	margin-bottom: var(--space-4);
+}
+.sheet-title {
+	font-size: var(--fs-h3);
+	font-weight: 600;
+	line-height: 1.3;
+	color: var(--plate-head-ink);
+}
+.setting {
+	display: grid;
+	gap: var(--space-2);
+	padding: var(--space-4) 0;
+	box-shadow: inset 0 1px 0 0 var(--plate-groove-dk), inset 0 2px 0 0 var(--plate-groove-lt);
+}
+.setting-row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-3);
+}
+.path-well {
+	display: flex;
+	align-items: center;
+	flex: 1 1 14rem;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+.setting-help {
+	font-size: 0.85rem;
+	line-height: 1.45;
+	color: var(--plate-ink-2);
+	text-wrap: pretty;
+}
+.setting .switch {
+	justify-self: start;
+}
+.theme-keys {
+	display: grid;
+	grid-template-columns: repeat(3, auto);
+	justify-content: start;
+	gap: var(--space-3);
+}
+@media (max-width: 480px) {
+	dialog.housing {
+		padding: 1rem 1rem 1.25rem;
+	}
+	.theme-keys {
+		grid-template-columns: minmax(0, 1fr);
+		justify-content: stretch;
+	}
+}
+
+/* Narrow windows (a phone-width window, or Armory snapped beside SolidWorks): the same
+   parts, with the room between them taken in so the words get the width. Viewport only,
+   never the theme. */
+@media (max-width: 480px) {
+	.scroller {
+		padding-top: var(--space-3);
+	}
+	.recess-scroll {
+		padding: 15px 3px 19px;
+	}
+	.list-well {
+		padding-inline: var(--space-3);
+	}
+	.display {
+		padding: 0.9rem 1rem;
+	}
+	.display .screen {
+		margin: -0.35rem -0.45rem 0;
+	}
+	.connect {
+		padding-top: var(--space-3);
+	}
+	.connect-card {
+		padding: 1.1rem;
+	}
+	.history-list > li,
+	.history-well > .history-head {
+		padding-inline: 0.75rem;
+	}
+}

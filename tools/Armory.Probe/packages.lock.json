@@ -2,14 +2,24 @@
   "version": 1,
   "dependencies": {
     "net10.0-windows7.0": {
+      "armory.client": {
+        "type": "Project",
+        "dependencies": {
+          "Armory.Storage": "[1.0.0, )"
+        }
+      },
       "armory.core": {
         "type": "Project"
       },
       "armory.platform.windows": {
         "type": "Project",
         "dependencies": {
+          "Armory.Client": "[1.0.0, )",
           "Armory.Core": "[1.0.0, )"
         }
+      },
+      "armory.storage": {
+        "type": "Project"
       }
     }
   }

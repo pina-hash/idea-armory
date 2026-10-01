@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <!-- The tests touch no Windows Forms type, and Linux has no Windows Desktop runtime. Keeping
+         the agent's Windows Forms framework reference from flowing in lets the
+         platform-neutral tests (contract, redaction, settings) run on Linux too. -->
+    <DisableTransitiveFrameworkReferences>true</DisableTransitiveFrameworkReferences>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.1" PrivateAssets="all" />
+    <ProjectReference Include="../../src/Armory.Agent/Armory.Agent.csproj" />
+    <Using Include="Xunit" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="../GuardTests/DocumentedTestGuard.cs" Link="DocumentedTestGuard.cs" />
+    <None Include="../GUARDS.txt" Link="GUARDS.txt" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <!-- Same as src/Armory.Agent: the WebView2 package's WPF control is not used. -->
+  <Target Name="DropWebView2Wpf" BeforeTargets="ResolveAssemblyReferences">
+    <ItemGroup>
+      <Reference Remove="@(Reference)" Condition="'%(Filename)' == 'Microsoft.Web.WebView2.Wpf'" />
+    </ItemGroup>
+  </Target>
+</Project>

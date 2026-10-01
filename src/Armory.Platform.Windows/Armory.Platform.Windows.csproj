@@ -5,6 +5,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Armory.Core/Armory.Core.csproj" />
+    <ProjectReference Include="../Armory.Client/Armory.Client.csproj" />
     <InternalsVisibleTo Include="Armory.Platform.Windows.Tests" />
     <InternalsVisibleTo Include="Armory.Probe" />
   </ItemGroup>

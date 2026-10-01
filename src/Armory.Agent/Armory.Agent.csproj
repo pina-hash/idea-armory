@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <AssemblyName>IdeaArmory</AssemblyName>
+    <RootNamespace>Armory.Agent</RootNamespace>
+    <Product>IDEA Armory</Product>
+    <Company>IDEA, Don Bosco Tech</Company>
+    <AssemblyTitle>IDEA Armory</AssemblyTitle>
+    <Copyright>IDEA, Don Bosco Tech</Copyright>
+    <Version>0.1.0</Version>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <ApplicationIcon>Assets\armory.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <ApplicationVisualStyles>true</ApplicationVisualStyles>
+    <ApplicationDefaultFont>Segoe UI, 9pt</ApplicationDefaultFont>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4258.31" />
+    <ProjectReference Include="../Armory.Core/Armory.Core.csproj" />
+    <ProjectReference Include="../Armory.Client/Armory.Client.csproj" />
+    <ProjectReference Include="../Armory.Agent.Engine/Armory.Agent.Engine.csproj" />
+    <ProjectReference Include="../Armory.Platform.Windows/Armory.Platform.Windows.csproj" />
+    <InternalsVisibleTo Include="Armory.Agent.Tests" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The window's page (docs/agent/BRIDGE.md). Shipped as is beside IdeaArmory.exe. -->
+    <None Remove="wwwroot\**" />
+    <Content Include="wwwroot\**" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <EmbeddedResource Include="Assets\armory.ico" LogicalName="armory.ico" />
+  </ItemGroup>
+  <!-- The WebView2 package always references its WPF control, which needs WPF's WindowsBase.
+       This is a Windows Forms app, so that one assembly is left out. -->
+  <Target Name="DropWebView2Wpf" BeforeTargets="ResolveAssemblyReferences">
+    <ItemGroup>
+      <Reference Remove="@(Reference)" Condition="'%(Filename)' == 'Microsoft.Web.WebView2.Wpf'" />
+    </ItemGroup>
+  </Target>
+</Project>
