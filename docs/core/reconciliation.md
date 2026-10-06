@@ -39,7 +39,9 @@ Automatic never sets it. "Live" means a remote revision that is not a tombstone.
   - a remote tombstone whose bytes were already kept (`PreservedLocalHash`): recovery, as
     Automatic;
   - the SolidWorks release gate, exactly as Automatic;
-  - no remote: `AcquireLockThenUpload` (`Upload` when this device holds the lock), an add;
+  - no remote and no live base: `AcquireLockThenUpload` (`Upload` when this device holds
+    the lock), an add. A tracked file (live base) whose server record is missing is not an
+    add: its bytes are kept (`Conflict`, or `LockBroken`) and nothing is shared, as Automatic;
   - a remote tombstone with no base, or with that same tombstone as base: the same, a
     re-add that revives the removed name and its history;
   - a broken lock, a remote that moved since base, a tombstone over a live base, or a lock

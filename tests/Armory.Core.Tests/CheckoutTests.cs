@@ -231,7 +231,7 @@ public sealed class CheckoutTests
     [Fact]
     public void Explicit_a_new_file_is_added_under_its_own_lock()
     {
-        foreach (var baseline in new Revision?[] { null, Fixtures.Base })
+        foreach (var baseline in new Revision?[] { null, Removed })
         foreach (var ownership in Enum.GetValues<LockOwnership>())
         foreach (var request in Enum.GetValues<CheckoutRequest>())
         foreach (var broken in new[] { false, true })
@@ -243,6 +243,27 @@ public sealed class CheckoutTests
             };
             var expected = ownership == LockOwnership.ThisDevice ? SyncActionKind.Upload : SyncActionKind.AcquireLockThenUpload;
             Assert.Equal([(expected, (SideVersionReason?)null)], Steps(input));
+        }
+    }
+
+    // E1, add row: a tracked file (a live base) whose server record is missing is not an add.
+    // Its bytes are kept, nothing is shared, exactly as Automatic.
+    [Fact]
+    public void Explicit_a_tracked_file_missing_from_the_server_is_kept_not_added()
+    {
+        foreach (var local in new[] { "edit", "base" })
+        foreach (var ownership in Enum.GetValues<LockOwnership>())
+        foreach (var request in Enum.GetValues<CheckoutRequest>())
+        foreach (var broken in new[] { false, true })
+        foreach (var open in new[] { false, true })
+        {
+            var input = Explicit with
+            {
+                Base = Fixtures.Base, Remote = null, LocalHash = local, Lock = ownership, Request = request, LockWasBroken = broken, IsOpen = open,
+            };
+            if (local == "base" && !broken) Assert.Equal([SyncActionKind.None], Kinds(input)); // E3: unchanged
+            else Assert.Equal([(SyncActionKind.SaveSideVersion, broken ? SideVersionReason.LockBroken : SideVersionReason.Conflict)], Steps(input));
+            Assert.Equal(Kinds(AsAutomatic(input)), Kinds(input));
         }
     }
 
@@ -404,7 +425,10 @@ public sealed class CheckoutTests
             Assert.All(actions, a => Assert.Equal(a.Kind == SyncActionKind.SaveSideVersion, a.Why is not null));
             if (input.IsOpen) Assert.DoesNotContain(actions, a => a.Kind is SyncActionKind.Download or SyncActionKind.MoveLocalToRecovery);
             if (!actions.Any(a => a.Kind is SyncActionKind.Upload or SyncActionKind.AcquireLockThenUpload)) continue;
-            var add = input.Remote is null || input.Remote.IsTombstone;
+            // An add has no server record and no live base; a revival re-adds a removal this copy saw (or never had).
+            var add = (input.Remote is null && input.Base is not { IsTombstone: false }) ||
+                (input.Remote is { IsTombstone: true } && (input.Base is null || Reconciler.SameRevision(input.Base, input.Remote)));
+            Assert.False(input.Remote is null && input.Base is { IsTombstone: false }, $"Shared a tracked file missing from the server: {input}");
             var checkIn = request == CheckoutRequest.CheckIn && input.Lock == LockOwnership.ThisDevice && !input.LockWasBroken &&
                 Reconciler.SameRevision(input.Base, input.Remote);
             Assert.True(add || checkIn, $"Shared outside check in or add: {input}");

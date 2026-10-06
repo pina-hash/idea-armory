@@ -65,10 +65,11 @@ public static class Reconciler
             SyncAction Commit() => new(input.Lock == LockOwnership.ThisDevice ? SyncActionKind.Upload : SyncActionKind.AcquireLockThenUpload, null, releaseNotChecked);
             SyncAction Keep(SideVersionReason why) => new(SyncActionKind.SaveSideVersion, "Keep local bytes as this student's named side version.",
                 releaseNotChecked, explicitCheckout ? why : null);
-            // Explicit: adding a file, or re-adding a removed name (which revives its history),
-            // takes the lock and shares the first version at once.
-            if (explicitCheckout && (input.Remote is null ||
-                input.Remote.IsTombstone && (input.Base is null || SameRevision(input.Base, input.Remote))))
+            // Explicit: adding a file (no server record, and no live base: a tracked file whose
+            // record is missing is not an add), or re-adding a removed name (which revives its
+            // history), takes the lock and shares the first version at once.
+            if (explicitCheckout && ((input.Remote is null && input.Base is not { IsTombstone: false }) ||
+                (input.Remote is { IsTombstone: true } && (input.Base is null || SameRevision(input.Base, input.Remote)))))
                 return Actions(Commit());
             var mustPreserve = input.LockWasBroken || remoteChanged || input.Remote?.IsTombstone == true ||
                 input.Lock is LockOwnership.MyOtherDevice or LockOwnership.OtherPerson;
@@ -77,7 +78,7 @@ public static class Reconciler
                 var preserve = Keep(input.LockWasBroken ? SideVersionReason.LockBroken
                     : remoteChanged || input.Remote?.IsTombstone == true ? SideVersionReason.Conflict : SideVersionReason.ChangedWithoutCheckOut);
                 // A tombstone never authorizes removing changed local bytes. After side-version
-                // acknowledgement, a fresh plan may move the now-preserved local copy to recovery.
+                // acknowledgment, a fresh plan may move the now-preserved local copy to recovery.
                 if (input.Remote is null || input.Remote.IsTombstone) return Actions(preserve);
                 return Actions(preserve, Refresh()); // MUTATION: conflict preservation
             }
