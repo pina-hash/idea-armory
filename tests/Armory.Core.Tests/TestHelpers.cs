@@ -24,6 +24,7 @@ internal sealed class MemoryJournalStore(bool tracksGeneration = true) : IJourna
     internal int? CrashAfter { get; set; }
     internal bool CrashOnFlush { get; set; }
     internal int Reads { get; private set; }
+    internal int TornAppends { get; private set; }
     public byte[] ReadAll() { Reads++; return Bytes.ToArray(); }
     // Tests also change Bytes directly, so the generation follows the content itself: any
     // change by any route gives a new value. Without tracking, the journal reads every call.
@@ -40,7 +41,7 @@ internal sealed class MemoryJournalStore(bool tracksGeneration = true) : IJourna
     {
         var count = Math.Min(CrashAfter ?? bytes.Length, bytes.Length);
         Bytes.AddRange(bytes[..count].ToArray());
-        if (CrashAfter is not null) { CrashAfter = null; throw new SimulatedCrash(); }
+        if (CrashAfter is not null) { CrashAfter = null; TornAppends++; throw new SimulatedCrash(); }
     }
     public void Flush()
     {

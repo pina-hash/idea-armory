@@ -29,7 +29,7 @@ After each step, and each client sync during idle draining, the oracle checks th
 - The previous server history remains an identical prefix and all referenced blobs exist.
 
 `JournalTests` complements random scheduling by testing every byte cut of a frame, replay
-twice, corruption, and acknowledgement loss. Unit tests cover the CAD gate and naming
+twice, corruption, and acknowledgment loss. Unit tests cover the CAD gate and naming
 rules independently of the generic byte-file simulation.
 
 The final local gate passed all 164 tests: `Test Run Successful. Total tests: 164.
@@ -55,18 +55,29 @@ Seeded_explicit_checkout_scenarios`. It asserts its own two-minute budget.
 Each scenario has two or three clients and five paths: three shared from the start and
 two that start on no computer and no server. Forty-eight random events (weighted toward
 files the client has checked out) include check out and "check out and open" (through
-the fake server's lock machine; a copy that is behind is brought up to date first, and a
-copy with changes nobody checked out is never checked out over), edits and saves (a save
-fails on a read-only file, using `CheckoutRules.IsReadOnlyOnDisk`), a forced save after
-clearing the read-only attribute, check in (the student may save first), undo check out
-(the student closes the file first), adding a new file or re-adding a removed name
-(sometimes while it is open), plus everything the v1 simulation does: opens, closes,
-disconnections, reconnections, process crashes, torn journal writes, mentor lock breaks,
-server removals, local deletions, simultaneous saves and crashes between sync actions.
-Check outs and check in or undo requests survive crashes, as the agent persists them. An
-add holds its lock until it is closed and is then checked in automatically; a deletion
-takes a lock only for itself. Every 16 steps and at the end the clients save what they
-can, close everything, go online and check in every check out.
+`CheckoutRules.NextCheckOutStep` and the fake server's lock machine: a copy that is missing
+or behind is brought up to date first, and bytes saved without a check out are kept and
+the shared version put back first, so the lock is only taken over the live shared
+version), edits and saves (a save fails on a read-only file), a forced save after clearing
+the read-only attribute (later saves before the next pass are forced too), check in (the
+student may save first), undo check out (the student closes the file first), adding a new
+file or re-adding a removed name (sometimes while it is open), plus everything the v1
+simulation does: opens, closes, disconnections, reconnections, process crashes, torn
+journal writes (carried to the next append, as in v1, and aimed at a writable file),
+mentor lock breaks (Take back), server removals, local deletions, simultaneous saves and
+crashes between sync actions (sometimes right after a save, so the server can keep it and
+the answer be lost). Check outs and check in or undo requests survive crashes, as the
+agent persists them. An add holds its lock only while it is open: a closed add is created,
+committed and checked in in one pass; a deletion takes a lock only for itself. Every 16
+steps and at the end the clients save what they can, close everything, go online and check
+in every check out.
+
+Each client keeps the read-only attribute as its agent last applied it, using
+`CheckoutRules.IsReadOnlyOnDisk` for a file the server has (an add stays writable): every
+online pass, on a check out, on a staged download before it replaces the file, and before a
+check in or undo releases the lock; offline passes apply it again from the ownership last
+known. So a holder whose check out was taken back keeps saving until its next pass, as on
+a real computer.
 
 The oracle keeps every v1 invariant and adds:
 
@@ -75,18 +86,27 @@ The oracle keeps every v1 invariant and adds:
   never by the plan); a removal may also use a lock the deletion took for itself.
 - The shared file advances only at check in, or as the first version of an add or a
   revival.
-- A save made without a check out never becomes a shared version.
+- Every save that is not forced is to a file the server does not have, or to one this
+  device held the lock of when its agent last made it writable. The oracle reads this from
+  the server's lock table when the attribute is applied, never through `CheckoutRules`, so a
+  read-only rule that leaves a checked-in file writable fails here.
+- A save made without a check out (forced, or after the student cleared the attribute)
+  never becomes a shared version.
+- A closed add never keeps its lock after a pass.
 - Undo never replaces an open file or bytes the server does not keep as a side version.
 - No check out survives the drain, and every save is in server history after the
   client's next online sync, as in v1.
 
 A run must also reach every route it models (check outs, check ins, an add's automatic
-check in, undo restores, adds, revivals, forced saves, put backs, offline saves, releases
-and a kept copy for every `SideVersionReason`); the counts are printed as
-`EXPLICIT coverage`. A normal run here reached `check_outs=16788 check_ins=3948
-add_check_ins=1629 undos=436 adds=7649 revivals=4293 forced_saves=11044 put_backs=728
-offline_saves=3984`; `blocked_adds` (an add whose name another device locked and then
-crashed before its first version) is printed but too rare to require.
+check in, undo restores, adds, revivals, forced saves, put backs, offline saves, releases,
+saves after a Take back, torn journal writes, crashes in the middle of a sync, lost
+acknowledgments and a kept copy for every `SideVersionReason`); the counts are printed as
+`EXPLICIT coverage`. A normal run here reached `check_outs=19019 check_ins=5796
+add_check_ins=1370 undos=564 adds=11791 revivals=7615 forced_saves=12208 put_backs=698
+offline_saves=5926 releases=46526 saves_after_take_back=219 torn_writes=15253
+mid_sync_crashes=13115 lost_acknowledgments=220`; `blocked_adds` (an add whose name
+another device locked and then crashed before its first version) is printed but too rare
+to require.
 
 The full Core test project (both simulations in parallel) passed: `Total tests: 221.
 Passed: 221.`, with `EXPLICIT scenarios=10000 elapsed=32.781s` and `SIMULATION
