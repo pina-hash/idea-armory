@@ -8,12 +8,20 @@
  *
  * Inside WebView2 the page posts message objects with window.chrome.webview.postMessage
  * (the host reads CoreWebView2WebMessageReceivedEventArgs.WebMessageAsJson) and receives
- * the host's PostWebMessageAsJson messages as parsed objects.
+ * the host's PostWebMessageAsJson messages as parsed objects. Dropped files go with
+ * window.chrome.webview.postMessageWithAdditionalObjects(message, files); the host reads
+ * each CoreWebView2File.Path from the event's AdditionalObjects.
  *
  * Outside WebView2 (a plain browser, the screenshot tools) it loads demo/states.js and a
  * demo transport answers instead, from the query string:
  *   ?state=<name>&theme=idea|spaceWhite&screen=home|detail|connect|settings&file=<fileId>
- * (theme=space-white is accepted too). Nothing here touches the network.
+ * (theme=space-white is accepted too), plus page-only places the page opens on, so every
+ * state can be drawn without a click:
+ *   project=<projectId>  folder=<folder path in the project; empty for its top>
+ *   select=<name>,<name> (files in that folder)  expand=<notice key>
+ *   dialog=newFolder|renameFolder|deleteFolder|takeBack  drag=1 (files held over the list)
+ *   at=browser (Home scrolled so the team's files are in view)
+ * Nothing here touches the network.
  */
 (function () {
 	'use strict';
@@ -24,28 +32,32 @@
 	 * @typedef {'signedOut' | 'connecting' | 'signedIn' | 'vaultOwnedByOther'} Connection
 	 * @typedef {'idle' | 'waitingForBrowser' | 'finishing' | 'failed'} ConnectPhase
 	 * @typedef {'synced' | 'syncing' | 'offline' | 'paused' | 'attention'} SyncState
-	 * @typedef {'synced' | 'syncing' | 'waitingToSend' | 'editingByMe' | 'editingByOther'
-	 *   | 'newerWaiting' | 'conflict' | 'refused' | 'notOnThisComputer'} FileStatus
-	 * @typedef {'newerWaiting' | 'sideVersion' | 'refused' | 'lockBroken' | 'nameTaken'
-	 *   | 'releaseNotChecked'} AttentionKind
+	 * @typedef {'synced' | 'changed' | 'uploading' | 'downloading' | 'waiting' | 'newerWaiting'
+	 *   | 'keptCopy' | 'notInArmory' | 'notOnThisComputer'} FileStatus
+	 * @typedef {'available' | 'mine' | 'other' | 'myOtherComputer'} CheckoutState
+	 * @typedef {'upload' | 'download' | 'move'} Direction
+	 * @typedef {'info' | 'look' | 'bad'} NoticeTone
+	 * @typedef {'import' | 'nameShared' | 'newerWaiting' | 'keptCopy' | 'takenBack' | 'folderPutBack'
+	 *   | 'projectPutBack' | 'projectRenaming' | 'cantSend' | 'cantRead' | 'checkInPartial'} NoticeKind
+	 * @typedef {'version' | 'keptCopy' | 'removed'} HistoryKind
 	 * @typedef {'system' | 'idea' | 'spaceWhite'} ThemeSetting
 	 * @typedef {'idea' | 'spaceWhite'} EffectiveTheme
 	 */
 
 	/**
-	 * @typedef {object} ConnectInfo
+	 * @typedef {object} ConnectView
 	 * @property {ConnectPhase} phase
 	 * @property {string | null} message
 	 */
 
 	/**
-	 * @typedef {object} Account
+	 * @typedef {object} AccountView
 	 * @property {string} email
 	 * @property {string} deviceName
 	 */
 
 	/**
-	 * @typedef {object} SyncInfo
+	 * @typedef {object} SyncView
 	 * @property {SyncState} state
 	 * @property {string} line           Plain student sentence, e.g. "Everything is saved to Armory."
 	 * @property {string | null} detail  e.g. "Last checked 2 minutes ago"
@@ -53,65 +65,136 @@
 	 */
 
 	/**
-	 * @typedef {object} MyFile
+	 * One direction of what is moving right now.
+	 * @typedef {object} DirectionView
+	 * @property {number} filesDone
+	 * @property {number} filesTotal
+	 * @property {number} bytesDone
+	 * @property {number} bytesTotal
+	 * @property {number} bytesPerSecond
+	 * @property {number | null} secondsLeft   null until 3 seconds and 2 files have gone by
+	 * @property {string} line                e.g. "Downloading 412 of 1,280 files, 2.1 GB left, about 3 min"
+	 */
+
+	/**
+	 * @typedef {object} WaitingView
+	 * @property {number} count
+	 * @property {string} line  e.g. "3 files are waiting to upload. They upload when this computer is back online."
+	 */
+
+	/**
+	 * @typedef {object} ActiveTransferView
+	 * @property {string} path            vault-relative, forward slashes
+	 * @property {string} name
+	 * @property {Direction} direction
+	 * @property {number} bytesDone
+	 * @property {number} bytesTotal
+	 */
+
+	/**
+	 * What is happening right now. Also sent on its own as the 'activity' message.
+	 * @typedef {object} ActivityView
+	 * @property {string | null} line              the status line while files move
+	 * @property {DirectionView | null} upload
+	 * @property {DirectionView | null} download
+	 * @property {DirectionView | null} move
+	 * @property {WaitingView | null} waiting
+	 * @property {ActiveTransferView[]} active      at most 8
+	 */
+
+	/**
+	 * @typedef {object} NoticeActionView
+	 * @property {string} label
+	 * @property {string} command   a page-to-host type (checkOut, checkIn, launchFile, dismissNotice...) or "expand" (page only)
+	 * @property {string[]} paths
+	 */
+
+	/**
+	 * @typedef {object} NoticeItemView
+	 * @property {string | null} fileId
+	 * @property {string} path
+	 * @property {string} name
+	 * @property {string | null} detail
+	 */
+
+	/**
+	 * One card per kind, never one per file.
+	 * @typedef {object} NoticeGroupView
+	 * @property {string} key
+	 * @property {NoticeKind} kind
+	 * @property {NoticeTone} tone
+	 * @property {string} title       e.g. "14 files share a name with other files in this project"
+	 * @property {string} detail
+	 * @property {number} count       the total; items holds at most 200
+	 * @property {NoticeActionView | null} action
+	 * @property {NoticeItemView[]} items
+	 */
+
+	/**
+	 * Who has a file checked out.
+	 * @typedef {object} CheckoutView
+	 * @property {CheckoutState} state
+	 * @property {string} label          "Checked out by you", "Checked out by Maria Lopez on LAB-PC-07", "Available"
+	 * @property {string | null} name
+	 * @property {string | null} email
+	 * @property {string | null} device
+	 * @property {string | null} since    ISO-8601
+	 */
+
+	/**
+	 * The quiet question when SolidWorks opens a file this computer has not checked out.
+	 * @typedef {object} PromptView
+	 * @property {string | null} fileId
+	 * @property {string} path
+	 * @property {string} name
+	 * @property {CheckoutView} checkout
+	 * @property {boolean} canCheckOut
+	 */
+
+	/**
+	 * @typedef {object} MyFileView
 	 * @property {string | null} fileId  null until the server has the file
 	 * @property {string} path           vault-relative, forward slashes
 	 * @property {string} name
 	 * @property {string} project
 	 * @property {FileStatus} status
 	 * @property {string | null} note
+	 * @property {CheckoutView} checkout
 	 */
 
 	/**
-	 * @typedef {object} Attention
-	 * @property {AttentionKind} kind
-	 * @property {string | null} fileId
-	 * @property {string} path
-	 * @property {string} name
-	 * @property {string} title
-	 * @property {string} detail
-	 * @property {string | null} at      ISO-8601
-	 */
-
-	/**
-	 * @typedef {object} Holder
-	 * @property {string} name
-	 * @property {string} email
-	 * @property {string} device
-	 * @property {string} since          ISO-8601
-	 * @property {boolean} isMe
-	 * @property {boolean} isMyOtherComputer
-	 * @property {boolean} savedToArmory
-	 */
-
-	/**
-	 * @typedef {object} FileRow
-	 * @property {string} fileId
+	 * @typedef {object} FileRowView
+	 * @property {string | null} fileId  null for a file in the folder that isn't in Armory
 	 * @property {string} name
 	 * @property {string} path
 	 * @property {FileStatus} status
-	 * @property {Holder | null} holder
+	 * @property {CheckoutView} checkout
+	 * @property {boolean} changed       its bytes here differ from the last check in
 	 * @property {boolean} releaseNotChecked
 	 * @property {string | null} updatedAt
 	 * @property {string | null} updatedBy
 	 */
 
 	/**
-	 * @typedef {object} Folder
-	 * @property {string} path           "" for the project's root folder
+	 * @typedef {object} FolderView
+	 * @property {string} path           in the project: "" for its top folder, "Drivetrain/Gears" for a subfolder
 	 * @property {string} name
-	 * @property {FileRow[]} files
+	 * @property {number} fileCount      files directly in it
+	 * @property {FileRowView[]} files
 	 */
 
 	/**
-	 * @typedef {object} Project
+	 * @typedef {object} ProjectView
 	 * @property {string} id
 	 * @property {string} name
-	 * @property {Folder[]} folders
+	 * @property {boolean} archived
+	 * @property {string} role           student, cad_lead, mentor or instructor
+	 * @property {boolean} canTakeBack   a mentor or CAD lead
+	 * @property {FolderView[]} folders  a flat list, every folder once, empty ones too
 	 */
 
 	/**
-	 * @typedef {object} Settings
+	 * @typedef {object} SettingsView
 	 * @property {string} vaultRoot
 	 * @property {boolean} startAtSignIn
 	 * @property {ThemeSetting} theme
@@ -120,21 +203,23 @@
 	/**
 	 * @typedef {object} AgentView
 	 * @property {Connection} connection
-	 * @property {ConnectInfo} connect
-	 * @property {Account | null} account
-	 * @property {SyncInfo} sync
+	 * @property {ConnectView} connect
+	 * @property {AccountView | null} account
+	 * @property {SyncView} sync
+	 * @property {ActivityView} activity
 	 * @property {string} vaultRoot
-	 * @property {MyFile[]} myFiles
-	 * @property {Attention[]} needsMe
-	 * @property {Project[]} projects
-	 * @property {Settings} settings
+	 * @property {NoticeGroupView[]} notices
+	 * @property {PromptView | null} prompt
+	 * @property {MyFileView[]} myFiles
+	 * @property {ProjectView[]} projects
+	 * @property {SettingsView} settings
 	 * @property {EffectiveTheme} effectiveTheme
 	 */
 
 	/**
-	 * @typedef {object} HistoryEntry
+	 * @typedef {object} HistoryEntryView
 	 * @property {string} id
-	 * @property {'version' | 'sideVersion'} kind
+	 * @property {HistoryKind} kind
 	 * @property {string} author
 	 * @property {string} at             ISO-8601
 	 * @property {number} bytes
@@ -144,31 +229,42 @@
 	 */
 
 	/**
-	 * @typedef {object} FileDetail
+	 * @typedef {object} FileDetailView
 	 * @property {string} fileId
 	 * @property {string} name
 	 * @property {string} path
 	 * @property {string} project
 	 * @property {string} folder
 	 * @property {FileStatus} status
-	 * @property {Holder | null} holder
+	 * @property {CheckoutView} checkout
 	 * @property {boolean} releaseNotChecked
-	 * @property {HistoryEntry[]} history  newest first
+	 * @property {boolean} canTakeBack
+	 * @property {HistoryEntryView[]} history  newest first
 	 */
 
 	/**
 	 * Host to page.
-	 * @typedef {{ type: 'view', view: AgentView } | { type: 'fileDetail', detail: FileDetail }} HostMessage
+	 * @typedef {{ type: 'view', view: AgentView } | { type: 'fileDetail', detail: FileDetailView } | { type: 'activity', activity: ActivityView } | { type: 'actionResult', requestId: string, ok: boolean, message: string }} HostMessage
 	 */
 
 	/**
-	 * Page to host. Fields per type:
+	 * Page to host. Fields per type (an action also carries the requestId its actionResult
+	 * answers; ACTIONS below lists them):
 	 *   ready, connect, cancelConnect, signOut, pause, resume, openVault, chooseVaultRoot: none
-	 *   openFile: { fileId }
+	 *   openFile: { fileId }                  (the host answers with fileDetail)
+	 *   launchFile: { path }                  (opens it in its own program: SolidWorks for a part)
 	 *   showInFolder: { path }
+	 *   checkOut: { paths, open }             (files or folders, vault-relative)
+	 *   checkIn: { paths }    undoCheckOut: { paths }    takeBack: { fileId }
+	 *   createFolder: { projectId, parent, name }    renameFolder: { projectId, folder, newName }
+	 *   deleteFolder: { projectId, folder }   addFiles: { projectId, folder }
+	 *   dropFiles: { projectId, folder }      (sent with the dropped File objects)
+	 *   dismissNotice: { key }
 	 *   saveSettings: { vaultRoot, startAtSignIn, theme }
 	 * @typedef {'ready' | 'connect' | 'cancelConnect' | 'signOut' | 'pause' | 'resume'
-	 *   | 'openVault' | 'openFile' | 'showInFolder' | 'saveSettings' | 'chooseVaultRoot'} PageMessageType
+	 *   | 'openVault' | 'openFile' | 'launchFile' | 'showInFolder' | 'checkOut' | 'checkIn'
+	 *   | 'undoCheckOut' | 'takeBack' | 'createFolder' | 'renameFolder' | 'deleteFolder'
+	 *   | 'addFiles' | 'dropFiles' | 'dismissNotice' | 'saveSettings' | 'chooseVaultRoot'} PageMessageType
 	 */
 
 	/**
@@ -177,27 +273,49 @@
 	 * @property {'home' | 'detail' | 'connect' | 'settings'} screen
 	 * @property {string | null} fileId
 	 * @property {string} state
+	 * @property {string | null} project   a project id
+	 * @property {string | null} folder    a folder path in that project
+	 * @property {string[]} select         file names in that folder
+	 * @property {string | null} expand    a notice key
+	 * @property {string | null} dialog    newFolder, renameFolder, deleteFolder or takeBack
+	 * @property {boolean} drag
+	 * @property {string | null} at        a part of Home to scroll into view: browser
 	 */
 
 	/* ------------------------------------------------------- Message lists */
 
 	/** Page to host message types (BRIDGE.md, "Page to host"). */
-	var PAGE_TO_HOST = ['ready', 'connect', 'cancelConnect', 'signOut', 'pause', 'resume', 'openVault', 'openFile', 'showInFolder', 'saveSettings', 'chooseVaultRoot'];
+	var PAGE_TO_HOST = ['ready', 'connect', 'cancelConnect', 'signOut', 'pause', 'resume', 'openVault', 'openFile', 'launchFile', 'showInFolder', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'addFiles', 'dropFiles', 'dismissNotice', 'saveSettings', 'chooseVaultRoot'];
 
 	/** Host to page message types (BRIDGE.md, "Host to page"). */
-	var HOST_TO_PAGE = ['view', 'fileDetail'];
+	var HOST_TO_PAGE = ['view', 'fileDetail', 'activity', 'actionResult'];
 
-	/** Required fields per page-to-host type. */
+	/** Required fields per page-to-host type, as the host's message records name them. */
 	var REQUIRED = {
 		openFile: ['fileId'],
+		launchFile: ['path'],
 		showInFolder: ['path'],
+		checkOut: ['paths', 'open'],
+		checkIn: ['paths'],
+		undoCheckOut: ['paths'],
+		takeBack: ['fileId'],
+		createFolder: ['projectId', 'parent', 'name'],
+		renameFolder: ['projectId', 'folder', 'newName'],
+		deleteFolder: ['projectId', 'folder'],
+		addFiles: ['projectId', 'folder'],
+		dropFiles: ['projectId', 'folder'],
+		dismissNotice: ['key'],
 		saveSettings: ['vaultRoot', 'startAtSignIn', 'theme']
 	};
+
+	/** Actions: each carries a requestId, and the host answers it with one actionResult. */
+	var ACTIONS = ['launchFile', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'addFiles', 'dropFiles'];
 
 	/* ----------------------------------------------------------- Plumbing */
 
 	/** @type {Array<(message: HostMessage) => void>} */
 	var handlers = [];
+	var nextRequest = 1;
 
 	function dispatch(message) {
 		if (!message || typeof message !== 'object' || HOST_TO_PAGE.indexOf(message.type) < 0) {
@@ -217,6 +335,7 @@
 			if (!fields || !(needed[i] in fields)) throw new Error('Armory bridge: ' + type + ' needs ' + needed[i]);
 			message[needed[i]] = fields[needed[i]];
 		}
+		if (ACTIONS.indexOf(type) >= 0) message.requestId = fields && fields.requestId ? String(fields.requestId) : 'r' + nextRequest++;
 		return message;
 	}
 
@@ -249,8 +368,9 @@
 			dispatch(e.data);
 		});
 		return {
-			post: function (message) {
-				webview.postMessage(message);
+			post: function (message, files) {
+				if (files && files.length && typeof webview.postMessageWithAdditionalObjects === 'function') webview.postMessageWithAdditionalObjects(message, files);
+				else webview.postMessage(message);
 			},
 			now: function () {
 				return Date.now();
@@ -272,7 +392,14 @@
 		var route = {
 			screen: /** @type {any} */ (params.get('screen') || ''),
 			fileId: params.get('file'),
-			state: stateName
+			state: stateName,
+			project: params.get('project'),
+			folder: params.get('folder'),
+			select: (params.get('select') || '').split(',').filter(Boolean),
+			expand: params.get('expand'),
+			dialog: params.get('dialog'),
+			drag: params.get('drag') === '1',
+			at: params.get('at')
 		};
 
 		function firstFileId(v) {
@@ -294,6 +421,9 @@
 			view.effectiveTheme = view.settings.theme === 'system' ? systemTheme() : view.settings.theme;
 			deliver({ type: 'view', view: view });
 		}
+		function result(message, ok, words) {
+			deliver({ type: 'actionResult', requestId: message.requestId, ok: ok, message: words });
+		}
 		function useState(name) {
 			var s = demo.states[name];
 			var settings = view ? view.settings : null;
@@ -308,9 +438,51 @@
 			timers.forEach(clearTimeout);
 			timers = [];
 		}
+		function projectById(id) {
+			return view.projects.filter(function (p) {
+				return p.id === id;
+			})[0];
+		}
+		/** Every row of the view, with its project and folder. */
+		function eachRow(fn) {
+			view.projects.forEach(function (p) {
+				p.folders.forEach(function (f) {
+					f.files.forEach(function (r) {
+						fn(r, p, f);
+					});
+				});
+			});
+		}
+		/** The rows a list of vault-relative paths names: a file, or every file under a folder. */
+		function rowsFor(paths) {
+			var out = [];
+			eachRow(function (r) {
+				for (var i = 0; i < paths.length; i++) {
+					if (r.path === paths[i] || r.path.indexOf(paths[i] + '/') === 0) {
+						out.push(r);
+						break;
+					}
+				}
+			});
+			return out;
+		}
+		function words(n, one, many) {
+			return n + ' ' + (n === 1 ? one : many);
+		}
+		/** Keeps My files in step: my check outs, and the files that aren't in Armory. */
+		function refreshMine() {
+			var mine = [];
+			eachRow(function (r, p) {
+				if (r.checkout.state === 'mine' || r.checkout.state === 'myOtherComputer' || r.status === 'notInArmory')
+					mine.push({ fileId: r.fileId, path: r.path, name: r.name, project: p.name, status: r.status, note: null, checkout: r.checkout });
+			});
+			view.myFiles = mine;
+		}
 
 		/** Answers one page message the way the engine would. */
-		function handle(message) {
+		function handle(message, files) {
+			var rows;
+			var p;
 			switch (message.type) {
 				case 'ready':
 					postView();
@@ -334,10 +506,6 @@
 					);
 					break;
 				case 'cancelConnect':
-					clearTimers();
-					useState('signedOut');
-					postView();
-					break;
 				case 'signOut':
 					clearTimers();
 					useState('signedOut');
@@ -346,12 +514,7 @@
 				case 'pause':
 					if (view.sync.state !== 'paused') {
 						pausedFrom = clone(view.sync);
-						view.sync = {
-							state: 'paused',
-							line: 'Paused. Nothing is sent or received until you resume.',
-							detail: view.sync.pendingCount ? view.sync.pendingCount + ' changes are waiting on this computer.' : null,
-							pendingCount: view.sync.pendingCount
-						};
+						view.sync = demo.pausedSync(view.sync.pendingCount);
 					}
 					postView();
 					break;
@@ -361,7 +524,112 @@
 					postView();
 					break;
 				case 'openFile':
-					deliver({ type: 'fileDetail', detail: demo.detailFor(stateName, message.fileId) });
+					deliver({ type: 'fileDetail', detail: demo.detailFor(stateName, message.fileId, view) });
+					break;
+				case 'launchFile':
+					// In the app this opens the file in its own program (SolidWorks for a part).
+					console.info('Armory demo: launchFile', message.path);
+					result(message, true, 'Opening ' + message.path.split('/').pop() + '.');
+					break;
+				case 'checkOut':
+					rows = rowsFor(message.paths);
+					var got = 0;
+					var held = {};
+					rows.forEach(function (r) {
+						if (r.checkout.state === 'available' && r.fileId) {
+							r.checkout = demo.checkoutMine();
+							got++;
+						} else if (r.checkout.state === 'other') held[r.checkout.name] = (held[r.checkout.name] || 0) + 1;
+					});
+					refreshMine();
+					postView();
+					var names = Object.keys(held);
+					var heldCount = names.reduce(function (n, k) {
+						return n + held[k];
+					}, 0);
+					if (rows.length === 1 && got === 1) result(message, true, 'Checked out ' + rows[0].name + '.');
+					else if (!heldCount) result(message, got > 0, got ? 'Checked out ' + words(got, 'file', 'files') + '.' : 'Those files are already checked out by you.');
+					else
+						result(
+							message,
+							got > 0,
+							'Checked out ' + got + ' of ' + words(rows.length, 'file', 'files') + '. ' + (names.length === 1 ? names[0] + ' has ' : 'Others have ') + heldCount + ' of them checked out.'
+						);
+					break;
+				case 'checkIn':
+				case 'undoCheckOut':
+					rows = rowsFor(message.paths).filter(function (r) {
+						return r.checkout.state === 'mine';
+					});
+					rows.forEach(function (r) {
+						r.checkout = demo.checkoutAvailable();
+						r.changed = false;
+						if (r.status === 'changed' || r.status === 'waiting') r.status = 'synced';
+					});
+					refreshMine();
+					postView();
+					if (!rows.length) result(message, false, 'Nothing there is checked out by you.');
+					else if (message.type === 'checkIn') result(message, true, rows.length === 1 ? 'Checked in ' + rows[0].name + '.' : 'Checked in ' + words(rows.length, 'file', 'files') + '.');
+					else
+						result(
+							message,
+							true,
+							rows.length === 1
+								? 'Undid the check out of ' + rows[0].name + '. Your changes are kept as your own copy.'
+								: 'Undid ' + words(rows.length, 'check out', 'check outs') + '. Your changes are kept as your own copies.'
+						);
+					break;
+				case 'takeBack':
+					var taken = null;
+					eachRow(function (r) {
+						if (r.fileId === message.fileId && r.checkout.state !== 'available') {
+							taken = { row: r, from: r.checkout.name };
+							r.checkout = demo.checkoutAvailable();
+						}
+					});
+					refreshMine();
+					postView();
+					result(message, !!taken, taken ? 'Took back ' + taken.row.name + ' from ' + taken.from + '. Anything not checked in is kept in its history.' : 'That file is not checked out.');
+					break;
+				case 'createFolder':
+					p = projectById(message.projectId);
+					p.folders.push({ path: (message.parent ? message.parent + '/' : '') + message.name, name: message.name, fileCount: 0, files: [] });
+					postView();
+					result(message, true, 'Made the folder ' + message.name + '.');
+					break;
+				case 'renameFolder':
+					p = projectById(message.projectId);
+					var from = message.folder;
+					var to = from.split('/').slice(0, -1).concat([message.newName]).join('/');
+					p.folders.forEach(function (f) {
+						if (f.path === from || f.path.indexOf(from + '/') === 0) {
+							f.path = to + f.path.slice(from.length);
+							if (f.path === to) f.name = message.newName;
+							f.files.forEach(function (r) {
+								r.path = p.name + '/' + f.path + '/' + r.name;
+							});
+						}
+					});
+					postView();
+					result(message, true, 'Renamed ' + from.split('/').pop() + ' to ' + message.newName + '.');
+					break;
+				case 'deleteFolder':
+					p = projectById(message.projectId);
+					var gone = 0;
+					p.folders = p.folders.filter(function (f) {
+						var inside = f.path === message.folder || f.path.indexOf(message.folder + '/') === 0;
+						if (inside) gone += f.files.length;
+						return !inside;
+					});
+					refreshMine();
+					postView();
+					result(message, true, 'Deleted ' + message.folder.split('/').pop() + ' and the ' + words(gone, 'file', 'files') + ' in it. Their history is kept.');
+					break;
+				case 'dismissNotice':
+					view.notices = view.notices.filter(function (n) {
+						return n.key !== message.key;
+					});
+					postView();
 					break;
 				case 'saveSettings':
 					var movedOut = view.connection === 'vaultOwnedByOther' && message.vaultRoot !== view.settings.vaultRoot;
@@ -379,8 +647,11 @@
 					break;
 				case 'openVault':
 				case 'showInFolder':
-					// In the app these open File Explorer. The demo has nothing to open.
-					console.info('Armory demo: ' + message.type, message.path || view.vaultRoot);
+				case 'addFiles':
+				case 'dropFiles':
+					// In the app these open File Explorer or a file picker, or copy the dropped
+					// files in. The demo has nothing to open or copy, so it only says so.
+					console.info('Armory demo: ' + message.type, message.path || message.folder || view.vaultRoot, files ? files.length + ' dropped' : '');
 					break;
 			}
 		}
@@ -397,7 +668,9 @@
 			useState(stateName);
 			var queued = waiting;
 			waiting = null;
-			queued.forEach(handle);
+			queued.forEach(function (q) {
+				handle(q[0], q[1]);
+			});
 		};
 		document.head.appendChild(script);
 
@@ -408,9 +681,9 @@
 		}
 
 		return {
-			post: function (message) {
-				if (waiting) waiting.push(message);
-				else handle(message);
+			post: function (message, files) {
+				if (waiting) waiting.push([message, files]);
+				else handle(message, files);
 			},
 			now: function () {
 				return demo ? Date.parse(demo.now) : Date.now();
@@ -426,6 +699,7 @@
 	window.ArmoryBridge = Object.freeze({
 		PAGE_TO_HOST: Object.freeze(PAGE_TO_HOST.slice()),
 		HOST_TO_PAGE: Object.freeze(HOST_TO_PAGE.slice()),
+		ACTIONS: Object.freeze(ACTIONS.slice()),
 
 		/** True when a demo transport answers instead of the engine. */
 		isDemo: !webview,
@@ -434,13 +708,30 @@
 		 * Sends one message to the host.
 		 * @param {PageMessageType} type
 		 * @param {Record<string, unknown>} [fields]
+		 * @returns {string | null} the requestId an action's actionResult will answer
 		 */
 		send: function (type, fields) {
-			transport.post(buildMessage(type, fields));
+			var message = buildMessage(type, fields);
+			transport.post(message, null);
+			return message.requestId || null;
 		},
 
 		/**
-		 * Calls `handler` with every host message ({type: 'view'} or {type: 'fileDetail'}).
+		 * Sends one message with the files dropped on the window (WebView2's
+		 * postMessageWithAdditionalObjects; the host reads each CoreWebView2File.Path).
+		 * @param {PageMessageType} type
+		 * @param {Record<string, unknown>} fields
+		 * @param {ArrayLike<File>} files
+		 * @returns {string | null}
+		 */
+		sendWithFiles: function (type, fields, files) {
+			var message = buildMessage(type, fields);
+			transport.post(message, files);
+			return message.requestId || null;
+		},
+
+		/**
+		 * Calls `handler` with every host message (view, fileDetail, activity, actionResult).
 		 * @param {(message: HostMessage) => void} handler
 		 * @returns {() => void} stops listening
 		 */
