@@ -88,6 +88,9 @@ jobs:
             '',
             "Built from $env:GITHUB_SHA. Before publishing, both assets were installed, launched and uninstalled on windows-latest, and the vault's proof files kept their bytes through each uninstall.")
           $notes -join "`n" | Set-Content -LiteralPath release-notes.md -Encoding utf8
+          # Notes for this version alone (docs/agent/release-notes/<tag>.md), when there are any, go first.
+          $versionNotes = "docs/agent/release-notes/$tag.md"
+          if (Test-Path -LiteralPath $versionNotes) { (@(Get-Content -LiteralPath $versionNotes -Encoding utf8) + @('') + $notes) -join "`n" | Set-Content -LiteralPath release-notes.md -Encoding utf8 }
           $assets = @($env:USB_ZIP, "$env:USB_ZIP.sha256", $env:SETUP_EXE, "$env:SETUP_EXE.sha256")
           gh release view $tag *> $null
           if ($LASTEXITCODE -eq 0) {

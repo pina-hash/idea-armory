@@ -64,6 +64,13 @@ public sealed class ArmoryRpcException(int status, string? sqlState, string mess
     public bool IsNameTaken => SqlState == "23505";
     public bool IsForbidden => SqlState == "42501" || Status == 403;
     public bool IsInvalidInput => SqlState is not null && SqlState.StartsWith("22", StringComparison.Ordinal);
+    // 55006 (object in use): a folder rename or delete refused because someone else has a file in it
+    // checked out, or because the target folder already holds files. FolderRefusal.TryParse(Details).
+    // PostgREST answers it with HTTP 500, so branch on this, never on Status.
+    public bool IsInUse => SqlState == "55006";
+    // 40P01 (deadlock) and 40001 (serialization failure): the server rolled the call back and
+    // nothing was written. PostgrestClient resends such a call itself before raising this.
+    public bool IsTransient => SqlState is "40P01" or "40001";
 }
 
 internal static class Json

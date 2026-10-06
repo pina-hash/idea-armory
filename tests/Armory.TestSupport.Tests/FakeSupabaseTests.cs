@@ -208,8 +208,15 @@ public sealed class FakeSupabaseTests(TestDatabaseFixture fixture) : IClassFixtu
             await AssertPostgrestError(anonymous, HttpStatusCode.Unauthorized, "42501");
         using (var anonKeyAsBearer = await h.Rpc("armory_my_projects", "{}", accessToken: h.Supabase.AnonKey))
             await AssertPostgrestError(anonKeyAsBearer, HttpStatusCode.Unauthorized, "42501");
-        using (var revoked = await h.Rpc("armory_current_email", "{}", studentToken))
+        // An internal helper no client role holds (0231's grants, mirrored by server/sql/005_v2.sql section 9).
+        using (var revoked = await h.Rpc("armory_add_change", new JsonObject { ["p_project"] = project.ToString(), ["p_kind"] = "forged", ["p_entity"] = project.ToString(), ["p_payload"] = new JsonObject() }, studentToken))
             await AssertPostgrestError(revoked, HttpStatusCode.Forbidden, "42501");
+        // RLS policies name armory_current_email, so authenticated holds it, as in production, and it answers only the caller.
+        using (var email = await h.Rpc("armory_current_email", "{}", studentToken))
+        {
+            Assert.Equal(HttpStatusCode.OK, email.StatusCode);
+            Assert.Equal(student, (string?)await Harness.Json(email));
+        }
 
         using var device = await h.Rpc("armory_register_device", new JsonObject { ["p_name"] = "Lab PC", ["p_operation"] = Guid.NewGuid().ToString() }, studentToken);
         var deviceId = (string)(await Harness.Json(device))!;

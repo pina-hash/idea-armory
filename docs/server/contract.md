@@ -52,3 +52,113 @@ known to be newer than the project's pin is refused in both modes; an unknown re
 not checked"). `armory_current_email()` now also refuses idea-app's empty-string identity.
 The test harness stubs `public.is_admin()` in `tests/Armory.Server.Tests/sql/001_test_admin.sql`;
 production SQL never defines it.
+
+## Contract v2 (`005_v2.sql`, idea-app migration 0232)
+
+Lane W's `supabase/migrations/0232_armory_v2.sql` reached idea-app main (afb370f) before lane A
+wrote its own, so `005_v2.sql` is that file byte for byte (its lines 13 to 477, SHA-256
+`cba64901279e4469edf1d7f4d91a4ad5e5359c816810f5433ce38d61f5ef48a9`) under a provenance header.
+Lane A wrote no function body for C1 to C7. Section 9 at its end is the only text that is not
+0232's: the grants production already got from 0231 and 001 to 004 predate. Every helper is revoked
+from `public`, `anon` and `authenticated` (002 had left `authenticated` out, and 001's trigger
+function was never revoked), and `armory_current_email` and `armory_is_member`, which the RLS
+policies name, are granted to `authenticated`. `armory_project_checkouts` reads idea-app's
+`public.profiles`; the tests stand it in with `tests/Armory.Server.Tests/sql/002_test_profiles.sql`.
+C8 (check out, check in, take back) is unchanged. idea-app recorded 0232 as applied to production in
+8b57bad, with the same bytes, so a change to any of its bodies now needs a new idea-app migration.
+
+| RPC | Rule |
+|---|---|
+| `armory_create_project(name, season, operation_id)` | Same signature. `season` may be null; a given season is still a year from 2000 to 2100 (`22023`). `project_created` carries `season` null. Callers send `p_season` explicitly, null included. |
+| `armory_allocate_part_number(project, subsystem, season, operation_id)` | The season is the call's, else the project's, else the current year in America/Los_Angeles. |
+| `armory_my_projects()` | Adds `archived` (boolean) and `archived_at` (timestamp or null). `season` may be null. |
+| `armory_rename_project(project, name, operation_id)` returns boolean | Mentor only (`42501`). Create's name rules (`22023`). Another project already named that in any case: `23505`, DETAIL `{"existing_name"}`. False when the exact name is unchanged; a case-only rename is true. Takes create's advisory key, so a rename and a create of one name have one winner. Change `project_renamed` `{from, to, by}`. |
+| `armory_set_project_archived(project, archived, operation_id)` returns boolean | Mentor only (`42501`); null is `22023`. False when already in that state. Sets or clears `archived_at`. Change `project_archived` or `project_restored`, `{archived, by}`. Nothing is deleted and no other RPC refuses an archived project. |
+| `armory_create_file(project, folder, name, device, operation_id)` | Same signature. A name whose only holder is a removed file revives that file: its tombstone row and any lock row are deleted, `deleted_at` is cleared, the requested folder and spelling are set, `current_version_id` is kept, and the same id is returned. Change `file_revived` `{folder, name, old_folder, old_name, released_checkout_of, device_id, by}` (no `file_created`). A live holder still raises `23505` with `{existing_folder, existing_name, file_id}`. Creators of one name serialize on an advisory key, so racing revivals revive once and the loser is told the winner's folder. The reviver commits with the revived file's current version as parent, read from `armory_project_files`. |
+| `armory_rename_folder(project, from, to, device, operation_id)` returns int | Any member with their own device. `from` and `to` are non-empty valid folder paths (`22023`), differ (`22023`), and `to` is not inside `from` (case-insensitive, `22023`). Moves every live file whose folder is `from` or starts with `from/` (exact case, no LIKE), as one update, and writes one `folder_renamed` `{from, to, files, device_id, by}` (no `file_moved`). A case-only rename moves the folder. Zero live files: returns 0 and writes no change. Removed files keep their old folder. |
+| `armory_delete_folder(project, folder, device, operation_id)` returns int | As above; `''` (the project root) is `22023`. Tombstones every live file in the subtree (tombstone rows carry each file's current version) and writes one `folder_deleted` `{folder, files, device_id, by}` (no per-file `tombstone`). Lock rows stay until a revival clears them. Removed rows keep their folder, so a folder must never be made from removed rows. |
+| `armory_project_checkouts(project)` returns jsonb | Members only (`42501`). One element per live file with an unbroken lock, in check-out order: `{file_id, folder, name, holder_email, holder_name, device_name, since}`. `holder_name` is the holder's profile display name, else full name, else null. |
+
+**Folder refusals.** Both folder RPCs refuse with SQLSTATE `55006` (PostgREST answers it with HTTP
+500, so clients branch on the SQLSTATE) when any live file in the subtree has an unbroken lock
+held by anyone but the pair (caller, `p_device`), so the caller's own other computer counts, and
+`armory_rename_folder` also when the target folder (compared without case) already holds live
+files outside the moved set. DETAIL is JSON text:
+
+```
+{"reason": "checked_out" | "target_exists", "names": [at most 10 file names, sorted without case], "total": n}
+```
+
+The message names the count, the folder and the names; the hint says what to do. A refusal stores
+no receipt, so the same operation id succeeds once the files are checked in.
+
+**Decisions D6 to D9, as open points for lane W.** Lane A's design notes proposed these before 0232
+existed. 0232 is what both lanes now build on; where it differs, 0232 wins and the client reads both.
+
+- D6, revival: matches (tombstone row and lock row deleted, folder and spelling set, history and
+  `current_version_id` kept). 0232's `file_revived` payload names `released_checkout_of` and has no
+  `version_id`.
+- D7, null season: matches, with the year taken in America/Los_Angeles.
+- D8, archive: 0232 stores `archived_at`, projects `archived` and `archived_at`, and writes
+  `project_restored` when a project comes back (lane A proposed one kind with `archived` false).
+- D9, refusal: same SQLSTATE and the same "someone else" rule. The DETAIL is `{reason, names,
+  total}` rather than `{reason, folder, count, files: [{file_id, folder, name, holder_email,
+  holder_name, device_name, since}]}`; holders come from `armory_project_checkouts`.
+  `target_exists` does not cover a target equal to a live file's full path, and `holder_name` is
+  the profile name or null rather than the email's local part (the agent derives a name from the
+  email when it is null).
+
+**Open for lane W, found while testing 0232 here.**
+
+1. 0.1.0 agents and revival, live since 0232 reached production. 0232's header says no client
+   change is ordered against the apply, but revival changes what the shipped 0.1.0 agent does.
+   When a 0.1.0 agent adds a file whose name belongs to a removed file in a different folder (the
+   students' Pack and Go re-unzip), `armory_create_file` now returns the revived file's id. 0.1.0
+   commits it with parent null, which `armory_commit_version` keeps aside as a `stale parent`
+   side version while the removed bytes stay the shared version
+   (`CreatingARemovedNameRevivesTheSameFileWithItsHistory` pins this). 0.1.0 then counts its
+   bytes as kept and downloads the removed file's bytes over the student's new file, saying
+   "Someone else saved Plate.SLDPRT first". The student's bytes survive only as that side version;
+   nothing goes to the computer's recovery folder. The lane A review showed it end to end with
+   this repo's 0.1.0-era engine against 005, and `RevivalTests` failed the same way before the
+   engine fix: B's new Plate.SLDPRT in Intake read "old plate" after three passes, with the file
+   revived, one version and one side version. Re-adding at the removed file's own path is
+   not affected, because 0.1.0 refuses that itself. 0.2.0 commits on the revived file's current
+   version and forgets its record of the old path (guarded `RevivalTests` in
+   `tests/Armory.EndToEnd.Tests`), and its release notes (`docs/agent/release-notes/v0.2.0.md`)
+   ask mentors to install it on every computer soon. Until every computer has it, the hazard is
+   live. A server-side mitigation would change C4 or C8 and is lane W's to weigh, for example:
+   `armory_commit_version` treats a null parent as the current version when the caller's (email,
+   device) pair revived the file and nothing has been committed since. 0.2.0 still meets the
+   0.1.0 outcome for a revival its own refresh did not see (the file removed after the refresh
+   and before the add); the v2 engine should read `file_revived` from the change feed, or the
+   file's record, before that first commit.
+2. Deadlock. The folder RPCs lock the project row and then the files; `armory_acquire_lock`,
+   `armory_commit_version`, `armory_tombstone` and `armory_move_file` lock the file row first and
+   the project row second (the change feed's foreign key). A folder operation racing a check out
+   in that folder deadlocks (`40P01`, one side rolled back, never a wrong result): 6 to 37 of 60
+   free-running races per run in `V2RpcTests.ACheckOutNeverLandsInsideAFolderRenameOrDelete`.
+   Serializing folder operations with `pg_advisory_xact_lock(hashtextextended('armory_folders:' ||
+   p_project::text, 0))` instead of the project row, and locking the subtree's `armory_locks` rows
+   `for update` (in `file_id` order) after `armory_folder_files`, passed all 15 v2 tests with 0
+   deadlocks (`server/PROOF.md`). The agent's client resends `40P01` and `40001` meanwhile.
+   The project row also orders a check out taken again after a take back only when the check out
+   goes first. That check out updates the old lock row (no foreign key check, so no lock on the
+   file row) and takes its change-feed cursor before it waits on the project row. A folder
+   operation that already holds the project row but has not yet read the locks still sees the
+   broken row and moves or removes the files. The lane A review reproduced this in a scratch
+   database (a third session held a file row so the rename paused after taking the project row):
+   `armory_rename_folder` returned 1, `armory_acquire_lock` returned true, and `lock_acquired`
+   has cursor 7 below `folder_renamed`'s 8. `ACheckOutNeverLandsInsideAFolderRenameOrDelete`
+   holds only the check-out-first order. The fix above should close this too, since the folder
+   operation would lock the subtree's lock rows before reading them; when it lands, add the
+   folder-first retaken interleaving to that test.
+3. The source folder matches with case (`Drive` does not move `drive/Shaft`) while the target check
+   ignores case. On Windows both spellings are one folder. `FolderRenameMovesTheWholeSubtreeInOneChange`
+   pins the current behavior.
+4. Not new in 0232: the change feed's cursor is taken when a row is inserted, not when it commits.
+   A writer that waits on a lock can record a cursor below a change that committed before it, so a
+   reader that keeps only `cursor > last` can step past a late commit. Readers should treat the
+   feed as a hint and the read snapshots (`armory_project_files`, `armory_my_projects`) as the
+   truth; an agent that skips a snapshot refresh because the feed did not move still needs a
+   periodic full refresh (the v2 design's 60-second safety refresh).

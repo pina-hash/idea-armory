@@ -57,14 +57,17 @@ public sealed class BlobClient(HttpClient siteHttp, HttpClient storageHttp, Uri 
         }
     }
 
-    // Returns false when storage already held the object, so nothing was sent.
-    public async Task<bool> UploadAsync(Guid project, string hash, long bytes, Func<Stream> open, CancellationToken ct = default)
+    // Returns false when storage already held the object, so nothing was sent (and nothing is
+    // reported). progress receives the bytes sent so far: 0 when sending starts, then the running
+    // total, and 0 again if the request body is sent again from the start.
+    public async Task<bool> UploadAsync(Guid project, string hash, long bytes, Func<Stream> open, CancellationToken ct = default, IProgress<long>? progress = null)
     {
         if (bytes > MaximumPutBytes) throw new BlobRefusedException(400, "Files larger than 2 GiB cannot be stored in Armory yet.");
         var url = await GetUrlAsync(project, hash, bytes, HttpMethod.Put, ct);
         if (url.Exists) return false;
         await using var source = open();
-        using var request = new HttpRequestMessage(HttpMethod.Put, url.Url) { Content = new StreamContent(source) };
+        progress?.Report(0);
+        using var request = new HttpRequestMessage(HttpMethod.Put, url.Url) { Content = new StreamContent(progress is null ? source : new ProgressStream(source, progress)) };
         request.Content.Headers.ContentLength = bytes;
         foreach (var header in url.Headers)
             if (!request.Headers.TryAddWithoutValidation(header.Key, header.Value)) request.Content.Headers.TryAddWithoutValidation(header.Key, header.Value);
@@ -74,8 +77,10 @@ public sealed class BlobClient(HttpClient siteHttp, HttpClient storageHttp, Uri 
     }
 
     // Writes verified bytes to destination. Mismatched bytes throw HashMismatchException
-    // after writing; the caller owns the destination and must discard it.
-    public async Task DownloadAsync(Guid project, string hash, long bytes, Stream destination, CancellationToken ct = default)
+    // after writing; the caller owns the destination and must discard it. progress receives the
+    // bytes received so far: 0 when the body starts, then the running total. Every call starts
+    // again from 0, so a retried download reports from 0.
+    public async Task DownloadAsync(Guid project, string hash, long bytes, Stream destination, CancellationToken ct = default, IProgress<long>? progress = null)
     {
         var url = await GetUrlAsync(project, hash, bytes, HttpMethod.Get, ct);
         using var request = new HttpRequestMessage(HttpMethod.Get, url.Url);
@@ -85,7 +90,9 @@ public sealed class BlobClient(HttpClient siteHttp, HttpClient storageHttp, Uri 
         using var sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         try
         {
-            await using var body = await response.Content.ReadAsStreamAsync(ct);
+            await using var received = await response.Content.ReadAsStreamAsync(ct);
+            progress?.Report(0);
+            await using var body = progress is null ? received : new ProgressStream(received, progress);
             var buffer = new byte[81920];
             int read;
             while ((read = await body.ReadAsync(buffer, ct)) > 0)

@@ -6,7 +6,9 @@ namespace Armory.Client;
 public enum MemberRole { Student, CadLead, Mentor, Instructor }
 public enum ProjectReleaseGate { Warn, Enforce }
 
-public sealed record RemoteProject(Guid Id, string Name, int Season, MemberRole Role, int PinnedRelease, ProjectReleaseGate ReleaseGate);
+// Season is null for a project made without one (contract v2, C1). Archived is false when the
+// server does not send the flag (a server older than 0232).
+public sealed record RemoteProject(Guid Id, string Name, int? Season, MemberRole Role, int PinnedRelease, ProjectReleaseGate ReleaseGate, bool Archived);
 public sealed record RemoteVersion(Guid Id, string Hash, long Bytes, string Author, DateTimeOffset CreatedAt, int? SavedRelease, bool? ReleaseChecked);
 public sealed record RemoteLock(string HolderEmail, Guid HolderDeviceId, string? HolderDeviceName, DateTimeOffset AcquiredAt,
     DateTimeOffset? BrokenAt, string? BrokenBy, string? BrokenHolderEmail, Guid? BrokenHolderDeviceId)
@@ -18,8 +20,11 @@ public sealed record RemoteChange(long Cursor, Guid ProjectId, string Kind, Guid
 public sealed record RemoteHistoryEntry(Guid Id, string Kind, string Author, DateTimeOffset CreatedAt, long Bytes, string? Hash, Guid? Parent,
     string? Reason, int? SavedRelease, bool? ReleaseChecked);
 public sealed record CommitResult(Guid VersionId, bool Advanced);
+// One live check out (contract v2, C7). HolderName is the holder's profile name, or null when
+// they have none; DeviceName is null only when the device row is gone.
+public sealed record RemoteCheckout(Guid FileId, string Folder, string Name, string HolderEmail, string? HolderName, string? DeviceName, DateTimeOffset Since);
 
-// Typed calls for every RPC in docs/agent/CONTRACT.md, server/sql/001-004. Every write
+// Typed calls for every RPC in docs/agent/CONTRACT.md, server/sql/001-005. Every write
 // takes the caller's operation id; replaying the same id returns the stored receipt.
 public sealed class ArmoryApi(PostgrestClient rest)
 {
@@ -56,8 +61,22 @@ public sealed class ArmoryApi(PostgrestClient rest)
             c["kind"]!.GetValue<string>(), Guid.Parse(c["entity_id"]!.GetValue<string>()), c["payload"] as JsonObject is { } p ? (JsonObject)p.DeepClone() : new JsonObject(),
             Time(c["created_at"])!.Value)).ToArray();
     }
-    public async Task<Guid> CreateProjectAsync(string name, int season, Guid operation, CancellationToken ct = default)
-        => GuidOf(await rest.CallAsync("armory_create_project", Args(("p_name", name), ("p_season", (short)season), ("p_operation", operation)), ct));
+    // season null makes a project without one (contract v2, C1); p_season is always sent.
+    public async Task<Guid> CreateProjectAsync(string name, int? season, Guid operation, CancellationToken ct = default)
+        => GuidOf(await rest.CallAsync("armory_create_project", Args(("p_name", name), ("p_season", (short?)season), ("p_operation", operation)), ct));
+    // Contract v2. Mentor only; false when the project already has that exact name.
+    public async Task<bool> RenameProjectAsync(Guid project, string name, Guid operation, CancellationToken ct = default)
+        => BoolOf(await rest.CallAsync("armory_rename_project", Args(("p_project", project), ("p_name", name), ("p_operation", operation)), ct));
+    // Contract v2. Mentor only; false when the project was already in that state.
+    public async Task<bool> SetProjectArchivedAsync(Guid project, bool archived, Guid operation, CancellationToken ct = default)
+        => BoolOf(await rest.CallAsync("armory_set_project_archived", Args(("p_project", project), ("p_archived", archived), ("p_operation", operation)), ct));
+    // Contract v2. Returns the number of live files moved. A refusal is ArmoryRpcException with
+    // IsInUse; FolderRefusal.TryParse reads its Details.
+    public async Task<int> RenameFolderAsync(Guid project, string from, string to, Guid device, Guid operation, CancellationToken ct = default)
+        => IntOf(await rest.CallAsync("armory_rename_folder", Args(("p_project", project), ("p_from", from), ("p_to", to), ("p_device", device), ("p_operation", operation)), ct));
+    // Contract v2. Returns the number of live files removed; refusals as RenameFolderAsync.
+    public async Task<int> DeleteFolderAsync(Guid project, string folder, Guid device, Guid operation, CancellationToken ct = default)
+        => IntOf(await rest.CallAsync("armory_delete_folder", Args(("p_project", project), ("p_folder", folder), ("p_device", device), ("p_operation", operation)), ct));
     public async Task<bool> AddMemberAsync(Guid project, string email, MemberRole role, Guid operation, CancellationToken ct = default)
         => BoolOf(await rest.CallAsync("armory_add_member", Args(("p_project", project), ("p_email", email), ("p_role", RoleName(role)), ("p_operation", operation)), ct));
     public async Task<bool> RemoveMemberAsync(Guid project, string email, Guid operation, CancellationToken ct = default)
@@ -73,8 +92,14 @@ public sealed class ArmoryApi(PostgrestClient rest)
 
     public async Task<IReadOnlyList<RemoteProject>> MyProjectsAsync(CancellationToken ct = default)
         => Array(await rest.CallAsync("armory_my_projects", Args(), ct)).Select(p => new RemoteProject(
-            Guid.Parse(p["id"]!.GetValue<string>()), p["name"]!.GetValue<string>(), p["season"]!.GetValue<int>(), ParseRole(p["role"]!.GetValue<string>()),
-            p["pinned_release"]!.GetValue<int>(), p["release_gate"]!.GetValue<string>() == "enforce" ? ProjectReleaseGate.Enforce : ProjectReleaseGate.Warn)).ToArray();
+            Guid.Parse(p["id"]!.GetValue<string>()), p["name"]!.GetValue<string>(), p["season"]?.GetValue<int>(), ParseRole(p["role"]!.GetValue<string>()),
+            p["pinned_release"]!.GetValue<int>(), p["release_gate"]!.GetValue<string>() == "enforce" ? ProjectReleaseGate.Enforce : ProjectReleaseGate.Warn,
+            p["archived"]?.GetValue<bool>() ?? false)).ToArray();
+    // Contract v2 (C7): every live, unbroken check out on a live file of the project, for members.
+    public async Task<IReadOnlyList<RemoteCheckout>> ProjectCheckoutsAsync(Guid project, CancellationToken ct = default)
+        => Array(await rest.CallAsync("armory_project_checkouts", Args(("p_project", project)), ct)).Select(c => new RemoteCheckout(
+            Guid.Parse(c["file_id"]!.GetValue<string>()), c["folder"]!.GetValue<string>(), c["name"]!.GetValue<string>(), c["holder_email"]!.GetValue<string>(),
+            c["holder_name"]?.GetValue<string>(), c["device_name"]?.GetValue<string>(), Time(c["since"])!.Value)).ToArray();
     public async Task<IReadOnlyList<RemoteFile>> ProjectFilesAsync(Guid project, CancellationToken ct = default)
         => Array(await rest.CallAsync("armory_project_files", Args(("p_project", project)), ct)).Select(f => new RemoteFile(
             Guid.Parse(f["id"]!.GetValue<string>()), f["folder"]!.GetValue<string>(), f["name"]!.GetValue<string>(), f["deleted"]!.GetValue<bool>(),
@@ -102,6 +127,7 @@ public sealed class ArmoryApi(PostgrestClient rest)
     private static Dictionary<string, object?> Args(params (string Name, object? Value)[] values) => values.ToDictionary(v => v.Name, v => v.Value);
     private static Guid GuidOf(JsonNode? node) => node is JsonValue v && Guid.TryParse(v.GetValue<string>(), out var id) ? id : throw new InvalidDataException("Armory answered without an id.");
     private static bool BoolOf(JsonNode? node) => node is JsonValue v ? v.GetValue<bool>() : throw new InvalidDataException("Armory answered without a result.");
+    private static int IntOf(JsonNode? node) => node is JsonValue v ? v.GetValue<int>() : throw new InvalidDataException("Armory answered without a count.");
     private static JsonObject FirstRow(JsonNode? node) => node is JsonArray { Count: > 0 } a && a[0] is JsonObject o ? o : node as JsonObject ?? throw new InvalidDataException("Armory answered without a row.");
     private static CommitResult CommitOf(JsonNode? node)
     {

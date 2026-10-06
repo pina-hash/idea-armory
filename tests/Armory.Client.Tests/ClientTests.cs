@@ -12,7 +12,7 @@ namespace Armory.Client.Tests;
 
 // Armory.Client against the fake ideabosco.com and fake Supabase (PostgREST and token
 // refresh) over a real PostgreSQL database: docs/agent/CONTRACT.md sections 1-3.
-public sealed class ClientTests
+public sealed partial class ClientTests
 {
     private sealed class Env : IAsyncDisposable
     {
