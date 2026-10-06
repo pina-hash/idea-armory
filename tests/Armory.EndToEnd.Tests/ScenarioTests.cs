@@ -24,9 +24,10 @@ public sealed class ScenarioTests
         public async Task<string?> CurrentHash(Guid file) => (await World.QueryAsync("select v.content_sha256 from armory_files f join armory_versions v on v.id=f.current_version_id where f.id=@f", r => r.GetString(0), ("f", file))).SingleOrDefault();
     }
 
-    internal static async Task<Team> TeamAsync(bool secondDeviceForAlex = false)
+    internal static async Task<Team> TeamAsync(bool secondDeviceForAlex = false, LatencyProfile? latency = null)
     {
         var world = await World.StartAsync();
+        world.Latency = latency ?? LatencyProfile.None;
         var mentor = await world.PersonAsync(Mentor, admin: true);
         var project = await mentor.Api.CreateProjectAsync("Robot 2027", 2027, Guid.NewGuid());
         await mentor.Api.AddMemberAsync(project, Alex, MemberRole.Student, Guid.NewGuid());

@@ -26,6 +26,8 @@ internal sealed class World : IAsyncDisposable
     public FakeSupabase Supabase { get; }
     public FakeIdeaBosco Site { get; }
     public FakeS3 S3 { get; }
+    // The network profile every Computer made after this is set uses (throughput measurements).
+    public LatencyProfile Latency { get; set; } = LatencyProfile.None;
     public string Temp { get; } = Path.Combine(Path.GetTempPath(), "armory-e2e-" + Guid.NewGuid().ToString("N"));
 
     // Every world holds the heavy-run lock shared, so the server simulation (which takes it
@@ -150,10 +152,12 @@ internal sealed class Computer : IAsyncDisposable
         this.world = world;
         Name = name;
         Disk = new PortableVaultFileSystem(root) { IsPreserved = world.HashOnServer };
-        network = new OfflineHandler(new FakeNetworkHandler(world.S3));
+        Network = new LatencyHandler(world.Latency, world.Site.BaseUri.Port, new Uri(world.Supabase.SupabaseUrl).Port, new FakeNetworkHandler(world.S3));
+        network = new OfflineHandler(Network);
         http = new HttpClient(network);
     }
     public string Name { get; }
+    public LatencyHandler Network { get; }
     public PortableVaultFileSystem Disk { get; }
     public MemoryJournalStore Journal { get; } = new();
     public MemorySnapshotStore Snapshots { get; } = new();
