@@ -437,11 +437,9 @@ public sealed class V2RpcTests(DatabaseFixture db, ITestOutputHelper output)
         Task<long> FolderCursor(string folder) => Count(mentor, "select max(cursor) from armory_list_changes(@p,0) where kind in ('folder_renamed','folder_deleted') and coalesce(payload->>'from',payload->>'folder')=@f", ("p", p), ("f", folder));
         Task<long> LockCursor(Guid file) => Count(mentor, "select max(cursor) from armory_list_changes(@p,0) where kind='lock_acquired' and entity_id=@f", ("p", p), ("f", file));
 
-        foreach (var delete in new[] { false, true })
+        var mentorPc = await Device(mentor, "mentor laptop");
+        async Task OpenCheckOutHoldsTheFolder(bool delete, string folder, Guid f)
         {
-            // A check-out that is still open makes the folder operation wait, then refuse.
-            var folder = Unique("Held");
-            var f = await CreateFile(student, p, folder, Unique("Part") + ".SLDPRT", laptop);
             await using (var holder = await db.Open("lead@example.com"))
             {
                 await using var tx = await holder.BeginTransactionAsync();
@@ -456,6 +454,22 @@ public sealed class V2RpcTests(DatabaseFixture db, ITestOutputHelper output)
                 Assert.Equal(1, Detail(refused).GetProperty("total").GetInt32());
             }
             Assert.Equal(folder, await Text(mentor, "select folder from armory_files where id=@f and deleted_at is null", ("f", f)));
+        }
+
+        foreach (var delete in new[] { false, true })
+        {
+            // A check-out that is still open makes the folder operation wait, then refuse.
+            var folder = Unique("Held");
+            var f = await CreateFile(student, p, folder, Unique("Part") + ".SLDPRT", laptop);
+            await OpenCheckOutHoldsTheFolder(delete, folder, f);
+
+            // The same for a check-out taken again after a take back, which updates the old lock row
+            // instead of inserting one, so no foreign key check touches the file row.
+            folder = Unique("Retaken");
+            f = await CreateFile(student, p, folder, Unique("Part") + ".SLDPRT", laptop);
+            Assert.True(await Acquire(lead, f, leadPc));
+            Assert.True(await Break(mentor, f, mentorPc));
+            await OpenCheckOutHoldsTheFolder(delete, folder, f);
 
             // A folder operation that is still open makes the check-out wait until it lands.
             folder = Unique("Moving");
