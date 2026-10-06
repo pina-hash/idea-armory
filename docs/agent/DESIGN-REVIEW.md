@@ -522,3 +522,168 @@ CHECK-UI PASS
 What the lines say: all 64 screens were rendered fresh; across 32 comparisons of 12 states (every screen, both window sizes) no element box differs between IDEA and Space White and none is missing, while one length planted in Space White moves 288 boxes, so the diff can see a difference; and every hard rule holds on all 64 pages: no control under 44px, nothing from the network and no web address, font or import in the shipped files, no grid, no decoration on a row or off the main plate, no chip that looks like a key or shows a pointer hand, nothing scrolling sideways or spilling, every load-bearing hairline at 3:1 or more (lowest 3.07), every control reached by Tab with a ring of at least 4.69:1, no jargon, no em dash, all 18 flows passing, all 11 page-to-host message types sent correctly to a stand-in WebView2 host, and all eight planted defects caught.
 
 Changes to the checker in pass 4, none of which loosen a check: the jargon list gained conflict, sync, upload and download, with a self-test per word; a static offline sweep of wwwroot (web addresses, `@font-face`, `@import`, `url()`), with five planted problems; the chip check reads what the mouse meets over each chip, with a planted covered chip; a decoration check off the main plate (the open sheet, cards, lists), with a planted rail; a chip-click flow at both sizes (16 flows became 18), and the row flow also checks the holder's address; the stand-in WebView2 bridge check and the plain-browser theme pick; and the em dash sweep now covers this file. Pass 3's checker changes are described in pass 3.
+
+## v2 pass
+
+Mr. Pina's feedback of 2026-10-06 (two students testing) turned the window from a status
+page into the place where files are opened, checked out, checked in, moved and added. This
+pass built that window to the v2 design (`v2-design.md` sections 4.4, 4.5 and 4.6, decisions
+D5, D12, D13 and D14) inside the same Plate language: both themes, one geometry, 44px
+targets, no new fonts and nothing from the network. The v2 screens are in
+`docs/agent/screens/v2/` (132 images, listed in its README); the 64 v1 images one folder up
+were not touched.
+
+Files changed: `src/Armory.Agent/wwwroot/` (all five files), the `BridgeMessages` lists in
+`src/Armory.Agent.Engine/View/AgentView.cs` (constants and lists only), `tools/agent-ui/`
+(all four), `docs/agent/BRIDGE.md` (rewritten for v2) and this file.
+
+### What changed
+
+1. **The IDEA mark turns, as the site's does (D12).** The lockup is now built the way
+   `AnimatedLogo.svelte` builds it: a box with the emblem's 2560 by 1204 proportions, the
+   gear layer behind the plate layer, the gear at left 0, top -1.2%, 46.95% of the width,
+   turning about its own center once every 24 seconds, linear, forever. It turns only under
+   `prefers-reduced-motion: no-preference`; with reduced motion it is the still gear, and
+   nothing is ever hidden or faded in the base state. Both layers are pseudo-elements, so
+   the span keeps its one box and bbox-diff still sees no difference between the themes.
+   IDEA shows the site's own dark rasters (`idea-gear-120.png` and `idea-logo-text-256.png`
+   in the header, the 240 and 512 copies in the Connect hero), embedded as data: URIs;
+   Space White shows the vector SLATE art, split into its gear and plate. The duration lives
+   in app.css because the page's CSP refuses inline style (the site sets it inline), and
+   the gear stops while the window is hidden. This is the one shape in the window that
+   moves; the rule that only color and shadow ease still holds everywhere else, and app.css
+   says so where the rule is written. Pass 3 item 2 above said the site's PNGs are rendered
+   from `tools/idea_logo_vector.py`; only the light pair is (the dark pair is the original
+   painted art), and both that sentence and the old app.css comment are corrected.
+2. **Check out, in the words both lanes use (D5).** Check out, Check in, Undo check out,
+   Take back, Open, Show in folder. Every file row says who has it, always: "Checked out by
+   you" (a green tag with the student's initials), "Checked out by Maria Lopez on
+   LAB-PC-07" (amber, her initials), or plain "Available" (never a chip, as pass 2 item 3
+   asked: a state worth a tag gets one, the ordinary state does not). File detail leads
+   with a green Open, then Check out and Check out and open, or Check in and Undo check
+   out, or Take back for a mentor or CAD lead (after a small dialog that says the holder's
+   changes are kept in the history), with Show in folder as a quiet link. Every "Double-click
+   it there..." sentence is gone, and so is "The first person to open it in SolidWorks gets
+   to edit it", which v2 made false.
+3. **The quiet check-out question (D13).** When SolidWorks opens a file this computer has
+   not checked out, one slim card heads the recessed column: "Check out Plate-Left.SLDPRT
+   to edit it?" with Check out and Not now. When someone else has it, it says who:
+   "Plate-Left.SLDPRT is checked out by Maria Lopez on LAB-PC-07. You can look, but you
+   can't save changes." It never takes focus from SolidWorks; the tray balloon when the
+   window is hidden is the host's part.
+4. **Right now.** What is moving is its own panel at the top of the recessed column, never
+   rows: each direction (Uploading, Downloading, Moving) with its count ("412 of 1,280
+   files"), what is left, the speed and the time left, and a progress track; each file
+   moving now with its own track; and how many files wait ("3 files are waiting to upload.
+   They upload when this computer is back online."). While files move, the status display's
+   line is the engine's activity line ("Downloading 412 of 1,280 files, 2.1 GB left, about
+   3 min"). The host's `activity` message (four a second at most) patches only this panel
+   and that line, so focus, scroll and typed words never move. The progress track is a new
+   recipe: an inset groove on `--plate-track` with the 3:1 hairline, filled in the ok lamp's
+   color, no stripes and no easing, its width set through CSSOM.
+5. **Notices, one card per kind.** "14 files share a name with other files in this project"
+   is one card with one action and a key that opens the list of those files inside the
+   card, never 14 rows. The strip over them counts cards. "SolidWorks year not checked" is
+   never a notice: it is a small tag on File detail only. An unzip or a Pack and Go is one
+   import summary card ("Added 4,987 of 5,000 files to Robot 2027 > CopyDesignTemp").
+6. **The file browser.** Team files is now a browser: the project tabs, then where you are
+   (Robot 2027 › Drivetrain › Gearbox, the earlier steps quiet links), the folder's keys
+   (New folder, Add files, Rename folder, Delete folder, Check out all, Check in all; icon
+   keys with their words for screen readers at 560px and under), its folders (with how many
+   files and folders are under each), then its files. Each file row has a 44px select key
+   (`role="checkbox"`); while files are selected a bar stays at the top of the column with
+   the count and Check out, Check in, Undo check out, Take back (mentors and CAD leads) and
+   Clear; Shift selects a range and Escape lets go. Files dragged from File Explorer wear
+   the focus ring and say "Drop to add to Robot 2027 › Intake". An archived project is
+   listed and says so, with no keys.
+7. **Long lists.** A folder, My files and a notice's list draw only the rows near the view,
+   at one fixed row height (64px; 84px at 560px and under, where the line under a name may
+   take two lines), with spacers whose heights are set through CSSOM, about 30 rows each
+   side, the focused row and the row Back returns to always drawn. Tab enters a list on one
+   row; the arrow keys, Home, End and the page keys move between rows. "4,995 more files
+   below" is counted from the data. The 5,000-file demo folder keeps 37 rows in the page at
+   1280x800.
+8. **The small dialog.** New folder, Rename folder, Delete folder and Take back ask in a
+   second housing that is filled once and never redrawn by a host message. Its name field
+   is a new recipe, the inset field: 44px, the 3:1 hairline, the focus ring. A bad name is
+   refused in plain words before anything is sent. Delete folder says how many files go and
+   that their history is kept. A question that removes something starts on Cancel.
+9. **The host's answer to an action** shows as a quiet tag at the window's foot ("Checked
+   out 2 files."), read out by a screen reader, fading after 8 seconds; never an alert and
+   never a focus change.
+
+### Checker changes (none loosen a rule, except the jargon list as D5 decided)
+
+- The jargon list no longer bans upload and download (D5: "Uploading", "Downloading" and
+  "Moving" are Mr. Pina's own words). Lock, unlock, conflict, sync, journal, side version,
+  intent, RPC, hash and vault stay banned, each with its self-test, and a new self-test
+  proves the list lets the v2 sentences through.
+- The hairline check covers the text field and the progress track.
+- The em dash sweep covers `docs/agent/screens/v2/README.md`, `docs/agent/BRIDGE.md` and
+  `docs/overnight/`, and fails if the v2 index or BRIDGE.md is missing.
+- New flows (both sizes): every file row says who has it; a notice's list opens and closes
+  and no kind has two cards; folders in, deeper and back out by the crumbs; select (with
+  Shift) and Check out, the result line, Escape; the folder dialog refuses a slash, renames
+  on Enter, follows the folder, and Delete names its 8 files and the kept history; the
+  5,000-file folder keeps under 150 rows, reaches its last file by scrolling and by End, and
+  has one row in the Tab order. The logo probe: idea-gear-spin, 24s, linear, infinite under
+  no-preference, none under reduce, both layers painted, the gear 46.95% of the width, with
+  a planted 3s gear caught.
+- The stand-in WebView2 bridge check sends all 22 page-to-host types with exactly their
+  fields (an action's `requestId` included), sends a drop through
+  `postMessageWithAdditionalObjects` with its files, checks that an `activity` message keeps
+  focus and the focused row's place on screen and patches its numbers, that an
+  `actionResult` is a quiet line, and that a host view arriving while the folder dialog is
+  open keeps the typed name. The summary counts types from the contract, not a fixed 11.
+- render-screens writes only into `docs/agent/screens/v2/` (it refuses any other folder) and
+  each state can name a page-only place (folder, selected files, an open list, a dialog,
+  files held over the list, Home scrolled to Team files) that bridge.js reads from the
+  query string.
+
+### Decisions taken in this pass
+
+- **"Archived. It no longer updates."** D8 gives the archived line as "Archived. It no
+  longer syncs.", but the same brief keeps "sync" on the banned list (D5). The window says
+  "updates"; the meaning is the same and the checker stays as strict as it was.
+- **Right now sits at the top of the recessed column**, not in the side column the audit
+  suggested: three directions and eight file tracks do not fit beside the status display in
+  an 800px window without pushing This computer off it. The status line, which stays in
+  sight, carries the activity line.
+- **A file that isn't in Armory** shows "Not in Armory" where the check out would be, and
+  has no select key: nothing can be checked out or in until it is added, and "Available"
+  would promise a check out the host would refuse.
+- **Notice tones** map `info` to the green (ok) edge, so the scale stays the four it was.
+- **Not now** sends nothing (there is no message for it in the contract); the page hides
+  that question until the host asks about another file. With someone else holding the file
+  the key says OK.
+- **Take back asks first**, in the small dialog, before it sends `takeBack`.
+- The demo's subfolder is "Drivetrain/Gearbox", so "Gearbox was put back" and "Moving 120
+  files to Gearbox" refer to a folder the browser shows.
+
+### Not done
+
+- The window was checked against the demo transport and a stand-in WebView2 only. The real
+  host's side of the new messages (`Bridge.cs`, `MainWindow` reading `AdditionalObjects`,
+  the tray balloon for the question) is being built in another lane against the same
+  contract; nothing here proves the two meet until the engine sends real views.
+- The 420x720 renders show a layout the real window cannot reach (its minimum size is
+  720x520). They are kept because the brief asks for them.
+- The demo's sentences follow v2-design.md where it gives the engine's words; where it
+  does not (a check-out result for several files, a folder made), the demo's words are this
+  pass's guess at the engine's, and the engine lane may word them differently.
+
+### Proof
+
+```
+node tools/agent-ui/render-screens.mjs
+node tools/agent-ui/bbox-diff.mjs
+node tools/agent-ui/check-ui.mjs
+```
+
+```
+SCREENS rendered=132 removed_stale=132 dir=docs/agent/screens/v2 index=docs/agent/screens/v2/README.md
+BBOX planted control (home-synced-1280x800, one length in Space White): differing=179 (must be above 0)
+BBOX states=27 comparisons=66 differing=0 missing=0 elements=23188
+CHECK-UI pages=132 controls=3376 under44=0 network=0 grids=0 rowGrids=0 plantedGridLayersFound=3/3 rowDecoration=0 chipsLikeButtons=0 overflow=0 hairlines=2982 hairlineMin=3.07 hairlineUnder3=0 tabStops=1476 focusMissed=0 ringMin=4.69 ringFailures=0 jargon=0 offline=0 plantedOfflineFound=5/5 flows=28 flowFailures=0 logo=4 logoFailures=0 plantedLogoFound=1/1 bridgeTypes=22/22 bridgeFailures=0 plantedDefectsCaught=8/8 emDash=0 files=16
+CHECK-UI PASS
+```
