@@ -1,5 +1,6 @@
 # assembly|type|method
 Armory.Core.Tests|Armory.Core.Tests.SimulationTests|Seeded_scenarios_preserve_every_save_and_converge
+Armory.Core.Tests|Armory.Core.Tests.CheckoutSimulationTests|Seeded_explicit_checkout_scenarios_preserve_every_save_and_converge
 Armory.Server.Tests|Armory.Server.Tests.ServerContractTests|RpcHappyPathsAndRefusals
 Armory.Server.Tests|Armory.Server.Tests.ServerContractTests|VersionRowsAreImmutable
 Armory.Server.Tests|Armory.Server.Tests.ServerContractTests|ANewHolderCanAcquireAfterALockIsBroken
