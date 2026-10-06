@@ -19,6 +19,30 @@ internal sealed class MemorySnapshots : ISaveSnapshotStore
     public IReadOnlyList<SavedSnapshot> Enumerate() => Items.Values.Select(v => v.Metadata).ToArray();
 }
 
+// A store that counts its writes, as DurableJournalStore does, and can let another writer in
+// right after its next write, before the writing journal reads the generation again.
+internal sealed class InterleavingJournalStore : IJournalStore
+{
+    private long generation;
+    internal List<byte> Bytes { get; } = [];
+    internal int Reads { get; private set; }
+    internal Action? AfterNextWrite { get; set; }
+    public byte[] ReadAll() { Reads++; return Bytes.ToArray(); }
+    public long? Generation => generation;
+    public void Append(ReadOnlySpan<byte> bytes) { Bytes.AddRange(bytes.ToArray()); Wrote(); }
+    public void Flush() { }
+    public void TruncateIncompleteTail(int validLength) { Bytes.RemoveRange(validLength, Bytes.Count - validLength); Wrote(); }
+    // A torn write behind every journal's back.
+    internal void Tear(ReadOnlySpan<byte> bytes) { Bytes.AddRange(bytes.ToArray()); generation++; }
+    private void Wrote()
+    {
+        generation++;
+        var next = AfterNextWrite;
+        AfterNextWrite = null;
+        next?.Invoke();
+    }
+}
+
 public sealed class JournalTests
 {
     private static JournalEntry Entry(string id) => new(id, IntentKind.Upload, "robot/file.txt", "hash", "snapshot-" + id, "Alex");
@@ -163,6 +187,53 @@ public sealed class JournalTests
         Assert.True(journal.TryGet("2", out var second));
         Assert.Equal(Entry("2"), second);
         Assert.False(journal.TryGet("3", out _));
+    }
+
+    // Another journal writes between this journal's append and its read of the generation:
+    // the generation moved by two, so the cache is dropped and the other entry is seen.
+    [Fact]
+    public void A_write_by_another_journal_right_after_an_append_is_seen()
+    {
+        var store = new InterleavingJournalStore();
+        var journal = new OfflineJournal(store);
+        journal.Append(Entry("1"));
+        Assert.Single(journal.Read().Entries);
+        var reads = store.Reads;
+        store.AfterNextWrite = () => new OfflineJournal(store).Append(Entry("2"));
+        journal.Append(Entry("3"));
+        Assert.Equal(["1", "3", "2"], journal.Read().Entries.Select(e => e.Id));
+        Assert.True(store.Reads > reads);
+        Assert.True(journal.TryGet("2", out var other));
+        Assert.Equal(Entry("2"), other);
+        Assert.Throws<InvalidDataException>(() => journal.Append(Entry("2") with { Hash = "different" }));
+        var length = store.Bytes.Count;
+        journal.Append(Entry("2"));
+        Assert.Equal(length, store.Bytes.Count);
+        Assert.Equal(new OfflineJournal(store).Read().Entries, journal.Read().Entries);
+        // With nothing else writing, appends keep the cache again: the store is not read.
+        reads = store.Reads;
+        journal.Append(Entry("4"));
+        Assert.Equal(["1", "3", "2", "4"], journal.Read().Entries.Select(e => e.Id));
+        Assert.Equal(reads, store.Reads);
+    }
+
+    // The same between the truncation of a torn tail and the read of the generation.
+    [Fact]
+    public void A_write_by_another_journal_right_after_a_truncation_is_seen()
+    {
+        var store = new InterleavingJournalStore();
+        var journal = new OfflineJournal(store);
+        journal.Append(Entry("1"));
+        store.Tear(OfflineJournal.Encode(Entry("torn")).AsSpan(0, 10));
+        Assert.True(journal.Read().TornTail);
+        store.AfterNextWrite = () => new OfflineJournal(store).Append(Entry("2"));
+        journal.Append(Entry("3"));
+        var read = journal.Read();
+        Assert.Equal(["1", "2", "3"], read.Entries.Select(e => e.Id));
+        Assert.False(read.TornTail);
+        Assert.Equal(store.Bytes.Count, read.ValidLength);
+        Assert.Throws<InvalidDataException>(() => journal.Append(Entry("2") with { Hash = "different" }));
+        Assert.Equal(new OfflineJournal(store).Read().Entries, journal.Read().Entries);
     }
 
     [Fact]

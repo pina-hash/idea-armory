@@ -14,8 +14,11 @@ public interface IJournalStore
     void Flush();
     void TruncateIncompleteTail(int validLength);
     // A value that changes whenever the bytes ReadAll returns change, by any route, and that
-    // fails exactly as ReadAll would. OfflineJournal keeps its decoded entries while it is
-    // unchanged. Null (the default) means unknown: the journal reads the store on every call.
+    // fails exactly as ReadAll would. Each Append and each TruncateIncompleteTail moves it up
+    // by exactly one, and any other change moves it too, so after its own write a journal sees
+    // exactly the next value only if nothing else wrote. OfflineJournal keeps its decoded
+    // entries while it is unchanged. Null (the default) means unknown: the journal reads the
+    // store on every call.
     long? Generation => null;
 }
 public sealed record JournalEntry(string Id, IntentKind Kind, string Path, string? Hash, string? SnapshotId, string Author);
@@ -144,7 +147,7 @@ public sealed class OfflineJournal(IJournalStore store)
                 {
                     store.TruncateIncompleteTail(existing.ValidLength);
                     existing.TornTail = false;
-                    existing.Generation = store.Generation;
+                    Advanced(existing);
                 }
                 if (existing.ById.TryGetValue(entry.Id, out var duplicate))
                 {
@@ -154,14 +157,13 @@ public sealed class OfflineJournal(IJournalStore store)
                 }
                 store.Append(frame);
                 store.Flush();
-                if (existing != cache) return;
-                existing.Generation = store.Generation;
+                if (!Advanced(existing)) return;
                 // Keep exactly what a fresh read decodes from these bytes. If it would not
                 // decode, keep nothing: the next read decodes the store and fails as before.
                 JournalEntry? appended = null;
                 try { appended = Decode(frame).Entries.SingleOrDefault(); }
                 catch (Exception error) when (error is InvalidDataException or JsonException or ArgumentException) { }
-                if (appended is null || existing.Generation is null) cache = null;
+                if (appended is null) cache = null;
                 else existing.Add(appended, frame.Length);
             }
             catch
@@ -170,6 +172,23 @@ public sealed class OfflineJournal(IJournalStore store)
                 throw;
             }
         }
+    }
+
+    // After this journal's own write to the store: the cached entries stay valid only if the
+    // generation moved by exactly that one write. Otherwise something else wrote in between
+    // (another journal on the same store), so the cache is dropped and the next call reads the
+    // store again. This call goes on with what it read, as before the cache.
+    private bool Advanced(Decoded decoded)
+    {
+        if (decoded != cache) return false;
+        var generation = store.Generation;
+        if (decoded.Generation is { } before && generation == before + 1)
+        {
+            decoded.Generation = generation;
+            return true;
+        }
+        cache = null;
+        return false;
     }
 
     public void Replay(IIntentSink sink)
