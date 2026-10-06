@@ -19,14 +19,14 @@ public sealed class OpenFileDetector
 
     // A whole folder before it is moved: one Restart Manager session per batch of files (one
     // session per file would take seconds for a large assembly), then the exclusive-open probe
-    // on each file. FirstOpen names a file that is open, when the probe found one.
+    // on each file. firstOpen is the open file (as given) when the probe found one.
     public OpenFileStatus InspectAll(IReadOnlyList<string> files, out string? firstOpen)
     {
         firstOpen = null;
-        var existing = files.Where(File.Exists).Select(Path.GetFullPath).ToArray();
+        var existing = files.Where(File.Exists).ToArray();
         List<HoldingProcess> holders = [];
         string? diagnostic = null;
-        foreach (var batch in existing.Chunk(500))
+        foreach (var batch in existing.Select(Path.GetFullPath).Chunk(500))
         {
             var (found, problem) = Holders(batch);
             holders.AddRange(found);

@@ -172,7 +172,8 @@ public sealed class LocalStateTests(ITestOutputHelper output)
         var file = vault.File("part.txt");
         File.WriteAllText(file, "first");
         var written = File.GetLastWriteTimeUtc(file);
-        using var scanner = new LocalChangeDetector(vault.Paths);
+        // The hash is taken "at" the moment of the write, however slow the runner is.
+        using var scanner = new LocalChangeDetector(vault.Paths, clock: new FixedClock(new DateTimeOffset(written, TimeSpan.Zero)));
         var first = scanner.Scan();
         // Same size, same last-write time, within two seconds of the hash: not trusted.
         File.WriteAllText(file, "other");
@@ -275,4 +276,9 @@ public sealed class LocalStateTests(ITestOutputHelper output)
         Assert.Equal(["~$part.SLDPRT"], scan.Markers);
         Assert.True(Assert.Single(scan.Files).ReadOnly);
     }
+}
+
+internal sealed class FixedClock(DateTimeOffset now) : TimeProvider
+{
+    public override DateTimeOffset GetUtcNow() => now;
 }
