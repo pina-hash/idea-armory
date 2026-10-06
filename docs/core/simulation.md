@@ -108,10 +108,11 @@ mid_sync_crashes=13115 lost_acknowledgments=220`; `blocked_adds` (an add whose n
 another device locked and then crashed before its first version) is printed but too rare
 to require.
 
-The full Core test project (both simulations in parallel) passed: `Total tests: 221.
-Passed: 221.`, with `EXPLICIT scenarios=10000 elapsed=32.781s` and `SIMULATION
-scenarios=10000 elapsed=46.259s` while other builds shared the machine; the test process
-took 50.0 seconds.
+The full Core test project (both simulations in parallel) passed: `Total tests: 226.
+Passed: 226.`, with `EXPLICIT scenarios=10000 elapsed=21.368s` and `SIMULATION
+scenarios=10000 elapsed=27.459s` while other builds shared the machine; the test process
+took 28.5 seconds. The v1 `SIMULATION state_hashes` for seeds 0-99 were again identical to
+those at `b18791d`.
 
 ## Deliberate faults
 
@@ -123,22 +124,26 @@ It does not count a compilation error as a caught mutation.
 
 | Broken rule | Simulation | Seed | Observed failure | Last verified commit |
 |---|---|---:|---|---|
-| Download despite an open file | v1 | 0 | Open overwrite at step 9 | `574f9a9` |
-| Omit side-version action before conflict download | v1 | 0 | Unsynced local overwrite without side-version acknowledgement at step 12 | `574f9a9` |
-| Emit Upload instead of AcquireLockThenUpload | v1 | 1 | Shared-write assertion found a different/missing lock holder | `574f9a9` |
-| Parse an incomplete journal frame as committed | v1 | 0 | Truncated JSON reached the replay path instead of being dropped | `574f9a9` |
-| Explicit: a change with nobody holding the file plans AcquireLockThenUpload | explicit | 0 | A shared version under a lock taken by Implicit, not a check out or an add, at step 47 | `574f9a9` |
-| Explicit: a save while checked out (no request) plans Upload | explicit | 1 | The shared file advanced before check in at step 35 | `574f9a9` |
-| Explicit: undo restores without keeping the changes | explicit | 3 | Unsynced local overwrite without side-version acknowledgement at step 39 | `574f9a9` |
+| Download despite an open file | v1 | 0 | Open overwrite at step 9 | `b375f8a` |
+| Omit side-version action before conflict download | v1 | 0 | Unsynced local overwrite without side-version acknowledgement at step 12 (the v1 message, quoted) | `b375f8a` |
+| Emit Upload instead of AcquireLockThenUpload | v1 | 1 | Shared-write assertion found a different/missing lock holder | `b375f8a` |
+| Parse an incomplete journal frame as committed | v1 | 0 | Truncated JSON reached the replay path instead of being dropped | `b375f8a` |
+| Explicit: a change with nobody holding the file plans AcquireLockThenUpload | explicit | 1 | A shared version under a lock taken by Implicit, not a check out or an add, at step 41 | `b375f8a` |
+| Explicit: a save while checked out (no request) plans Upload | explicit | 1 | The shared file advanced before check in at step 35 | `b375f8a` |
+| Explicit: undo restores without keeping the changes | explicit | 24 | Unsynced local overwrite without side-version acknowledgment at step 44 | `b375f8a` |
+| Explicit: the read-only rule leaves a checked-in file writable (only another person's or my other device's check out is read-only) | explicit | 0 | A save to a shared file this device had not checked out at step 1 | `b375f8a` |
+| Explicit: the check out rule takes the lock over bytes saved without a check out | explicit | 23 | A save made without a check out became the shared version at step 47 | `b375f8a` |
 
-All seven were caught. Before A2 the script's `lock-before-upload` anchor no longer
+All nine were caught. Before A2 the script's `lock-before-upload` anchor no longer
 matched the reconciler and the recorded hashes were stale; both are fixed. PowerShell is
-not installed in the A2 container, so the seven cases were run by an exact Python port of
+not installed in the A2 container, so the nine cases were run by an exact Python port of
 the script (same anchors, filters, REPRO match and byte-identical restore check). The
 reconciliation source was restored byte-identical with SHA-256
-`156B1FFF98E080E2EE98DF7BA5E2F68AE430957FB180BD2DA8F18BFC19E83EBB`.
+`C20804528BFDB781D4D9D4F9B37BC45B31A28098237C8A5F5BC0F79DB5FFE1DB`.
 The journal source was restored byte-identical with SHA-256
-`7B23E638C67885B20EBC719532F335CD3574296AF002C52C658AB6CFCBBDD2D1`.
+`6CE492000E01321374B06A45AE6045E5D18275C0D307D7684C9884BA0562637C`.
+The check out rules source was restored byte-identical with SHA-256
+`30264177C685520FEA965958B593BFA414FD4A0769520376E6ED11F31DCA9C1B`.
 Raw logs and JSON results are generated under ignored `artifacts/mutations/`.
 
 Stryker.NET mutation score: not run because neither the global nor local tool was

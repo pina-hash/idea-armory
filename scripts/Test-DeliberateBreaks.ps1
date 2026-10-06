@@ -52,6 +52,20 @@ $cases = @(
         Filter = 'Seeded_explicit_checkout_scenarios'
         Before = 'CheckoutRequest.Undo => Actions(Keep(SideVersionReason.UndoCheckOut), Refresh()),'
         After = 'CheckoutRequest.Undo => Actions(Refresh()),'
+    },
+    @{
+        Name = 'explicit-checked-in-file-writable'
+        File = 'src/Armory.Core/Checkout.cs'
+        Filter = 'Seeded_explicit_checkout_scenarios'
+        Before = 'public static bool IsReadOnlyOnDisk(LockOwnership ownership) => ownership != LockOwnership.ThisDevice;'
+        After = 'public static bool IsReadOnlyOnDisk(LockOwnership ownership) => ownership is LockOwnership.OtherPerson or LockOwnership.MyOtherDevice;'
+    },
+    @{
+        Name = 'explicit-check-out-over-unshared-bytes'
+        File = 'src/Armory.Core/Checkout.cs'
+        Filter = 'Seeded_explicit_checkout_scenarios'
+        Before = 'if (localHash is not null && localHash != baseRevision?.Hash) return CheckOutStep.KeepChangesFirst; // MUTATION: check out over unshared bytes'
+        After = 'if (localHash is not null && baseRevision is null) return CheckOutStep.KeepChangesFirst; // MUTATION: check out over unshared bytes'
     }
 )
 $results = @()
