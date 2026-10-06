@@ -110,7 +110,14 @@ public sealed class ServerContractTests(DatabaseFixture db)
                 "select armory_raise_pinned_release(@id,2026::smallint,@operation)",
                 "select armory_my_projects()",
                 "select armory_project_files(@id)",
-                "select armory_file_history(@id)"};
+                "select armory_file_history(@id)",
+                "select armory_create_project('Robot',null::smallint,@operation)",
+                "select * from armory_allocate_part_number(@id,1,null,@operation)",
+                "select armory_rename_project(@id,'Robot',@operation)",
+                "select armory_set_project_archived(@id,true,@operation)",
+                "select armory_rename_folder(@id,'Drive','Powertrain',@device,@operation)",
+                "select armory_delete_folder(@id,'Drive',@device,@operation)",
+                "select armory_project_checkouts(@id)"};
             foreach (var call in calls) await Assert.ThrowsAsync<PostgresException>(async () => await Cmd(connection, call, ("id", id), ("device", device), ("operation", operation), ("hash", Hash)).ExecuteNonQueryAsync());
         }
         finally { await db.DropDatabase(production.Database); }
@@ -139,8 +146,11 @@ public sealed class ServerContractTests(DatabaseFixture db)
     [DatabaseFact]
     public async Task DeviceIdentityCannotBeStolen()
     {
-        var (_, f) = await Seed(); await using var student = await db.Open("student@example.com"); var stolen = await Device(student); await using var owner = await db.Open("owner@example.com");
+        var (p, f) = await Seed(); await using var student = await db.Open("student@example.com"); var stolen = await Device(student); await using var owner = await db.Open("owner@example.com");
         await Assert.ThrowsAsync<PostgresException>(() => Cmd(owner, "select armory_acquire_lock(@f,@d,@o)", ("f", f), ("d", stolen), ("o", Guid.NewGuid())).ExecuteNonQueryAsync());
+        foreach (var call in new[] { "select armory_create_file(@p,'','Stolen.SLDPRT',@d,@o)", "select armory_rename_folder(@p,'Drive','Powertrain',@d,@o)", "select armory_delete_folder(@p,'Drive',@d,@o)" })
+            await Assert.ThrowsAsync<PostgresException>(() => Cmd(owner, call, ("p", p), ("d", stolen), ("o", Guid.NewGuid())).ExecuteNonQueryAsync());
+        Assert.Equal(1L, (long)(await Cmd(owner, "select count(*) from armory_files where project_id=@p", ("p", p)).ExecuteScalarAsync())!);
     }
     [DatabaseFact]
     public async Task EveryWriteRpcReturnsItsOriginalResultOnReplay()
@@ -154,6 +164,15 @@ public sealed class ServerContractTests(DatabaseFixture db)
         var release = Guid.NewGuid(); Assert.Equal(await Scalar(c, "select armory_release_lock(@f,@d,@o)", f, d, release), await Scalar(c, "select armory_release_lock(@f,@d,@o)", f, d, release));
         var allocation = Guid.NewGuid(); var n1 = await Cmd(c, "select part_number from armory_allocate_part_number(@p,1,2026,@o)", ("p", p), ("o", allocation)).ExecuteScalarAsync(); var n2 = await Cmd(c, "select part_number from armory_allocate_part_number(@p,1,2026,@o)", ("p", p), ("o", allocation)).ExecuteScalarAsync(); Assert.Equal(n1, n2);
         await using var owner = await db.Open("owner@example.com"); var od = await Device(owner); var ao = Guid.NewGuid(); await Cmd(owner, "select armory_acquire_lock(@f,@d,@o)", ("f", f), ("d", od), ("o", ao)).ExecuteNonQueryAsync(); var breakOp = Guid.NewGuid(); Assert.Equal(await Scalar(owner, "select armory_break_lock(@f,@d,@o)", f, od, breakOp), await Scalar(owner, "select armory_break_lock(@f,@d,@o)", f, od, breakOp));
+        // Contract v2 (005_v2.sql): every new write answers a replay from its receipt.
+        var created = Guid.NewGuid(); var g = (Guid)(await Cmd(c, "select armory_create_file(@p,'Bin','Gear.SLDPRT',@d,@o)", ("p", p), ("d", d), ("o", created)).ExecuteScalarAsync())!; Assert.Equal(g, (Guid)(await Cmd(c, "select armory_create_file(@p,'Other','Other.SLDPRT',@d,@o)", ("p", p), ("d", d), ("o", created)).ExecuteScalarAsync())!);
+        var rename = Guid.NewGuid(); Assert.Equal(1, (int)(await Cmd(c, "select armory_rename_folder(@p,'Bin','Box',@d,@o)", ("p", p), ("d", d), ("o", rename)).ExecuteScalarAsync())!); Assert.Equal(1, (int)(await Cmd(c, "select armory_rename_folder(@p,'Bin','Box',@d,@o)", ("p", p), ("d", d), ("o", rename)).ExecuteScalarAsync())!);
+        var delete = Guid.NewGuid(); Assert.Equal(1, (int)(await Cmd(c, "select armory_delete_folder(@p,'Box',@d,@o)", ("p", p), ("d", d), ("o", delete)).ExecuteScalarAsync())!); Assert.Equal(1, (int)(await Cmd(c, "select armory_delete_folder(@p,'Box',@d,@o)", ("p", p), ("d", d), ("o", delete)).ExecuteScalarAsync())!);
+        var revive = Guid.NewGuid(); Assert.Equal(g, (Guid)(await Cmd(c, "select armory_create_file(@p,'Bin','gear.sldprt',@d,@o)", ("p", p), ("d", d), ("o", revive)).ExecuteScalarAsync())!); Assert.Equal(g, (Guid)(await Cmd(c, "select armory_create_file(@p,'Elsewhere','gear.sldprt',@d,@o)", ("p", p), ("d", d), ("o", revive)).ExecuteScalarAsync())!);
+        var newName = "Robot " + Guid.NewGuid().ToString("N")[..8]; var renameProject = Guid.NewGuid(); Assert.True((bool)(await Cmd(owner, "select armory_rename_project(@p,@n,@o)", ("p", p), ("n", newName), ("o", renameProject)).ExecuteScalarAsync())!); Assert.True((bool)(await Cmd(owner, "select armory_rename_project(@p,@n,@o)", ("p", p), ("n", newName + " again"), ("o", renameProject)).ExecuteScalarAsync())!);
+        var archive = Guid.NewGuid(); Assert.True((bool)(await Cmd(owner, "select armory_set_project_archived(@p,true,@o)", ("p", p), ("o", archive)).ExecuteScalarAsync())!); Assert.True((bool)(await Cmd(owner, "select armory_set_project_archived(@p,true,@o)", ("p", p), ("o", archive)).ExecuteScalarAsync())!);
+        Assert.Equal(newName, (string)(await Cmd(owner, "select name from armory_projects where id=@p", ("p", p)).ExecuteScalarAsync())!);
+        foreach (var kind in new[] { "folder_renamed", "folder_deleted", "file_revived", "project_renamed", "project_archived" }) Assert.Equal(1L, (long)(await Cmd(owner, "select count(*) from armory_list_changes(@p,0) where kind=@k", ("p", p), ("k", kind)).ExecuteScalarAsync())!);
     }
     [DatabaseFact]
     public async Task OperationIdReuseAcrossCallerOrRpcIsRefused()

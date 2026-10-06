@@ -310,6 +310,7 @@ public sealed class AgentRpcTests(DatabaseFixture db)
         using var projects = JsonDocument.Parse((string)(await Cmd(student, "select armory_my_projects()::text").ExecuteScalarAsync())!);
         var mine = projects.RootElement.EnumerateArray().Single(x => x.GetProperty("id").GetGuid() == p);
         Assert.Equal("student", mine.GetProperty("role").GetString()); Assert.Equal("warn", mine.GetProperty("release_gate").GetString());
+        Assert.False(mine.GetProperty("archived").GetBoolean()); Assert.Equal(JsonValueKind.Null, mine.GetProperty("archived_at").ValueKind); // contract v2 (C3)
         using var files = JsonDocument.Parse((string)(await Cmd(student, "select armory_project_files(@p)::text", ("p", p)).ExecuteScalarAsync())!);
         var file = files.RootElement.EnumerateArray().Single();
         Assert.Equal("Drivetrain", file.GetProperty("folder").GetString());
