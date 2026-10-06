@@ -71,6 +71,17 @@ internal static class AgentExe
         return built;
     }
 
+    // The version the built app reports, read from the built IdeaArmory.dll itself (its
+    // informational version, which Armory.Agent.csproj's <Version> sets), so no test pins a
+    // release number.
+    internal static string Version(string folder)
+    {
+        var info = FileVersionInfo.GetVersionInfo(Path.Combine(folder, "IdeaArmory.dll"));
+        var version = (info.ProductVersion ?? string.Empty).Split('+')[0];
+        Assert.Matches(@"^\d+\.\d+\.\d+$", version);
+        return version;
+    }
+
     internal static Process Start(string folder, string dataFolder, params string[] arguments)
     {
         var start = new ProcessStartInfo(Path.Combine(folder, "IdeaArmory.exe"))
