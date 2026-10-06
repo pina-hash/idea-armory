@@ -9,10 +9,13 @@ namespace Armory.Client;
 // public anon key (docs/agent/CLIENT.md section 1).
 public sealed class PostgrestClient(HttpClient http, SessionManager sessions)
 {
+    public const int MaximumResends = 3;
+
     public async Task<JsonNode?> CallAsync(string function, IReadOnlyDictionary<string, object?> arguments, CancellationToken cancellationToken = default)
     {
         if (!function.StartsWith("armory_", StringComparison.Ordinal)) throw new ArgumentException("Only armory_ RPCs are called.", nameof(function));
         var session = await sessions.GetFreshAsync(cancellationToken: cancellationToken);
+        var resent = 0;
         for (var attempt = 0; ; attempt++)
         {
             using var request = new HttpRequestMessage(HttpMethod.Post, session.SupabaseUrl.TrimEnd('/') + "/rest/v1/rpc/" + function)
@@ -40,6 +43,15 @@ public sealed class PostgrestClient(HttpClient http, SessionManager sessions)
                 }
                 if (response.StatusCode is HttpStatusCode.BadGateway or HttpStatusCode.ServiceUnavailable or HttpStatusCode.GatewayTimeout or HttpStatusCode.TooManyRequests)
                     throw new ArmoryOfflineException($"Armory is busy or unavailable ({function}, {(int)response.StatusCode}).");
+                // A deadlock or serialization failure rolled the whole call back, receipt included, so
+                // the same body (the same operation id) is sent again. 0232's folder rename and delete
+                // can deadlock with a check out or check in in the same folder (docs/server/contract.md).
+                if (error.Code is "40P01" or "40001" && resent < MaximumResends)
+                {
+                    resent++;
+                    await Task.Delay(TimeSpan.FromMilliseconds(50 * resent), cancellationToken);
+                    continue;
+                }
                 throw new ArmoryRpcException((int)response.StatusCode, error.Code, error.Message ?? $"{function} failed with {(int)response.StatusCode}.", error.Details, error.Hint);
             }
         }
