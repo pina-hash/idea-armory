@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Armory.Core;
 
 namespace Armory.Core.Tests;
@@ -15,12 +16,26 @@ internal static class Fixtures
 }
 
 internal sealed class SimulatedCrash : Exception;
-internal sealed class MemoryJournalStore : IJournalStore
+internal sealed class MemoryJournalStore(bool tracksGeneration = true) : IJournalStore
 {
+    private byte[] seen = [];
+    private long generation;
     internal List<byte> Bytes { get; } = [];
     internal int? CrashAfter { get; set; }
     internal bool CrashOnFlush { get; set; }
-    public byte[] ReadAll() => Bytes.ToArray();
+    internal int Reads { get; private set; }
+    public byte[] ReadAll() { Reads++; return Bytes.ToArray(); }
+    // Tests also change Bytes directly, so the generation follows the content itself: any
+    // change by any route gives a new value. Without tracking, the journal reads every call.
+    public long? Generation
+    {
+        get
+        {
+            if (!tracksGeneration) return null;
+            if (!CollectionsMarshal.AsSpan(Bytes).SequenceEqual(seen)) { seen = Bytes.ToArray(); generation++; }
+            return generation;
+        }
+    }
     public void Append(ReadOnlySpan<byte> bytes)
     {
         var count = Math.Min(CrashAfter ?? bytes.Length, bytes.Length);

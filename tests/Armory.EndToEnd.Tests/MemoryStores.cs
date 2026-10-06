@@ -9,10 +9,12 @@ namespace Armory.EndToEnd.Tests;
 internal sealed class MemoryJournalStore : IJournalStore
 {
     private readonly List<byte> bytes = [];
+    private long generation;
     public byte[] ReadAll() { lock (bytes) return bytes.ToArray(); }
-    public void Append(ReadOnlySpan<byte> value) { lock (bytes) bytes.AddRange(value.ToArray()); }
+    public void Append(ReadOnlySpan<byte> value) { lock (bytes) { bytes.AddRange(value.ToArray()); generation++; } }
     public void Flush() { }
-    public void TruncateIncompleteTail(int validLength) { lock (bytes) bytes.RemoveRange(validLength, bytes.Count - validLength); }
+    public void TruncateIncompleteTail(int validLength) { lock (bytes) { bytes.RemoveRange(validLength, bytes.Count - validLength); generation++; } }
+    public long? Generation { get { lock (bytes) return generation; } }
 }
 
 internal sealed class MemorySnapshotStore : ISnapshotStore
