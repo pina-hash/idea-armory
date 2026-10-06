@@ -33,6 +33,12 @@
     <None Remove="wwwroot\**" />
     <Content Include="wwwroot\**" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <EmbeddedResource Include="Assets\armory.ico" LogicalName="armory.ico" />
+    <!-- The tray icon for each sync state (tools/agent-icon/make_icon.py). -->
+    <EmbeddedResource Include="Assets\tray-synced.ico" LogicalName="tray-synced.ico" />
+    <EmbeddedResource Include="Assets\tray-syncing.ico" LogicalName="tray-syncing.ico" />
+    <EmbeddedResource Include="Assets\tray-paused.ico" LogicalName="tray-paused.ico" />
+    <EmbeddedResource Include="Assets\tray-offline.ico" LogicalName="tray-offline.ico" />
+    <EmbeddedResource Include="Assets\tray-attention.ico" LogicalName="tray-attention.ico" />
   </ItemGroup>
   <!-- The WebView2 package always references its WPF control, which needs WPF's WindowsBase.
        This is a Windows Forms app, so that one assembly is left out. -->
