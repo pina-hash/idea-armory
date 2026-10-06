@@ -12,6 +12,13 @@ public sealed class V2RpcTests(DatabaseFixture db, ITestOutputHelper output)
     private const string Hash = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
     private static string Unique(string prefix) => prefix + " " + Guid.NewGuid().ToString("N")[..8];
 
+    // Each test has its own student, CAD lead and instructor (xUnit makes one instance per test),
+    // so no test here changes which projects a fixed email can see in the shared database. The
+    // guard ServerContractTests.RlsIsolatesProjectsAndAnonCannotUseRpcs counts the projects of
+    // student@example.com and must not depend on the order the tests run in.
+    private readonly string studentEmail = Person("student"), leadEmail = Person("lead"), instructorEmail = Person("instructor");
+    private static string Person(string role) => $"{role}.{Guid.NewGuid().ToString("N")[..8]}@example.com";
+
     private async Task<NpgsqlConnection> Admin(string email = "admin@example.com")
     {
         var c = await db.Open(email);
@@ -70,13 +77,13 @@ public sealed class V2RpcTests(DatabaseFixture db, ITestOutputHelper output)
     }
     private static string[] Names(JsonElement detail) => detail.GetProperty("names").EnumerateArray().Select(n => n.GetString()!).ToArray();
 
-    // A project with a mentor (admin@example.com), a CAD lead and a student.
+    // A project with a mentor (admin@example.com), this test's CAD lead and this test's student.
     private async Task<(Guid Project, NpgsqlConnection Mentor)> Team()
     {
         var mentor = await Admin();
         var p = await CreateProject(mentor, Unique("Robot"));
-        await AddMember(mentor, p, "lead@example.com", "cad_lead");
-        await AddMember(mentor, p, "student@example.com", "student");
+        await AddMember(mentor, p, leadEmail, "cad_lead");
+        await AddMember(mentor, p, studentEmail, "student");
         return (p, mentor);
     }
 
@@ -112,8 +119,8 @@ public sealed class V2RpcTests(DatabaseFixture db, ITestOutputHelper output)
     {
         var (p, mentor) = await Team(); await using var _ = mentor;
         var original = (await Text(mentor, "select name from armory_projects where id=@p", ("p", p)))!;
-        await AddMember(mentor, p, "instructor@example.com", "instructor");
-        foreach (var email in new[] { "lead@example.com", "student@example.com", "instructor@example.com", "stranger@example.com" })
+        await AddMember(mentor, p, instructorEmail, "instructor");
+        foreach (var email in new[] { leadEmail, studentEmail, instructorEmail, "stranger@example.com" })
         {
             await using var c = await db.Open(email);
             await Refused(() => RenameProject(c, p, Unique("Nope")), "42501");
@@ -166,11 +173,11 @@ public sealed class V2RpcTests(DatabaseFixture db, ITestOutputHelper output)
     public async Task ArchivingIsMentorOnlyShowsInMyProjectsAndDeletesNothing()
     {
         var (p, mentor) = await Team(); await using var _ = mentor;
-        await using var student = await db.Open("student@example.com"); var device = await Device(student);
+        await using var student = await db.Open(studentEmail); var device = await Device(student);
         var f = await CreateFile(student, p, "Drivetrain", "Plate.SLDPRT", device);
         Assert.True(await Acquire(student, f, device));
         var v1 = await Commit(student, f, null, device);
-        foreach (var email in new[] { "lead@example.com", "student@example.com", "stranger@example.com" })
+        foreach (var email in new[] { leadEmail, studentEmail, "stranger@example.com" })
         {
             await using var c = await db.Open(email);
             await Refused(() => SetArchived(c, p, true), "42501");
@@ -188,7 +195,7 @@ public sealed class V2RpcTests(DatabaseFixture db, ITestOutputHelper output)
         var file = (await Json(student, "select armory_project_files(@p)::text", ("p", p))).EnumerateArray().Single();
         Assert.False(file.GetProperty("deleted").GetBoolean());
         Assert.Equal(v1.Version, file.GetProperty("current").GetProperty("id").GetGuid());
-        Assert.Equal("student@example.com", file.GetProperty("lock").GetProperty("holder_email").GetString());
+        Assert.Equal(studentEmail, file.GetProperty("lock").GetProperty("holder_email").GetString());
         Assert.Equal(0L, await Count(mentor, "select count(*) from armory_tombstones t join armory_files f on f.id=t.file_id where f.project_id=@p", ("p", p)));
         var change = await Json(mentor, "select payload::text from armory_list_changes(@p,0) where kind='project_archived'", ("p", p));
         Assert.True(change.GetProperty("archived").GetBoolean());
@@ -205,13 +212,13 @@ public sealed class V2RpcTests(DatabaseFixture db, ITestOutputHelper output)
     public async Task CreatingARemovedNameRevivesTheSameFileWithItsHistory()
     {
         var (p, mentor) = await Team(); await using var _ = mentor;
-        await using var student = await db.Open("student@example.com"); var laptop = await Device(student, "laptop");
+        await using var student = await db.Open(studentEmail); var laptop = await Device(student, "laptop");
         var f = await CreateFile(student, p, "Drivetrain", "Plate.SLDPRT", laptop);
         Assert.True(await Acquire(student, f, laptop));
         var v1 = await Commit(student, f, null, laptop);
         Assert.True(v1.Advanced);
         Assert.True(await Tombstone(student, f, v1.Version, laptop)); // 002 leaves the remover's checkout in place
-        await using var lead = await db.Open("lead@example.com"); var leadPc = await Device(lead, "LAB-PC-07");
+        await using var lead = await db.Open(leadEmail); var leadPc = await Device(lead, "LAB-PC-07");
         var op = Guid.NewGuid();
         Assert.Equal(f, await CreateFile(lead, p, "Intake", "PLATE.sldprt", leadPc, op)); // the same file, not a new one
         Assert.Equal(f, await CreateFile(lead, p, "Intake", "PLATE.sldprt", leadPc, op)); // replay
@@ -230,11 +237,18 @@ public sealed class V2RpcTests(DatabaseFixture db, ITestOutputHelper output)
         Assert.Equal(1L, await Count(lead, "select count(*) from armory_list_changes(@p,0) where kind='file_created'", ("p", p)));
         var revived = await Json(lead, "select payload::text from armory_list_changes(@p,0) where kind='file_revived' and entity_id=@f", ("p", p), ("f", f));
         Assert.Equal(("Intake", "PLATE.sldprt", "Drivetrain", "Plate.SLDPRT"), (revived.GetProperty("folder").GetString(), revived.GetProperty("name").GetString(), revived.GetProperty("old_folder").GetString(), revived.GetProperty("old_name").GetString()));
-        Assert.Equal(("student@example.com", "lead@example.com", leadPc), (revived.GetProperty("released_checkout_of").GetString(), revived.GetProperty("by").GetString(), revived.GetProperty("device_id").GetGuid()));
+        Assert.Equal((studentEmail, leadEmail, leadPc), (revived.GetProperty("released_checkout_of").GetString(), revived.GetProperty("by").GetString(), revived.GetProperty("device_id").GetGuid()));
         var file = (await Json(lead, "select armory_project_files(@p)::text", ("p", p))).EnumerateArray().Single();
         Assert.Equal((false, "Intake", v1.Version), (file.GetProperty("deleted").GetBoolean(), file.GetProperty("folder").GetString(), file.GetProperty("current").GetProperty("id").GetGuid()));
         // The reviver checks it out and continues from the version that was current at removal.
         Assert.True(await Acquire(lead, f, leadPc));
+        // Without that parent, the way the 0.1.0 agent commits a file it has just created, the commit
+        // is a stale parent: kept aside, and the removed bytes stay the shared version, so 0.1.0 then
+        // downloads them over the new file (docs/server/contract.md, open point 1).
+        var orphan = await Commit(lead, f, null, leadPc);
+        Assert.False(orphan.Advanced);
+        Assert.Equal("stale parent", await Text(lead, "select reason from armory_side_versions where id=@v and file_id=@f", ("v", orphan.Version), ("f", f)));
+        Assert.Equal(v1.Version, (Guid)(await Cmd(lead, "select current_version_id from armory_files where id=@f", ("f", f)).ExecuteScalarAsync())!);
         var v2 = await Commit(lead, f, v1.Version, leadPc);
         Assert.True(v2.Advanced);
         Assert.False((await Commit(student, f, v1.Version, laptop)).Advanced); // the former holder no longer holds it
@@ -246,7 +260,7 @@ public sealed class V2RpcTests(DatabaseFixture db, ITestOutputHelper output)
         await using (var row = await Cmd(lead, "select author_email, version_id from armory_tombstones where file_id=@f", ("f", f)).ExecuteReaderAsync())
         {
             Assert.True(await row.ReadAsync());
-            Assert.Equal(("lead@example.com", v2.Version), (row.GetString(0), row.GetGuid(1)));
+            Assert.Equal((leadEmail, v2.Version), (row.GetString(0), row.GetGuid(1)));
         }
     }
 
@@ -254,15 +268,15 @@ public sealed class V2RpcTests(DatabaseFixture db, ITestOutputHelper output)
     public async Task RacingRevivalsReviveOnceAndTellTheLoserWhereItLives()
     {
         var (p, mentor) = await Team(); await using var _ = mentor;
-        await using var student = await db.Open("student@example.com"); var studentPc = await Device(student);
-        await using var lead = await db.Open("lead@example.com"); var leadPc = await Device(lead);
+        await using var student = await db.Open(studentEmail); var studentPc = await Device(student);
+        await using var lead = await db.Open(leadEmail); var leadPc = await Device(lead);
         for (var i = 0; i < 100; i++)
         {
             var name = $"Revive{i}.SLDPRT";
             var f = await CreateFile(student, p, "Old", name, studentPc);
             Assert.True(await Acquire(student, f, studentPc));
             Assert.True(await Tombstone(student, f, null, studentPc));
-            await using var a = await db.Open("student@example.com"); await using var b = await db.Open("lead@example.com");
+            await using var a = await db.Open(studentEmail); await using var b = await db.Open(leadEmail);
             var x = Try(() => CreateFile(a, p, "A", name, studentPc)); var y = Try(() => CreateFile(b, p, "B", name.ToLowerInvariant(), leadPc));
             var results = await Task.WhenAll(x, y);
             var winner = Assert.Single(results, r => r.Id is not null);
@@ -283,7 +297,7 @@ public sealed class V2RpcTests(DatabaseFixture db, ITestOutputHelper output)
     public async Task FolderRenameMovesTheWholeSubtreeInOneChange()
     {
         var (p, mentor) = await Team(); await using var _ = mentor;
-        await using var student = await db.Open("student@example.com"); var laptop = await Device(student, "laptop");
+        await using var student = await db.Open(studentEmail); var laptop = await Device(student, "laptop");
         var top = await CreateFile(student, p, "Drive", "Base.SLDPRT", laptop);
         var gear = await CreateFile(student, p, "Drive/Gear", "Gear.SLDPRT", laptop);
         var tooth = await CreateFile(student, p, "Drive/Gear/Teeth", "Tooth.SLDPRT", laptop);
@@ -306,11 +320,11 @@ public sealed class V2RpcTests(DatabaseFixture db, ITestOutputHelper output)
         Assert.Equal("Drivetrain", await FolderOf(prefix));
         Assert.Equal("Dr_ve 2", await FolderOf(wildcard));
         Assert.Equal("Drive/Old", await FolderOf(removed)); // a removed file keeps its folder
-        Assert.Equal(("student@example.com", laptop), ((await Text(mentor, "select holder_email from armory_locks where file_id=@f and broken_at is null", ("f", gear)))!, (Guid)(await Cmd(mentor, "select holder_device_id from armory_locks where file_id=@f", ("f", gear)).ExecuteScalarAsync())!));
+        Assert.Equal((studentEmail, laptop), ((await Text(mentor, "select holder_email from armory_locks where file_id=@f and broken_at is null", ("f", gear)))!, (Guid)(await Cmd(mentor, "select holder_device_id from armory_locks where file_id=@f", ("f", gear)).ExecuteScalarAsync())!));
         Assert.Equal(2L, await Count(mentor, "select count(*) from armory_list_changes(@p,0) where kind='folder_renamed'", ("p", p)));
         Assert.Equal(0L, await Count(mentor, "select count(*) from armory_list_changes(@p,0) where kind='file_moved'", ("p", p)));
         var change = await Json(mentor, "select payload::text from armory_list_changes(@p,0) where kind='folder_renamed' order by cursor desc limit 1", ("p", p));
-        Assert.Equal(("Drive", "Powertrain", 3, laptop, "student@example.com"), (change.GetProperty("from").GetString(), change.GetProperty("to").GetString(), change.GetProperty("files").GetInt32(), change.GetProperty("device_id").GetGuid(), change.GetProperty("by").GetString()));
+        Assert.Equal(("Drive", "Powertrain", 3, laptop, studentEmail), (change.GetProperty("from").GetString(), change.GetProperty("to").GetString(), change.GetProperty("files").GetInt32(), change.GetProperty("device_id").GetGuid(), change.GetProperty("by").GetString()));
         // A folder with no live files moves nothing and writes no change.
         Assert.Equal(0, await RenameFolder(student, p, "Nothing here", "Still nothing", laptop));
         Assert.Equal(2L, await Count(mentor, "select count(*) from armory_list_changes(@p,0) where kind='folder_renamed'", ("p", p)));
@@ -320,8 +334,8 @@ public sealed class V2RpcTests(DatabaseFixture db, ITestOutputHelper output)
     public async Task FolderRenameIsRefusedWhileSomeoneElseOrMyOtherComputerHasAFileCheckedOut()
     {
         var (p, mentor) = await Team(); await using var _ = mentor;
-        await using var student = await db.Open("student@example.com"); var laptop = await Device(student, "laptop"); var labPc = await Device(student, "lab PC");
-        await using var lead = await db.Open("lead@example.com"); var leadPc = await Device(lead, "LAB-PC-07");
+        await using var student = await db.Open(studentEmail); var laptop = await Device(student, "laptop"); var labPc = await Device(student, "lab PC");
+        await using var lead = await db.Open(leadEmail); var leadPc = await Device(lead, "LAB-PC-07");
         var files = new List<Guid>();
         for (var i = 0; i < 14; i++) files.Add(await CreateFile(student, p, i % 2 == 0 ? "Gearbox" : "Gearbox/Stage", $"Part{i:D2}.SLDPRT", laptop));
         var outside = await CreateFile(student, p, "Gearbox2", "Outside.SLDPRT", laptop);
@@ -355,7 +369,7 @@ public sealed class V2RpcTests(DatabaseFixture db, ITestOutputHelper output)
     public async Task FolderRenameRefusesBadPathsAMoveIntoItselfAndAnExistingFolder()
     {
         var (p, mentor) = await Team(); await using var _ = mentor;
-        await using var student = await db.Open("student@example.com"); var laptop = await Device(student);
+        await using var student = await db.Open(studentEmail); var laptop = await Device(student);
         await CreateFile(student, p, "A", "One.SLDPRT", laptop);
         await CreateFile(student, p, "A/B", "Two.SLDPRT", laptop);
         await CreateFile(student, p, "Target", "Three.SLDPRT", laptop);
@@ -372,7 +386,7 @@ public sealed class V2RpcTests(DatabaseFixture db, ITestOutputHelper output)
         Assert.Equal(2L, await Count(mentor, "select count(*) from armory_files where project_id=@p and folder in ('a','a/B')", ("p", p)));
         await using var stranger = await db.Open("stranger@example.com"); var strangerPc = await Device(stranger);
         await Refused(() => RenameFolder(stranger, p, "a", "Z", strangerPc), "42501");
-        await using var lead = await db.Open("lead@example.com"); var leadPc = await Device(lead);
+        await using var lead = await db.Open(leadEmail); var leadPc = await Device(lead);
         await Assert.ThrowsAsync<PostgresException>(() => RenameFolder(student, p, "a", "Z", leadPc)); // someone else's device
         await Assert.ThrowsAsync<PostgresException>(() => DeleteFolder(student, p, "a", leadPc));
         Assert.Equal(1L, await Count(mentor, "select count(*) from armory_list_changes(@p,0) where kind='folder_renamed'", ("p", p)));
@@ -382,8 +396,8 @@ public sealed class V2RpcTests(DatabaseFixture db, ITestOutputHelper output)
     public async Task DeleteFolderTombstonesTheSubtreeInOneChange()
     {
         var (p, mentor) = await Team(); await using var _ = mentor;
-        await using var student = await db.Open("student@example.com"); var laptop = await Device(student, "laptop");
-        await using var lead = await db.Open("lead@example.com"); var leadPc = await Device(lead, "LAB-PC-07");
+        await using var student = await db.Open(studentEmail); var laptop = await Device(student, "laptop");
+        await using var lead = await db.Open(leadEmail); var leadPc = await Device(lead, "LAB-PC-07");
         var roller = await CreateFile(student, p, "Intake", "Roller.SLDPRT", laptop);
         Assert.True(await Acquire(student, roller, laptop)); // the caller's own checkout on this computer does not block
         var v1 = await Commit(student, roller, null, laptop);
@@ -402,7 +416,7 @@ public sealed class V2RpcTests(DatabaseFixture db, ITestOutputHelper output)
         await using (var row = await Cmd(mentor, "select author_email, version_id from armory_tombstones where file_id=@f", ("f", roller)).ExecuteReaderAsync())
         {
             Assert.True(await row.ReadAsync());
-            Assert.Equal(("student@example.com", v1.Version), (row.GetString(0), row.GetGuid(1)));
+            Assert.Equal((studentEmail, v1.Version), (row.GetString(0), row.GetGuid(1)));
         }
         Assert.Equal(DBNull.Value, await Cmd(mentor, "select version_id from armory_tombstones where file_id=@f", ("f", arm)).ExecuteScalarAsync());
         var files = (await Json(student, "select armory_project_files(@p)::text", ("p", p))).EnumerateArray().ToDictionary(f => f.GetProperty("id").GetGuid());
@@ -413,7 +427,7 @@ public sealed class V2RpcTests(DatabaseFixture db, ITestOutputHelper output)
         Assert.Equal(1L, await Count(mentor, "select count(*) from armory_list_changes(@p,0) where kind='folder_deleted'", ("p", p)));
         Assert.Equal(0L, await Count(mentor, "select count(*) from armory_list_changes(@p,0) where kind='tombstone'", ("p", p)));
         var change = await Json(mentor, "select payload::text from armory_list_changes(@p,0) where kind='folder_deleted'", ("p", p));
-        Assert.Equal(("Intake", 2, "student@example.com"), (change.GetProperty("folder").GetString(), change.GetProperty("files").GetInt32(), change.GetProperty("by").GetString()));
+        Assert.Equal(("Intake", 2, studentEmail), (change.GetProperty("folder").GetString(), change.GetProperty("files").GetInt32(), change.GetProperty("by").GetString()));
         // A name from the deleted folder can be revived, and the remover's checkout goes with the revival.
         Assert.Equal(roller, await CreateFile(lead, p, "Intake 2", "roller.sldprt", leadPc));
         Assert.Equal(0L, await Count(mentor, "select count(*) from armory_locks where file_id=@f", ("f", roller)));
@@ -425,8 +439,8 @@ public sealed class V2RpcTests(DatabaseFixture db, ITestOutputHelper output)
     public async Task ACheckOutNeverLandsInsideAFolderRenameOrDelete()
     {
         var (p, mentor) = await Team(); await using var _ = mentor;
-        await using var student = await db.Open("student@example.com"); var laptop = await Device(student, "laptop");
-        await using var lead = await db.Open("lead@example.com"); var leadPc = await Device(lead, "LAB-PC-07");
+        await using var student = await db.Open(studentEmail); var laptop = await Device(student, "laptop");
+        await using var lead = await db.Open(leadEmail); var leadPc = await Device(lead, "LAB-PC-07");
         async Task<int> FolderOp(NpgsqlConnection c, bool delete, string folder, NpgsqlTransaction? tx = null)
         {
             var sql = delete ? "select armory_delete_folder(@p,@f,@d,@o)" : "select armory_rename_folder(@p,@f,@t,@d,@o)";
@@ -440,13 +454,13 @@ public sealed class V2RpcTests(DatabaseFixture db, ITestOutputHelper output)
         var mentorPc = await Device(mentor, "mentor laptop");
         async Task OpenCheckOutHoldsTheFolder(bool delete, string folder, Guid f)
         {
-            await using (var holder = await db.Open("lead@example.com"))
+            await using (var holder = await db.Open(leadEmail))
             {
                 await using var tx = await holder.BeginTransactionAsync();
                 var acquire = Cmd(holder, "select armory_acquire_lock(@f,@d,@o)", ("f", f), ("d", leadPc), ("o", Guid.NewGuid()));
                 acquire.Transaction = tx;
                 Assert.True((bool)(await acquire.ExecuteScalarAsync())!);
-                await using var mover = await db.Open("student@example.com");
+                await using var mover = await db.Open(studentEmail);
                 var operation = FolderOp(mover, delete, folder);
                 Assert.False(await Task.WhenAny(operation, Task.Delay(750)) == operation, "The folder operation finished while another person's check-out was still open.");
                 await tx.CommitAsync();
@@ -464,7 +478,12 @@ public sealed class V2RpcTests(DatabaseFixture db, ITestOutputHelper output)
             await OpenCheckOutHoldsTheFolder(delete, folder, f);
 
             // The same for a check-out taken again after a take back, which updates the old lock row
-            // instead of inserting one, so no foreign key check touches the file row.
+            // instead of inserting one, so no foreign key check touches the file row. When the
+            // check-out goes first, the change feed's foreign key holds 0232's project row until it
+            // commits, so the folder operation then sees it. The other order is NOT held: a folder
+            // operation that has the project row but has not yet read the locks misses a retaken
+            // check-out waiting on that row (docs/server/contract.md, open point 2). Add that
+            // interleaving here when lane W's follow-up migration closes it.
             folder = Unique("Retaken");
             f = await CreateFile(student, p, folder, Unique("Part") + ".SLDPRT", laptop);
             Assert.True(await Acquire(lead, f, leadPc));
@@ -474,11 +493,11 @@ public sealed class V2RpcTests(DatabaseFixture db, ITestOutputHelper output)
             // A folder operation that is still open makes the check-out wait until it lands.
             folder = Unique("Moving");
             f = await CreateFile(student, p, folder, Unique("Part") + ".SLDPRT", laptop);
-            await using (var mover = await db.Open("student@example.com"))
+            await using (var mover = await db.Open(studentEmail))
             {
                 await using var tx = await mover.BeginTransactionAsync();
                 Assert.Equal(1, await FolderOp(mover, delete, folder, tx));
-                await using var holder = await db.Open("lead@example.com");
+                await using var holder = await db.Open(leadEmail);
                 var acquire = Acquire(holder, f, leadPc);
                 await Task.WhenAny(acquire, Task.Delay(250));
                 await tx.CommitAsync();
@@ -494,7 +513,7 @@ public sealed class V2RpcTests(DatabaseFixture db, ITestOutputHelper output)
             var delete = i % 2 == 1;
             var folder = Unique("Race");
             var f = await CreateFile(student, p, folder, Unique("Part") + ".SLDPRT", laptop);
-            await using var mover = await db.Open("student@example.com"); await using var holder = await db.Open("lead@example.com");
+            await using var mover = await db.Open(studentEmail); await using var holder = await db.Open(leadEmail);
             // 0232 takes the project row before the files, a check-out takes the file before the project, so a true
             // race can deadlock; detect it in 100 ms instead of the default second (both sides here are superuser).
             foreach (var c in new[] { mover, holder }) await Cmd(c, "set deadlock_timeout = '100ms'").ExecuteNonQueryAsync();
@@ -553,19 +572,19 @@ public sealed class V2RpcTests(DatabaseFixture db, ITestOutputHelper output)
     public async Task TakeBackStaysWithMentorsAndCadLeads()
     {
         var (p, mentor) = await Team(); await using var _ = mentor;
-        await AddMember(mentor, p, "instructor@example.com", "instructor");
-        await using var student = await db.Open("student@example.com"); var studentPc = await Device(student);
+        await AddMember(mentor, p, instructorEmail, "instructor");
+        await using var student = await db.Open(studentEmail); var studentPc = await Device(student);
         var f = await CreateFile(student, p, "", "Gear.SLDPRT", studentPc);
         Assert.True(await Acquire(student, f, studentPc));
-        foreach (var email in new[] { "instructor@example.com", "student@example.com", "stranger@example.com" })
+        foreach (var email in new[] { instructorEmail, studentEmail, "stranger@example.com" })
         {
             await using var c = await db.Open(email);
             await Assert.ThrowsAsync<PostgresException>(async () => await Break(c, f, await Device(c)));
         }
         Assert.Equal(1L, await Count(mentor, "select count(*) from armory_locks where file_id=@f and broken_at is null", ("f", f)));
-        await using var lead = await db.Open("lead@example.com");
+        await using var lead = await db.Open(leadEmail);
         Assert.True(await Break(lead, f, await Device(lead)));
-        Assert.Equal("lead@example.com", await Text(mentor, "select broken_by from armory_locks where file_id=@f", ("f", f)));
+        Assert.Equal(leadEmail, await Text(mentor, "select broken_by from armory_locks where file_id=@f", ("f", f)));
         Assert.Equal(0L, await Count(mentor, "select count(*) from jsonb_array_elements(armory_project_checkouts(@p)) as e(v) where (v->>'file_id')::uuid=@f", ("p", p), ("f", f)));
         foreach (var name in new[] { "armory_acquire_lock", "armory_release_lock", "armory_break_lock" })
             Assert.Equal(1L, await Count(mentor, "select count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname=@n", ("n", name)));
@@ -575,7 +594,7 @@ public sealed class V2RpcTests(DatabaseFixture db, ITestOutputHelper output)
     public async Task EveryV2WriteReturnsItsOriginalResultOnReplay()
     {
         var (p, mentor) = await Team(); await using var _ = mentor;
-        await using var student = await db.Open("student@example.com"); var laptop = await Device(student);
+        await using var student = await db.Open(studentEmail); var laptop = await Device(student);
         var createOp = Guid.NewGuid();
         var unseasoned = await CreateProject(mentor, Unique("Replay"), null, createOp);
         Assert.Equal(unseasoned, await CreateProject(mentor, Unique("Replay"), null, createOp));
@@ -608,14 +627,14 @@ public sealed class V2RpcTests(DatabaseFixture db, ITestOutputHelper output)
             Assert.Equal(count, await Count(mentor, "select count(*) from armory_list_changes(@p,0) where kind=@k", ("p", p), ("k", kind)));
         // An operation id belongs to one RPC and one caller.
         await Assert.ThrowsAsync<PostgresException>(() => DeleteFolder(student, p, "Bin", laptop, moveOp));
-        await using var lead = await db.Open("lead@example.com");
+        await using var lead = await db.Open(leadEmail);
         await Assert.ThrowsAsync<PostgresException>(async () => await RenameFolder(lead, p, "Bin", "Box", await Device(lead), moveOp));
     }
 
     [DatabaseFact]
     public async Task V2FunctionsAreForAuthenticatedOnlyAndHelpersForNoClient()
     {
-        await using var c = await db.Open("student@example.com");
+        await using var c = await db.Open(studentEmail);
         Assert.Equal(0L, await Count(c, "select count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname like 'armory\\_%' and has_function_privilege('anon',p.oid,'execute')"));
         var helpers = new[] { "armory_refuse_version_mutation", "armory_add_change", "armory_replay", "armory_remember", "armory_require_device",
             "armory_valid_segment", "armory_valid_folder", "armory_derived_operation", "armory_require_role", "armory_name_taken",
@@ -634,10 +653,10 @@ public sealed class V2RpcTests(DatabaseFixture db, ITestOutputHelper output)
         await Cmd(c, "set role authenticated").ExecuteNonQueryAsync();
         try
         {
-            Assert.Equal(0L, await Count(c, "select count(*) from armory_devices where owner_email<>'student@example.com'"));
+            Assert.Equal(0L, await Count(c, "select count(*) from armory_devices where owner_email<>@e", ("e", studentEmail)));
             Assert.Equal(1L, await Count(c, "select count(*) from armory_devices where id=@d", ("d", device)));
             Assert.True(await Count(c, "select count(*) from armory_operation_receipts") >= 1);
-            Assert.Equal(0L, await Count(c, "select count(*) from armory_operation_receipts where caller_email<>'student@example.com'"));
+            Assert.Equal(0L, await Count(c, "select count(*) from armory_operation_receipts where caller_email<>@e", ("e", studentEmail)));
             await Refused(() => Cmd(c, "select armory_add_change(gen_random_uuid(),'x',gen_random_uuid(),'{}')").ExecuteNonQueryAsync(), "42501");
         }
         finally { await Cmd(c, "reset role").ExecuteNonQueryAsync(); }
