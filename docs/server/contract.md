@@ -64,7 +64,8 @@ from `public`, `anon` and `authenticated` (002 had left `authenticated` out, and
 function was never revoked), and `armory_current_email` and `armory_is_member`, which the RLS
 policies name, are granted to `authenticated`. `armory_project_checkouts` reads idea-app's
 `public.profiles`; the tests stand it in with `tests/Armory.Server.Tests/sql/002_test_profiles.sql`.
-C8 (check out, check in, take back) is unchanged.
+C8 (check out, check in, take back) is unchanged. idea-app recorded 0232 as applied to production in
+8b57bad, with the same bytes, so a change to any of its bodies now needs a new idea-app migration.
 
 | RPC | Rule |
 |---|---|
