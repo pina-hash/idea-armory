@@ -11,10 +11,25 @@ namespace Armory.EndToEnd.Tests;
 // and writes the ~$ marker. This double deliberately does NOT refuse writes to an open
 // file, so the engine's own open-file check is what the proof exercises; every write to
 // an open file is recorded as a violation for the oracle instead.
+//
+// The read-only bit has Windows semantics but is modeled here, per vault path: these tests
+// run as root on Linux, where a cleared write permission stops nobody. ApplyLockAttribute(s)
+// set it by the v2 rule (read-only unless THIS device holds the check out, Armory.Core's
+// CheckoutRules.IsReadOnlyOnDisk), Replace(readOnly) sets it before the new bytes appear, it
+// travels with Move, MoveFolder and a student's folder rename, and Computer.Save refuses a
+// file that has it, the way SolidWorks cannot save over a read-only file.
 internal sealed class PortableVaultFileSystem : IVaultFileSystem
 {
+    // Decision D14, as the Windows adapter's LaunchPolicy (without the computer's PATHEXT).
+    private static readonly string[] RefusedLaunchTypes =
+    [
+        ".exe", ".com", ".bat", ".cmd", ".ps1", ".psm1", ".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh", ".hta", ".msi", ".msp", ".scr",
+        ".lnk", ".url", ".reg", ".cpl", ".jar", ".appref-ms",
+    ];
     private readonly object gate = new();
     private readonly HashSet<string> open = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> readOnlyBits = new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<FolderMove> studentFolderMoves = [];
     private int recoveries;
     public PortableVaultFileSystem(string root) { Root = root; Directory.CreateDirectory(root); }
     public string Root { get; }
@@ -26,11 +41,20 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
     public List<string> UnpreservedOverwrites { get; } = [];
     public int Moves { get; private set; }
     public int Replaces { get; private set; }
+    // The lock ownership the engine last applied to each path (what the Windows adapter keeps
+    // in its read-only intent manifest).
     public Dictionary<string, LockOwnership> Attributes { get; } = new(StringComparer.OrdinalIgnoreCase);
+    public int AttributeBatches { get; private set; }
     public List<string> Recovered { get; } = [];
+    public List<FolderMove> MovedFolders { get; } = [];
+    public List<string> DeletedFolders { get; } = [];
+    public List<string> CopiedIn { get; } = [];
+    public List<string> Launched { get; } = [];
 
     public string Full(string relative) => Path.Combine(Root, relative.Replace('/', Path.DirectorySeparatorChar));
     public static VaultPath P(string relative) => VaultPath.TryCreate(relative, out var path, out var problem) ? path : throw new ArgumentException(problem);
+    // The v2 rule, as CheckoutRules.IsReadOnlyOnDisk and the Windows ReadOnlyPolicy state it.
+    public static bool IsReadOnlyByRule(LockOwnership ownership) => ownership != LockOwnership.ThisDevice;
 
     public void Open(string relative)
     {
@@ -54,6 +78,33 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
         return relative[..(slash + 1)] + "~$" + relative[(slash + 1)..];
     }
 
+    // The modeled read-only bit.
+    public bool IsReadOnly(string relative) { lock (gate) return readOnlyBits.Contains(P(relative).Value); }
+    // Someone cleared the bit by hand (Explorer, Properties, Read-only unchecked).
+    public void ClearReadOnly(string relative) { lock (gate) readOnlyBits.Remove(P(relative).Value); }
+    // A brand-new file at a path never inherits an old file's bit.
+    public void ForgetReadOnly(string relative) { lock (gate) readOnlyBits.Remove(P(relative).Value); }
+
+    // A student renames a folder in Explorer: Windows refuses while a file inside is open in
+    // SolidWorks; otherwise the folder moves, the read-only bits travel with its files, and
+    // the next Scan reports the move once (as the Windows adapter proves it by directory id).
+    public void RenameFolderAsStudent(string from, string to)
+    {
+        from = Folder(from);
+        to = Folder(to);
+        lock (gate)
+        {
+            var held = open.FirstOrDefault(path => Under(path, from));
+            if (held is not null) throw new IOException($"The action can't be completed because {Name(held)} is open in SOLIDWORKS.");
+        }
+        Directory.Move(Full(from), Full(to));
+        lock (gate)
+        {
+            Rekey(readOnlyBits, from, to);
+            studentFolderMoves.Add(new FolderMove(from, to));
+        }
+    }
+
     public VaultScan Scan()
     {
         List<LocalFile> files = [];
@@ -72,11 +123,29 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
             try
             {
                 var bytes = File.ReadAllBytes(full);
-                files.Add(new LocalFile(path, Convert.ToHexStringLower(SHA256.HashData(bytes)), bytes.Length));
+                bool bit;
+                lock (gate) bit = readOnlyBits.Contains(path.Value);
+                files.Add(new LocalFile(path, Convert.ToHexStringLower(SHA256.HashData(bytes)), bytes.Length, bit));
             }
             catch (IOException error) { problems.Add($"{relative}: {error.Message}"); }
         }
-        return new(files.OrderBy(f => f.Path).ToArray(), markers, problems);
+        List<string> folders = [];
+        foreach (var full in Directory.EnumerateDirectories(Root, "*", SearchOption.AllDirectories))
+        {
+            var relative = Path.GetRelativePath(Root, full).Replace(Path.DirectorySeparatorChar, '/');
+            if (!VaultIgnore.IsIgnored(relative) && VaultPath.TryCreate(relative, out var folder, out _)) folders.Add(folder.Value);
+        }
+        folders.Sort(StringComparer.OrdinalIgnoreCase);
+        FolderMove[] moves;
+        lock (gate)
+        {
+            // A bit stays with its file: a path with no file any more has no bit.
+            var present = files.Select(f => f.Path.Value).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            readOnlyBits.RemoveWhere(path => !present.Contains(path));
+            moves = [.. studentFolderMoves];
+            studentFolderMoves.Clear();
+        }
+        return new(files.OrderBy(f => f.Path).ToArray(), markers, problems, null, folders, moves);
     }
 
     public bool IsOpen(VaultPath path) { lock (gate) return open.Contains(path.Value); }
@@ -93,7 +162,9 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
         lock (gate) if (open.Contains(path.Value)) OpenWriteViolations.Add($"{what} {path}");
     }
 
-    public ReplaceOutcome Replace(VaultPath path, string? expectedHash, Stream content)
+    // Windows: a read-only destination is replaced and stays read-only; readOnly makes the new
+    // bytes read-only from their first moment.
+    public ReplaceOutcome Replace(VaultPath path, string? expectedHash, Stream content, bool readOnly = false)
     {
         var full = Full(path.Value);
         if (HashOf(full) != expectedHash) return ReplaceOutcome.Refused("Destination changed since the plan was made.");
@@ -104,7 +175,13 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
         var temp = Full(".armory/staging/" + Guid.NewGuid().ToString("N") + ".pending");
         Directory.CreateDirectory(Path.GetDirectoryName(temp)!);
         using (var output = File.Create(temp)) content.CopyTo(output);
-        File.Move(temp, full, overwrite: true);
+        lock (gate)
+        {
+            var wasReadOnly = expectedHash is not null && readOnlyBits.Contains(path.Value);
+            File.Move(temp, full, overwrite: true);
+            if (readOnly || wasReadOnly) readOnlyBits.Add(path.Value);
+            else readOnlyBits.Remove(path.Value);
+        }
         return ReplaceOutcome.Done;
     }
 
@@ -117,7 +194,11 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
         var target = Full($".armory/recovery/{Interlocked.Increment(ref recoveries)}/{path.Value}");
         Directory.CreateDirectory(Path.GetDirectoryName(target)!);
         File.Move(full, target);
-        lock (gate) Recovered.Add(path.Value);
+        lock (gate)
+        {
+            Recovered.Add(path.Value);
+            readOnlyBits.Remove(path.Value);
+        }
         return ReplaceOutcome.Done;
     }
 
@@ -131,10 +212,119 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
         Moves++;
         Directory.CreateDirectory(Path.GetDirectoryName(target)!);
         File.Move(source, target);
+        lock (gate) if (readOnlyBits.Remove(from.Value)) readOnlyBits.Add(to.Value);
         return ReplaceOutcome.Done;
     }
 
-    public void ApplyLockAttribute(VaultPath path, LockOwnership ownership) { lock (gate) Attributes[path.Value] = ownership; }
+    // Windows refuses while a file inside is open, never merges into an existing folder (a
+    // case-only rename is allowed), and the agent's own move is not reported by Scan.
+    public ReplaceOutcome MoveFolder(string from, string to)
+    {
+        from = Folder(from);
+        to = Folder(to);
+        if (from.Length == 0 || to.Length == 0) return ReplaceOutcome.Refused("That is the whole vault, not a folder in it.");
+        if (string.Equals(from, to, StringComparison.Ordinal)) return ReplaceOutcome.Done;
+        var caseOnly = string.Equals(from, to, StringComparison.OrdinalIgnoreCase);
+        if (!Directory.Exists(Full(from))) return ReplaceOutcome.Refused($"The folder {Name(from)} is not there any more.");
+        if (!caseOnly && to.StartsWith(from + "/", StringComparison.OrdinalIgnoreCase)) return ReplaceOutcome.Refused($"{Name(from)} cannot be moved into itself.");
+        if (!caseOnly && ExistsIgnoringCase(to)) return ReplaceOutcome.Refused($"Something named {Name(to)} is already there.");
+        lock (gate)
+        {
+            var held = open.FirstOrDefault(path => Under(path, from));
+            if (held is not null) return ReplaceOutcome.Refused($"{Name(held)} is open in SOLIDWORKS. Close it, then try again.");
+        }
+        foreach (var file in Directory.EnumerateFiles(Full(from), "*", SearchOption.AllDirectories))
+        {
+            var moved = to + "/" + Path.GetRelativePath(Full(from), file).Replace(Path.DirectorySeparatorChar, '/');
+            if (!VaultIgnore.IsIgnored(moved) && !VaultPath.TryCreate(moved, out _, out _))
+                return ReplaceOutcome.Refused($"{Path.GetFileName(file)} would have too long a path in {Name(to)}. Choose a shorter name.");
+        }
+        Directory.CreateDirectory(Path.GetDirectoryName(Full(to))!);
+        Directory.Move(Full(from), Full(to));
+        lock (gate)
+        {
+            Rekey(readOnlyBits, from, to);
+            foreach (var pair in Attributes.Where(p => Under(p.Key, from)).ToArray())
+            {
+                Attributes.Remove(pair.Key);
+                Attributes[to + pair.Key[from.Length..]] = pair.Value;
+            }
+            MovedFolders.Add(new FolderMove(from, to));
+        }
+        return ReplaceOutcome.Done;
+    }
+
+    // Only when nothing but ignored metadata (desktop.ini, Thumbs.db, ~$ markers) is inside.
+    public bool DeleteEmptyFolder(string folder)
+    {
+        folder = Folder(folder);
+        if (folder.Length == 0) return false;
+        var full = Full(folder);
+        if (!Directory.Exists(full)) return !File.Exists(full);
+        var files = Directory.EnumerateFiles(full, "*", SearchOption.AllDirectories).ToArray();
+        if (files.Any(f => !VaultIgnore.IsIgnored(Path.GetFileName(f)))) return false;
+        if (Directory.EnumerateDirectories(full, "*", SearchOption.AllDirectories).Any(d => Path.GetFileName(d).Equals(".armory", StringComparison.OrdinalIgnoreCase))) return false;
+        foreach (var file in files) File.Delete(file);
+        foreach (var directory in Directory.EnumerateDirectories(full, "*", SearchOption.AllDirectories).OrderByDescending(d => d.Length).Append(full))
+            Directory.Delete(directory, recursive: false);
+        lock (gate) DeletedFolders.Add(folder);
+        return true;
+    }
+
+    // A staged copy renamed into place; never overwrites (names compare as NTFS does).
+    public ReplaceOutcome CopyIn(string sourceFullPath, VaultPath to)
+    {
+        if (!Path.IsPathFullyQualified(sourceFullPath)) return ReplaceOutcome.Refused("Armory can only add a file from a folder on this computer.");
+        if (Directory.Exists(sourceFullPath)) return ReplaceOutcome.Refused($"{Path.GetFileName(sourceFullPath)} is a folder. Add the files in it.");
+        var source = new FileInfo(sourceFullPath);
+        if (!source.Exists) return ReplaceOutcome.Refused($"{source.Name} is not there any more.");
+        if (source.LinkTarget is not null) return ReplaceOutcome.Refused($"{source.Name} is a link to another file. Add the file itself.");
+        if (Path.GetFullPath(sourceFullPath).StartsWith(Path.GetFullPath(Full(".armory")) + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+            return ReplaceOutcome.Refused("Armory does not add its own private files.");
+        if (VaultIgnore.IsIgnored(to.Value)) return ReplaceOutcome.Refused($"Armory does not keep {to.Name} files.");
+        if (ExistsIgnoringCase(to.Value)) return ReplaceOutcome.Refused($"Something named {to.Name} is already in that folder.");
+        var temp = Full(".armory/staging/" + Guid.NewGuid().ToString("N") + ".copy");
+        Directory.CreateDirectory(Path.GetDirectoryName(temp)!);
+        File.Copy(sourceFullPath, temp);
+        Directory.CreateDirectory(Path.GetDirectoryName(Full(to.Value))!);
+        try { File.Move(temp, Full(to.Value), overwrite: false); }
+        catch (IOException error) { File.Delete(temp); return ReplaceOutcome.Refused(error.Message); }
+        lock (gate)
+        {
+            readOnlyBits.Remove(to.Value);
+            CopiedIn.Add(to.Value);
+        }
+        return ReplaceOutcome.Done;
+    }
+
+    // Records instead of starting a program.
+    public ReplaceOutcome Launch(VaultPath path)
+    {
+        if (RefusedLaunchTypes.Contains(Path.GetExtension(path.Name), StringComparer.OrdinalIgnoreCase))
+            return ReplaceOutcome.Refused($"Armory does not open {Path.GetExtension(path.Name)} files, because opening one runs a program.");
+        if (!File.Exists(Full(path.Value))) return ReplaceOutcome.Refused($"{path.Name} is not on this computer yet.");
+        lock (gate) Launched.Add(path.Value);
+        return ReplaceOutcome.Done;
+    }
+
+    public void ApplyLockAttribute(VaultPath path, LockOwnership ownership)
+    {
+        lock (gate)
+        {
+            Attributes[path.Value] = ownership;
+            // Windows changes the bit of a file that exists; the intent stays for later.
+            if (!File.Exists(Full(path.Value))) readOnlyBits.Remove(path.Value);
+            else if (IsReadOnlyByRule(ownership)) readOnlyBits.Add(path.Value);
+            else readOnlyBits.Remove(path.Value);
+        }
+    }
+
+    public void ApplyLockAttributes(IReadOnlyList<(VaultPath Path, LockOwnership Ownership)> attributes)
+    {
+        lock (gate) AttributeBatches++;
+        foreach (var (path, ownership) in attributes) ApplyLockAttribute(path, ownership);
+    }
+
     public void EnsureFolder(string vaultRelativeFolder) => Directory.CreateDirectory(Full(vaultRelativeFolder));
     public Stream CreateStaging(out string stagingName)
     {
@@ -144,4 +334,24 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
         return new FileStream(full, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None);
     }
     public void DeleteStaging(string stagingName) { var full = Full(stagingName); if (File.Exists(full)) File.Delete(full); }
+
+    private static string Folder(string folder) => folder.Replace('\\', '/').Trim('/');
+    private static string Name(string path) => path[(path.LastIndexOf('/') + 1)..];
+    private static bool Under(string path, string folder) => path.StartsWith(folder + "/", StringComparison.OrdinalIgnoreCase);
+    private static void Rekey(HashSet<string> paths, string from, string to)
+    {
+        foreach (var path in paths.Where(p => Under(p, from)).ToArray())
+        {
+            paths.Remove(path);
+            paths.Add(to + path[from.Length..]);
+        }
+    }
+    // NTFS compares names without case; Linux does not.
+    private bool ExistsIgnoringCase(string relative)
+    {
+        var full = Full(relative);
+        var parent = Path.GetDirectoryName(full)!;
+        return Directory.Exists(parent) && Directory.EnumerateFileSystemEntries(parent)
+            .Any(entry => string.Equals(Path.GetFileName(entry), Path.GetFileName(full), StringComparison.OrdinalIgnoreCase));
+    }
 }
