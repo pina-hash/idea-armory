@@ -19,14 +19,19 @@ public sealed partial class ClientTests
         public long[] Values { get { lock (values) return [.. values]; } }
     }
 
-    // Answers RPCs from a script of (status, body) pairs and keeps every request body it saw.
+    // Answers RPCs (and token refreshes) from a script of (status, body) pairs and keeps every
+    // request body, path and bearer token it saw.
     private sealed class CannedRpc(IEnumerable<(int Status, string Body)> answers) : HttpMessageHandler
     {
         private readonly Queue<(int Status, string Body)> script = new(answers);
         public List<string> Bodies { get; } = [];
+        public List<string> Paths { get; } = [];
+        public List<string?> Tokens { get; } = [];
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Bodies.Add(await request.Content!.ReadAsStringAsync(cancellationToken));
+            Paths.Add(request.RequestUri!.AbsolutePath);
+            Tokens.Add(request.Headers.Authorization?.Parameter);
             var (status, body) = script.Dequeue();
             return new HttpResponseMessage((HttpStatusCode)status) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
         }
@@ -176,6 +181,18 @@ public sealed partial class ClientTests
         Assert.True(refused.IsInUse);
         Assert.Single(refusal.Bodies); // a refusal is an answer, never sent again
         Assert.Equal("Gear.SLDPRT", Assert.Single(FolderRefusal.TryParse(refused.Details)!.Files).Name);
+        // A token that expires during a resend's wait is still refreshed once, and the call goes on.
+        const string expired = """{"code":"PGRST301","message":"JWT expired","details":null,"hint":null}""";
+        const string token = """{"access_token":"renewed","refresh_token":"refresh 2","expires_in":3600}""";
+        var late = new CannedRpc([(500, deadlock), (401, expired), (200, token), (200, "5")]);
+        Assert.Equal(5, await CannedApi(late).RenameFolderAsync(Guid.NewGuid(), "Drive", "Powertrain", Guid.NewGuid(), op));
+        Assert.Equal(["/rest/v1/rpc/armory_rename_folder", "/rest/v1/rpc/armory_rename_folder", "/auth/v1/token", "/rest/v1/rpc/armory_rename_folder"], late.Paths);
+        Assert.Equal(("access", "access", "renewed"), (late.Tokens[0], late.Tokens[1], late.Tokens[3]));
+        Assert.Single(late.Bodies.Where(b => b.Contains(op.ToString())).Distinct()); // the same operation id every time
+        // Only once per call: a second 401 after the refresh is an answer.
+        var twice = new CannedRpc([(401, expired), (200, token), (401, expired)]);
+        var unauthorized = await Assert.ThrowsAsync<ArmoryRpcException>(() => CannedApi(twice).DeleteFolderAsync(Guid.NewGuid(), "Drive", Guid.NewGuid(), Guid.NewGuid()));
+        Assert.Equal((401, "PGRST301", 3), (unauthorized.Status, unauthorized.SqlState, twice.Paths.Count));
     }
 
     [PostgresFact]

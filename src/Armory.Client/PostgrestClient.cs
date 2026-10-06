@@ -15,8 +15,11 @@ public sealed class PostgrestClient(HttpClient http, SessionManager sessions)
     {
         if (!function.StartsWith("armory_", StringComparison.Ordinal)) throw new ArgumentException("Only armory_ RPCs are called.", nameof(function));
         var session = await sessions.GetFreshAsync(cancellationToken: cancellationToken);
+        // One token refresh per call, whatever came before it: a token can expire during a
+        // deadlock resend's wait, and that 401 is still refreshed once and sent again.
+        var refreshed = false;
         var resent = 0;
-        for (var attempt = 0; ; attempt++)
+        while (true)
         {
             using var request = new HttpRequestMessage(HttpMethod.Post, session.SupabaseUrl.TrimEnd('/') + "/rest/v1/rpc/" + function)
             {
@@ -36,8 +39,9 @@ public sealed class PostgrestClient(HttpClient http, SessionManager sessions)
                 catch (HttpRequestException cut) { throw new ArmoryOfflineException($"Armory's answer was cut off ({function}).", cut); }
                 if (response.IsSuccessStatusCode) return body.Length == 0 ? null : JsonNode.Parse(body);
                 var error = ParseError(body);
-                if (response.StatusCode == HttpStatusCode.Unauthorized && error.Code?.StartsWith("PGRST3", StringComparison.Ordinal) == true && attempt == 0)
+                if (response.StatusCode == HttpStatusCode.Unauthorized && error.Code?.StartsWith("PGRST3", StringComparison.Ordinal) == true && !refreshed)
                 {
+                    refreshed = true;
                     session = await sessions.GetFreshAsync(forceRefresh: true, cancellationToken);
                     continue;
                 }
