@@ -22,6 +22,69 @@ Rules:
 - SolidWorks shared and side uploads fail closed for unreadable or too-new releases.
   A refusal never authorizes deleting the private snapshot.
 
+## Check out modes
+
+`SyncInput.Checkout` selects the mode. `Automatic` (the default) is v1 and is unchanged:
+`CheckoutTests.Automatic_plans_match_the_v1_fingerprint` hashes every Automatic plan over a
+small complete state space and compares it with the value recorded at `b18791d`.
+`SyncInput.Request` (`None`, `CheckIn`, `Undo`) is ignored in Automatic.
+
+`Explicit` is v2 (PDM style): only a check out takes the lock on a shared file, saves made
+while checked out are kept as side versions, and the shared version advances only at check
+in or when a file is added. Every `SaveSideVersion` in Explicit carries `SyncAction.Why`
+(`Conflict`, `LockBroken`, `SavedWhileCheckedOut`, `ChangedWithoutCheckOut`, `UndoCheckOut`);
+Automatic never sets it. "Live" means a remote revision that is not a tombstone.
+
+- E1, local bytes changed (or the lock was broken):
+  - a remote tombstone whose bytes were already kept (`PreservedLocalHash`): recovery, as
+    Automatic;
+  - the SolidWorks release gate, exactly as Automatic;
+  - no remote and no live base: `AcquireLockThenUpload` (`Upload` when this device holds
+    the lock), an add. A tracked file (live base) whose server record is missing is not an
+    add: its bytes are kept (`Conflict`, or `LockBroken`) and nothing is shared, as Automatic;
+  - a remote tombstone with no base, or with that same tombstone as base: the same, a
+    re-add that revives the removed name and its history;
+  - a broken lock, a remote that moved since base, a tombstone over a live base, or a lock
+    held by another person or by my other device: as Automatic (side version, then download
+    or notify when the remote is live). Why is `LockBroken`, `ChangedWithoutCheckOut` when
+    only the lock differs, else `Conflict`;
+  - a free lock: side version (`ChangedWithoutCheckOut`), then the shared version is put back;
+  - this device's lock: `None` keeps a side version (`SavedWhileCheckedOut`) and nothing
+    else; `CheckIn` uploads; `Undo` keeps a side version (`UndoCheckOut`), then restores the
+    shared version (download, or notify while open).
+- E2, local file absent: as Automatic, except that a live file another person or my other
+  device has checked out is put back (downloaded) instead of refused.
+- E3, local bytes unchanged: as Automatic.
+- Offline: as Automatic, but never an `AcquireLock` intent for a file with a live remote.
+
+`CheckoutRules.IsReadOnlyOnDisk(ownership)` is the read-only rule: a file the server has is
+read-only on disk unless this device holds its lock. Files the server does not have stay
+writable; the adapter decides which files the rule covers.
+
+`CheckoutRules.NextCheckOutStep(base, localHash, remote, isOpen)` is the check out rule.
+Check in shares whatever bytes are on disk, so the lock may be taken only over a copy that
+is the live shared version: its bytes equal its base and its base is the live remote
+(`TakeLock`). Otherwise: `KeepChangesFirst` when the copy has bytes saved without a check
+out (the read-only attribute was cleared), `DownloadFirst` when it is missing or behind and
+closed (D18), `CloseFirst` when it is missing or behind and open, `RemovedHere` when it was
+removed on this computer, and `NotShared` when the server has no live version. Adapter
+obligations for "Check out":
+
+- Hash the file at check-out time; never trust an older scan, because the bytes may have
+  changed since.
+- Ask the rule and take the lock only on `TakeLock`. On `KeepChangesFirst` or
+  `DownloadFirst`, run one pass for the file with the lock free (it keeps the changed bytes
+  as a kept copy and puts the shared version back, or downloads the current version), hash
+  again and ask again. Any other step refuses the check out with a plain sentence.
+
+`CheckoutTests` has one test per row above, the gate on every Explicit route in both modes,
+properties over the whole state space (the shared file advances only at check in or add,
+every kept copy names why, an open file is never replaced), the read-only rule, and the
+check out rule, including its agreement with the Explicit reconciler over the whole state
+space (a check out it allows can never share anything but the shared version).
+`CheckoutSimulationTests` runs Explicit under the seeded simulation (see
+[simulation](simulation.md)).
+
 Actions are ordered dependencies, not independent commands to launch in parallel. If
 side-version upload fails, the following download must not execute. Adapters must
 revalidate both local bytes/open state and the remote revision at execution, use server

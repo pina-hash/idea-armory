@@ -17,6 +17,7 @@ public sealed class DurableJournalStore : IJournalStore, IDisposable
     private readonly MemoryStream logical = new();
     private readonly object gate = new();
     private bool faulted;
+    private long generation;
     public JournalRecovery Recovery { get; }
     public DurableJournalStore(string file)
     {
@@ -84,6 +85,8 @@ public sealed class DurableJournalStore : IJournalStore, IDisposable
         if (Recovery.CorruptionDetected) throw new InvalidDataException($"Journal corruption at {Recovery.FailureOffset}; evidence retained at {Recovery.EvidencePath}.");
     }
     public byte[] ReadAll() { lock (gate) { CheckHealthy(); return logical.ToArray(); } }
+    // The logical bytes change only through Append and TruncateIncompleteTail, which bump this.
+    public long? Generation { get { lock (gate) { CheckHealthy(); return generation; } } }
     public void Append(ReadOnlySpan<byte> bytes)
     {
         lock (gate)
@@ -102,6 +105,7 @@ public sealed class DurableJournalStore : IJournalStore, IDisposable
                 stream.Write(bytes);
                 stream.Flush(true);
                 logical.Write(bytes);
+                generation++;
                 boundaries.Add((stream.Position, checked((int)logical.Length)));
             }
             catch { faulted = true; throw; }
@@ -124,6 +128,7 @@ public sealed class DurableJournalStore : IJournalStore, IDisposable
             stream.Flush(true);
             logical.SetLength(validLength);
             logical.Position = validLength;
+            generation++;
             boundaries.RemoveAll(b => b.LogicalEnd > validLength);
         }
     }

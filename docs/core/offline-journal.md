@@ -11,10 +11,25 @@ records are never rewritten or purged. Bad complete headers, checksums, or marke
 closed and retain evidence, because corruption is different from a torn append.
 
 Replay delivers ids to `IIntentSink.ApplyOnce`. The sink must atomically commit the effect
-and id, reject reuse with different content, and be idempotent after an acknowledgement
+and id, reject reuse with different content, and be idempotent after an acknowledgment
 is lost. The journal cannot manufacture exactly-once network semantics with a local flag.
 Each store has one serialized writer; `Flush` must establish durability. A real adapter
 must supply crash-safe truncation of only the incomplete suffix.
+
+`OfflineJournal` keeps the decoded entries in memory after the first read, with an index
+by id (`TryGet` returns the first entry with an id, the one a duplicate check compares
+against). `Append` and `Read` reuse them while `IJournalStore.Generation` is unchanged, so
+neither re-reads the whole store. A store reports a new generation whenever its bytes
+change by any route, including a write by another journal or a torn write, and each
+`Append` and `TruncateIncompleteTail` moves it up by exactly one; the journal then reads and
+decodes the store again, exactly as before. After its own append or truncation, a journal
+keeps its decoded entries only if the generation is exactly the next value; anything else
+means another writer got in between, so it drops them and the next call reads the store
+again (that call itself goes on with what it read, as the journal did before the cache). A
+failed store call drops the decoded entries. A store whose generation is null (the
+default) is read on every call. `DurableJournalStore` and the end-to-end memory store count
+their appends and truncations; the Core test store follows its own bytes, because tests
+change them directly, and so moves by one for each change it observes.
 
 `SaveRecorder` first persists bytes and ordered metadata through `ISaveSnapshotStore`,
 then appends the upload intent. Recovery enumerates captures and re-journals missing
@@ -26,5 +41,11 @@ interface guarantee and must be handled by the real agent's watcher/spike design
 `JournalTests` cuts the second append at every byte, including zero and the complete
 frame boundary, checks ordered replay twice, and appends a third entry after recovery.
 It also tests crash after remote commit, flush failure, conflicting ids, corruption,
-validation, and recovery of multiple snapshots. The simulation adds crashes during
-journal writes and remote-effect acknowledgement loss amid live multi-client sync.
+validation, and recovery of multiple snapshots. Cache tests show that 300 appends and reads
+read the store once, that changes made behind the journal are seen, and that a long-lived
+journal over a store with a generation behaves exactly like one that re-reads the store
+(same outcomes, bytes, reads and replays) through random torn writes, failed flushes,
+duplicates, conflicting ids, writes by another journal, torn bytes and corruption, and that
+a write by another journal right after an append or a truncation (before the generation is
+read again) is seen. The simulation adds crashes during journal writes and remote-effect
+acknowledgment loss amid live multi-client sync.
