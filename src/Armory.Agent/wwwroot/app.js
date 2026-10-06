@@ -2,9 +2,16 @@
  * app.js: the Armory Agent window.
  *
  * Renders everything from the AgentView the host sends (docs/agent/BRIDGE.md) and talks
- * back only through window.ArmoryBridge. Three screens: Connect, Home and File detail,
- * plus the Settings sheet over Home. The words are for students who have never used a
- * vault: plain sentences, no jargon.
+ * back only through window.ArmoryBridge. Three screens: Connect, Home (the status, what
+ * is moving right now, notices, My files and the team's files to browse) and File
+ * detail, plus the Settings sheet and one small dialog for folder questions. The words
+ * are for students who have never used a shared CAD folder: plain sentences, no jargon.
+ *
+ * Long lists (a folder of 5,000 files) are drawn a screenful at a time: rows have one
+ * fixed height, only the rows near the view (and the focused one) are in the page, and
+ * spacers whose heights are set through CSSOM stand in for the rest. A host 'activity'
+ * message (four times a second while files move) patches only the activity panel and
+ * the status line, so focus, typing and scroll never jump.
  */
 (function () {
 	'use strict';
@@ -14,17 +21,37 @@
 	var headerKeys = document.getElementById('header-keys');
 	var scroller = document.getElementById('scroller');
 	var sheet = document.getElementById('settings');
+	var ask = document.getElementById('ask');
 	var windowCue = document.getElementById('window-cue');
+	var resultBox = document.getElementById('result');
+	var resultWord = document.getElementById('result-word');
+
+	/** Rows drawn beyond each edge of the view in a long list. */
+	var OVERSCAN = 30;
 
 	/** Page state the host does not own. */
 	var ui = {
 		/** @type {import('./bridge.js').AgentView | null} */ view: null,
+		index: null, // lookups built once per view
 		screen: 'home', // 'home' | 'detail' (Connect is chosen by the view)
 		/** @type {any} */ detail: null,
 		projectId: null,
+		folders: {}, // project id -> the folder open in the browser ("" for its top)
+		selected: {}, // vault-relative path -> true, files picked in the open folder
+		anchor: null, // the last file picked, for a Shift range
+		expanded: {}, // notice key -> its list is open
+		promptGone: null, // the prompt the student answered with Not now
 		returnKey: null, // the control that opened detail, so Back can put focus there again
 		homeScroll: 0,
 		homeRecess: 0, // the recessed column's own scroll, in a wide window
+		vrange: {}, // list id -> the rows it drew last, so a redraw starts there
+		active: {}, // list id -> the row Tab enters the list on
+		pin: [], // control keys whose rows must stay drawn through a redraw
+		ask: null, // the open question in the small dialog
+		routeDialog: null, // a demo dialog to open once its file's detail has arrived
+		follow: null, // a folder renamed from here: the browser follows it to its new name
+		drag: false,
+		resultTimer: 0,
 		routed: false,
 		ready: false,
 		waitingForDetail: false
@@ -33,41 +60,41 @@
 	/* ------------------------------------------------------------- Words */
 
 	/*
-	 * ONE SEVERITY SCALE, everywhere a state is shown (the status display, Needs you, the
+	 * ONE SEVERITY SCALE, everywhere a state is shown (the status display, notices, the
 	 * chips, File detail): ok is green, look is amber, bad (blocked) is red, off is gray.
 	 * The word always carries the meaning; the color only adds to it.
 	 */
 	var LAMP = { ok: 'green', look: 'amber', bad: 'red', off: '' };
 
-	/**
-	 * Short status words for chips. A saved file gets no chip: its line already says
-	 * "Saved by". `same` lists the sentences that only repeat the chip, so a note beside
-	 * the chip can leave them out and say the next step instead. Editing chips are built
-	 * by whoChip(), with the person's initials.
-	 */
+	/** A notice's tone on the page's scale: news that is not a problem reads green. */
+	var NOTICE_TONE = { info: 'ok', look: 'look', bad: 'bad' };
+
+	/** Status chips. A file that is just up to date has none; its line says enough. */
 	var STATUS = {
-		synced: { chip: '', tone: '' },
-		syncing: { chip: 'Updating', tone: 'ok', same: ['updating', 'updating now'] },
-		waitingToSend: { chip: 'Waiting to send', tone: 'look', same: ['waiting to send'] },
-		editingByMe: { chip: "You're editing", tone: 'ok', same: ["you're editing this", 'you are editing this'] },
-		editingByOther: { chip: 'Being edited', tone: 'look' },
-		newerWaiting: { chip: 'Newer version waiting', tone: 'look', same: ['a newer version is waiting'] },
-		conflict: { chip: 'Your copy kept', tone: 'look', same: ['kept as your own copy'] },
-		refused: { chip: "Can't send", tone: 'bad', same: ["can't send this one", "can't send this"] },
-		notOnThisComputer: { chip: 'Not here yet', tone: 'off', same: ['not on this computer yet'] }
+		synced: null,
+		changed: { chip: 'Changed', tone: 'look' },
+		uploading: { chip: 'Uploading', tone: 'ok' },
+		downloading: { chip: 'Downloading', tone: 'ok' },
+		waiting: { chip: 'Waiting to upload', tone: 'look' },
+		newerWaiting: { chip: 'Newer version waiting', tone: 'look' },
+		keptCopy: { chip: 'Your copy kept', tone: 'look' },
+		notInArmory: { chip: 'Not in Armory', tone: 'off' },
+		notOnThisComputer: { chip: 'Not here yet', tone: 'off' }
 	};
 
-	/**
-	 * A Needs-you card: its glyph, its severity, and the labeled actions it offers. The
-	 * title says what happened, so the card carries no status chip.
-	 */
-	var ATTENTION = {
-		newerWaiting: { glyph: 'newer', tone: 'look', open: 'See the file', folder: false },
-		sideVersion: { glyph: 'copy', tone: 'look', open: 'See both copies', folder: true },
-		lockBroken: { glyph: 'copy', tone: 'look', open: 'See both copies', folder: true },
-		refused: { glyph: 'cant', tone: 'bad', open: 'See the file', folder: true, folderFirst: true },
-		nameTaken: { glyph: 'cant', tone: 'bad', open: null, folder: true, folderFirst: true },
-		releaseNotChecked: { glyph: 'question', tone: 'look', open: 'See the file', folder: true }
+	/** A notice card's glyph, by kind. */
+	var NOTICE_GLYPH = {
+		import: 'import',
+		nameShared: 'names',
+		newerWaiting: 'newer',
+		keptCopy: 'copy',
+		takenBack: 'takeback',
+		folderPutBack: 'folder-back',
+		projectPutBack: 'folder-back',
+		projectRenaming: 'rename',
+		cantSend: 'cant',
+		cantRead: 'cant',
+		checkInPartial: 'person'
 	};
 
 	var SYNC = {
@@ -78,10 +105,19 @@
 		attention: { readout: 'Needs you', tone: 'look' }
 	};
 
+	var DIRECTION = {
+		upload: { word: 'Uploading', glyph: 'up' },
+		download: { word: 'Downloading', glyph: 'down' },
+		move: { word: 'Moving', glyph: 'move' }
+	};
+
 	var KIND_WORD = { part: 'Part', asm: 'Assembly', drw: 'Drawing', file: 'File' };
 
-	/** Files that are in Armory and current on this computer. */
-	var UP_TO_DATE = { synced: true, editingByMe: true, editingByOther: true };
+	/** Files whose team version is the one on this computer. */
+	var UP_TO_DATE = { synced: true, changed: true, uploading: true, waiting: true, keptCopy: true };
+
+	/** Characters Windows never allows in a folder name. */
+	var BAD_NAME = /[\\/:*?"<>|]/;
 
 	/* ----------------------------------------------------------- Helpers */
 
@@ -98,8 +134,17 @@
 		return '<svg class="' + (cls || 'icon') + '" aria-hidden="true" focusable="false"><use href="#i-' + name + '"/></svg>';
 	}
 
+	/** 1,280 with a thousands separator. */
+	function num(n) {
+		return Number(n || 0).toLocaleString('en-US');
+	}
+
 	function plural(n, one, many) {
-		return n + ' ' + (n === 1 ? one : many);
+		return num(n) + ' ' + (n === 1 ? one : many);
+	}
+
+	function clamp(v, lo, hi) {
+		return Math.max(lo, Math.min(hi, v));
 	}
 
 	/** "just now", "5 minutes ago", "2 hours ago", "yesterday", "3 days ago". */
@@ -155,10 +200,29 @@
 		}
 	}
 
-	function size(bytes) {
-		if (bytes < 1024) return plural(bytes, 'byte', 'bytes');
-		if (bytes < 1024 * 1024) return Math.round(bytes / 1024) + ' KB';
-		return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+	/** "612 KB", "2.1 GB", "48 MB": one decimal, dropped when it is zero. */
+	function bytes(b) {
+		b = Math.max(0, Math.round(b || 0));
+		if (b < 1024) return plural(b, 'byte', 'bytes');
+		var units = ['KB', 'MB', 'GB', 'TB'];
+		var v = b / 1024;
+		var u = 0;
+		while (v >= 1024 && u < units.length - 1) {
+			v /= 1024;
+			u++;
+		}
+		var t = v.toFixed(1);
+		if (/\.0$/.test(t)) t = t.slice(0, -2);
+		return t + ' ' + units[u];
+	}
+
+	/** "about 3 min", "about 20 sec", "less than a minute". */
+	function timeLeft(seconds) {
+		if (seconds == null) return '';
+		if (seconds >= 90) return 'about ' + Math.round(seconds / 60) + ' min';
+		if (seconds >= 55) return 'about 1 min';
+		if (seconds >= 10) return 'about ' + Math.round(seconds / 5) * 5 + ' sec';
+		return 'less than a minute';
 	}
 
 	/** "Robot 2027 › Drivetrain" for "Robot 2027/Drivetrain/Gearbox.SLDASM". The path is
@@ -206,12 +270,10 @@
 
 	/** The signed-in student's name, as the view knows it. */
 	function myName(v) {
-		for (var i = 0; v && i < v.projects.length; i++)
-			for (var j = 0; j < v.projects[i].folders.length; j++)
-				for (var k = 0; k < v.projects[i].folders[j].files.length; k++) {
-					var h = v.projects[i].folders[j].files[k].holder;
-					if (h && h.isMe) return h.name;
-				}
+		var mine = (v.myFiles || []).filter(function (f) {
+			return f.checkout && f.checkout.state === 'mine' && f.checkout.name;
+		})[0];
+		if (mine) return mine.checkout.name;
 		return v && v.account ? nameFromEmail(v.account.email) : '';
 	}
 
@@ -233,39 +295,22 @@
 		return '<span class="chip kind">' + esc(KIND_WORD[kindOf(name)]) + '</span>';
 	}
 
-	/** Who is editing: their initials in a disc, then the words. Green when it is you,
-	 *  amber when it is someone else (you can look, not save). */
-	function whoChip(holderName, isMe, device) {
-		var words = isMe ? (device ? "You're editing on " + device : "You're editing") : firstName(holderName) + ' is editing';
+	/** Who has it checked out, always shown: their initials in a disc and the engine's
+	 *  own words ("Checked out by Maria Lopez on LAB-PC-07", green when it is you, amber
+	 *  when it is someone else), or plain "Available" with no chip. */
+	function checkoutMark(c) {
+		if (!c || c.state === 'available') return '<span class="row-avail">' + esc((c && c.label) || 'Available') + '</span>';
+		var tone = c.state === 'other' ? 'look' : 'ok';
 		return (
-			'<span class="chip who" data-tone="' + (isMe ? 'ok' : 'look') + '"><span class="avatar" aria-hidden="true">' + esc(initials(holderName)) + '</span>' +
-			esc(words) + '</span>'
+			'<span class="chip who" data-tone="' + tone + '"><span class="avatar" aria-hidden="true">' + esc(initials(c.name)) + '</span>' +
+			'<span class="who-word">' + esc(c.label) + '</span></span>'
 		);
 	}
 
-	function statusChip(row, meName) {
-		var h = row.holder;
-		if (row.status === 'editingByMe' || (h && h.isMe && (row.status === 'synced' || row.status === 'editingByOther')))
-			return whoChip((h && h.name) || meName, true, h && h.isMyOtherComputer ? h.device : null);
-		if (row.status === 'editingByOther' && h) return whoChip(h.name, false);
-		var s = STATUS[row.status] || { chip: row.status, tone: '' };
-		var out = s.chip ? chip(s.chip, s.tone) : '';
-		if (row.releaseNotChecked) out += chip('Version not checked', 'look');
-		return out;
-	}
-
-	/** A note without the sentences that only repeat its chip: "Waiting to send." beside
-	 *  a Waiting to send chip says nothing new. Null when nothing is left. */
-	function noteBesideChip(note, status) {
-		if (!note) return null;
-		var same = (STATUS[status] && STATUS[status].same) || [];
-		var kept = String(note)
-			.split(/(?<=[.!?])\s+/)
-			.filter(function (sentence) {
-				var plain = sentence.trim().replace(/[.!?]+$/, '').toLowerCase();
-				return same.indexOf(plain) < 0;
-			});
-		return kept.length ? kept.join(' ') : null;
+	function statusChip(status, changed) {
+		var s = STATUS[status];
+		if (!s && changed) s = STATUS.changed;
+		return s ? chip(s.chip, s.tone) : '';
 	}
 
 	/** "2 things", "1 file": a count in words, for the right end of a label row. */
@@ -273,35 +318,9 @@
 		return '<span class="count">' + esc(plural(n, one, many)) + '</span>';
 	}
 
-	function findRow(view, fileId) {
-		if (!view || !fileId) return null;
-		for (var i = 0; i < view.projects.length; i++) {
-			var p = view.projects[i];
-			for (var j = 0; j < p.folders.length; j++) {
-				var f = p.folders[j];
-				for (var k = 0; k < f.files.length; k++) if (f.files[k].fileId === fileId) return { row: f.files[k], project: p, folder: f };
-			}
-		}
-		return null;
-	}
-
-	/** What a team file row's meta line says: who and when. */
-	function rowMeta(row) {
-		var h = row.holder;
-		if (h && !h.isMe && row.status === 'editingByOther') return 'Since ' + agoWhole(h.since) + ' on ' + h.device;
-		if (row.status === 'notOnThisComputer') return 'Coming to this computer soon';
-		if (row.updatedBy) return metaLine(['Saved by ' + row.updatedBy, row.updatedAt ? agoWhole(row.updatedAt) : '']);
-		return '';
-	}
-
-	/** The worst severity among the things that need the student. */
-	function needsTone(items) {
-		var tone = '';
-		(items || []).forEach(function (a) {
-			var t = (ATTENTION[a.kind] || {}).tone || 'look';
-			if (t === 'bad' || !tone) tone = t;
-		});
-		return tone || 'look';
+	/** Attribute-safe text for a querySelector value. */
+	function sel(v) {
+		return String(v).replace(/["\\]/g, '\\$&');
 	}
 
 	/** A title bar: spaced mono caps between two hatched rails (the site's engraved
@@ -316,6 +335,129 @@
 		);
 	}
 
+	/** A key with a glyph and its word; the word hides in a narrow window (`tight`), and
+	 *  stays for screen readers and in the tooltip. */
+	function key(o) {
+		return (
+			'<button class="key' + (o.cls ? ' ' + o.cls : '') + '" type="button" data-action="' + o.action + '"' +
+			(o.key ? ' data-key="' + esc(o.key) + '"' : '') +
+			(o.path != null ? ' data-path="' + esc(o.path) + '"' : '') +
+			(o.fileId ? ' data-file-id="' + esc(o.fileId) + '"' : '') +
+			(o.extra || '') +
+			(o.title ? ' title="' + esc(o.title) + '"' : '') +
+			(o.label ? ' aria-label="' + esc(o.label) + '"' : '') +
+			(o.disabled ? ' disabled' : '') +
+			'>' + (o.glyph ? icon(o.glyph) : '') + '<span class="key-word">' + esc(o.word) + '</span></button>'
+		);
+	}
+
+	/* ------------------------------------------------------- View lookups */
+
+	// One collator for every sort: "Part-2" before "Part-10", case ignored.
+	var collator = typeof Intl !== 'undefined' ? new Intl.Collator('en', { sensitivity: 'base', numeric: true }) : null;
+	function byName(a, b) {
+		return collator ? collator.compare(String(a), String(b)) : String(a).localeCompare(String(b));
+	}
+
+	/** Everything the page looks up more than once, built once per view: rows by file id
+	 *  and by path, and each project's folder tree with the files under every folder. */
+	function buildIndex(v) {
+		var byId = {};
+		var byPath = {};
+		var projects = {};
+		(v.projects || []).forEach(function (p) {
+			var folders = {};
+			var children = {};
+			var root = null;
+			(p.folders || []).forEach(function (f) {
+				folders[f.path] = f;
+				(f.files || []).forEach(function (r) {
+					var hit = { row: r, project: p, folder: f };
+					if (r.fileId) byId[r.fileId] = hit;
+					byPath[r.path] = hit;
+					if (!root) root = r.path.split('/')[0];
+				});
+			});
+			if (!folders['']) folders[''] = { path: '', name: p.name, fileCount: 0, files: [] };
+			// Every folder's parents are folders too, even when the host lists only the leaves.
+			Object.keys(folders).forEach(function (path) {
+				var parts = path ? path.split('/') : [];
+				for (var i = parts.length; i > 0; i--) {
+					var self = parts.slice(0, i).join('/');
+					var parent = parts.slice(0, i - 1).join('/');
+					if (!folders[self]) folders[self] = { path: self, name: parts[i - 1], fileCount: 0, files: [] };
+					(children[parent] = children[parent] || {})[self] = true;
+				}
+			});
+			var under = {};
+			var subfolders = {};
+			Object.keys(folders).forEach(function (path) {
+				var parts = path ? path.split('/') : [];
+				for (var i = parts.length; i >= 0; i--) {
+					var a = parts.slice(0, i).join('/');
+					under[a] = (under[a] || 0) + (folders[path].files || []).length;
+					if (i < parts.length) subfolders[a] = (subfolders[a] || 0) + 1;
+				}
+			});
+			var kids = {};
+			Object.keys(children).forEach(function (k) {
+				kids[k] = Object.keys(children[k]).sort(function (a, b) {
+					return byName(folders[a].name, folders[b].name);
+				});
+			});
+			projects[p.id] = { project: p, folders: folders, children: kids, under: under, subfolders: subfolders, root: root || p.name };
+		});
+		return { byId: byId, byPath: byPath, projects: projects };
+	}
+
+	/** After a rename sent from here lands, the open folder is the renamed one. */
+	function followRename() {
+		var f = ui.follow;
+		var pi = f ? ui.index.projects[f.projectId] : null;
+		if (!pi || !pi.folders[f.to] || pi.folders[f.from]) return;
+		var open = ui.folders[f.projectId] || '';
+		if (open === f.from || open.indexOf(f.from + '/') === 0) ui.folders[f.projectId] = f.to + open.slice(f.from.length);
+		ui.follow = null;
+	}
+
+	function findRow(fileId) {
+		return ui.index && fileId ? ui.index.byId[fileId] || null : null;
+	}
+
+	/** The vault-relative path of a folder in a project ("Robot 2027/Drivetrain"). */
+	function folderPathOf(pi, folder) {
+		return pi.root + (folder ? '/' + folder : '');
+	}
+
+	/** Every row under a folder (the folder's own files and all its subfolders'). */
+	function rowsUnder(pi, folder) {
+		var out = [];
+		Object.keys(pi.folders).forEach(function (path) {
+			if (folder === '' || path === folder || path.indexOf(folder + '/') === 0) out = out.concat(pi.folders[path].files || []);
+		});
+		return out;
+	}
+
+	/** The browser's place: which project, which folder in it, and that project's lookups. */
+	function browserPlace() {
+		var v = ui.view;
+		var projects = v.projects || [];
+		if (!projects.length) return null;
+		var current = projects.filter(function (p) {
+			return p.id === ui.projectId;
+		})[0] || projects.filter(function (p) {
+			return !p.archived;
+		})[0] || projects[0];
+		ui.projectId = current.id;
+		var pi = ui.index.projects[current.id];
+		var folder = ui.folders[current.id] || '';
+		// A folder that is gone (deleted, or renamed by someone else) leaves the browser at
+		// the nearest folder above it that is still there.
+		while (folder && !pi.folders[folder]) folder = folder.split('/').slice(0, -1).join('/');
+		ui.folders[current.id] = folder;
+		return { project: current, pi: pi, folder: folder };
+	}
+
 	/* --------------------------------------------------------- Rendering */
 
 	function activeKey() {
@@ -323,9 +465,9 @@
 		return el && el.getAttribute ? el.getAttribute('data-key') : null;
 	}
 
-	function restoreFocus(key) {
-		if (!key) return;
-		var el = document.querySelector('[data-key="' + key.replace(/"/g, '\\"') + '"]');
+	function restoreFocus(k) {
+		if (!k) return;
+		var el = document.querySelector('[data-key="' + sel(k) + '"]');
 		if (el && el !== document.activeElement) el.focus({ preventScroll: true });
 	}
 
@@ -338,18 +480,28 @@
 		// In a wide window Home's lists scroll inside the recessed column, and a new view
 		// must not throw the student back to the top of them.
 		var keepRecess = document.body.getAttribute('data-screen') === 'home' && screen === 'home' ? recessTop() : null;
+		ui.pin = [focus, ui.returnKey];
+		lists = {};
+		lastActivity = null;
 		document.body.setAttribute('data-screen', screen);
 		headerKeys.innerHTML = screen === 'connect' ? '' : headerHtml(v);
 		if (screen === 'connect') main.innerHTML = connectHtml(v);
 		else if (screen === 'detail') main.innerHTML = detailHtml(v);
 		else main.innerHTML = homeHtml(v);
+		// Long lists first draw where they were, so the page is its full height before
+		// anything is measured, and a kept scroll position is never cut short.
+		mountLists(true);
 		if (keepRecess !== null) setRecessTop(keepRecess);
+		applyBars(main);
 		if (sheet.open) {
 			if (screen === 'connect') sheet.close();
 			else sheet.innerHTML = settingsHtml(v);
 		}
+		if (ask.open && screen === 'connect') ask.close();
 		document.title = screen === 'detail' && ui.detail ? ui.detail.name + ' · Armory' : 'Armory';
+		mountLists(false);
 		restoreFocus(focus);
+		paintDrag();
 		updateCues();
 	}
 
@@ -385,7 +537,7 @@
 		// The welcome sentence is for before the first click; after it, the status plate
 		// says what is happening instead.
 		if (!waiting && !finishing && !failed)
-			html += '<p class="lead">You only do this once. After that, Armory saves your work for the team and keeps everyone\'s files up to date by itself.</p>';
+			html += '<p class="lead">You only do this once. After that, Armory keeps your team\'s files up to date on this computer by itself.</p>';
 		html += '<ol class="steps">';
 		html += step(1, current, failed ? 'Click <strong>Try again</strong> below.' : 'Click the button below.');
 		html += step(2, current, 'Sign in with your school Google account in the browser that opens.');
@@ -399,10 +551,7 @@
 			html += '<button class="key" type="button" data-action="connect" data-key="cn-reopen">Open the browser again</button>';
 			html += '<button class="key" type="button" data-action="cancelConnect" data-key="cn-cancel">Cancel</button>';
 		} else if (!finishing) {
-			html +=
-				'<button class="key primary" type="button" data-action="connect" data-key="cn-connect">' +
-				(failed ? 'Try again' : 'Connect this computer') +
-				'</button>';
+			html += '<button class="key primary" type="button" data-action="connect" data-key="cn-connect">' + (failed ? 'Try again' : 'Connect this computer') + '</button>';
 		}
 		html += '</div>';
 		html += '</div></div>';
@@ -432,10 +581,10 @@
 
 	function step(n, current, text) {
 		var state = n < current ? 'done' : n === current ? 'current' : 'todo';
-		var num = state === 'done' ? icon('check') + '<span class="visually-hidden">Done:</span>' : String(n);
+		var label = state === 'done' ? icon('check') + '<span class="visually-hidden">Done:</span>' : String(n);
 		return (
 			'<li class="step panel" data-step="' + state + '"' + (state === 'current' ? ' aria-current="step"' : '') + '>' +
-			'<span class="step-num">' + num + '</span><span class="step-text">' + text + '</span></li>'
+			'<span class="step-num">' + label + '</span><span class="step-text">' + text + '</span></li>'
 		);
 	}
 
@@ -461,13 +610,10 @@
 		if (me) html += '<div><dt class="label">You\'re signed in as</dt><dd class="mono-plate">' + esc(me) + '</dd></div>';
 		html += '</dl>';
 		html += '<div class="connect-actions">';
-		html +=
-			'<button class="key primary" type="button" data-action="useFolder" data-path="' + esc(mine) + '" data-key="cn-own">Use <span class="key-path">' + esc(mine) + '</span></button>';
+		html += '<button class="key primary" type="button" data-action="useFolder" data-path="' + esc(mine) + '" data-key="cn-own">Use <span class="key-path">' + esc(mine) + '</span></button>';
 		html += '<button class="key" type="button" data-action="chooseVaultRoot" data-key="cn-choose">' + icon('folder') + '<span>Choose another folder</span></button>';
 		html += '</div>';
-		html +=
-			'<p class="connect-foot">Not sure? Ask your teacher. Not you? ' +
-			'<button class="textlink" type="button" data-action="signOut" data-key="cn-signout">Sign out</button></p>';
+		html += '<p class="connect-foot">Not sure? Ask your teacher. Not you? <button class="textlink" type="button" data-action="signOut" data-key="cn-signout">Sign out</button></p>';
 		html += '</div></div>';
 		return html;
 	}
@@ -475,12 +621,13 @@
 	/* ---- Home ---- */
 
 	/*
-	 * Home: the status display, how much is up to date, and this computer's account on
-	 * the left; the recessed column on the right holding Needs you, My files (what you're
-	 * editing and what isn't in Armory yet) and every team file. In a wide window the
-	 * column scrolls inside its own frame, so the status stays in sight; in a narrow one
-	 * the window scrolls and the parts stack in reading order, the status shrunk to one
-	 * lit strip.
+	 * Home: the status display and this computer on the left; the recessed column on the
+	 * right holding, in order, the selection bar (while files are picked), the quiet
+	 * check-out question, what is moving right now, the notices (one card per kind), My
+	 * files (my check outs and my files that aren't in Armory) and the team's files to
+	 * browse. In a wide window the column scrolls inside its own frame, so the status
+	 * stays in sight; in a narrow one the window scrolls and the parts stack in reading
+	 * order, the status shrunk to one lit strip.
 	 */
 	function homeHtml(v) {
 		return (
@@ -490,9 +637,12 @@
 			'<path class="e-dk" d="M0 17.5 H62 L76 3.5 H120" /><path class="e-lt" d="M0 18.5 H62.4 L76.4 4.5 H120" /></svg>' +
 			statusHtml(v) +
 			'<div class="main-col plate-recess"><div class="recess-scroll" id="recess-scroll">' +
-			needsHtml(v) +
+			selectionBarHtml(v) +
+			promptHtml(v) +
+			activityHtml(v.activity) +
+			noticesHtml(v) +
 			myFilesHtml(v) +
-			projectsHtml(v) +
+			browserHtml(v) +
 			'</div>' +
 			cueHtml('recess-cue') +
 			'</div>' +
@@ -505,46 +655,56 @@
 		return '<div class="scroll-cue" id="' + id + '" data-on="false" aria-hidden="true"><span class="cue-chip">' + icon('chev-down') + '<span class="cue-word"></span></span></div>';
 	}
 
+	function recessEl() {
+		return document.getElementById('recess-scroll');
+	}
+
+	/** What scrolls Home's lists: the recessed column in a wide window, else the window. */
+	function homeScroller() {
+		var r = recessEl();
+		return r && getComputedStyle(r).overflowY !== 'visible' ? r : scroller;
+	}
+
 	function recessTop() {
-		var r = document.getElementById('recess-scroll');
+		var r = recessEl();
 		return r ? r.scrollTop : 0;
 	}
 
 	function setRecessTop(top) {
-		var r = document.getElementById('recess-scroll');
+		var r = recessEl();
 		if (r) r.scrollTop = top;
 	}
 
-	/** The display holds the readout and its words. Its one key sits under it: Pause
-	 *  sending (gone while offline, when there is nothing to pause), or Resume as the
-	 *  screen's green primary while paused. */
+	/** The display holds the readout and its words: while files move, the line is what is
+	 *  moving ("Downloading 412 of 1,280 files, 2.1 GB left, about 3 min"). Its one key
+	 *  sits under it: Pause sending (gone while offline, when there is nothing to pause),
+	 *  or Resume as the screen's green primary while paused. */
 	function statusHtml(v) {
 		var s = SYNC[v.sync.state] || SYNC.synced;
 		var tone = s.tone;
 		var readout = s.readout;
 		if (v.sync.state === 'attention') {
-			tone = needsTone(v.needsMe);
-			if (tone === 'bad' && (v.needsMe || []).every(function (a) { return (ATTENTION[a.kind] || {}).tone === 'bad'; })) readout = "Can't send";
+			tone = noticesTone(v.notices);
+			if (tone === 'bad' && (v.notices || []).every(function (n) { return n.tone === 'bad'; })) readout = "Can't upload";
 		}
-		// The host's sentence comes first; when it sends none, the count of changes still
-		// on this computer says what is waiting (pendingCount), so nothing goes unsaid.
-		var detail = v.sync.detail || (v.sync.pendingCount > 0 ? plural(v.sync.pendingCount, 'change is', 'changes are') + ' waiting to send.' : null);
-		var key = '';
+		var line = (v.activity && v.activity.line) || v.sync.line;
+		var detail = v.sync.detail || (v.sync.pendingCount > 0 ? plural(v.sync.pendingCount, 'file is', 'files are') + ' waiting to upload.' : null);
+		var k = '';
 		if (v.sync.state === 'paused')
-			key = '<button class="key primary status-key" type="button" data-action="resume" data-key="sync-toggle">' + icon('play') + '<span class="key-word">Resume sending</span></button>';
+			k = '<button class="key primary status-key" type="button" data-action="resume" data-key="sync-toggle">' + icon('play') + '<span class="key-word">Resume sending</span></button>';
 		else if (v.sync.state !== 'offline')
-			key =
-				'<button class="key status-key" type="button" data-action="pause" data-key="sync-toggle" title="Stop sending and getting files for now">' +
+			k =
+				'<button class="key status-key" type="button" data-action="pause" data-key="sync-toggle" title="Stop uploading and downloading files for now">' +
 				icon('pause') + '<span class="key-word">Pause sending</span></button>';
 		return (
-			'<section class="group top status-group' + (key ? '' : ' no-key') + '" aria-labelledby="status-label">' +
+			'<section class="group top status-group' + (k ? '' : ' no-key') + '" aria-labelledby="status-label">' +
 			'<h2 class="section-label" id="status-label">Status</h2>' +
 			'<div class="display" data-tone="' + tone + '">' +
 			'<p class="screen lcd" role="status"><span>' + esc(readout) + '</span></p>' +
-			'<p class="sync-line">' + esc(glue(v.sync.line)) + '</p>' +
+			'<p class="sync-line" id="sync-line">' + esc(glue(line)) + '</p>' +
 			(detail ? '<p class="sync-detail">' + esc(glue(detail)) + '</p>' : '') +
 			'</div>' +
-			key +
+			k +
 			'</section>'
 		);
 	}
@@ -554,15 +714,14 @@
 		var total = 0;
 		var good = 0;
 		(v.projects || []).forEach(function (p) {
+			if (p.archived) return;
 			p.folders.forEach(function (f) {
 				f.files.forEach(function (r) {
+					if (!r.fileId) return; // a file that isn't in Armory is not a team file yet
 					total++;
 					if (UP_TO_DATE[r.status]) good++;
 				});
 			});
-		});
-		(v.myFiles || []).forEach(function (f) {
-			if (!f.fileId) total++; // a new file that isn't in Armory yet
 		});
 		return { good: good, total: total };
 	}
@@ -574,14 +733,14 @@
 		var pct = Math.round((c.good / c.total) * 100);
 		var all = c.good === c.total;
 		var tone = all || v.sync.state === 'syncing' ? 'ok' : 'look';
-		var words = (all ? 'All ' + c.total : c.good + ' of ' + c.total) + ' team files are up to date on ' + where + '.';
+		var words = (all ? 'All ' + num(c.total) : num(c.good) + ' of ' + num(c.total)) + ' team files are up to date on ' + where + '.';
 		return (
 			'<div class="gauge">' +
 			'<div class="ring" data-tone="' + tone + '">' +
 			'<svg viewBox="0 0 100 100" aria-hidden="true" focusable="false">' +
 			'<circle class="ring-track" cx="50" cy="50" r="41" />' +
 			'<circle class="ring-arc" cx="50" cy="50" r="41" pathLength="100" stroke-dasharray="' + pct + ' 100" transform="rotate(-90 50 50)" /></svg>' +
-			'<span class="ring-glass" aria-hidden="true"><span class="ring-value">' + c.good + '</span><span class="ring-of">of ' + c.total + '</span></span>' +
+			'<span class="ring-glass" aria-hidden="true"><span class="ring-value">' + esc(c.good > 9999 ? Math.round(c.good / 1000) + 'k' : String(c.good)) + '</span><span class="ring-of">of ' + esc(c.total > 9999 ? Math.round(c.total / 1000) + 'k' : String(c.total)) + '</span></span>' +
 			'</div>' +
 			'<p class="gauge-words">' + esc(glue(words)) + '</p>' +
 			'</div>'
@@ -604,268 +763,629 @@
 		);
 	}
 
-	/** Needs you: under its own lit strip ("2 things to look at" in amber, or "to fix" in
-	 *  red when something can't be sent; the status display already says "Needs you"),
-	 *  one card per thing, each with a colored edge, its glyph and labeled actions. */
-	function needsHtml(v) {
-		var items = v.needsMe || [];
-		// Nothing needs the student: the group is not drawn at all. The status display
-		// already says so, and the group appears the moment something does.
+	/* ---- The quiet check-out question ---- */
+
+	/** SolidWorks opened a file this computer has not checked out: one slim card at the
+	 *  top of the column, never a window that takes focus. When someone else has it, it
+	 *  says who instead. */
+	function promptHtml(v) {
+		var p = v.prompt;
+		if (!p || ui.promptGone === promptKey(p)) return '';
+		var free = !!p.canCheckOut;
+		// The file's name never breaks at its hyphens ("Plate- / Left.SLDPRT").
+		var name = '<span class="fname">' + esc(p.name) + '</span>';
+		var title = free ? 'Check out ' + name + ' to edit it?' : name + ' is ' + esc(glue(lowerFirst(p.checkout.label))) + '.';
+		var words = free ? 'SolidWorks opened it read-only. Check it out, and your saves can go to the team.' : 'You can look, but you can\'t save changes.';
+		var keys = free
+			? key({ action: 'promptCheckOut', key: 'prompt-checkout', cls: 'primary', glyph: 'checkout', word: 'Check out', path: p.path }) +
+			  key({ action: 'promptLater', key: 'prompt-later', word: 'Not now' })
+			: key({ action: 'promptLater', key: 'prompt-later', word: 'OK' });
+		return (
+			'<section class="prompt-card panel" data-tone="' + (free ? 'ok' : 'look') + '" aria-labelledby="prompt-title">' +
+			'<span class="attn-glyph">' + icon(free ? 'checkout' : 'person') + '</span>' +
+			'<div class="attn-body">' +
+			'<h2 class="attn-title" id="prompt-title">' + title + '</h2>' +
+			'<p class="attn-detail">' + esc(words) + '</p>' +
+			'<div class="attn-actions">' + keys + '</div>' +
+			'</div></section>'
+		);
+	}
+
+	function promptKey(p) {
+		return p.path + '|' + (p.checkout ? p.checkout.state : '');
+	}
+
+	function lowerFirst(s) {
+		s = String(s || '');
+		return s.charAt(0).toLowerCase() + s.slice(1);
+	}
+
+	/* ---- Right now: what is moving ---- */
+
+	function hasActivity(a) {
+		return !!(a && (a.upload || a.download || a.move || a.waiting || (a.active && a.active.length)));
+	}
+
+	/** "Right now": each direction with its count, what is left, the speed, the time left
+	 *  and a progress track; each file moving now with its own track; and how many files
+	 *  wait. Always in the page (hidden when nothing moves) so an 'activity' message can
+	 *  patch it in place. */
+	function activityHtml(a) {
+		return (
+			'<section class="group top activity-group" id="activity-group" aria-labelledby="act-label"' + (hasActivity(a) ? '' : ' hidden') + '>' +
+			'<h2 class="section-label" id="act-label">Right now</h2>' +
+			'<div class="panel act-panel" id="act-panel">' + activityInner(a) + '</div>' +
+			'</section>'
+		);
+	}
+
+	function track(pct, label) {
+		pct = clamp(Math.round(pct), 0, 100);
+		return (
+			'<span class="track" role="progressbar" aria-label="' + esc(label) + '" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + pct + '">' +
+			'<span class="track-fill" data-pct="' + pct + '"></span></span>'
+		);
+	}
+
+	function directionHtml(name, d) {
+		if (!d) return '';
+		var w = DIRECTION[name];
+		var pct = d.bytesTotal > 0 ? (d.bytesDone / d.bytesTotal) * 100 : d.filesTotal > 0 ? (d.filesDone / d.filesTotal) * 100 : 0;
+		var meta;
+		if (d.bytesTotal > 0) meta = metaLine([bytes(d.bytesTotal - d.bytesDone) + ' left', d.bytesPerSecond > 0 ? bytes(d.bytesPerSecond) + '/s' : '', timeLeft(d.secondsLeft)]);
+		else meta = String(d.line || '').replace(/^\S+ [\d,]+ files? /, '').replace(/^./, function (c) {
+			return c.toUpperCase();
+		});
+		return (
+			'<div class="act-dir" data-direction="' + name + '" title="' + esc(d.line || '') + '">' +
+			'<p class="act-head label">' + icon(w.glyph) + '<span class="act-word">' + esc(w.word) + '</span></p>' +
+			'<p class="act-count">' + esc(glue(num(d.filesDone) + ' of ' + plural(d.filesTotal, 'file', 'files'))) + '</p>' +
+			track(pct, w.word + ' ' + num(d.filesDone) + ' of ' + num(d.filesTotal)) +
+			(meta ? '<p class="act-meta">' + esc(meta) + '</p>' : '') +
+			'</div>'
+		);
+	}
+
+	function activityInner(a) {
+		if (!hasActivity(a)) return '';
+		var html = '';
+		var dirs = directionHtml('upload', a.upload) + directionHtml('download', a.download) + directionHtml('move', a.move);
+		if (dirs) html += '<div class="act-dirs">' + dirs + '</div>';
+		if (a.active && a.active.length) {
+			html += '<ul class="act-files" aria-label="Files moving now">';
+			a.active.slice(0, 8).forEach(function (f) {
+				var w = DIRECTION[f.direction] || DIRECTION.download;
+				var pct = f.bytesTotal > 0 ? (f.bytesDone / f.bytesTotal) * 100 : 0;
+				html +=
+					'<li class="act-file" data-direction="' + esc(f.direction) + '">' +
+					icon(w.glyph, 'act-glyph') +
+					'<span class="act-name" title="' + esc(f.path) + '">' + esc(f.name) + '</span>' +
+					'<span class="act-bytes">' + esc(f.bytesTotal > 0 ? bytes(f.bytesDone) + ' of ' + bytes(f.bytesTotal) : w.word) + '</span>' +
+					track(pct, w.word + ' ' + f.name) +
+					'</li>';
+			});
+			html += '</ul>';
+		}
+		if (a.waiting) html += '<p class="act-wait">' + icon('clock') + '<span>' + esc(glue(a.waiting.line)) + '</span></p>';
+		return html;
+	}
+
+	/** Progress widths go in through CSSOM: the page's CSP refuses inline styles. */
+	function applyBars(root) {
+		var fills = (root || document).querySelectorAll('.track-fill[data-pct]');
+		for (var i = 0; i < fills.length; i++) fills[i].style.width = fills[i].getAttribute('data-pct') + '%';
+	}
+
+	var lastActivity = null;
+
+	/** A host 'activity' message: the panel and the status line change, nothing else. */
+	function patchActivity(a) {
+		if (!ui.view) return;
+		ui.view.activity = a;
+		var group = document.getElementById('activity-group');
+		if (group) {
+			var panel = document.getElementById('act-panel');
+			var html = activityInner(a);
+			if (lastActivity !== html) {
+				panel.innerHTML = html;
+				applyBars(panel);
+			}
+			lastActivity = html;
+			group.hidden = !hasActivity(a);
+		}
+		var line = document.getElementById('sync-line');
+		if (line) {
+			var text = glue((a && a.line) || ui.view.sync.line);
+			if (line.textContent !== text) line.textContent = text;
+		}
+		updateCues();
+	}
+
+	/* ---- Notices: one card per kind ---- */
+
+	function noticesTone(items) {
+		var rank = { info: 0, look: 1, bad: 2 };
+		var worst = -1;
+		(items || []).forEach(function (n) {
+			worst = Math.max(worst, rank[n.tone] == null ? 1 : rank[n.tone]);
+		});
+		return worst === 2 ? 'bad' : worst === 1 ? 'look' : 'ok';
+	}
+
+	/** Notices under their own lit strip ("2 things to look at" in amber, "to fix" in red
+	 *  when something can't be uploaded). One card per kind, its count in the title, one
+	 *  action key, and a key that opens the list of its files inside the card. */
+	function noticesHtml(v) {
+		var items = v.notices || [];
+		// Nothing to say: the group is not drawn at all. The status display already says
+		// so, and the group appears the moment something needs the student.
 		if (!items.length) return '';
-		var tone = needsTone(items);
+		var tone = noticesTone(items);
+		var words = tone === 'bad' ? plural(items.length, 'thing', 'things') + ' to fix' : tone === 'look' ? plural(items.length, 'thing', 'things') + ' to look at' : plural(items.length, 'update', 'updates');
 		var html = '<section class="group top needs-group" aria-labelledby="needs-label">';
-		html +=
-			'<h2 class="needs-strip lcd" id="needs-label" data-tone="' + tone + '">' + icon(tone === 'bad' ? 'cant' : 'note', 'lcd-icon') +
-			'<span>' + esc(plural(items.length, 'thing', 'things') + (tone === 'bad' ? ' to fix' : ' to look at')) + '</span></h2>';
+		html += '<h2 class="needs-strip lcd" id="needs-label" data-tone="' + tone + '">' + icon(tone === 'bad' ? 'cant' : tone === 'ok' ? 'check' : 'note', 'lcd-icon') + '<span>' + esc(words) + '</span></h2>';
 		html += '<ul class="attn-list">';
-		items.forEach(function (a, i) {
-			html += attentionCard(a, i);
+		items.forEach(function (n, i) {
+			html += noticeCard(n, i);
 		});
 		html += '</ul>';
 		return html + '</section>';
 	}
 
-	function attentionCard(a, i) {
-		var k = ATTENTION[a.kind] || { glyph: 'note', tone: 'look', open: 'See the file', folder: true };
-		var id = 'attn-' + i;
-		var keys = [];
-		if (k.open && a.fileId)
-			keys.push(
-				'<button class="key" type="button" data-action="openFile" data-file-id="' + esc(a.fileId) + '" data-key="attn-open-' + i + '" aria-describedby="' + id + '-t">' +
-				'<span>' + esc(k.open) + '</span>' + icon('chev-right') + '</button>'
-			);
-		if (k.folder || !a.fileId) {
-			var folderKey =
-				'<button class="key" type="button" data-action="showInFolder" data-path="' + esc(a.path) + '" data-key="attn-folder-' + i + '" aria-describedby="' + id + '-t">' +
-				icon('folder') + '<span>Show in folder</span></button>';
-			if (k.folderFirst) keys.unshift(folderKey);
-			else keys.push(folderKey);
+	function noticeCard(n, i) {
+		var id = 'nt-' + i;
+		var open = !!ui.expanded[n.key];
+		var hasItems = n.items && n.items.length;
+		var keys = '';
+		var a = n.action;
+		if (a && a.command === 'expand') {
+			if (hasItems)
+				keys += '<button class="key" type="button" data-action="expand" data-notice="' + esc(n.key) + '" data-key="nt-expand-' + esc(n.key) + '" aria-expanded="' + open + '" aria-controls="' + id + '-items">' + icon(open ? 'chev-down' : 'chev-right') + '<span>' + esc(open ? 'Hide them' : a.label) + '</span></button>';
+		} else {
+			if (a) keys += '<button class="key" type="button" data-action="notice" data-notice="' + esc(n.key) + '" data-key="nt-act-' + esc(n.key) + '" aria-describedby="' + id + '-t">' + esc(a.label) + '</button>';
+			if (hasItems)
+				keys +=
+					'<button class="key" type="button" data-action="expand" data-notice="' + esc(n.key) + '" data-key="nt-expand-' + esc(n.key) + '" aria-expanded="' + open + '" aria-controls="' + id + '-items">' +
+					icon(open ? 'chev-down' : 'chev-right') + '<span>' + esc(open ? 'Hide the files' : n.items.length === 1 ? 'Show the file' : 'Show the ' + plural(n.items.length, 'file', 'files')) + '</span></button>';
+		}
+		var list = '';
+		if (hasItems && open) {
+			list += '<div class="notice-well list-well" id="' + id + '-items" data-scroll-own="true">' + registerList({
+				id: 'vl-' + id,
+				cls: 'items',
+				label: n.title,
+				items: n.items.map(function (it) {
+					return { kind: 'item', notice: n.key, item: it };
+				}),
+				key: function (x) {
+					return 'ni:' + x.notice + ':' + (x.item.fileId || x.item.path);
+				},
+				row: itemRow,
+				scrollEl: function () {
+					return document.getElementById(id + '-items');
+				}
+			}) + '</div>';
+			if (n.count > n.items.length) list += '<p class="notice-more">' + esc('Showing ' + num(n.items.length) + ' of ' + num(n.count) + '.') + '</p>';
 		}
 		return (
-			'<li class="attn-card panel" data-tone="' + k.tone + '">' +
-			'<span class="attn-glyph">' + icon(k.glyph) + '</span>' +
+			'<li class="attn-card panel" data-tone="' + (NOTICE_TONE[n.tone] || 'look') + '" data-kind="' + esc(n.kind) + '">' +
+			'<span class="attn-glyph">' + icon(NOTICE_GLYPH[n.kind] || 'note') + '</span>' +
 			'<div class="attn-body">' +
-			'<h3 class="attn-title" id="' + id + '-t">' + esc(glue(a.title)) + '</h3>' +
-			'<p class="attn-detail">' + esc(glue(a.detail)) + '</p>' +
-			'<p class="attn-meta">' + kindChip(a.name) + '<span class="meta-text">' + esc(metaLine([a.name, whereIs(a.path), a.at ? agoWhole(a.at) : ''])) + '</span></p>' +
-			'<div class="attn-actions">' + keys.join('') + '</div>' +
+			'<h3 class="attn-title" id="' + id + '-t">' + esc(glue(n.title)) + '</h3>' +
+			(n.detail ? '<p class="attn-detail">' + esc(glue(n.detail)) + '</p>' : '') +
+			(keys ? '<div class="attn-actions">' + keys + '</div>' : '') +
+			list +
 			'</div></li>'
 		);
 	}
 
-	/** A file row: the whole row is the click target (an invisible key laid over it),
-	 *  with any extra key above it. Every row ends in a glyph that says where a click
-	 *  goes: a chevron to the file's page, or a folder when it has no page yet. Chips
-	 *  always sit on the line under the name. */
-	function fileRow(o) {
-		var hit =
-			'<button class="row-hit" type="button" data-action="' + o.action + '"' +
-			(o.fileId ? ' data-file-id="' + esc(o.fileId) + '"' : '') +
-			(o.path ? ' data-path="' + esc(o.path) + '"' : '') +
-			' data-key="' + esc(o.key) + '" aria-labelledby="' + o.nameId + '"' + (o.hint ? ' title="' + esc(o.hint) + '"' : '') + '></button>';
-		return (
-			'<li class="row"><div class="row-main' + (o.extra ? ' has-extra' : '') + '">' +
-			hit +
-			icon(kindOf(o.name), 'row-icon') +
+	function itemRow(x, i, active) {
+		var it = x.item;
+		var k = 'ni:' + x.notice + ':' + (it.fileId || it.path);
+		return rowHtml({
+			i: i,
+			vkey: k,
+			active: active,
+			hit: it.fileId ? { action: 'openFile', fileId: it.fileId } : { action: 'showInFolder', path: it.path, hint: 'Show in folder' },
+			k: k,
+			name: it.name,
+			line: '<span class="row-meta">' + esc(it.detail || whereIs(it.path)) + '</span>',
+			go: it.fileId ? 'chev-right' : 'folder-go'
+		});
+	}
+
+	/* ---- Rows ---- */
+
+	/**
+	 * One row of a long list, at one fixed height. The whole row is a click target (an
+	 * invisible key laid over it), with any extra key above it; Tab enters the list on one
+	 * row and the arrow keys move between rows (data-rove marks the keys that move). Every
+	 * row ends in a glyph that says where a click goes: a chevron to the file's page, into
+	 * a folder, or a folder-out glyph for a file that has no page yet.
+	 */
+	function rowHtml(o) {
+		var t = o.active ? '0' : '-1';
+		var hit = o.hit;
+		var html =
+			'<li class="row vrow' + (o.cls ? ' ' + o.cls : '') + '" data-vkey="' + esc(o.vkey) + '" data-i="' + o.i + '"><div class="row-main' + (o.select !== undefined ? ' has-select' : '') + (o.extra ? ' has-extra' : '') + '">' +
+			'<button class="row-hit" type="button" data-rove="row" tabindex="' + t + '" data-action="' + hit.action + '"' +
+			(hit.fileId ? ' data-file-id="' + esc(hit.fileId) + '"' : '') +
+			(hit.path != null ? ' data-path="' + esc(hit.path) + '"' : '') +
+			(hit.folder != null ? ' data-folder="' + esc(hit.folder) + '"' : '') +
+			' data-key="row-' + esc(o.k) + '" aria-labelledby="n-' + esc(o.k) + '"' + (hit.hint ? ' title="' + esc(hit.hint) + '"' : '') + '></button>';
+		if (o.select !== undefined) html += o.select ? o.select.replace('data-rove="sel"', 'data-rove="sel" tabindex="' + t + '"') : '<span class="sel-slot" aria-hidden="true"></span>';
+		html +=
+			icon(o.glyph || kindOf(o.name), 'row-icon') +
 			'<span class="row-body">' +
-			'<span class="row-name" id="' + o.nameId + '">' + esc(o.name) + '</span>' +
-			'<span class="row-line">' + kindChip(o.name) + (o.chips || '') + (o.meta ? '<span class="row-meta">' + esc(o.meta) + '</span>' : '') + '</span>' +
-			(o.note ? '<span class="row-note">' + esc(glue(o.note)) + '</span>' : '') +
+			'<span class="row-name" id="n-' + esc(o.k) + '">' + esc(o.name) + '</span>' +
+			'<span class="row-line">' + (o.line || '') + '</span>' +
 			'</span>' +
-			(o.extra || '') +
-			icon(o.action === 'openFile' ? 'chev-right' : 'folder-go', 'row-go') +
-			'</div></li>'
+			(o.extra ? '<span class="row-extra">' + o.extra.replace(/data-rove="(\w+)"/g, 'data-rove="$1" tabindex="' + t + '"') + '</span>' : '') +
+			icon(o.go || 'chev-right', 'row-go') +
+			'</div></li>';
+		return html;
+	}
+
+	/** The line under a file's name: its state (if it has one worth a chip), who has it
+	 *  checked out, always, and who checked it in last. */
+	function fileLine(r) {
+		var meta = r.updatedBy ? metaLine(['Checked in by ' + r.updatedBy, r.updatedAt ? agoWhole(r.updatedAt) : '']) : '';
+		return (
+			kindChip(r.name) +
+			statusChip(r.status, r.changed) +
+			// A file that isn't in Armory can't be checked out yet: its chip says so.
+			(r.fileId ? checkoutMark(r.checkout) : '') +
+			(meta ? '<span class="row-meta">' + esc(meta) + '</span>' : '')
 		);
 	}
+
+	function openKey(path, name, k) {
+		return (
+			'<button class="key row-key" type="button" data-rove="open" data-action="launch" data-path="' + esc(path) + '" data-key="open-' + esc(k) + '"' +
+			' aria-label="Open ' + esc(name) + '" title="Open ' + esc(name) + '">' + icon('open') + '<span class="key-word">Open</span></button>'
+		);
+	}
+
+	/* ---- My files ---- */
 
 	function myFilesHtml(v) {
 		var files = v.myFiles || [];
-		var me = myName(v);
 		var html = '<section class="group top" aria-labelledby="mine-label">';
 		html += '<h2 class="section-label" id="mine-label"><span>My files</span>' + (files.length ? count(files.length, 'file', 'files') : '') + '</h2>';
 		if (!files.length) {
 			html += '<div class="empty-tile">' + icon('asm', 'empty-glyph') + '<div class="empty-words">';
-			html += '<p>Nothing right now. Files you open and change in SolidWorks show up here until they\'re saved to Armory.</p>';
+			html += '<p>Nothing checked out. Files you check out show up here, and so do your files that aren\'t in Armory yet.</p>';
 			html += '<p class="empty-where">Your team\'s files are in <span class="mono-plate">' + esc(v.vaultRoot) + '</span></p>';
-			html +=
-				'<button class="key" type="button" data-action="openVault" data-key="empty-vault">' + icon('folder') + '<span>Open Armory folder</span></button>';
+			html += '<button class="key" type="button" data-action="openVault" data-key="empty-vault">' + icon('folder') + '<span>Open Armory folder</span></button>';
 			html += '</div></div>';
 			return html + '</section>';
 		}
-		html += '<ul class="list-well">';
-		files.forEach(function (f, i) {
-			var found = findRow(v, f.fileId);
-			var row = found ? found.row : { status: f.status, holder: null, releaseNotChecked: false };
-			var chips = statusChip({ status: f.status, holder: row.holder, releaseNotChecked: false }, me);
-			var extra = f.fileId
-				? '<button class="key row-key" type="button" data-action="showInFolder" data-path="' + esc(f.path) + '" data-key="mine-folder-' + esc(f.fileId) + '" title="Show in folder, then double-click it to open it in SolidWorks" aria-label="Show ' + esc(f.name) + ' in folder">' +
-				  icon('folder') + '<span class="key-word">Show in folder</span></button>'
-				: '';
-			html += fileRow({
-				action: f.fileId ? 'openFile' : 'showInFolder',
-				fileId: f.fileId,
-				path: f.fileId ? null : f.path,
-				key: f.fileId ? 'mine-' + f.fileId : 'mine-new-' + i,
-				hint: f.fileId ? null : 'Show in folder',
-				nameId: 'mine-n-' + i,
-				name: f.name,
-				chips: chips,
-				meta: whereIs(f.path),
-				note: noteBesideChip(f.note, f.status),
-				extra: extra
-			});
-		});
-		html += '</ul>';
+		html += '<div class="list-well mine-well">' + registerList({
+			id: 'vl-mine',
+			label: 'My files',
+			items: files.map(function (f) {
+				return { kind: 'mine', file: f };
+			}),
+			key: function (x) {
+				return 'mine:' + (x.file.fileId || x.file.path);
+			},
+			row: mineRow,
+			scrollEl: homeScroller
+		}) + '</div>';
 		return html + '</section>';
 	}
 
-	/** Team files: two-line project tabs (the name, then how many files) at the top left,
-	 *  then one card per project with each folder labeled inside it. */
-	function projectsHtml(v) {
+	function mineRow(x, i, active) {
+		var f = x.file;
+		var k = 'mine:' + (f.fileId || f.path);
+		var found = findRow(f.fileId);
+		var r = found ? found.row : { name: f.name, status: f.status, changed: false, checkout: f.checkout, updatedBy: null };
+		var extra = openKey(f.path, f.name, k);
+		if (f.checkout && f.checkout.state === 'mine')
+			extra +=
+				'<button class="key row-key" type="button" data-rove="in" data-action="checkIn" data-path="' + esc(f.path) + '" data-key="in-' + esc(k) + '"' +
+				' aria-label="Check in ' + esc(f.name) + '" title="Check in ' + esc(f.name) + '">' + icon('checkin') + '<span class="key-word">Check in</span></button>';
+		return rowHtml({
+			i: i,
+			vkey: k,
+			active: active,
+			hit: f.fileId ? { action: 'openFile', fileId: f.fileId } : { action: 'showInFolder', path: f.path, hint: 'Show in folder' },
+			k: k,
+			name: f.name,
+			line: kindChip(f.name) + statusChip(f.status, r.changed) + (f.fileId ? checkoutMark(f.checkout) : '') + '<span class="row-meta">' + esc(whereIs(f.path)) + '</span>',
+			extra: extra,
+			go: f.fileId ? 'chev-right' : 'folder-go'
+		});
+	}
+
+	/* ---- Team files: the browser ---- */
+
+	/** Team files: two-line project tabs (the name, then how many files), then the open
+	 *  project's card: where you are (Project › Folder › Subfolder), the folder's keys, and
+	 *  its folders and files, every file with who has it checked out. Files dragged in from
+	 *  File Explorer drop into the open folder. */
+	function browserHtml(v) {
 		var projects = v.projects || [];
-		var me = myName(v);
-		var html = '<section class="group top" aria-labelledby="proj-label">';
+		var html = '<section class="group top browser-group" aria-labelledby="proj-label">';
 		html += '<h2 class="section-label" id="proj-label">Team files</h2>';
-		if (!projects.length) {
+		var place = browserPlace();
+		if (!place) {
 			html += '<p class="group-help">You\'re not in any projects yet. Ask your teacher or CAD lead to add you.</p>';
 			return html + '</section>';
 		}
-		var current = projects.filter(function (p) {
-			return p.id === ui.projectId;
-		})[0] || projects[0];
-		ui.projectId = current.id;
-		var fileCount = function (p) {
-			return p.folders.reduce(function (n, f) {
-				return n + f.files.length;
-			}, 0);
-		};
 		html += '<div class="pads" role="tablist" aria-labelledby="proj-label">';
 		projects.forEach(function (p) {
-			var on = p.id === current.id;
+			var on = p.id === place.project.id;
+			var pi = ui.index.projects[p.id];
 			html +=
 				'<button class="pad project-pad" type="button" role="tab" id="tab-' + esc(p.id) + '" aria-selected="' + on + '" aria-controls="project-panel"' +
 				' data-action="project" data-project="' + esc(p.id) + '" data-key="tab-' + esc(p.id) + '">' +
-				'<span class="pad-name">' + esc(p.name) + '</span><span class="pad-sub">' + esc(plural(fileCount(p), 'file', 'files')) + '</span></button>';
+				'<span class="pad-name">' + esc(p.name) + '</span><span class="pad-sub">' + esc(p.archived ? 'Archived' : plural(pi.under[''] || 0, 'file', 'files')) + '</span></button>';
 		});
 		html += '</div>';
-		html += '<div class="list-well project-card" id="project-panel" role="tabpanel" aria-labelledby="tab-' + esc(current.id) + '">';
-		current.folders.forEach(function (folder, fi) {
-			if (!folder.files.length) return;
-			var label = folder.path === '' ? 'Main folder' : folder.name || folder.path;
-			var headId = 'fh-' + esc(current.id) + '-' + fi;
-			html += '<section class="folder" aria-labelledby="' + headId + '">';
+		var p = place.project;
+		if (p.archived) {
 			html +=
-				'<h3 class="folder-row" id="' + headId + '">' + icon('folder') + '<span class="folder-name">' + esc(label) + '</span>' +
-				'<span class="folder-count">' + plural(folder.files.length, 'file', 'files') + '</span></h3>';
-			html += '<ul class="folder-list">';
-			folder.files.forEach(function (row) {
-				html += fileRow({
-					action: 'openFile',
-					fileId: row.fileId,
-					key: 'row-' + row.fileId,
-					nameId: 'n-' + row.fileId,
-					name: row.name,
-					chips: statusChip(row, me),
-					meta: rowMeta(row)
-				});
+				'<div class="panel archived-note" id="project-panel" role="tabpanel" aria-labelledby="tab-' + esc(p.id) + '">' + icon('archive', 'archived-glyph') +
+				'<div><p class="archived-line">Archived. It no longer updates.</p>' +
+				'<p class="group-help">' + esc(p.name) + '\'s folder stays on this computer just as it is. A teacher can bring the project back on ideabosco.com.</p></div></div>';
+			return html + '</section>';
+		}
+		var pi = place.pi;
+		var folder = place.folder;
+		html += '<div class="list-well project-card browser" id="project-panel" role="tabpanel" aria-labelledby="tab-' + esc(p.id) + '" data-drop="true">';
+		html += '<div class="drop-cue" aria-hidden="true"><span class="drop-word">' + icon('addfile') + '<span>' + esc('Drop to add to ' + crumbWords(p, folder)) + '</span></span></div>';
+		html += '<div class="browser-head">' + crumbsHtml(p, pi, folder) + folderKeysHtml(p, pi, folder) + '</div>';
+		var items = browserItems(pi, folder);
+		if (!items.length) html += '<p class="group-help browser-empty">This folder is empty. Add files, or drag them here from File Explorer.</p>';
+		else
+			html += registerList({
+				id: 'vl-browser',
+				label: 'In ' + crumbWords(p, folder),
+				items: items,
+				key: function (x) {
+					return x.kind === 'folder' ? 'dir:' + x.path : x.row.fileId || 'local:' + x.row.path;
+				},
+				row: browserRow,
+				scrollEl: homeScroller
 			});
-			html += '</ul></section>';
-		});
 		html += '</div>';
 		return html + '</section>';
+	}
+
+	/** "Robot 2027 › Drivetrain › Gears". */
+	function crumbWords(p, folder) {
+		return [p.name].concat(folder ? folder.split('/') : []).join(' \u203a ');
+	}
+
+	function crumbsHtml(p, pi, folder) {
+		var parts = folder ? folder.split('/') : [];
+		var html = '<nav class="crumbs" aria-label="Where you are"><ol>';
+		var steps = [{ path: '', name: p.name }];
+		parts.forEach(function (part, i) {
+			steps.push({ path: parts.slice(0, i + 1).join('/'), name: part });
+		});
+		steps.forEach(function (s, i) {
+			var last = i === steps.length - 1;
+			html += '<li>' + (i ? '<span class="crumb-sep" aria-hidden="true">\u203a</span>' : '');
+			html += last
+				? '<span class="crumb-here" aria-current="location">' + icon('folder') + '<span>' + esc(s.name) + '</span></span>'
+				: '<button class="textlink crumb" type="button" data-action="folder" data-folder="' + esc(s.path) + '" data-key="crumb-' + esc(s.path) + '">' + esc(s.name) + '</button>';
+			html += '</li>';
+		});
+		return html + '</ol></nav>';
+	}
+
+	/** The open folder's keys. The project's own top folder can't be renamed or deleted
+	 *  here (project names are changed on ideabosco.com). */
+	function folderKeysHtml(p, pi, folder) {
+		var rows = rowsUnder(pi, folder);
+		var canOut = rows.some(function (r) {
+			return r.fileId && r.checkout.state === 'available';
+		});
+		var canIn = rows.some(function (r) {
+			return r.checkout.state === 'mine';
+		});
+		var name = folder ? folder.split('/').pop() : p.name;
+		var html = '<div class="folder-keys" role="group" aria-label="' + esc('Folder ' + name) + '">';
+		html += key({ action: 'askNewFolder', key: 'fk-new', cls: 'tool', glyph: 'newfolder', word: 'New folder', title: 'Make a folder in ' + name });
+		html += key({ action: 'addFiles', key: 'fk-add', cls: 'tool', glyph: 'addfile', word: 'Add files', title: 'Copy files from this computer into ' + name });
+		if (folder) {
+			html += key({ action: 'askRenameFolder', key: 'fk-rename', cls: 'tool', glyph: 'rename', word: 'Rename folder', title: 'Rename ' + name });
+			html += key({ action: 'askDeleteFolder', key: 'fk-delete', cls: 'tool', glyph: 'trash', word: 'Delete folder', title: 'Delete ' + name });
+		}
+		html += key({ action: 'folderCheckOut', key: 'fk-out', cls: 'tool', glyph: 'checkout', word: 'Check out all', title: 'Check out every file in ' + name, disabled: !canOut });
+		html += key({ action: 'folderCheckIn', key: 'fk-in', cls: 'tool', glyph: 'checkin', word: 'Check in all', title: 'Check in every file you have checked out in ' + name, disabled: !canIn });
+		return html + '</div>';
+	}
+
+	/** The open folder's rows: its folders first, then its files. */
+	function browserItems(pi, folder) {
+		var out = [];
+		(pi.children[folder] || []).forEach(function (path) {
+			out.push({ kind: 'folder', path: path, name: pi.folders[path].name, files: pi.under[path] || 0, folders: (pi.children[path] || []).length });
+		});
+		var files = (pi.folders[folder].files || []).slice().sort(function (a, b) {
+			return byName(a.name, b.name);
+		});
+		files.forEach(function (r) {
+			out.push({ kind: 'file', row: r });
+		});
+		return out;
+	}
+
+	function browserRow(x, i, active) {
+		if (x.kind === 'folder') {
+			var fk = 'dir:' + x.path;
+			var what = x.files || x.folders ? metaLine([x.files ? plural(x.files, 'file', 'files') : '', x.folders ? plural(x.folders, 'folder', 'folders') : '']) : 'Empty';
+			return rowHtml({
+				i: i,
+				vkey: fk,
+				cls: 'folder-item',
+				active: active,
+				select: null,
+				hit: { action: 'folder', folder: x.path },
+				k: fk,
+				name: x.name,
+				glyph: 'folder',
+				line: '<span class="row-meta">' + esc(what) + '</span>',
+				go: 'chev-right'
+			});
+		}
+		var r = x.row;
+		var k = r.fileId || 'local:' + r.path;
+		var picked = !!ui.selected[r.path];
+		var selectKey = r.fileId
+			? '<button class="key sel-key" type="button" role="checkbox" data-rove="sel" aria-checked="' + picked + '" data-action="select" data-path="' + esc(r.path) + '" data-key="sel-' + esc(k) + '" aria-label="Select ' + esc(r.name) + '">' + icon('check') + '</button>'
+			: null;
+		return rowHtml({
+			i: i,
+			vkey: k,
+			active: active,
+			select: selectKey,
+			hit: r.fileId ? { action: 'openFile', fileId: r.fileId } : { action: 'showInFolder', path: r.path, hint: 'Show in folder' },
+			k: k,
+			name: r.name,
+			line: fileLine(r),
+			extra: openKey(r.path, r.name, k),
+			go: r.fileId ? 'chev-right' : 'folder-go'
+		});
+	}
+
+	/* ---- Picking files ---- */
+
+	function pickedRows() {
+		var out = [];
+		Object.keys(ui.selected).forEach(function (path) {
+			var hit = ui.index.byPath[path];
+			if (hit && hit.row.fileId) out.push(hit);
+		});
+		return out;
+	}
+
+	/** While files are picked, one bar at the top of the column (it stays in sight as
+	 *  the column scrolls) says how many and offers what fits them. */
+	function selectionBarHtml(v) {
+		var picked = pickedRows();
+		if (!picked.length) return '';
+		var any = function (state) {
+			return picked.some(function (h) {
+				return h.row.checkout.state === state;
+			});
+		};
+		var lead = picked.some(function (h) {
+			return h.project.canTakeBack;
+		});
+		// One wrapping row: the count, what fits the selected files, then Clear. A narrow
+		// window puts Clear beside the count and the file keys on the lines under them.
+		var html = '<div class="sel-bar panel" role="region" aria-label="Selected files">';
+		html += '<p class="sel-count" role="status"><span class="avatar" data-tone="ok" aria-hidden="true">' + icon('check') + '</span>' + esc(num(picked.length) + ' selected') + '</p>';
+		html += key({ action: 'selCheckOut', key: 'sel-out', cls: 'tool', glyph: 'checkout', word: 'Check out', disabled: !any('available') });
+		html += key({ action: 'selCheckIn', key: 'sel-in', cls: 'tool', glyph: 'checkin', word: 'Check in', disabled: !any('mine') });
+		html += key({ action: 'selUndo', key: 'sel-undo', cls: 'tool', glyph: 'undo', word: 'Undo check out', disabled: !any('mine') });
+		if (lead) html += key({ action: 'askTakeBackPicked', key: 'sel-take', cls: 'tool', glyph: 'takeback', word: 'Take back', disabled: !any('other') });
+		html += key({ action: 'selClear', key: 'sel-clear', cls: 'tool sel-clear', word: 'Clear' });
+		html += '<span class="sel-break" aria-hidden="true"></span>';
+		return html + '</div>';
+	}
+
+	function setPicked(path, on) {
+		if (on) ui.selected[path] = true;
+		else delete ui.selected[path];
+	}
+
+	function clearPicked() {
+		ui.selected = {};
+		ui.anchor = null;
+	}
+
+	/** A click on a pick key; with Shift, every file from the last one picked to here. */
+	function togglePick(path, range) {
+		var place = browserPlace();
+		var files = browserItems(place.pi, place.folder)
+			.filter(function (x) {
+				return x.kind === 'file' && x.row.fileId;
+			})
+			.map(function (x) {
+				return x.row.path;
+			});
+		var on = !ui.selected[path];
+		if (range && ui.anchor && files.indexOf(ui.anchor) >= 0) {
+			var a = files.indexOf(ui.anchor);
+			var b = files.indexOf(path);
+			for (var i = Math.min(a, b); i <= Math.max(a, b); i++) setPicked(files[i], true);
+		} else setPicked(path, on);
+		ui.anchor = path;
+		render();
 	}
 
 	/* ---- File detail ---- */
 
-	/** The detail with the newest status and holder from the view laid over it. */
-	function currentDetail(v) {
+	/** The detail with the newest state from the view laid over it. */
+	function currentDetail() {
 		var d = ui.detail;
-		var found = findRow(v, d.fileId);
+		var found = findRow(d.fileId);
 		if (!found) return d;
 		var out = {};
 		for (var k in d) out[k] = d[k];
 		out.status = found.row.status;
-		out.holder = found.row.holder;
+		out.checkout = found.row.checkout;
+		out.changed = found.row.changed;
 		out.releaseNotChecked = found.row.releaseNotChecked;
+		out.canTakeBack = d.canTakeBack || found.project.canTakeBack;
 		return out;
 	}
 
-	/** What the file's display says (readout, tone, a line and a sentence), and what to
-	 *  do after Show in folder. */
+	/** What the file's display says (readout, tone, a line and a sentence). */
 	function detailWords(d) {
-		var h = d.holder;
-		var w;
-		if (h && h.isMe && !h.isMyOtherComputer) {
-			w = {
-				readout: "You're editing",
+		var c = d.checkout || { state: 'available', label: 'Available' };
+		if (c.state === 'mine')
+			return {
+				readout: 'Checked out by you',
 				tone: 'ok',
-				line: "You're editing this",
-				meta: h.savedToArmory ? 'Your latest save is in Armory. Each time you save in SolidWorks, Armory sends it to the team.' : 'Your newest changes haven\'t been sent yet. They send by themselves.',
-				act: "It's open in SolidWorks on this computer. Show in folder finds the file if you closed it."
+				line: d.changed || d.status === 'changed' ? 'You have changes that aren\'t checked in' : 'Checked out by you',
+				meta: d.changed || d.status === 'changed' ? 'Each save is kept safe. Check in to share your changes with the team.' : 'Save in SolidWorks as often as you like. Check in to share your changes with the team.'
 			};
-		} else if (h && h.isMe) {
-			w = {
-				readout: 'Open on ' + h.device,
-				tone: 'look',
-				line: "You're editing this on " + h.device,
-				meta: 'Close it on ' + h.device + ' to edit it on this computer.',
-				act: 'Double-click it there to open it and look.'
-			};
-		} else if (h) {
-			var who = firstName(h.name);
-			w = {
-				readout: who + ' is editing',
-				tone: 'look',
-				line: h.name + ' is editing this',
-				meta: h.savedToArmory ? who + '\'s latest save is in Armory.' : who + '\'s newest changes aren\'t in Armory yet.',
-				act: 'Double-click it there to open it and look. To make changes, wait until ' + who + ' closes it, or ask ' + who + '.'
-			};
-		} else {
-			switch (d.status) {
-				case 'conflict':
-					w = {
-						readout: 'Your copy kept',
-						tone: 'look',
-						line: 'Your changes were kept as your own copy',
-						meta: 'Someone else saved first. Nothing was lost. Your copy is marked in the history.',
-						act: 'Ask your CAD lead which one to keep. Double-click the file there to open the team\'s version.'
-					};
-					break;
-				case 'newerWaiting':
-					w = { readout: 'Newer version waiting', tone: 'look', line: 'A newer version is waiting', meta: 'Close it in SolidWorks to get the newer version.', act: 'Double-click it there to open it in SolidWorks.' };
-					break;
-				case 'refused':
-					w = { readout: "Can't send", tone: 'bad', line: "Armory can't send your changes", meta: 'Your changes are safe on this computer. Needs you on Home says how to fix it.', act: 'Double-click it there to open it in SolidWorks and fix it.' };
-					break;
-				case 'waitingToSend':
-					w = { readout: 'Waiting to send', tone: 'look', line: 'Saved on this computer', meta: 'It goes to Armory as soon as this computer is back online.', act: 'Double-click it there to keep working in SolidWorks.' };
-					break;
-				case 'syncing':
-					w = { readout: 'Updating', tone: 'ok', line: 'Updating now', meta: 'Armory is moving the newest version. You can keep working.', act: 'Double-click it there to open it in SolidWorks.' };
-					break;
-				case 'notOnThisComputer':
-					w = { readout: 'Not here yet', tone: 'off', line: 'Not on this computer yet', meta: 'Armory is getting it. It shows up in the folder soon.', act: null };
-					break;
-				default:
-					w = {
-						readout: 'Free to edit',
-						tone: 'ok',
-						line: 'You can open this and make changes',
-						meta: 'Armory saves it for the team each time you save in SolidWorks.',
-						act: 'Double-click it there to open it in SolidWorks.'
-					};
-			}
+		if (c.state === 'myOtherComputer')
+			return { readout: 'On your other computer', tone: 'look', line: c.label, meta: 'Check it in on ' + c.device + ' first, then check it out here.' };
+		if (c.state === 'other')
+			return { readout: 'Checked out', tone: 'look', line: c.label, meta: 'You can open it to look, but you can\'t save changes. To change it, ask ' + firstName(c.name) + ' to check it in.' };
+		switch (d.status) {
+			case 'newerWaiting':
+				return { readout: 'Newer version waiting', tone: 'look', line: 'A newer version is waiting', meta: 'Close it in SolidWorks to get the newer version.' };
+			case 'downloading':
+				return { readout: 'Downloading', tone: 'ok', line: 'Downloading the newest version', meta: 'It\'s ready in a moment. You can keep working.' };
+			case 'notOnThisComputer':
+				return { readout: 'Not here yet', tone: 'off', line: 'Not on this computer yet', meta: 'Armory is getting it. It shows up in the folder soon.' };
+			case 'keptCopy':
+				return { readout: 'Your copy kept', tone: 'look', line: 'Your changes were kept as your own copy', meta: 'Someone else checked it in first. Nothing was lost: your copy is marked in the history.' };
+			default:
+				return { readout: 'Available', tone: 'ok', line: 'Available', meta: 'Anyone can open it to look. Check it out to make changes.' };
 		}
-		// One scale: a file whose version couldn't be checked is never shown as all clear.
-		if (d.releaseNotChecked && w.tone === 'ok') {
-			w.readout = 'Version not checked';
-			w.tone = 'look';
+	}
+
+	/** The file's keys, as its state allows: Open first, always the screen's primary. */
+	function detailKeysHtml(d) {
+		var c = d.checkout || { state: 'available' };
+		var here = d.status !== 'notOnThisComputer';
+		var html = '<div class="detail-act">';
+		if (here) html += key({ action: 'launch', key: 'd-open', cls: 'primary side-key', glyph: 'open', word: 'Open', path: d.path, title: 'Open ' + d.name + ' in its program' });
+		var keys = '';
+		if (c.state === 'available' && d.fileId) {
+			keys += key({ action: 'checkOut', key: 'd-checkout', cls: 'tool', glyph: 'checkout', word: 'Check out', path: d.path });
+			if (here) keys += key({ action: 'checkOutOpen', key: 'd-checkout-open', cls: 'tool', glyph: 'open', word: 'Check out and open', path: d.path });
+		} else if (c.state === 'mine') {
+			keys += key({ action: 'checkIn', key: 'd-checkin', cls: 'tool', glyph: 'checkin', word: 'Check in', path: d.path });
+			keys += key({ action: 'undoCheckOut', key: 'd-undo', cls: 'tool', glyph: 'undo', word: 'Undo check out', path: d.path });
 		}
-		return w;
+		if ((c.state === 'other' || c.state === 'myOtherComputer') && d.canTakeBack) keys += key({ action: 'askTakeBack', key: 'd-takeback', cls: 'tool', glyph: 'takeback', word: 'Take back', fileId: d.fileId });
+		if (keys) html += '<div class="detail-keys">' + keys + '</div>';
+		html += '<button class="textlink" type="button" data-action="showInFolder" data-path="' + esc(d.path) + '" data-key="show-in-folder">' + icon('folder') + '<span>Show in folder</span></button>';
+		return html + '</div>';
 	}
 
 	function detailHtml(v) {
-		var d = currentDetail(v);
+		var d = currentDetail();
 		var w = detailWords(d);
 		var me = myName(v);
 		var html = '<article class="detail" aria-labelledby="detail-title">';
@@ -875,38 +1395,26 @@
 			' id="detail-title" tabindex="-1" data-key="detail-title"',
 			'<button class="key back-key" type="button" data-action="back" data-key="back" aria-label="Back to Home" title="Back to Home">' + icon('chev-left') + '</button>'
 		);
-		html += '<p class="title-sub">' + kindChip(d.name) + '<span class="meta-text">' + esc(whereIs(d.path)) + '</span></p>';
+		html +=
+			'<p class="title-sub">' + kindChip(d.name) + '<span class="meta-text">' + esc(whereIs(d.path)) + '</span>' +
+			// The one place a release that couldn't be checked shows: a small tag, never a notice.
+			(d.releaseNotChecked ? chip('SolidWorks year not checked', 'look', 'year-tag') : '') + '</p>';
 		html += '<div class="detail-grid">';
 
 		html += '<div class="detail-side">';
 		html += '<section class="display" data-tone="' + w.tone + '" aria-labelledby="holder-line">';
 		html += '<p class="screen lcd"><span>' + esc(w.readout) + '</span></p>';
-		html += '<h2 class="holder-line" id="holder-line">' + esc(w.line) + '</h2>';
-		// When a warning follows, it is the sentence that matters; the display keeps to its line.
-		if (w.meta && !d.releaseNotChecked) html += '<p class="holder-meta">' + esc(w.meta) + '</p>';
+		html += '<h2 class="holder-line" id="holder-line">' + esc(glue(w.line)) + '</h2>';
+		if (w.meta) html += '<p class="holder-meta">' + esc(w.meta) + '</p>';
 		html += '</section>';
-		// A warning sits above the action, with an amber edge, so it is read first.
-		if (d.releaseNotChecked) {
-			html +=
-				'<section class="panel note-panel" data-tone="look" aria-labelledby="rnc-title"><h3 id="rnc-title">' + icon('question') + '<span>SolidWorks version not checked</span></h3>' +
-				'<p>Armory saved this file but couldn\'t tell which SolidWorks made it. If it won\'t open on a lab computer, open it in the team\'s SolidWorks version and save it again.</p></section>';
-		}
-		if (w.act) {
-			html += '<div class="detail-act">';
-			html +=
-				'<button class="key primary side-key" type="button" data-action="showInFolder" data-path="' + esc(d.path) + '" data-key="show-in-folder">' +
-				icon('folder') + '<span>Show in folder</span></button>';
-			html += '<p class="act-help">' + esc(w.act) + '</p>';
-			html += '</div>';
-		}
+		html += detailKeysHtml(d);
 		html += whoHtml(d);
 		html += '</div>';
 
 		html += '<section class="detail-main plate-recess" aria-labelledby="history-label"><div class="history-group brackets">';
-		html += '<h2 class="section-label history-head" id="history-label"><span>History</span>' + (d.history ? count(d.history.length, 'save', 'saves') : '') + '</h2>';
-		if (!d.history) {
-			html += '<p class="hist-loading">Getting the history…</p>';
-		} else {
+		html += '<h2 class="section-label history-head" id="history-label"><span>History</span>' + (d.history ? count(d.history.length, 'entry', 'entries') : '') + '</h2>';
+		if (!d.history) html += '<p class="hist-loading">Getting the history\u2026</p>';
+		else {
 			html += '<ol class="history-list list-well">';
 			d.history.forEach(function (e) {
 				html += historyEntry(e, me);
@@ -918,40 +1426,45 @@
 		return html;
 	}
 
-	/** Who's editing, as a person: their initials, their name, and where and since when. */
+	/** Checked out: the person (initials, name, computer, how long, and how to reach
+	 *  them), or that it is free. */
 	function whoHtml(d) {
-		var h = d.holder;
-		var html = '<section class="group top who-group" aria-labelledby="who-label"><h2 class="section-label" id="who-label">Who\'s editing</h2>';
+		var c = d.checkout || { state: 'available' };
+		var html = '<section class="group top who-group" aria-labelledby="who-label"><h2 class="section-label" id="who-label">Checked out</h2>';
 		html += '<div class="panel who-panel">';
-		if (h) {
+		if (c.state !== 'available') {
+			var isMe = c.state === 'mine' || c.state === 'myOtherComputer';
 			html +=
-				'<span class="avatar big" data-tone="' + (h.isMe ? 'ok' : 'look') + '" aria-hidden="true">' + esc(initials(h.name)) + '</span>' +
-				'<div class="who-words"><p class="who-name">' + esc(h.isMe ? h.name + ' (you)' : h.name) + '</p>' +
-				'<p class="who-where">' + esc(metaLine([h.device, 'for ' + lasting(h.since)])) + '</p>' +
+				'<span class="avatar big" data-tone="' + (isMe ? 'ok' : 'look') + '" aria-hidden="true">' + esc(initials(c.name)) + '</span>' +
+				'<div class="who-words"><p class="who-name">' + esc(isMe ? c.name + ' (you)' : c.name) + '</p>' +
+				'<p class="who-where">' + esc(metaLine([c.device, c.since ? 'for ' + lasting(c.since) : ''])) + '</p>' +
 				// Someone else's school email, so the student knows how to ask them.
-				(!h.isMe && h.email ? '<p class="who-where who-email">' + esc(h.email) + '</p>' : '') +
+				(!isMe && c.email ? '<p class="who-where who-email">' + esc(c.email) + '</p>' : '') +
 				'</div>';
 		} else {
 			html +=
 				'<span class="avatar big" data-tone="off" aria-hidden="true">' + icon('check') + '</span>' +
-				'<div class="who-words"><p class="who-name">Nobody right now</p><p class="who-where">The first person to open it in SolidWorks gets to edit it.</p></div>';
+				'<div class="who-words"><p class="who-name">Available.</p><p class="who-where">Check it out to make changes.</p></div>';
 		}
 		return html + '</div></section>';
 	}
 
 	/** A history entry: who and when is the title (what a student scans for). A kept copy
-	 *  is its own title and, when it is the student's, is marked YOUR COPY on a tinted row.
-	 *  The size is in the tooltip, not the line. */
+	 *  is its own title and, when it is the student's, is marked YOUR COPY on a tinted
+	 *  row; a removal says so. The size is in the tooltip, not the line. */
 	function historyEntry(e, me) {
-		var routine = e.kind === 'version' && (e.note === 'Saved' || e.note === 'Added to Armory');
+		var copy = e.kind === 'keptCopy';
+		var removed = e.kind === 'removed';
+		var routine = e.kind === 'version' && /^(Checked in|Saved|Added to Armory)$/.test(e.note);
 		var when = '<time datetime="' + esc(e.at) + '" title="' + esc(fullTime(e.at)) + '">' + esc(agoWhole(e.at)) + '</time>';
-		var mine = e.kind === 'sideVersion' && me && (e.author.toLowerCase() === me.toLowerCase() || firstName(e.author).toLowerCase() === firstName(me).toLowerCase());
+		var mine = copy && me && (e.author.toLowerCase() === me.toLowerCase() || firstName(e.author).toLowerCase() === firstName(me).toLowerCase());
 		var chips = '';
 		if (e.isCurrent) chips += chip('Current', 'ok');
-		if (e.kind === 'sideVersion') chips += chip(mine ? 'Your copy' : firstName(e.author) + '\'s copy', 'look');
-		if (e.releaseNotChecked) chips += chip('Version not checked', 'look');
+		if (copy) chips += chip(mine ? 'Your copy' : firstName(e.author) + '\'s copy', 'look');
+		if (removed) chips += chip('Removed', 'off');
+		if (e.releaseNotChecked) chips += chip('Year not checked', 'look');
 		return (
-			'<li class="hist"' + (mine ? ' data-mine="true"' : '') + (e.kind === 'sideVersion' ? ' data-copy="true"' : '') + ' title="' + esc(size(e.bytes)) + '">' +
+			'<li class="hist"' + (mine ? ' data-mine="true"' : '') + (copy ? ' data-copy="true"' : '') + (removed ? ' data-removed="true"' : '') + (e.bytes ? ' title="' + esc(bytes(e.bytes)) + '"' : '') + '>' +
 			'<div class="hist-top"><span class="hist-title">' + (routine ? esc(e.author) + ' · ' + when : esc(e.note)) + '</span>' +
 			(chips ? '<span class="hist-chips">' + chips + '</span>' : '') + '</div>' +
 			'<div class="hist-meta">' + (routine ? esc(e.note) : esc(e.author) + ' · ' + when) + '</div></li>'
@@ -981,7 +1494,7 @@
 		html +=
 			'<button class="switch" type="button" data-action="toggleStart" data-key="set-start" aria-pressed="' + !!s.startAtSignIn + '" aria-labelledby="set-start-label set-start-word">' +
 			'<span class="ts-glyph" aria-hidden="true"></span><span class="ts-word" id="set-start-word">' + (s.startAtSignIn ? 'On' : 'Off') + '</span></button>';
-		html += '<p class="setting-help">When this is on, Armory opens by itself when you sign in to Windows, so your saves always reach the team.</p>';
+		html += '<p class="setting-help">When this is on, Armory opens by itself when you sign in to Windows, so your work always reaches the team.</p>';
 		html += '</section>';
 
 		html += '<section class="setting" aria-labelledby="set-theme-label">';
@@ -1006,6 +1519,7 @@
 			render();
 			scroller.scrollTop = ui.homeScroll;
 			setRecessTop(ui.homeRecess);
+			mountLists(false);
 		}
 		sheet.innerHTML = settingsHtml(ui.view);
 		if (!sheet.open) sheet.showModal();
@@ -1021,27 +1535,458 @@
 		bridge.send('saveSettings', next);
 	}
 
+	/* ------------------------------------------------------ The small dialog */
+
+	/*
+	 * New folder, Rename folder, Delete folder and Take back ask in one small housing.
+	 * It is filled once when it opens and never redrawn by a host update, so the words a
+	 * student is typing stay put. Its name field is the inset field recipe at 44px.
+	 */
+	function openAsk(kind, ctx, returnKey) {
+		ui.ask = { kind: kind, ctx: ctx, returnKey: returnKey || null };
+		ask.innerHTML = askHtml(kind, ctx);
+		if (!ask.open) ask.showModal();
+		var field = ask.querySelector('input');
+		if (field) {
+			field.focus();
+			field.select();
+		} else (ask.querySelector('[data-ask-first]') || ask).focus();
+	}
+
+	function askHtml(kind, c) {
+		var title;
+		var body;
+		var field = '';
+		var ok;
+		var danger = false;
+		if (kind === 'newFolder') {
+			title = 'New folder';
+			body = 'Make a folder in ' + c.where + '. Everyone on the team sees it.';
+			field = fieldHtml('Folder name', '');
+			ok = 'Make folder';
+		} else if (kind === 'renameFolder') {
+			title = 'Rename folder';
+			body = 'Rename ' + c.name + ' in ' + c.parentWhere + '. Everyone on the team sees the new name, and its files keep their history.';
+			field = fieldHtml('New name', c.name);
+			ok = 'Rename';
+		} else if (kind === 'deleteFolder') {
+			title = 'Delete folder';
+			body =
+				'Delete ' + c.name + (c.files ? ' and the ' + plural(c.files, 'file', 'files') + ' in it' : '') + ' from ' + c.project + '? It goes for everyone on the team. ' +
+				(c.files ? 'The history of every file is kept, so a file can be brought back later.' : 'It has no files in it.');
+			ok = 'Delete folder';
+			danger = true;
+		} else {
+			title = 'Take back';
+			body =
+				'Take back ' + c.what + '? Any changes ' + c.who + ' hasn\'t checked in are kept in ' + (c.count === 1 ? 'the file\'s history' : 'each file\'s history') +
+				', so nothing is lost. Then anyone can check ' + (c.count === 1 ? 'it' : 'them') + ' out.';
+			ok = 'Take back';
+			danger = true;
+		}
+		return (
+			titleBar('h2', title, ' id="ask-title"') +
+			'<div class="ask-body">' +
+			'<p class="ask-words" id="ask-words">' + esc(glue(body)) + '</p>' +
+			field +
+			'<div class="ask-keys">' +
+			// A question that removes something starts on Cancel, so Enter never deletes.
+			'<button class="key' + (danger ? ' danger' : ' primary') + '" type="button" data-action="askOk" data-key="ask-ok">' + esc(ok) + '</button>' +
+			'<button class="key" type="button" data-action="askCancel" data-key="ask-cancel"' + (field ? '' : ' data-ask-first="true"') + '>Cancel</button>' +
+			'</div></div>'
+		);
+	}
+
+	function fieldHtml(label, value) {
+		return (
+			'<label class="field-label label" for="ask-name">' + esc(label) + '</label>' +
+			'<input class="field" id="ask-name" data-key="ask-name" type="text" value="' + esc(value) + '" maxlength="120" autocomplete="off" spellcheck="false" aria-describedby="ask-words ask-error" />' +
+			'<p class="field-error" id="ask-error" aria-live="polite"></p>'
+		);
+	}
+
+	/** Why a folder name won't do, in plain words, or null when it will. */
+	function nameProblem(name, c) {
+		if (!name) return 'Type a name for the folder.';
+		if (BAD_NAME.test(name)) return 'A folder name can\'t use any of these: \\ / : * ? " < > |';
+		if (/^\.+$/.test(name) || /[. ]$/.test(name)) return 'A folder name can\'t end with a dot or a space.';
+		if (c.kind === 'renameFolder' && name === c.name) return 'That is already its name.';
+		var taken = (c.siblings || []).some(function (s) {
+			return s.toLowerCase() === name.toLowerCase() && !(c.kind === 'renameFolder' && s.toLowerCase() === c.name.toLowerCase());
+		});
+		if (taken) return (c.kind === 'renameFolder' ? c.parentWhere : c.where) + ' already has a folder named ' + name + '.';
+		return null;
+	}
+
+	function askOk() {
+		var a = ui.ask;
+		if (!a) return;
+		var c = a.ctx;
+		if (a.kind === 'newFolder' || a.kind === 'renameFolder') {
+			var input = ask.querySelector('#ask-name');
+			var name = input.value.trim();
+			var problem = nameProblem(name, { kind: a.kind, name: c.name, siblings: c.siblings, where: c.where, parentWhere: c.parentWhere });
+			if (problem) {
+				ask.querySelector('#ask-error').textContent = problem;
+				input.setAttribute('aria-invalid', 'true');
+				input.focus();
+				return;
+			}
+			if (a.kind === 'newFolder') act('createFolder', { projectId: c.projectId, parent: c.folder, name: name });
+			else {
+				act('renameFolder', { projectId: c.projectId, folder: c.folder, newName: name });
+				// When the host's next view has the new name, the browser goes with it.
+				ui.follow = { projectId: c.projectId, from: c.folder, to: c.folder.split('/').slice(0, -1).concat([name]).join('/') };
+			}
+		} else if (a.kind === 'deleteFolder') act('deleteFolder', { projectId: c.projectId, folder: c.folder });
+		else
+			c.fileIds.forEach(function (id) {
+				act('takeBack', { fileId: id });
+			});
+		ask.close();
+	}
+
+	/** The folder questions' facts: where, what is beside it, how many files go with it. */
+	function folderContext() {
+		var place = browserPlace();
+		var p = place.project;
+		var folder = place.folder;
+		var parent = folder.split('/').slice(0, -1).join('/');
+		var names = function (path) {
+			return (place.pi.children[path] || []).map(function (f) {
+				return place.pi.folders[f].name;
+			});
+		};
+		return {
+			projectId: p.id,
+			project: p.name,
+			folder: folder,
+			name: folder ? folder.split('/').pop() : p.name,
+			where: crumbWords(p, folder),
+			parentWhere: crumbWords(p, parent),
+			files: place.pi.under[folder] || 0,
+			siblingsHere: names(folder),
+			siblingsParent: names(parent)
+		};
+	}
+
+	function askFolder(kind, from) {
+		var c = folderContext();
+		if (kind !== 'newFolder' && !c.folder) return;
+		c.siblings = kind === 'newFolder' ? c.siblingsHere : c.siblingsParent;
+		openAsk(kind, c, from);
+	}
+
+	/** Take back one file, or the picked files someone else has. */
+	function askTakeBack(hits, from) {
+		hits = hits.filter(function (h) {
+			return h && h.row.checkout.state !== 'available' && h.row.checkout.state !== 'mine';
+		});
+		if (!hits.length) return;
+		var people = {};
+		hits.forEach(function (h) {
+			people[h.row.checkout.name] = true;
+		});
+		var names = Object.keys(people);
+		openAsk(
+			'takeBack',
+			{
+				fileIds: hits.map(function (h) {
+					return h.row.fileId;
+				}),
+				count: hits.length,
+				people: names.length,
+				what: (hits.length === 1 ? hits[0].row.name : plural(hits.length, 'file', 'files')) + ' from ' + names.join(' and '),
+				who: names.length === 1 ? firstName(names[0]) : 'anyone'
+			},
+			from
+		);
+	}
+
+	/* ------------------------------------------------------------- Actions */
+
+	/** Sends an action; its actionResult comes back to the quiet line at the foot. */
+	function act(type, fields) {
+		return bridge.send(type, fields);
+	}
+
+	/** The host's word on an action: a small tag at the window's foot, read out by a
+	 *  screen reader, that fades after a while. Never an alert, never a focus change. */
+	function showResult(ok, message) {
+		if (!message) return;
+		resultWord.textContent = message;
+		resultBox.setAttribute('data-tone', ok ? 'ok' : 'look');
+		resultBox.setAttribute('data-on', 'true');
+		var glyph = resultBox.querySelector('use');
+		if (glyph) glyph.setAttribute('href', ok ? '#i-check' : '#i-note');
+		clearTimeout(ui.resultTimer);
+		ui.resultTimer = setTimeout(function () {
+			resultBox.setAttribute('data-on', 'false');
+		}, 8000);
+	}
+
+	function runNotice(keyName) {
+		var n = (ui.view.notices || []).filter(function (x) {
+			return x.key === keyName;
+		})[0];
+		if (!n || !n.action) return;
+		var a = n.action;
+		var paths = a.paths || [];
+		switch (a.command) {
+			case 'expand':
+				toggleExpand(n.key);
+				break;
+			case 'dismissNotice':
+				bridge.send('dismissNotice', { key: n.key });
+				break;
+			case 'checkOut':
+				act('checkOut', { paths: paths, open: false });
+				break;
+			case 'checkIn':
+			case 'undoCheckOut':
+				act(a.command, { paths: paths });
+				break;
+			case 'launchFile':
+				if (paths[0]) act('launchFile', { path: paths[0] });
+				break;
+			case 'showInFolder':
+				if (paths[0]) bridge.send('showInFolder', { path: paths[0] });
+				break;
+			case 'openFile':
+				var first = (n.items || []).filter(function (it) {
+					return it.fileId;
+				})[0];
+				if (first) openFile(first.fileId, 'nt-act-' + n.key);
+				break;
+		}
+	}
+
+	function toggleExpand(keyName) {
+		if (ui.expanded[keyName]) delete ui.expanded[keyName];
+		else ui.expanded[keyName] = true;
+		render();
+	}
+
+	/* ------------------------------------------------------- Long lists */
+
+	/*
+	 * A long list draws only the rows near the view: a spacer above them and one below
+	 * (heights through CSSOM) hold the room of the rows left out, so the scroll bar and
+	 * "N more files below" tell the truth. Every row is --vrow-h tall. The row Tab enters
+	 * on, the focused row and the row Back returns to are always drawn too, with spacers
+	 * between, so neither focus nor Back ever lands on nothing.
+	 */
+	var lists = {};
+
+	function registerList(def) {
+		def.active = clamp(ui.active[def.id] || 0, 0, Math.max(0, def.items.length - 1));
+		lists[def.id] = def;
+		return '<ul class="vlist' + (def.cls ? ' ' + def.cls : '') + '" id="' + def.id + '" aria-label="' + esc(def.label) + '" data-total="' + def.items.length + '"></ul>';
+	}
+
+	function rowHeight(ul) {
+		return parseFloat(getComputedStyle(ul).getPropertyValue('--vrow-h')) || 64;
+	}
+
+	/** The list index a control key points at ("row-f-wheel-hub" is f-wheel-hub's row). */
+	function indexOfKey(list, controlKey) {
+		if (!controlKey) return -1;
+		if (!list.keys) {
+			list.keys = {};
+			list.items.forEach(function (x, i) {
+				list.keys[list.key(x)] = i;
+			});
+		}
+		var k = String(controlKey).replace(/^[a-z]+-/, '');
+		return k in list.keys ? list.keys[k] : -1;
+	}
+
+	function mountLists(blind) {
+		Object.keys(lists).forEach(function (id) {
+			mountList(lists[id], blind);
+		});
+	}
+
+	/** Draws the rows a list needs now. `blind` draws where it was last, without
+	 *  measuring anything (so a fresh page is its full height before any layout read). */
+	function mountList(list, blind) {
+		var ul = document.getElementById(list.id);
+		if (!ul) return;
+		var n = list.items.length;
+		var h = (list.h = rowHeight(ul));
+		var a;
+		var b;
+		if (blind) {
+			var r = ui.vrange[list.id] || [0, 2 * OVERSCAN];
+			a = clamp(r[0], 0, n);
+			b = clamp(Math.max(r[1], a + 2 * OVERSCAN), 0, n);
+		} else {
+			var sc = list.scrollEl() || scroller;
+			var sr = sc.getBoundingClientRect();
+			var ur = ul.getBoundingClientRect();
+			var first = Math.floor((sr.top - ur.top) / h);
+			var last = Math.ceil((sr.bottom - ur.top) / h);
+			a = clamp(first - OVERSCAN, 0, n);
+			b = clamp(last + OVERSCAN, 0, n);
+			if (b <= a) {
+				// The list is out of view: keep a few rows at the edge nearest the view.
+				if (first >= n) {
+					a = Math.max(0, n - OVERSCAN);
+					b = n;
+				} else {
+					a = 0;
+					b = Math.min(n, OVERSCAN);
+				}
+			}
+		}
+		ui.vrange[list.id] = [a, b];
+		var want = {};
+		for (var i = a; i < b; i++) want[i] = true;
+		want[list.active] = n > 0;
+		ui.pin.forEach(function (k) {
+			var at = indexOfKey(list, k);
+			if (at >= 0) want[at] = true;
+		});
+		var idx = Object.keys(want)
+			.filter(function (k) {
+				return want[k];
+			})
+			.map(Number)
+			.sort(function (x, y) {
+				return x - y;
+			});
+
+		// Reuse the rows already drawn; parse the new ones in one go.
+		var have = {};
+		for (var c = ul.firstElementChild; c; c = c.nextElementSibling) if (c.hasAttribute('data-vkey')) have[c.getAttribute('data-vkey')] = c;
+		var nodes = [];
+		var fresh = [];
+		idx.forEach(function (i) {
+			var x = list.items[i];
+			var k = list.key(x);
+			if (have[k] && have[k].getAttribute('data-i') === String(i)) nodes.push(have[k]);
+			else {
+				nodes.push(null);
+				fresh.push({ at: nodes.length - 1, html: list.row(x, i, i === list.active) });
+			}
+		});
+		if (fresh.length) {
+			var tpl = document.createElement('template');
+			tpl.innerHTML = fresh
+				.map(function (f) {
+					return f.html;
+				})
+				.join('');
+			var made = tpl.content.children;
+			var arr = [];
+			for (var m = 0; m < made.length; m++) arr.push(made[m]);
+			fresh.forEach(function (f, j) {
+				nodes[f.at] = arr[j];
+			});
+		}
+		// Spacers between runs, and above and below.
+		var out = [];
+		var prev = -1;
+		idx.forEach(function (i, j) {
+			var gap = i - prev - 1;
+			if (gap > 0 || (j === 0 && i === 0)) out.push(spacer(gap * h));
+			out.push(nodes[j]);
+			prev = i;
+		});
+		out.push(spacer((n - prev - 1) * h));
+		if (!idx.length) out = [spacer(n * h)];
+
+		var keep = new Set(out);
+		Array.prototype.slice.call(ul.children).forEach(function (el) {
+			if (!keep.has(el)) ul.removeChild(el);
+		});
+		var ref = ul.firstChild;
+		out.forEach(function (node) {
+			if (node === ref) ref = ref.nextSibling;
+			else ul.insertBefore(node, ref);
+		});
+	}
+
+	function spacer(px) {
+		var li = document.createElement('li');
+		li.className = 'vspacer';
+		li.setAttribute('aria-hidden', 'true');
+		li.style.height = Math.max(0, px) + 'px';
+		return li;
+	}
+
+	/** Moves the row Tab enters the list on. Only drawn rows carry tabindex. */
+	function setActive(list, i) {
+		var ul = document.getElementById(list.id);
+		if (!ul || i === list.active) return;
+		var roves = function (at, t) {
+			var li = ul.querySelector('li[data-i="' + at + '"]');
+			if (!li) return;
+			var ctl = li.querySelectorAll('[data-rove]');
+			for (var j = 0; j < ctl.length; j++) ctl[j].setAttribute('tabindex', t);
+		};
+		roves(list.active, '-1');
+		list.active = i;
+		ui.active[list.id] = i;
+		roves(i, '0');
+	}
+
+	/** Arrow keys, Home, End and Page keys move between a list's rows, scrolling and
+	 *  drawing as they go, and keep to the same kind of key (row, pick, Open). */
+	function moveInList(list, to, role) {
+		var ul = document.getElementById(list.id);
+		var n = list.items.length;
+		to = clamp(to, 0, n - 1);
+		setActive(list, to);
+		var sc = list.scrollEl() || scroller;
+		var sr = sc.getBoundingClientRect();
+		var ur = ul.getBoundingClientRect();
+		var top = ur.top + to * list.h;
+		var bottom = top + list.h;
+		var bar = document.querySelector('.sel-bar');
+		var shade = bar && sc.contains(bar) ? bar.getBoundingClientRect().height + 8 : 8;
+		if (top < sr.top + shade) sc.scrollTop -= sr.top + shade - top;
+		else if (bottom > sr.bottom - 8) sc.scrollTop += bottom - (sr.bottom - 8);
+		ui.pin = [];
+		mountList(list, false);
+		var li = ul.querySelector('li[data-i="' + to + '"]');
+		if (!li) return;
+		var ctl = li.querySelector('[data-rove="' + role + '"]') || li.querySelector('[data-rove="row"]');
+		if (ctl) ctl.focus({ preventScroll: true });
+		updateCues();
+	}
+
 	/* ------------------------------------------------------ Scroll cues */
 
 	/*
 	 * A region with more below says so: a fade at its foot and a small tag counting the
-	 * files still out of sight. The wide Home's recessed column has its own; the window
-	 * has one for everything else. Paint only, no pointer events, and the tag is hidden
-	 * from screen readers (they read the list itself).
+	 * files still out of sight, counted from the data for a long list (most of its rows
+	 * are not drawn). The wide Home's recessed column has its own; the window has one for
+	 * everything else. Paint only, no pointer events, hidden from screen readers.
 	 */
 	function below(box) {
 		if (box.scrollHeight <= box.clientHeight + 1) return null;
 		if (box.scrollTop + box.clientHeight >= box.scrollHeight - 2) return null;
 		var limit = box.getBoundingClientRect().bottom - 28;
 		var n = 0;
-		var rows = box.querySelectorAll('.row, .attn-card, .history-list > li');
 		var files = true;
+		var rows = box.querySelectorAll('.row, .attn-card, .history-list > li');
 		for (var i = 0; i < rows.length; i++) {
+			if (rows[i].closest('.vlist')) continue;
 			if (rows[i].getBoundingClientRect().top >= limit) {
 				n++;
 				if (!rows[i].matches('.row')) files = false;
 			}
 		}
+		Object.keys(lists).forEach(function (id) {
+			var l = lists[id];
+			var ul = document.getElementById(id);
+			if (!ul || !l.h || (l.scrollEl() || scroller) !== box) return;
+			var ur = ul.getBoundingClientRect();
+			var k = clamp(Math.ceil((limit - ur.top) / l.h), 0, l.items.length);
+			n += l.items.length - k;
+			for (var j = k; j < l.items.length && files; j++) if (l.items[j].kind !== 'file' && l.items[j].kind !== 'mine') files = false;
+		});
 		return { n: n, files: files };
 	}
 
@@ -1054,15 +1999,27 @@
 	}
 
 	function updateCues() {
-		var r = document.getElementById('recess-scroll');
+		var r = recessEl();
 		setCue(document.getElementById('recess-cue'), r && getComputedStyle(r).overflowY !== 'visible' ? below(r) : null);
 		setCue(windowCue, below(scroller));
+	}
+
+	var framed = false;
+	function onScroll() {
+		if (framed) return;
+		framed = true;
+		requestAnimationFrame(function () {
+			framed = false;
+			ui.pin = [activeKey(), ui.returnKey];
+			mountLists(false);
+			updateCues();
+		});
 	}
 
 	/* --------------------------------------------------------- Navigation */
 
 	function partialDetail(fileId) {
-		var found = findRow(ui.view, fileId);
+		var found = findRow(fileId);
 		if (found) {
 			return {
 				fileId: fileId,
@@ -1071,12 +2028,13 @@
 				project: found.project.name,
 				folder: found.folder.path,
 				status: found.row.status,
-				holder: found.row.holder,
+				checkout: found.row.checkout,
 				releaseNotChecked: found.row.releaseNotChecked,
+				canTakeBack: found.project.canTakeBack,
 				history: null
 			};
 		}
-		var mine = (ui.view.myFiles || []).concat(ui.view.needsMe || []).filter(function (f) {
+		var mine = (ui.view.myFiles || []).filter(function (f) {
 			return f.fileId === fileId;
 		})[0];
 		var path = mine ? mine.path : '';
@@ -1087,8 +2045,9 @@
 			project: path.split('/')[0] || '',
 			folder: '',
 			status: mine && mine.status ? mine.status : 'synced',
-			holder: null,
+			checkout: mine ? mine.checkout : { state: 'available', label: 'Available', name: null, email: null, device: null, since: null },
 			releaseNotChecked: false,
+			canTakeBack: false,
 			history: null
 		};
 	}
@@ -1121,11 +2080,78 @@
 		render();
 		scroller.scrollTop = ui.homeScroll;
 		setRecessTop(ui.homeRecess);
-		var target = ui.returnKey ? document.querySelector('[data-key="' + ui.returnKey + '"]') : null;
+		mountLists(false);
+		var target = ui.returnKey ? document.querySelector('[data-key="' + sel(ui.returnKey) + '"]') : null;
 		(target || document.querySelector('[data-key="hdr-vault"]')).focus({ preventScroll: true });
 		if (target && target.scrollIntoView) target.scrollIntoView({ block: 'nearest' });
 		updateCues();
 	}
+
+	/** Into a folder (or back up to one): the selection is for one folder at a time, and
+	 *  the list starts at its top. */
+	function goFolder(path, fromKey) {
+		var place = browserPlace();
+		ui.folders[place.project.id] = path;
+		clearPicked();
+		ui.active['vl-browser'] = 0;
+		ui.vrange['vl-browser'] = null;
+		render();
+		var head = document.querySelector('.browser-head');
+		var sc = homeScroller();
+		if (head) {
+			var top = head.getBoundingClientRect().top - sc.getBoundingClientRect().top;
+			if (top < 0 || top > sc.clientHeight * 0.6) sc.scrollTop += top - 8;
+		}
+		mountList(lists['vl-browser'] || { items: [] }, false);
+		var focus = document.querySelector('#vl-browser [data-rove="row"][tabindex="0"]') || document.querySelector('.crumb-here');
+		if (fromKey && focus && focus.focus) focus.focus({ preventScroll: true });
+		updateCues();
+	}
+
+	/* ------------------------------------------------------- Dropping files */
+
+	function hasFiles(e) {
+		var t = e.dataTransfer && e.dataTransfer.types;
+		return !!t && Array.prototype.indexOf.call(t, 'Files') >= 0;
+	}
+
+	function dropZoneOf(el) {
+		return el && el.closest ? el.closest('[data-drop]') : null;
+	}
+
+	function paintDrag() {
+		var zone = document.querySelector('[data-drop]');
+		if (zone) zone.setAttribute('data-drag', ui.drag ? 'true' : 'false');
+	}
+
+	function setDrag(on) {
+		if (ui.drag === on) return;
+		ui.drag = on;
+		paintDrag();
+	}
+
+	// A file dropped anywhere never opens in the window; one dropped on the open folder's
+	// list is copied in by the host, which reads each File's path.
+	document.addEventListener('dragover', function (e) {
+		if (!hasFiles(e)) return;
+		e.preventDefault();
+		var ok = !!dropZoneOf(e.target);
+		e.dataTransfer.dropEffect = ok ? 'copy' : 'none';
+		setDrag(ok);
+	});
+	document.addEventListener('dragleave', function (e) {
+		if (!dropZoneOf(e.relatedTarget)) setDrag(false);
+	});
+	document.addEventListener('drop', function (e) {
+		if (!hasFiles(e)) return;
+		e.preventDefault();
+		setDrag(false);
+		if (!dropZoneOf(e.target) || !ui.view) return;
+		var files = e.dataTransfer.files;
+		if (!files || !files.length) return;
+		var place = browserPlace();
+		bridge.sendWithFiles('dropFiles', { projectId: place.project.id, folder: place.folder }, files);
+	});
 
 	/* ------------------------------------------------------------ Events */
 
@@ -1136,15 +2162,101 @@
 		if (!el && e.target.closest && e.target.closest('.row .chip')) el = e.target.closest('.row-main').querySelector('.row-hit');
 		if (!el || el.disabled) return;
 		var action = el.getAttribute('data-action');
+		var path = el.getAttribute('data-path');
+		var from = el.getAttribute('data-key');
 		switch (action) {
 			case 'openFile':
-				openFile(el.getAttribute('data-file-id'), el.getAttribute('data-key'));
+				openFile(el.getAttribute('data-file-id'), from);
 				break;
 			case 'back':
 				back();
 				break;
 			case 'showInFolder':
-				bridge.send('showInFolder', { path: el.getAttribute('data-path') });
+				bridge.send('showInFolder', { path: path });
+				break;
+			case 'launch':
+				act('launchFile', { path: path });
+				break;
+			case 'checkOut':
+				act('checkOut', { paths: [path], open: false });
+				break;
+			case 'checkOutOpen':
+				act('checkOut', { paths: [path], open: true });
+				break;
+			case 'checkIn':
+				act('checkIn', { paths: [path] });
+				break;
+			case 'undoCheckOut':
+				act('undoCheckOut', { paths: [path] });
+				break;
+			case 'askTakeBack':
+				askTakeBack([findRow(el.getAttribute('data-file-id'))], from);
+				break;
+			case 'promptCheckOut':
+				act('checkOut', { paths: [path], open: false });
+				ui.promptGone = promptKey(ui.view.prompt);
+				render();
+				break;
+			case 'promptLater':
+				ui.promptGone = promptKey(ui.view.prompt);
+				render();
+				break;
+			case 'select':
+				togglePick(path, e.shiftKey);
+				break;
+			case 'selCheckOut':
+			case 'selCheckIn':
+			case 'selUndo':
+				var paths = pickedRows().map(function (h) {
+					return h.row.path;
+				});
+				if (action === 'selCheckOut') act('checkOut', { paths: paths, open: false });
+				else if (action === 'selCheckIn') act('checkIn', { paths: paths });
+				else act('undoCheckOut', { paths: paths });
+				break;
+			case 'askTakeBackPicked':
+				askTakeBack(pickedRows(), from);
+				break;
+			case 'selClear':
+				clearPicked();
+				render();
+				var first = document.querySelector('#vl-browser [data-rove="sel"][tabindex="0"]') || document.querySelector('.crumb-here');
+				if (first && first.focus) first.focus({ preventScroll: true });
+				break;
+			case 'folder':
+				goFolder(el.getAttribute('data-folder') || '', from);
+				break;
+			case 'askNewFolder':
+				askFolder('newFolder', from);
+				break;
+			case 'askRenameFolder':
+				askFolder('renameFolder', from);
+				break;
+			case 'askDeleteFolder':
+				askFolder('deleteFolder', from);
+				break;
+			case 'addFiles':
+				var place = browserPlace();
+				act('addFiles', { projectId: place.project.id, folder: place.folder });
+				break;
+			case 'folderCheckOut':
+			case 'folderCheckIn':
+				var here = browserPlace();
+				var target = [folderPathOf(here.pi, here.folder)];
+				if (action === 'folderCheckOut') act('checkOut', { paths: target, open: false });
+				else act('checkIn', { paths: target });
+				break;
+			case 'askOk':
+				askOk();
+				break;
+			case 'askCancel':
+				ask.close();
+				break;
+			case 'notice':
+				runNotice(el.getAttribute('data-notice'));
+				break;
+			case 'expand':
+				toggleExpand(el.getAttribute('data-notice'));
 				break;
 			case 'openSettings':
 				openSettings();
@@ -1161,10 +2273,11 @@
 			case 'useFolder':
 				// A folder of the student's own, next to the one that is taken. Saving it is
 				// the same as picking it in Settings; the host answers with a new view.
-				saveSettings({ vaultRoot: el.getAttribute('data-path') });
+				saveSettings({ vaultRoot: path });
 				break;
 			case 'project':
 				ui.projectId = el.getAttribute('data-project');
+				clearPicked();
 				render();
 				break;
 			case 'connect':
@@ -1179,33 +2292,87 @@
 		}
 	});
 
-	// Left and right arrows move between project tabs, as a tab strip should.
 	document.addEventListener('keydown', function (e) {
 		var el = e.target;
-		if (!el || el.getAttribute('role') !== 'tab' || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return;
-		var tabs = Array.prototype.slice.call(el.parentNode.querySelectorAll('[role="tab"]'));
-		var i = tabs.indexOf(el) + (e.key === 'ArrowRight' ? 1 : -1);
-		var next = tabs[(i + tabs.length) % tabs.length];
-		ui.projectId = next.getAttribute('data-project');
-		render();
-		var again = document.querySelector('[data-key="' + next.getAttribute('data-key') + '"]');
-		if (again) again.focus();
-		e.preventDefault();
+		// Left and right arrows move between project tabs, as a tab strip should.
+		if (el && el.getAttribute && el.getAttribute('role') === 'tab' && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+			var tabs = Array.prototype.slice.call(el.parentNode.querySelectorAll('[role="tab"]'));
+			var t = tabs.indexOf(el) + (e.key === 'ArrowRight' ? 1 : -1);
+			var next = tabs[(t + tabs.length) % tabs.length];
+			ui.projectId = next.getAttribute('data-project');
+			clearPicked();
+			render();
+			var again = document.querySelector('[data-key="' + sel(next.getAttribute('data-key')) + '"]');
+			if (again) again.focus();
+			e.preventDefault();
+			return;
+		}
+		// Inside a long list: up, down, Home, End and the page keys move between rows.
+		var role = el && el.getAttribute ? el.getAttribute('data-rove') : null;
+		var ul = role ? el.closest('.vlist') : null;
+		var list = ul ? lists[ul.id] : null;
+		if (list) {
+			var at = Number(el.closest('li[data-i]').getAttribute('data-i'));
+			var page = Math.max(1, Math.floor((list.scrollEl() || scroller).clientHeight / list.h) - 1);
+			var to = null;
+			if (e.key === 'ArrowDown') to = at + 1;
+			else if (e.key === 'ArrowUp') to = at - 1;
+			else if (e.key === 'Home') to = 0;
+			else if (e.key === 'End') to = list.items.length - 1;
+			else if (e.key === 'PageDown') to = at + page;
+			else if (e.key === 'PageUp') to = at - page;
+			if (to !== null) {
+				e.preventDefault();
+				moveInList(list, to, role);
+				return;
+			}
+		}
+		if (e.key === 'Enter' && el && el.id === 'ask-name') {
+			e.preventDefault();
+			askOk();
+			return;
+		}
+		// Escape lets go of every picked file.
+		if (e.key === 'Escape' && !sheet.open && !ask.open && Object.keys(ui.selected).length) {
+			clearPicked();
+			render();
+		}
 	});
 
-	// Scrolling anywhere (the window or the recessed column) updates the "more below" tags.
-	document.addEventListener('scroll', updateCues, { capture: true, passive: true });
-	window.addEventListener('resize', updateCues);
+	// Tab into a long list lands on the row it left from.
+	document.addEventListener('focusin', function (e) {
+		var el = e.target;
+		var ul = el && el.closest ? el.closest('.vlist') : null;
+		var li = ul ? el.closest('li[data-i]') : null;
+		if (li && lists[ul.id]) setActive(lists[ul.id], Number(li.getAttribute('data-i')));
+	});
+
+	// Scrolling anywhere (the window, the recessed column, a notice's list) draws the rows
+	// now in view and updates the "more below" tags.
+	document.addEventListener('scroll', onScroll, { capture: true, passive: true });
+	window.addEventListener('resize', onScroll);
+
+	// A window the student can't see stops turning the gear.
+	document.addEventListener('visibilitychange', function () {
+		document.documentElement.setAttribute('data-hidden', document.hidden ? 'true' : 'false');
+	});
 
 	sheet.addEventListener('close', function () {
-		var key = document.querySelector('[data-key="hdr-settings"]');
-		if (key) key.focus();
+		var k = document.querySelector('[data-key="hdr-settings"]');
+		if (k) k.focus();
 	});
-	// A click on the dim area around the sheet closes it.
-	sheet.addEventListener('click', function (e) {
-		if (e.target !== sheet) return;
-		var r = sheet.getBoundingClientRect();
-		if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) sheet.close();
+	ask.addEventListener('close', function () {
+		var from = ui.ask && ui.ask.returnKey ? document.querySelector('[data-key="' + sel(ui.ask.returnKey) + '"]') : null;
+		ui.ask = null;
+		if (from) from.focus({ preventScroll: true });
+	});
+	// A click on the dim area around a sheet closes it.
+	[sheet, ask].forEach(function (d) {
+		d.addEventListener('click', function (e) {
+			if (e.target !== d) return;
+			var r = d.getBoundingClientRect();
+			if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) d.close();
+		});
 	});
 
 	/* ------------------------------------------------------- Host messages */
@@ -1216,30 +2383,71 @@
 		requestAnimationFrame(function () {
 			requestAnimationFrame(function () {
 				document.body.classList.remove('preload');
+				mountLists(false);
 				updateCues();
 				document.documentElement.setAttribute('data-ready', 'true');
 			});
 		});
 	}
 
-	/** Applies the demo's ?screen= once, after the first view. */
+	/** Applies the demo's place once, after the first view: the screen, the project and
+	 *  folder, picked files, an open notice list, a dialog, files held over the list, and
+	 *  Home scrolled to the team's files. */
 	function applyRoute() {
 		if (ui.routed) return;
 		ui.routed = true;
 		var r = bridge.route();
 		if (!r || ui.view.connection !== 'signedIn') return markReady();
+		if (r.project) ui.projectId = r.project;
+		var place = browserPlace();
+		if (place && r.folder != null && place.pi.folders[r.folder]) ui.folders[place.project.id] = r.folder;
+		place = browserPlace();
+		if (place && r.select && r.select.length) {
+			(place.pi.folders[place.folder].files || []).forEach(function (row) {
+				if (row.fileId && r.select.indexOf(row.name) >= 0) setPicked(row.path, true);
+			});
+		}
+		if (r.expand) ui.expanded[r.expand] = true;
+		ui.drag = !!r.drag;
+		render();
 		if (r.screen === 'detail' && r.fileId) {
+			ui.routeDialog = r;
 			openFile(r.fileId, 'row-' + r.fileId);
 			return; // ready when the detail arrives
 		}
+		if (r.at === 'browser') {
+			// The open project's card at the top, under the selection bar when there is one.
+			var part = document.querySelector('.browser-group');
+			var sc = homeScroller();
+			if (part) sc.scrollTop += part.getBoundingClientRect().top - sc.getBoundingClientRect().top;
+			var bar = document.querySelector('.sel-bar');
+			var card = document.getElementById('project-panel');
+			if (bar && card) sc.scrollTop += card.getBoundingClientRect().top - bar.getBoundingClientRect().bottom - 12;
+			ui.pin = [];
+			mountLists(false);
+		}
 		if (r.screen === 'settings') openSettings();
+		routeDialog(r);
 		markReady();
+	}
+
+	function routeDialog(r) {
+		if (!r || !r.dialog) return;
+		if (r.dialog === 'takeBack' && ui.detail) askTakeBack([findRow(ui.detail.fileId)], 'd-takeback');
+		else if (r.dialog === 'newFolder' || r.dialog === 'renameFolder' || r.dialog === 'deleteFolder') askFolder(r.dialog, null);
 	}
 
 	bridge.onMessage(function (message) {
 		if (message.type === 'view') {
 			var wasSignedIn = ui.view && ui.view.connection === 'signedIn';
 			ui.view = message.view;
+			if (!ui.view.activity) ui.view.activity = { line: null, upload: null, download: null, move: null, waiting: null, active: [] };
+			ui.index = buildIndex(ui.view);
+			followRename();
+			// Picked files that are gone from the view are let go.
+			Object.keys(ui.selected).forEach(function (p) {
+				if (!ui.index.byPath[p]) delete ui.selected[p];
+			});
 			if (ui.view.connection !== 'signedIn') {
 				ui.screen = 'home';
 				ui.detail = null;
@@ -1255,9 +2463,15 @@
 				render();
 				if (ui.waitingForDetail) {
 					ui.waitingForDetail = false;
+					routeDialog(ui.routeDialog);
+					ui.routeDialog = null;
 					markReady();
 				}
 			}
+		} else if (message.type === 'activity') {
+			patchActivity(message.activity);
+		} else if (message.type === 'actionResult') {
+			showResult(!!message.ok, message.message);
 		}
 	});
 
