@@ -3,8 +3,10 @@ name: Agent release
 # the agent exactly as agent.yml does, checks that the tag is v<Version of src/Armory.Agent>,
 # runs the same install, launch and uninstall cycles, and then publishes a GitHub Release with
 # both installers, their .sha256 files, and the SHA-256 values in the notes.
-# A tag can also arrive by publishing a release in GitHub's web page (the chat's container
-# cannot push tags). Then the release already exists, and this job attaches the assets to it.
+# A tag can also arrive by publishing a release in GitHub's web page or with the API (the
+# chat's container cannot push tags). Then the release already exists, and this job attaches
+# the assets to it. Before publishing, an upgrade from the published v0.1.0 must keep the
+# vault, the settings and the sign-in (tools/test-agent-install.ps1 -Kind Upgrade).
 on:
   push:
     tags: ['v*']
@@ -49,6 +51,9 @@ jobs:
       - name: Install, launch and uninstall with IDEA-Armory-Setup
         run: ./tools/test-agent-install.ps1 -Kind Setup
 
+      - name: Upgrade from the published v0.1.0 (flash drive and setup.exe)
+        run: ./tools/test-agent-install.ps1 -Kind Upgrade
+
       - name: Upload the evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -86,7 +91,7 @@ jobs:
             "- ``$zipName``: ``$env:USB_SHA256``",
             "- ``$exeName``: ``$env:SETUP_SHA256``",
             '',
-            "Built from $env:GITHUB_SHA. Before publishing, both assets were installed, launched and uninstalled on windows-latest, and the vault's proof files kept their bytes through each uninstall.")
+            "Built from $env:GITHUB_SHA. Before publishing, both assets were installed, launched and uninstalled on windows-latest, the vault's proof files kept their bytes through each uninstall, and installing each over the published v0.1.0 kept the vault, the settings and the sign-in.")
           $notes -join "`n" | Set-Content -LiteralPath release-notes.md -Encoding utf8
           $assets = @($env:USB_ZIP, "$env:USB_ZIP.sha256", $env:SETUP_EXE, "$env:SETUP_EXE.sha256")
           gh release view $tag *> $null

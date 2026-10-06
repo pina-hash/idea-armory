@@ -156,8 +156,11 @@ Inno Setup 6.3 or later. Sources: `installer/usb/` (the drive's top level),
 `.github/actions/package-agent/action.yml`: `dotnet restore --locked-mode`,
 `dotnet build -warnaserror`, `dotnet test tests/Armory.Agent.Tests`, the self-contained
 publish, Inno Setup (installed with Chocolatey only when the runner lacks 6.3 or later), and
-`tools/package-agent.ps1`. Then `tools/test-agent-install.ps1` runs two cycles (installing
-the WebView2 Runtime on the runner first if the image lacks it):
+`tools/package-agent.ps1`. agent.yml then runs `tests/Armory.Platform.Windows.Tests` (real
+NTFS, Restart Manager, DPAPI and child processes, which skip on Linux), so dispatching it on
+a branch (`gh workflow run agent.yml --ref <branch>`) covers every Windows-only test. Then
+`tools/test-agent-install.ps1` runs three cycles (installing the WebView2 Runtime on the
+runner first if the image lacks it):
 
 - **Flash drive.** Extract the zip and check its top level. `Install IDEA Armory.cmd /quiet`
   exits 0; the exe has the right version, the Run value is exact, the Apps entry has every
@@ -173,34 +176,57 @@ the WebView2 Runtime on the runner first if the image lacks it):
   /SUPPRESSMSGBOXES /NORESTART` run twice, the installed `scripts\Check.cmd`, then
   `unins000.exe /VERYSILENT` (waiting for its TEMP copy to finish), the proof files again,
   and the drive's Check exiting non-zero.
+- **Upgrade from the published release** (`-Kind Upgrade`, both routes; `-Route Usb` or
+  `-Route Setup` runs one, `-From` names another published version). The v0.1.0 flash-drive
+  zip and setup.exe are downloaded from
+  `https://github.com/pina-hash/idea-armory/releases/download/v0.1.0/` into `RUNNER_TEMP`
+  (never `dist`, where the script picks the build under test) and each is checked against
+  its `.sha256`. For each route: install 0.1.0 and wait until it runs and logs
+  `started 0.1.0`; plant the proof files in the vault, a `settings.json` with a non-default
+  theme, a sign-in in the exact `DpapiSecretStore` format (`ARMORY-DPAPI-1` and a newline,
+  then a CurrentUser DPAPI blob with the entropy `IDEA Armory secret store v1/armory-session`,
+  holding a session whose sign-in service answers nothing, so neither version can renew or
+  end it) and a stray file in the program's `wwwroot\`; then install this build over it
+  (`Install IDEA Armory.cmd /quiet`, which must say `Upgraded IDEA Armory 0.1.0 to <version>`,
+  or setup.exe `/VERYSILENT`). It passes only when this build runs (exe version, `--check`,
+  `started <version>`, a new process still running 15 seconds later), the Apps entry shows
+  the new version, the sign-in, `settings.json` and the proof files keep every byte, the
+  sign-in still decrypts for this Windows account, the vault keeps `.armory`, and the stray
+  page file is gone. Then it uninstalls and checks the proof files once more.
 
 The `agent-dist` artifact holds the zip, the exe and their `.sha256` files; `agent-evidence`
-holds every step's output, the Inno logs, `package.txt` and the agent test results.
+holds every step's output, the Inno logs, `package.txt`, and the agent and platform test
+results.
 
 `.github/workflows/release.yml` runs when a person pushes a tag `v*` (no workflow pushes
-tags). It checks that the tag is `v<Version of src/Armory.Agent>`, runs the same build,
-package and both cycles, and then publishes a GitHub Release with both assets, their
-`.sha256` files, and the SHA-256 values in the notes (`gh release create`, `GH_TOKEN` from
-`github.token`, `contents: write`).
+tags), and also when a release is published, in GitHub's web page or with the API
+(`POST repos/pina-hash/idea-armory/releases` with `tag_name` and `target_commitish`), which
+creates the tag at that commit. It checks that the tag is `v<Version of src/Armory.Agent>`,
+so the version bump must be on that commit first, runs the same build, package and all
+three cycles, upgrade included, and then attaches both assets, their `.sha256` files, and
+the SHA-256 values in the notes to the release (`gh release upload --clobber` and
+`gh release edit` when the release exists, `gh release create` otherwise; `GH_TOKEN` from
+`github.token`, `contents: write`). A published release with a failed run has no assets
+until the run is repeated.
 
 ## Self-update: not shipped, and the choice it needs
 
-The agent ships without self-update. `pina-hash/idea-armory` is private, so downloading its
-GitHub Releases from a lab computer would need a GitHub token on every computer, which is
-not acceptable for student machines. Where updates are published is Mr. Pina's choice:
+The agent ships without self-update. `pina-hash/idea-armory` is public, so its GitHub
+Releases download with no token (the upgrade test above does exactly that). Where the agent
+should look for updates is still Mr. Pina's choice:
 
-- **A public releases repository**, for example `pina-hash/idea-armory-releases`, holding
-  only the release assets; the code stays private. The agent would read
-  `https://api.github.com/repos/pina-hash/idea-armory-releases/releases/latest` with no
-  token.
+- **This repository's releases.** The agent would read
+  `https://api.github.com/repos/pina-hash/idea-armory/releases/latest` with no token. No
+  new secret or release step is needed.
 - **An update feed on ideabosco.com**, for example `GET /api/armory/agent/latest` answering
-  `{version, url, sha256}`, with the installer in the same R2 storage as the blobs.
+  `{version, url, sha256}`, with the installer in the same R2 storage as the blobs. This
+  needs a release step that copies the assets there with the R2 credentials stored as a
+  repository secret. Today's workflows need no secret.
 
 Turning it on needs:
 
 1. That choice, made by Mr. Pina.
-2. A release step that copies the assets there: a token scoped to the public repository,
-   or the R2 credentials, stored as a repository secret. Today's workflows need no secret.
+2. For the feed, the release step that copies the assets.
 3. Agent code that checks once a day, downloads `IDEA-Armory-Setup-v<version>.exe` to
    `%LOCALAPPDATA%\IDEA Armory\updates\`, verifies its SHA-256 against the feed (served
    over HTTPS from a host the agent trusts), and runs it with
@@ -210,4 +236,9 @@ Turning it on needs:
    the SmartScreen warning.
 
 Until then, updating means running the new release's Install from the flash drive (or the
-new setup.exe) over the old one; settings, sign-in and the vault are kept.
+new setup.exe) over the old one; settings, sign-in and the vault are kept, as the upgrade
+cycle above proves on every run. The window's page is replaced as a whole: setup.exe deletes
+`{app}\wwwroot` before copying (`[InstallDelete]`), and the flash drive swaps the whole
+program folder. The WebView2 profile in `%LOCALAPPDATA%\IDEA Armory\WebView2` survives an
+upgrade, so the page and its scripts load with `?v=<version>`, and the first start of a new
+version empties that profile's cache once.

@@ -2,7 +2,10 @@ name: Agent installers
 # The Windows agent end to end on a clean windows-latest runner: locked restore, build with
 # warnings as errors, the agent's tests, the self-contained win-x64 publish, both installers,
 # then an install, launch and uninstall cycle for each (tools/test-agent-install.ps1), with
-# C:\IDEA\Armory\Proof\ proving that uninstall keeps the vault. Needs no secret.
+# C:\IDEA\Armory\Proof\ proving that uninstall keeps the vault, and an upgrade from the
+# published v0.1.0 over each route keeping the vault, the settings and the sign-in. It also
+# runs the platform tests (tests/Armory.Platform.Windows.Tests), so dispatching it on a branch
+# covers real NTFS. Needs no secret.
 on:
   push:
     branches: [main]
@@ -28,11 +31,17 @@ jobs:
         id: package
         uses: ./.github/actions/package-agent
 
+      - name: Platform tests (real NTFS, Restart Manager, DPAPI, child processes)
+        run: dotnet test tests/Armory.Platform.Windows.Tests --no-build --logger "console;verbosity=normal" --logger "trx;LogFileName=platform-tests.trx"
+
       - name: Install, launch and uninstall from the flash-drive zip
         run: ./tools/test-agent-install.ps1 -Kind Usb
 
       - name: Install, launch and uninstall with IDEA-Armory-Setup
         run: ./tools/test-agent-install.ps1 -Kind Setup
+
+      - name: Upgrade from the published v0.1.0 (flash drive and setup.exe)
+        run: ./tools/test-agent-install.ps1 -Kind Upgrade
 
       - name: Upload the installers
         if: always()
@@ -53,4 +62,5 @@ jobs:
           path: |
             evidence/
             tests/Armory.Agent.Tests/TestResults/*.trx
+            tests/Armory.Platform.Windows.Tests/TestResults/*.trx
           if-no-files-found: warn
