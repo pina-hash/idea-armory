@@ -72,7 +72,11 @@ immutable snapshot bytes.
   path in the same project) is sent as `armory_move_file`; a refused one is renamed back.
 - A deletion is planned only after two consecutive scans miss the file, and the file is
   probed again right before the tombstone is sent.
-- A brand-new file cannot take the name of a removed file (names stay with their history).
+- A brand-new file at a removed file's own path is refused here (names stay with their history).
+  Elsewhere in the project, the server (contract v2, C4) revives the removed file instead and
+  returns its id: the engine then commits the new bytes on top of the revived file's current
+  version, never with no parent, and forgets its record of the old path when nothing of it is
+  on disk, so the removed bytes never come back (`RevivalTests`).
 - Saves the release gate refuses are private drafts: never sent, never holding the lock,
   offered again if the gate later allows them.
 - A `~$` marker counts as "open" while the platform corroborates it and for 10 minutes after

@@ -102,7 +102,9 @@ Nothing secret is logged. `ArmorySession.ToString()` redacts both tokens.
 bool Archived)`. A null season is read as null and an answer without `archived` (a server older
 than 0232) as false. `HolderName` is the holder's profile name or null; show a name derived from
 `HolderEmail` when it is null. Revival needs no new call: `CreateFileAsync` on a removed name
-returns that file's id.
+returns that file's id. Its first commit must name the revived file's current version (from
+`ProjectFilesAsync`) as parent; a null parent is kept aside as a stale parent, and the removed
+bytes stay the shared version.
 
 A folder refusal is `ArmoryRpcException` with `IsInUse` (SQLSTATE `55006`, HTTP 500). Read its
 `Details` with `FolderRefusal.TryParse`, which returns `Reason` (`checked_out` or `target_exists`,

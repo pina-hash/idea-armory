@@ -203,6 +203,23 @@ public sealed partial class SyncEngine
         return await SendAsync(st, flight, ct) && st.FileId is not null;
     }
 
+    // Contract v2 (C4, D6): a name whose only holder is a removed file revives that file, with its
+    // id and history. A file this computer has just created has no version yet, so an id whose
+    // server record already has one is a revival: that version becomes the base, and the added
+    // bytes are committed on top of it. With no parent the server would keep them aside as a stale
+    // parent, and the removed bytes would come back over them (docs/server/contract.md, open
+    // point 1). This computer's record of the removed file at its old path is that file's past,
+    // not a second file: with nothing of it on this disk it is forgotten, so the revived file is
+    // never fetched back to the old path. A revival this pass's refresh did not see still ends
+    // the 0.1.0 way; the v2 engine reads the change feed's file_revived for it.
+    private void ContinueRevivedHistory(FileState st)
+    {
+        if (st.FileId is not { } id || !remoteById.TryGetValue(id, out var revived)) return;
+        if (st.Base is null && revived.File.Current is { } current) st.SetBase(new(current.Id.ToString(), current.Hash, current.Author));
+        foreach (var past in state.Files.Values.Where(f => f.FileId == id && !ReferenceEquals(f, st) && f.Inflight is null && !local.ContainsKey(f.Path)).ToArray())
+            state.Files.Remove(past.Path);
+    }
+
     private static string? ParentOf(FileState st) => Guid.TryParse(st.BaseId, out _) ? st.BaseId : null;
     private long SizeOf(SavedSnapshot snapshot)
     {
@@ -262,6 +279,7 @@ public sealed partial class SyncEngine
         {
             case "create":
                 st.FileId = await deps.Api.CreateFileAsync(f.ProjectId!.Value, f.Folder!, f.Name!, device, f.Operation, ct);
+                ContinueRevivedHistory(st);
                 return true;
             case "lock":
             {
