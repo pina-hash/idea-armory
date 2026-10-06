@@ -110,7 +110,30 @@ existed. 0232 is what both lanes now build on; where it differs, 0232 wins and t
 
 **Open for lane W, found while testing 0232 here.**
 
-1. Deadlock. The folder RPCs lock the project row and then the files; `armory_acquire_lock`,
+1. 0.1.0 agents and revival, live since 0232 reached production. 0232's header says no client
+   change is ordered against the apply, but revival changes what the shipped 0.1.0 agent does.
+   When a 0.1.0 agent adds a file whose name belongs to a removed file in a different folder (the
+   students' Pack and Go re-unzip), `armory_create_file` now returns the revived file's id. 0.1.0
+   commits it with parent null, which `armory_commit_version` keeps aside as a `stale parent`
+   side version while the removed bytes stay the shared version
+   (`CreatingARemovedNameRevivesTheSameFileWithItsHistory` pins this). 0.1.0 then counts its
+   bytes as kept and downloads the removed file's bytes over the student's new file, saying
+   "Someone else saved Plate.SLDPRT first". The student's bytes survive only as that side version;
+   nothing goes to the computer's recovery folder. The lane A review showed it end to end with
+   this repo's 0.1.0-era engine against 005, and `RevivalTests` failed the same way before the
+   engine fix: B's new Plate.SLDPRT in Intake read "old plate" after three passes, with the file
+   revived, one version and one side version. Re-adding at the removed file's own path is
+   not affected, because 0.1.0 refuses that itself. 0.2.0 commits on the revived file's current
+   version and forgets its record of the old path (guarded `RevivalTests` in
+   `tests/Armory.EndToEnd.Tests`), and its release notes (`docs/agent/release-notes/v0.2.0.md`)
+   ask mentors to install it on every computer soon. Until every computer has it, the hazard is
+   live. A server-side mitigation would change C4 or C8 and is lane W's to weigh, for example:
+   `armory_commit_version` treats a null parent as the current version when the caller's (email,
+   device) pair revived the file and nothing has been committed since. 0.2.0 still meets the
+   0.1.0 outcome for a revival its own refresh did not see (the file removed after the refresh
+   and before the add); the v2 engine should read `file_revived` from the change feed, or the
+   file's record, before that first commit.
+2. Deadlock. The folder RPCs lock the project row and then the files; `armory_acquire_lock`,
    `armory_commit_version`, `armory_tombstone` and `armory_move_file` lock the file row first and
    the project row second (the change feed's foreign key). A folder operation racing a check out
    in that folder deadlocks (`40P01`, one side rolled back, never a wrong result): 6 to 37 of 60
@@ -119,10 +142,21 @@ existed. 0232 is what both lanes now build on; where it differs, 0232 wins and t
    p_project::text, 0))` instead of the project row, and locking the subtree's `armory_locks` rows
    `for update` (in `file_id` order) after `armory_folder_files`, passed all 15 v2 tests with 0
    deadlocks (`server/PROOF.md`). The agent's client resends `40P01` and `40001` meanwhile.
-2. The source folder matches with case (`Drive` does not move `drive/Shaft`) while the target check
+   The project row also orders a check out taken again after a take back only when the check out
+   goes first. That check out updates the old lock row (no foreign key check, so no lock on the
+   file row) and takes its change-feed cursor before it waits on the project row. A folder
+   operation that already holds the project row but has not yet read the locks still sees the
+   broken row and moves or removes the files. The lane A review reproduced this in a scratch
+   database (a third session held a file row so the rename paused after taking the project row):
+   `armory_rename_folder` returned 1, `armory_acquire_lock` returned true, and `lock_acquired`
+   has cursor 7 below `folder_renamed`'s 8. `ACheckOutNeverLandsInsideAFolderRenameOrDelete`
+   holds only the check-out-first order. The fix above should close this too, since the folder
+   operation would lock the subtree's lock rows before reading them; when it lands, add the
+   folder-first retaken interleaving to that test.
+3. The source folder matches with case (`Drive` does not move `drive/Shaft`) while the target check
    ignores case. On Windows both spellings are one folder. `FolderRenameMovesTheWholeSubtreeInOneChange`
    pins the current behavior.
-3. Not new in 0232: the change feed's cursor is taken when a row is inserted, not when it commits.
+4. Not new in 0232: the change feed's cursor is taken when a row is inserted, not when it commits.
    A writer that waits on a lock can record a cursor below a change that committed before it, so a
    reader that keeps only `cursor > last` can step past a late commit. Readers should treat the
    feed as a hint and the read snapshots (`armory_project_files`, `armory_my_projects`) as the
