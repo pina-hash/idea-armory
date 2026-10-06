@@ -94,6 +94,71 @@ public sealed class CheckoutTests
         Assert.False(CheckoutRules.IsReadOnlyOnDisk(LockOwnership.ThisDevice));
     }
 
+    // The check out rule: the lock is taken only over the live shared version, unchanged.
+    [Fact]
+    public void Check_out_takes_the_lock_only_over_the_live_shared_version()
+    {
+        static CheckOutStep Step(Revision? baseline, string? local, Revision? remote, bool open = false)
+            => CheckoutRules.NextCheckOutStep(baseline, local, remote, open);
+        foreach (var open in new[] { false, true })
+        {
+            Assert.Equal(CheckOutStep.TakeLock, Step(Fixtures.Base, "base", Fixtures.Base, open));
+            // Bytes saved without a check out are never checked out over, open or not.
+            Assert.Equal(CheckOutStep.KeepChangesFirst, Step(Fixtures.Base, "forced", Fixtures.Base, open));
+            Assert.Equal(CheckOutStep.KeepChangesFirst, Step(Fixtures.Base, "forced", Fixtures.Newer, open));
+            // A same-named file this copy never had from the server is not the shared version.
+            Assert.Equal(CheckOutStep.KeepChangesFirst, Step(null, "mine", Fixtures.Base, open));
+            Assert.Equal(CheckOutStep.KeepChangesFirst, Step(Removed, "mine", Fixtures.Newer, open));
+        }
+        // A copy that is behind, or missing, is brought up to date first when it is closed (D18).
+        Assert.Equal(CheckOutStep.DownloadFirst, Step(Fixtures.Base, "base", Fixtures.Newer));
+        Assert.Equal(CheckOutStep.CloseFirst, Step(Fixtures.Base, "base", Fixtures.Newer, open: true));
+        Assert.Equal(CheckOutStep.DownloadFirst, Step(null, null, Fixtures.Base));
+        Assert.Equal(CheckOutStep.DownloadFirst, Step(Removed, null, Fixtures.Newer));
+        Assert.Equal(CheckOutStep.CloseFirst, Step(null, null, Fixtures.Base, open: true));
+        // A copy removed on this computer is a pending removal, not a check out.
+        Assert.Equal(CheckOutStep.RemovedHere, Step(Fixtures.Base, null, Fixtures.Base));
+        // Nothing to check out without a live shared version.
+        foreach (var remote in new Revision?[] { null, Removed })
+        foreach (var baseline in new Revision?[] { null, Fixtures.Base, Removed })
+        foreach (var local in new string?[] { null, "base", "new" })
+        foreach (var open in new[] { false, true })
+            Assert.Equal(CheckOutStep.NotShared, Step(baseline, local, remote, open));
+    }
+
+    // The rule agrees with the Explicit reconciler over the whole small state space: a check out
+    // it allows can never share anything but the shared version at check in, and every other
+    // step is exactly what one pass with the lock free does (keep and put back, download,
+    // notify while open, or the pending removal).
+    [Fact]
+    public void Check_out_rule_agrees_with_the_explicit_reconciler()
+    {
+        var steps = new HashSet<CheckOutStep>();
+        foreach (var input in SmallStateSpace().Where(i => i.IsOnline && !i.LockWasBroken))
+        {
+            var step = CheckoutRules.NextCheckOutStep(input.Base, input.LocalHash, input.Remote, input.IsOpen);
+            steps.Add(step);
+            var free = Kinds(input with { Checkout = CheckoutMode.Explicit, Lock = LockOwnership.Free });
+            var checkIn = Kinds(input with { Checkout = CheckoutMode.Explicit, Lock = LockOwnership.ThisDevice, Request = CheckoutRequest.CheckIn });
+            switch (step)
+            {
+                case CheckOutStep.TakeLock:
+                    Assert.Equal([SyncActionKind.None], checkIn);
+                    Assert.Equal([SyncActionKind.None], free);
+                    break;
+                case CheckOutStep.KeepChangesFirst:
+                    if (free is [SyncActionKind.Refuse]) break; // the release gate refuses the kept copy too
+                    Assert.Equal([SyncActionKind.SaveSideVersion, Refresh(input.IsOpen)], free);
+                    break;
+                case CheckOutStep.DownloadFirst: Assert.Equal([SyncActionKind.Download], free); break;
+                case CheckOutStep.CloseFirst: Assert.Equal([SyncActionKind.NotifyNewerVersionWaiting], free); break;
+                case CheckOutStep.RemovedHere: Assert.Equal([input.IsOpen ? SyncActionKind.Refuse : SyncActionKind.ProposeTombstone], free); break;
+                case CheckOutStep.NotShared: Assert.False(input.Remote is { IsTombstone: false }); break;
+            }
+        }
+        Assert.Equal(Enum.GetValues<CheckOutStep>().Length, steps.Count);
+    }
+
     // E1, first row: bytes already kept against a removal go to recovery, exactly as Automatic.
     [Theory]
     [InlineData(false, SyncActionKind.MoveLocalToRecovery)]

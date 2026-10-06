@@ -59,9 +59,27 @@ Automatic never sets it. "Live" means a remote revision that is not a tombstone.
 read-only on disk unless this device holds its lock. Files the server does not have stay
 writable; the adapter decides which files the rule covers.
 
+`CheckoutRules.NextCheckOutStep(base, localHash, remote, isOpen)` is the check out rule.
+Check in shares whatever bytes are on disk, so the lock may be taken only over a copy that
+is the live shared version: its bytes equal its base and its base is the live remote
+(`TakeLock`). Otherwise: `KeepChangesFirst` when the copy has bytes saved without a check
+out (the read-only attribute was cleared), `DownloadFirst` when it is missing or behind and
+closed (D18), `CloseFirst` when it is missing or behind and open, `RemovedHere` when it was
+removed on this computer, and `NotShared` when the server has no live version. Adapter
+obligations for "Check out":
+
+- Hash the file at check-out time; never trust an older scan, because the bytes may have
+  changed since.
+- Ask the rule and take the lock only on `TakeLock`. On `KeepChangesFirst` or
+  `DownloadFirst`, run one pass for the file with the lock free (it keeps the changed bytes
+  as a kept copy and puts the shared version back, or downloads the current version), hash
+  again and ask again. Any other step refuses the check out with a plain sentence.
+
 `CheckoutTests` has one test per row above, the gate on every Explicit route in both modes,
 properties over the whole state space (the shared file advances only at check in or add,
-every kept copy names why, an open file is never replaced), and the read-only rule.
+every kept copy names why, an open file is never replaced), the read-only rule, and the
+check out rule, including its agreement with the Explicit reconciler over the whole state
+space (a check out it allows can never share anything but the shared version).
 `CheckoutSimulationTests` runs Explicit under the seeded simulation (see
 [simulation](simulation.md)).
 

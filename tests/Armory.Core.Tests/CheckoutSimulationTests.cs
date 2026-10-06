@@ -205,20 +205,30 @@ internal sealed class CheckoutSimulation
     private bool Writable(Client client, VaultPath path)
         => client.Files[path].Base is not { IsTombstone: false } || !CheckoutRules.IsReadOnlyOnDisk(Ownership(client, path));
 
-    // Check out (and "Check out and open"). A copy that is behind and closed is brought up to
-    // date first; a copy with changes nobody checked out is never checked out over.
+    // Check out (and "Check out and open"), as CheckoutRules.NextCheckOutStep says: a copy that
+    // is missing or behind and closed is brought up to date first, and bytes saved without a
+    // check out are kept and the shared version put back first (one pass does either), so the
+    // lock is only ever taken over the live shared version.
     private void CheckOut(Client client, VaultPath path, bool open)
     {
-        var file = client.Files[path];
-        if (!client.Online || file.Hash is null || server.Latest.GetValueOrDefault(path) is not { IsTombstone: false }) return;
-        if (!Reconciler.SameRevision(file.Base, server.Latest[path]) && file.Hash == file.Base?.Hash && !client.Open.Contains(path)) Sync(client);
-        var latest = server.Latest[path];
-        if (file.Hash != file.Base?.Hash || !Reconciler.SameRevision(file.Base, latest) || latest.IsTombstone) return;
+        if (!client.Online) return;
+        var step = NextCheckOutStep(client, path);
+        if (step is CheckOutStep.DownloadFirst or CheckOutStep.KeepChangesFirst)
+        {
+            Sync(client);
+            step = NextCheckOutStep(client, path);
+        }
+        if (step != CheckOutStep.TakeLock) return;
         if (server.Locks.GetValueOrDefault(path) is not (null or FreeLock or Broken)) return;
         Assert.True(TryAcquire(path, client, Origin.CheckOut));
         client.Requests.Remove(path);
         coverage.CheckOuts++;
         if (open) client.Open.Add(path);
+    }
+    private CheckOutStep NextCheckOutStep(Client client, VaultPath path)
+    {
+        var file = client.Files[path];
+        return CheckoutRules.NextCheckOutStep(file.Base, file.Hash, server.Latest.GetValueOrDefault(path), client.Open.Contains(path));
     }
 
     // SolidWorks opens a read-only file read-only: there is nothing to save.
