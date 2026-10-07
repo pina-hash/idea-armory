@@ -22,9 +22,13 @@ public sealed class SafeFileReplace : IDisposable
         WindowsPaths.RejectReparsePoints(staging);
         Directory.CreateDirectory(staging);
         ownership = new(Path.Combine(staging, "owner.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
-        foreach (var orphan in Directory.EnumerateFiles(staging, "*.pending")) { File.Delete(orphan); CleanedOrphans++; }
+        foreach (var orphan in Directory.EnumerateFiles(staging, "*.pending")) { DeleteStaged(orphan); CleanedOrphans++; }
     }
-    public ReplaceResult Replace(VaultPath destination, string? expectedHash, Stream downloaded, int maxSharingRetries = 2)
+    // readOnly: the new bytes must never appear writable (the vault's read-only rule says this
+    // file is read-only on this computer), so FILE_ATTRIBUTE_READONLY is set on the staged file
+    // before the rename and travels with it. MoveFileEx can rename a read-only source; only a
+    // read-only destination blocks a replace, and callers clear that one first.
+    public ReplaceResult Replace(VaultPath destination, string? expectedHash, Stream downloaded, int maxSharingRetries = 2, bool readOnly = false)
     {
         lock (gate)
         {
@@ -35,6 +39,7 @@ public sealed class SafeFileReplace : IDisposable
             {
                 using (var output = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, FileOptions.WriteThrough))
                 { downloaded.CopyTo(output); output.Flush(true); }
+                if (readOnly) File.SetAttributes(temp, File.GetAttributes(temp) | FileAttributes.ReadOnly);
                 AfterStaging?.Invoke(temp);
                 var target = paths.Resolve(destination);
                 Directory.CreateDirectory(Path.GetDirectoryName(target)!);
@@ -75,8 +80,14 @@ public sealed class SafeFileReplace : IDisposable
             }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException or Win32Exception)
             { return new(false, error.Message, violations, retries); }
-            finally { if (File.Exists(temp)) File.Delete(temp); }
+            finally { if (File.Exists(temp)) DeleteStaged(temp); }
         }
+    }
+    // A staged file may carry the read-only bit, which File.Delete refuses.
+    private static void DeleteStaged(string file)
+    {
+        File.SetAttributes(file, FileAttributes.Normal);
+        File.Delete(file);
     }
     private static bool IsSharingViolation(Exception error)
         => error is Win32Exception native ? native.NativeErrorCode is 32 or 33

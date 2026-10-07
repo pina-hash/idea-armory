@@ -201,16 +201,40 @@ internal sealed class Computer : IAsyncDisposable
     public Task<SyncReport> SyncAsync() => Engine.SyncOnceAsync();
     public async Task SyncTimesAsync(int times) { for (var i = 0; i < times; i++) await SyncAsync(); }
 
+    // A raw write that ignores the read-only bit: for creating new files (a new file never
+    // inherits an old file's bit) and for tests that predate the bit.
     public void Write(string path, string text) => Write(path, Encoding.UTF8.GetBytes(text));
     public void Write(string path, byte[] bytes)
     {
         var full = Disk.Full(path);
+        if (!File.Exists(full)) Disk.ForgetReadOnly(path);
         Directory.CreateDirectory(Path.GetDirectoryName(full)!);
         File.WriteAllBytes(full, bytes);
     }
+    // Ctrl+S in SolidWorks: refused like SolidWorks refuses it when the file is read-only on
+    // disk (not checked out to this computer).
+    public void Save(string path, string text) => Save(path, Encoding.UTF8.GetBytes(text));
+    public void Save(string path, byte[] bytes)
+    {
+        if (Disk.IsReadOnly(path)) throw new IOException($"{path} is read-only. SOLIDWORKS cannot save over it.");
+        Write(path, bytes);
+    }
+    // Someone cleared the read-only bit by hand (Explorer, Properties) and then saved anyway.
+    public void ForceWrite(string path, string text) => ForceWrite(path, Encoding.UTF8.GetBytes(text));
+    public void ForceWrite(string path, byte[] bytes)
+    {
+        Disk.ClearReadOnly(path);
+        Write(path, bytes);
+    }
+    // A student renames a folder in Explorer (refused while a file inside is open).
+    public void RenameFolder(string from, string to) => Disk.RenameFolderAsStudent(from, to);
     public byte[]? Read(string path) => File.Exists(Disk.Full(path)) ? File.ReadAllBytes(Disk.Full(path)) : null;
     public string? Text(string path) => Read(path) is { } bytes ? Encoding.UTF8.GetString(bytes) : null;
-    public void Delete(string path) => File.Delete(Disk.Full(path));
+    public void Delete(string path)
+    {
+        File.Delete(Disk.Full(path));
+        Disk.ForgetReadOnly(path);
+    }
     public void Open(string path) => Disk.Open(path);
     public void Close(string path) => Disk.Close(path);
 
