@@ -34,10 +34,10 @@ public sealed class ReadOnlyPolicy : IDisposable
         if (File.Exists(manifest)) Load(File.ReadAllBytes(manifest));
     }
 
-    // The v2 rule, written here as Armory.Core's CheckoutRules.IsReadOnlyOnDisk states it (the
-    // portable rule function the engine and the end-to-end file system use): read-only unless
-    // this device holds the file's check out. Free, OtherPerson and MyOtherDevice are read-only.
-    public static bool IsReadOnly(LockOwnership ownership) => ownership != LockOwnership.ThisDevice;
+    // The v2 rule is Armory.Core's CheckoutRules.IsReadOnlyOnDisk, the one function the engine
+    // and the end-to-end file system also use: read-only unless this device holds the file's
+    // check out. Free, OtherPerson and MyOtherDevice are read-only.
+    public static bool IsReadOnly(LockOwnership ownership) => CheckoutRules.IsReadOnlyOnDisk(ownership);
 
     public void Apply(VaultPath path, LockOwnership state)
     {

@@ -61,8 +61,8 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
 
     public string Full(string relative) => Path.Combine(Root, relative.Replace('/', Path.DirectorySeparatorChar));
     public static VaultPath P(string relative) => VaultPath.TryCreate(relative, out var path, out var problem) ? path : throw new ArgumentException(problem);
-    // The v2 rule, as CheckoutRules.IsReadOnlyOnDisk and the Windows ReadOnlyPolicy state it.
-    public static bool IsReadOnlyByRule(LockOwnership ownership) => ownership != LockOwnership.ThisDevice;
+    // The v2 rule: Armory.Core's CheckoutRules.IsReadOnlyOnDisk, which the Windows ReadOnlyPolicy also calls.
+    public static bool IsReadOnlyByRule(LockOwnership ownership) => CheckoutRules.IsReadOnlyOnDisk(ownership);
 
     public void Open(string relative)
     {
