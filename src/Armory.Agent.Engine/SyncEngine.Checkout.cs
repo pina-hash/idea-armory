@@ -231,7 +231,7 @@ public sealed partial class SyncEngine
             {
                 ReleaseOutcome.Released when undo => kept ? $"Undid the check out of {path.Name}. Your changes are kept as your own copy." : $"Undid the check out of {path.Name}.",
                 ReleaseOutcome.Released => $"Checked in {path.Name}.",
-                ReleaseOutcome.TakenBack => $"{path.Name} was taken back before {(undo ? "the check out was undone" : "it was checked in")}. Your changes are kept in its history.",
+                ReleaseOutcome.TakenBack => $"{path.Name} was force checked in by a mentor before {(undo ? "the check out was undone" : "it was checked in")}. Your changes are kept in its history.",
                 ReleaseOutcome.Refused => $"{path.Name} can't be checked in. {st.Refusal} It stays checked out by you.",
                 _ when online != true => $"You're offline. {path.Name} is {(undo ? "put back" : "checked in")} as soon as this computer is back online.",
                 _ => $"Armory couldn't finish {(undo ? "undoing" : "checking in")} {path.Name} yet. It tries again by itself.",

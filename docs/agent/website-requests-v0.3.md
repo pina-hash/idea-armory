@@ -9,8 +9,8 @@ are how problems get to the developers with the data to fix them.
 
 ## 1. Live updates (no polling dead zone)
 
-Today every computer asks the server every 5 seconds while busy and every 60 seconds
-when quiet, so a change can take a minute to show up elsewhere. Supabase Realtime can
+Today every computer asks the server every 2 seconds while busy and every 10 seconds
+when quiet (v0.2.1; it was 5 and 60), so a change can still take up to 10 seconds, and every poll costs server work. Supabase Realtime can
 push a change the moment it is written.
 
 - Add `public.armory_change_feed` to the `supabase_realtime` publication:

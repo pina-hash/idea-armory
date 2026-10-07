@@ -144,7 +144,7 @@ public sealed class CheckOutTests
         Assert.True(t.A.Disk.IsReadOnly(Plate));
         var notice = Assert.Single(t.A.Engine.View.Notices);
         Assert.Equal(NoticeKinds.TakenBack, notice.Kind);
-        Assert.Equal("Plate.SLDPRT was taken back", notice.Title);
+        Assert.Equal("Plate.SLDPRT was force checked in", notice.Title);
         Assert.Equal(1, await t.Versions(file));
         // The notice's OK dismisses it.
         await t.A.Engine.DismissNoticeAsync(notice.Key);

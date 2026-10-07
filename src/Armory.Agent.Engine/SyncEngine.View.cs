@@ -253,7 +253,7 @@ public sealed partial class SyncEngine
                     : items.All(i => i.Flavor == "conflict") ? "Someone else checked these in first, so your changes were kept in each file's history. Nothing was lost. Ask your CAD lead which one to keep."
                     : "Nothing was lost: each change is in its file's history.", new NoticeActionView("OK", BridgeMessages.DismissNotice, [])),
             NoticeKinds.TakenBack => (NoticeTones.Look,
-                n == 1 ? $"{name} was taken back" : $"{n:N0} of your files were taken back",
+                n == 1 ? $"{name} was force checked in" : $"{n:N0} of your files were force checked in",
                 n == 1 ? first.Detail ?? "" : "A mentor or CAD lead took them back. Your changes that weren't checked in are kept in their history, so nothing was lost.",
                 new NoticeActionView("OK", BridgeMessages.DismissNotice, [])),
             NoticeKinds.FolderPutBack => (NoticeTones.Look,
@@ -549,7 +549,7 @@ public sealed partial class SyncEngine
         SavedWhileCheckedOutReason => "Saved while checked out",
         UndoReason => "Kept when the check out was undone",
         ChangedWithoutCheckOutReason => $"Changed without a check out, kept as {DisplayName(h.Author)}'s own copy",
-        LockBrokenReason => $"Kept as {DisplayName(h.Author)}'s own copy: the file was taken back",
+        LockBrokenReason => $"Kept as {DisplayName(h.Author)}'s own copy: the file was force checked in",
         _ => $"Kept as {DisplayName(h.Author)}'s own copy: someone else checked in first",
     };
 
