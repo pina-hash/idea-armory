@@ -267,69 +267,159 @@ break and after the restore, then broken:
 
 ## Stage E3: transfers made fast and visible (2026-10-07)
 
-Measured on this container's 4 CPUs with nothing else of this stage running. Other agents'
-processes may have shared the machine (the load average was between 0.2 and 3.5 during the
-runs); the throughput runs wait on the profile's simulated delays, not on the CPU.
+First measured on `1dcbcd4`, then measured again after the E3 review on `bc60434` (the
+review's fixes: the check outs and releases at the end of a pass go `TransferConcurrency` at
+a time, the activity panel is honest about time left, check ins and moves, and the claim that
+6 is "the knee" is withdrawn). Every number in this section is from `bc60434` unless it says
+otherwise (the commit after it changes only documents and a comment). Measured on this
+container's 4 CPUs with nothing else running: the container had just started, no other
+agent's processes were on it, and the load average, logged every 15 seconds through the
+40-minute sweep, stayed between 0.01 and 2.27 (mean 0.31; the peaks are the sweep's own test
+host starting and its six-computer classroom). The throughput runs wait on the profile's
+simulated delays, not on the CPU.
 
 ### Throughput
 
 `ThroughputTests.Transfers_through_a_school_network_profile` through the school network
 profile (`LatencyProfile.School`: 60 ms to file storage at 4 MB/s per connection and 25 MB/s
-for the whole link, 250 ms for a blob URL, 60 ms per server call). Alex adds 120 parts of
-256 KiB and two of 32 MiB (122 files, 98.6 MB), then Maria's computer receives them. Each run
-is its own world (nothing is stored already), and both computers move
-`EngineOptions.TransferConcurrency` files at once. The sweep:
-`ARMORY_THROUGHPUT=1 ARMORY_TEST_POSTGRES=... dotnet test tests/Armory.EndToEnd.Tests --filter ThroughputTests`.
+for the whole link, 250 ms for a blob URL, 60 ms per server call). Each run is its own world
+(nothing is stored already). Three runs of every point, interleaved (run 1 of every point,
+then run 2, then run 3):
+`ARMORY_THROUGHPUT=1 ARMORY_THROUGHPUT_RUNS=3 ARMORY_TEST_POSTGRES=... dotnet test tests/Armory.EndToEnd.Tests --filter ThroughputTests`.
+Each cell is the median of the three runs, the lowest and highest in brackets; the speedups
+are of the medians.
 
 Before (v1, `b18791d`, one file at a time, the same profile and batch): upload 122 files,
 98.6 MB in 100.0 s (1.22 files/s, 0.99 MB/s); download 65.4 s (1.86 files/s, 1.51 MB/s).
 
-After (`1dcbcd4`, one run each):
-
-```text
-THROUGHPUT label=after-c1 files=122 bytes=98566144 upload_s=100.0 upload_passes=1 upload_files_per_s=1.22 upload_MB_per_s=0.99 download_s=64.8 download_passes=1 download_files_per_s=1.88 download_MB_per_s=1.52 a_rpc=494 a_site=123 a_storage=122 b_rpc=3 b_site=123 b_storage=122
-THROUGHPUT label=after-c2 files=122 bytes=98566144 upload_s=54.7 upload_passes=1 upload_files_per_s=2.23 upload_MB_per_s=1.80 download_s=32.7 download_passes=1 download_files_per_s=3.73 download_MB_per_s=3.02 a_rpc=494 a_site=123 a_storage=122 b_rpc=3 b_site=123 b_storage=122
-THROUGHPUT label=after-c4 files=122 bytes=98566144 upload_s=34.0 upload_passes=1 upload_files_per_s=3.59 upload_MB_per_s=2.90 download_s=17.9 download_passes=1 download_files_per_s=6.82 download_MB_per_s=5.51 a_rpc=494 a_site=123 a_storage=122 b_rpc=3 b_site=123 b_storage=122
-THROUGHPUT label=after-c6 files=122 bytes=98566144 upload_s=26.3 upload_passes=1 upload_files_per_s=4.64 upload_MB_per_s=3.74 download_s=12.7 download_passes=1 download_files_per_s=9.61 download_MB_per_s=7.77 a_rpc=494 a_site=123 a_storage=122 b_rpc=3 b_site=123 b_storage=122
-THROUGHPUT label=after-c8 files=122 bytes=98566144 upload_s=24.9 upload_passes=1 upload_files_per_s=4.89 upload_MB_per_s=3.95 download_s=11.5 download_passes=1 download_files_per_s=10.58 download_MB_per_s=8.55 a_rpc=494 a_site=123 a_storage=122 b_rpc=3 b_site=123 b_storage=122
-THROUGHPUT label=after-c12 files=122 bytes=98566144 upload_s=19.2 upload_passes=1 upload_files_per_s=6.36 upload_MB_per_s=5.14 download_s=9.4 download_passes=1 download_files_per_s=13.04 download_MB_per_s=10.53 a_rpc=494 a_site=123 a_storage=122 b_rpc=3 b_site=123 b_storage=122
-```
-
-`after-c1` reproduces the v1 numbers, so the harness measures what it measured then. A first
-sweep on `281804d` (before the group commit waited for the save being written) agreed within
-1.4 s at every point.
+**Mixed batch, one computer each way.** Alex adds 120 parts of 256 KiB and two of 32 MiB
+(122 files, 98.6 MB), then Maria's computer receives them, both moving
+`TransferConcurrency` files at once.
 
 | Files at once | Upload | Faster than 1 | Download | Faster than 1 |
 |---|---|---|---|---|
-| 1 | 100.0 s | 1.0x | 64.8 s | 1.0x |
-| 2 | 54.7 s | 1.8x | 32.7 s | 2.0x |
-| 4 | 34.0 s | 2.9x | 17.9 s | 3.6x |
-| 6 | 26.3 s | 3.8x | 12.7 s | 5.1x |
-| 8 | 24.9 s | 4.0x | 11.5 s | 5.6x |
-| 12 | 19.2 s | 5.2x | 9.4 s | 6.9x |
+| 1 | 97.6 s (97.4 to 100.0) | 1.0x | 64.0 s (64.0 to 65.3) | 1.0x |
+| 2 | 49.0 s (48.9 to 49.2) | 2.0x | 32.2 s (32.1 to 32.6) | 2.0x |
+| 4 | 26.6 s (26.0 to 26.7) | 3.7x | 17.5 s (17.5 to 17.8) | 3.7x |
+| 6 | 18.9 s (18.4 to 19.0) | 5.2x | 12.9 s (12.8 to 12.9) | 5.0x |
+| 8 | 15.1 s (14.5 to 15.1) | 6.5x | 10.2 s (10.2 to 10.3) | 6.3x |
+| 12 | 11.2 s (10.7 to 11.8) | 8.7x | 9.0 s (9.0 to 9.1) | 7.1x |
 
-**The default is 6, the knee.** Up to 6, each added connection adds 0.5 to 1.0 files a second
-to the upload and 1.4 to 1.9 to the download; past 6, 0.1 to 0.4 to the upload and 0.4 to 1.0 to
-the download (both sweeps). At 6 a check in of this batch is 3.8 times faster and a download
-5.1 times faster than one at a time, with about three quarters of the throughput of 12 on half
-the connections. What holds the upload past 6 does not run at once: four server calls for each
-new file, and the releases at the end of the pass, which go one after the other (122 of them at
-60 ms, about 7 s of the 26). The profile is one computer alone on the link; in a classroom the
-school's link and the project's server are shared by every computer, where the doubled
-connections of 12 would buy less and cost every other student. 6 also keeps every file in flight
-in the activity panel's 8 rows.
+At 1 the harness reproduces the v1 numbers, so it measures what it measured then. Against the
+first E3 record (`1dcbcd4`, one run each: uploads 34.0 s at 4, 26.3 s at 6, 24.9 s at 8 and
+19.2 s at 12) the uploads are faster at every point above 1, because the 122 releases at the
+end of the pass no longer go one after the other (at 60 ms each they were about 7 s of every
+upload: 26.3 s became 18.9 s at 6). The downloads moved by at most 1.3 s. What still flattens
+this batch past 6 is not the network: each 32 MiB file takes about 8.4 s at the 4 MB/s one
+connection gets, whatever the concurrency (a file cannot be split: see "Multipart upload and
+ranged downloads" below), and the shared 25 MB/s link is never full (10.9 MB/s down and
+8.8 MB/s up at 12 at once).
+
+**Small files only, one computer each way.** The same 120 parts without the two large ones
+(31.5 MB).
+
+| Files at once | Upload | Faster than 1 | Download | Faster than 1 |
+|---|---|---|---|---|
+| 1 | 79.1 s (78.7 to 79.2) | 1.0x | 46.4 s (46.4 to 46.9) | 1.0x |
+| 2 | 39.6 s (39.5 to 39.7) | 2.0x | 23.3 s (23.2 to 23.3) | 2.0x |
+| 4 | 20.1 s (20.0 to 20.1) | 3.9x | 11.7 s (11.7 to 11.8) | 4.0x |
+| 6 | 13.7 s (13.6 to 13.7) | 5.8x | 8.0 s (7.9 to 8.1) | 5.8x |
+| 8 | 10.6 s (10.3 to 11.2) | 7.5x | 6.0 s (6.0 to 6.2) | 7.7x |
+| 12 | 7.1 s (7.1 to 7.2) | 11.1x | 4.1 s (4.1 to 4.1) | 11.3x |
+| 24 | 4.1 s (4.0 to 4.2) | 19.3x | 2.3 s (2.3 to 2.4) | 20.2x |
+
+Alone on the link, small files have no knee up to 24: the time nearly halves with every
+doubling, both ways. The review measured the uploads with the releases still one after the
+other at 21.5 s at 6, 14.9 s at 12 and 12.1 s at 24; that floor is gone.
+
+**A classroom behind one school link.** Six computers (`MeasureClassAsync`) share ONE link
+(`NetworkLink`: 25 MB/s for every storage body of every computer; the per-connection rate,
+the round trips and the server calls as before). Each adds 20 parts of 256 KiB at the same
+moment (120 files, 31.5 MB in all, a class-wide Pack and Go), then each receives the other
+five computers' 100 parts at the same moment (157.3 MB through the link, which takes 6.3 s
+at 25 MB/s). The time is until the last of the six is done; the link column is what went
+through the link per second, down and up.
+
+| Files at once (each computer) | Class upload | Faster than 1 | Class download | Faster than 1 | Link, down / up |
+|---|---|---|---|---|---|
+| 1 | 13.5 s (13.5 to 13.6) | 1.0x | 38.7 s (38.7 to 38.8) | 1.0x | 4.1 / 2.3 MB/s |
+| 2 | 7.0 s (7.0 to 7.0) | 1.9x | 19.6 s (19.5 to 20.3) | 2.0x | 8.0 / 4.5 MB/s |
+| 4 | 3.9 s (3.9 to 3.9) | 3.5x | 10.0 s (10.0 to 10.1) | 3.9x | 15.7 / 8.1 MB/s |
+| 6 | 3.2 s (3.2 to 3.3) | 4.2x | 7.1 s (7.0 to 7.1) | 5.5x | 22.3 / 9.8 MB/s |
+| 8 | 2.7 s (2.7 to 2.8) | 5.0x | 6.9 s (6.9 to 7.0) | 5.6x | 22.8 / 11.5 MB/s |
+| 12 | 2.4 s (2.4 to 2.4) | 5.6x | 6.9 s (6.9 to 6.9) | 5.6x | 22.8 / 13.1 MB/s |
+
+**The default stays 6, and that is a judgment call, not a knee in the data.** The first E3
+record called 6 "the knee" of the mixed sweep; the review showed that the flattening there came
+from the two large files and from the releases sent one after the other, not from the
+network, and that the classroom reason given for stopping at 6 had never been measured.
+Measured now: one computer alone keeps getting faster up to 24 at once (small files), so for
+one computer there is no knee. Six computers behind one 25 MB/s link fill it at 6 at once
+each (22.3 MB/s), and past 6 the class's download gains nothing (7.1 s at 6, 6.9 s at 8 and
+at 12, against 6.3 s for the bytes alone), while its upload, which waits on four server calls
+and a blob URL for every file rather than on the link, still gains a little (3.2 s at 6,
+2.4 s at 12). The number that fills a link depends on how many computers share it and how fast
+it is (here six computers at 6 each, 36 small-file connections, nearly fill 25 MB/s; twelve
+computers would at about 3 each, while one computer alone reaches only 13.5 MB/s at 24), and
+neither is known for a given school. 6 is chosen because it
+is where this six-computer class stops gaining on the download, it gives one computer alone
+5 to 6 times the speed of one at a time, it keeps a classroom's server calls at a few dozen at
+once, and every file in flight fits the activity panel's 8 rows. A school with a faster link or
+fewer computers would do better with more; the setting is `EngineOptions.TransferConcurrency`.
 
 The default run of the same test (a guard, about 25 s) moves 16 parts at 1 and at the default
 and requires the default to be at least twice as fast both ways; it also holds every activity
-message to the window's words, at most 8 files listed, more than one file moving at once, at
-most one message every 250 ms from each computer, and status lines that start with
-"Uploading" and "Downloading":
+message to the window's words ("Checking in 0 of 16 files" among them), at most 8 files
+listed, more than one file moving at once, at most one message every 250 ms from each
+computer, and status lines that start with "Uploading" and "Downloading":
 
 ```text
-THROUGHPUT label=smoke-c1 files=16 bytes=4194304 upload_s=12.3 upload_passes=1 upload_files_per_s=1.30 upload_MB_per_s=0.34 download_s=6.7 download_passes=1 download_files_per_s=2.38 download_MB_per_s=0.62 a_rpc=70 a_site=17 a_storage=16 b_rpc=3 b_site=17 b_storage=16
-THROUGHPUT label=smoke-c6 files=16 bytes=4194304 upload_s=3.9 upload_passes=1 upload_files_per_s=4.05 upload_MB_per_s=1.06 download_s=1.5 download_passes=1 download_files_per_s=10.74 download_MB_per_s=2.82 a_rpc=70 a_site=17 a_storage=16 b_rpc=3 b_site=17 b_storage=16
-ACTIVITY messages=17 lines: Uploading 0 of 16 files, 4 MB left | Uploading 6 of 16 files, 2.5 MB left | Uploading 9 of 16 files, 1 MB left | Uploading 12 of 16 files, 1 MB left | Downloading 0 of 16 files, 4 MB left | Downloading 6 of 16 files, 2.5 MB left | Downloading 12 of 16 files, 1 MB left
+THROUGHPUT label=smoke-c1 files=16 bytes=4194304 upload_s=11.3 upload_passes=1 upload_files_per_s=1.42 upload_MB_per_s=0.37 download_s=6.4 download_passes=1 download_files_per_s=2.51 download_MB_per_s=0.66 a_rpc=70 a_site=17 a_storage=16 b_rpc=3 b_site=17 b_storage=16
+THROUGHPUT label=smoke-c6 files=16 bytes=4194304 upload_s=2.4 upload_passes=1 upload_files_per_s=6.65 upload_MB_per_s=1.74 download_s=1.4 download_passes=1 download_files_per_s=11.69 download_MB_per_s=3.06 a_rpc=70 a_site=17 a_storage=16 b_rpc=3 b_site=17 b_storage=16
+ACTIVITY messages=10 lines: Uploading 0 of 16 files, 4 MB left | Uploading 6 of 16 files, 2.5 MB left | Uploading 12 of 16 files, 1 MB left | Uploading 12 of 16 files, 0 bytes left | Checking in 0 of 16 files | Downloading 0 of 16 files, 4 MB left | Downloading 6 of 16 files, 2.5 MB left | Downloading 12 of 16 files, 1 MB left
 ```
+
+("Uploading 12 of 16 files, 0 bytes left" is true: the last bytes are in file storage and
+those files wait for their server calls.)
+
+### Multipart upload and ranged downloads
+
+Multipart upload is not built: the frozen contract signs one PUT URL with a signed content
+length (D11), so a file goes up in one request, and the brief's "multipart upload for large
+files" is a false claim under it. A 32 MiB file therefore takes about 8.4 s at the 4 MB/s one
+connection gets, which is what bounds the mixed sweep above. Ranged parallel downloads
+(several `Range` GETs of one signed URL, which S3 and R2 accept; the audit listed them as
+optional) were considered and not built: `BlobClient` checks a download's SHA-256 while it
+streams, and split ranges would have to be written to the staging file in pieces and hashed
+after; the large-file download would gain at most the number of ranges, and only for files of
+tens of MB, while the uploads of the same files cannot gain at all.
+
+### Activity
+
+What the review measured on `1dcbcd4`, and what each became:
+
+- **Time left** read about twice the truth when it first appeared (600 files at a steady 10
+  a second: "about 2 min" at 3 s for 57 s left; on the school profile, 32 s shown for 17.2 s
+  left). The averages started from the first sample, taken before any file had finished
+  (zero), and climbed over 5 s. They now count from the direction's first file and are
+  divided by the weight they have gathered; the same steady run is within a quarter of the
+  truth from 3 s on (`StateAndActivityTests.Time_left_is_close_to_the_truth_from_three_seconds_on`,
+  which also holds the speed to 7.5 to 12.5 MB/s for a true 10).
+- **After the last upload** a 200-file import spent 15.1 s of its 36.9 s releasing locks one
+  at a time while the window said "Checking for changes.". The releases (and asked-for check
+  outs) now go `TransferConcurrency` at a time, and while they do, the upload direction and
+  the status line say "Checking in 412 of 4,900 files"; the 5,000-file import asserts that
+  line appears, and its first pass went from 77.8 s to 39.2 s (below).
+- **Moving** never reached the window (each file's move opened and closed the lane in one
+  step on the engine thread). A move is now one operation from its start to its end, with
+  its own count and its one target: "Moving 3 files to Robot 2027 › Drivetrain › Gears" is in
+  the activity messages while the window's rename waits for the server, and on the other
+  computer while the team's rename is made
+  (`ConcurrencyTests.Moving_files_reads_as_one_line_while_the_move_lasts`).
+- **My files during an import** listed every file being added (4,900 rows at once in the
+  5,000-file import, each "Checked out by you" with a false "You added it while it was open"
+  note), because an add's lock was counted as a check out. A lock taken only for an add of a
+  closed file, or only for a move or a removal, is no longer listed.
 
 ### The 5,000-file import
 
@@ -340,10 +430,16 @@ sends nothing. It holds at most 3 cards (exactly one import summary, "Added 4,90
 files to Robot 2027 › Unzipped", and one card for the 100 shared names), every other file in
 Armory with exactly one version, no check out left, the 4,900 read-only and the 100 writable,
 no write to an open file, no unpreserved overwrite, and fewer saves of the state document than
-server writes. Run alone on `1dcbcd4`:
+server writes. Since the review it also watches the whole import, not only the view at the
+end (`QuietWatch`): every view and every activity message (81 views and 86 messages built
+while files were moving in the run below) must have at most 3 cards, only of those two kinds,
+nothing in My files, no waiting line (the run stays online) and at most 8 files listed as
+moving, and the check ins after the uploads must say "Checking in". Run alone (the run before
+it, without its output shown, took the same 45 s):
 
 ```text
-SCAN files=5000 scan_ms=178 rescan_ms=110 first_pass_s=77.8 until_idle_s=78.7 cards=2 passes=2 state_saves=10052
+SCAN files=5000 scan_ms=105 rescan_ms=63 first_pass_s=39.2 until_idle_s=39.9 cards=2 passes=2 state_saves=10883 views=84 mid_pass_views=81 activity_messages=86
+ACTIVITY lines: Checking in # of # files | Checking in # of # files, less than a minute | Uploading # of # files, # KB left | Uploading # of # files, # KB left, about # sec | Uploading # of # files, # KB left, less than a minute
 ```
 
 `scan_ms` and `rescan_ms` are the portable test file system's (`PortableVaultFileSystem`),
@@ -356,10 +452,9 @@ be read from here (the proxy refuses the CI log and artifact downloads), and the
 tests step of run 37578843714 took 44 s.
 
 The first pass is the import: 4,900 new files through the fake server, PostgreSQL and the fake
-storage on this machine, 6 at once, then their releases one after the other. Serializing only
-the changed blocks of the state document (it is about 4 MB at 5,000 files) brought that pass
-from 115.7 s to under 90 s during this stage. In the parallel end-to-end suite it shares the
-CPUs with the seeded run (141.0 s there).
+storage on this machine, 6 at once, then their check ins, 6 at once. It took 77.8 s on
+`1dcbcd4`, when the 4,900 releases went one after the other, and 39.2 s now. In the parallel
+end-to-end suite it shares the CPUs with the seeded run (63.4 s there).
 
 ### Suite time
 
@@ -367,11 +462,16 @@ CPUs with the seeded run (141.0 s there).
 |---|---|---|
 | Before E3 (`4c76cf8`) | 85 | 3 min 6 s |
 | After E3 (`1dcbcd4`) | 92 | 4 min 0 s |
+| After the E3 review (`bc60434`) | 94 | 2 min 40 s |
 
 The seeded run is the suite's longest test: alone, 163.1 s before E3 and 156.8 s after
-(`E2E_SEEDS count=200 first=0 failures=0` both), 236.5 s inside the parallel suite. The whole
-solution's tests took 5 min 35 s (`1dcbcd4`, every project passed; skipped only the Windows-only
-tests).
+(`E2E_SEEDS count=200 first=0 failures=0` both); inside the parallel suite 236.5 s after E3
+and 126.1 s after the review (`E2E_SEEDS count=200 first=0 elapsed=126.1s failures=0`), now
+that the import beside it is shorter. The whole solution's tests took 4 min 6 s on the commit that records these numbers (the
+engine of `bc60434`; every project passed: 626 passed, 0 failed, 68 skipped, all of them the
+Windows-only tests of `AgentProcessTests`, `WindowsVaultFileSystemTests`,
+`DpapiSecretStoreTests`, `DurableJournalTests`, `LocalStateTests` and `ReplaceAndLockTests`);
+`tools/agent-ui/check-ui.mjs` passed on the same tree.
 
 ### New guards
 
@@ -379,31 +479,86 @@ tests).
 |---|---|
 | `StateAndActivityTests.The_state_document_written_in_pieces_is_the_whole_document` | the pieces a save writes are the reflection serializer's document, after every kind of change |
 | `StateAndActivityTests.Every_field_of_a_file_record_marks_it_changed` | every `FileState` property and list marks its record changed (by reflection) |
-| `StateAndActivityTests.Ids_come_from_saved_blocks_and_never_repeat_after_a_restart` | an id block is saved before its first id; a restart never repeats one |
-| `StateAndActivityTests.The_activity_panel_says_what_moves_in_the_window_s_words` | the activity lines, " › " in folder paths, the waiting line |
+| `StateAndActivityTests.Ids_come_from_saved_blocks_and_never_repeat_after_a_restart` | an id block is saved before its first id; a restart never repeats one; a block whose save fails hands out no id (review) |
+| `StateAndActivityTests.The_activity_panel_says_what_moves_in_the_window_s_words` | the activity lines, " › " in folder paths, the waiting line, "Checking in", one move operation at a time (review) |
+| `StateAndActivityTests.Time_left_is_close_to_the_truth_from_three_seconds_on` | a steady run's time left within a quarter of the truth from 3 s on (review) |
+| `StateAndActivityTests.Names_the_server_holds_for_one_share_a_unit_key` | the unit key folds case, accents, compatibility forms, the sharp s and the dotted I at least as much as the server (review) |
 | `ClientTests.A_storage_refusal_or_timeout_fails_one_transfer_and_a_dead_connection_is_offline` | storage refusals, timeouts and cut downloads are `StorageTransferException`; a connection that fails is offline |
 | `ConcurrencyTests.The_engine_works_on_its_own_thread_never_the_callers` | every step and view on the "Armory engine" thread |
 | `ConcurrencyTests.File_detail_answers_while_a_pass_moves_files` | File detail in under 2 s while a pass waits 3 s a request on storage |
-| `ConcurrencyTests.A_crash_among_files_moving_at_once_stops_them_all_and_replays_to_one_version_each` | a crash at the 4th of 12 uploads: no step and no save after it; the next engine makes one version each |
+| `ConcurrencyTests.A_crash_among_files_moving_at_once_stops_them_all_and_replays_to_one_version_each` | a crash among 12 uploads (five crashes, four of them with a 40 ms disk): no step, no serialization of the state and no half-done record on disk after it; the next engine makes one version each (review) |
 | `ConcurrencyTests.A_storage_refusal_fails_that_one_file_and_the_rest_go_on` | a refused upload and a refused download are one file's item; the pass stays online |
 | `ConcurrencyTests.The_server_is_read_at_most_twice_a_pass_and_not_again_when_nothing_moved` | two reads of the server at most a pass; a quiet pass reads no project files |
 | `ConcurrencyTests.A_slow_disk_makes_fewer_larger_saves` | with 50 ms saves, at most one save for every two server writes |
+| `ConcurrencyTests.Names_the_server_holds_for_one_are_sent_one_after_the_other` | "ẞolt" and "ßolt", "İnsert" and "insert" in different folders: the first in path order gets the name at 0 and 30 ms server latency (review) |
+| `ConcurrencyTests.Moving_files_reads_as_one_line_while_the_move_lasts` | the Moving line while the window's rename waits for the server and while the other computer moves the folder (review) |
 | `ThroughputTests.Transfers_through_a_school_network_profile` | the default at least twice as fast as one at a time, both ways; the activity messages |
-| `ImportScaleTests.A_5000_file_import_is_quiet_and_complete` | the 5,000-file import above |
+| `ImportScaleTests.A_5000_file_import_is_quiet_and_complete` | the 5,000-file import above, every view and message of it |
+| `FolderScenarioTests.Pack_and_Go_with_duplicate_names_then_the_inner_folder_is_renamed` (E2 guard, extended) | every view and message of the Pack and Go quiet too, offline stretch included (review) |
 
-### Break (c) against the 5,000-file import
+### The review's guards against the bugs they guard
 
-The same one-line break as before (`var key = kind;` became `var key = kind + ":" + item.Path;`
-at `// MUTATION: notices are grouped by kind` in `src/Armory.Agent.Engine/SyncEngine.View.cs`),
-built and run against the 5,000-file import and the Pack and Go scenario with
-`ARMORY_TEST_POSTGRES` set, then restored byte for byte. SHA-256 before the break and after the
-restore `2f940dbea559ead2b823abe84ea13117b02d1031797427f45946c23741e6b9c6` (`1dcbcd4`), broken
-`0e905e239f5a02786cdfc92311ec58654d0b5120a98b08a5bd45ac3014d4404f`. Red: 2 of 2.
+Each one-line edit below was built and run with `ARMORY_TEST_POSTGRES` set, then restored
+byte for byte (`git checkout`), on `bc60434`; SHA-256 before the edit and after the restore,
+then broken:
 
-```text
-Failed ImportScaleTests.A_5000_file_import_is_quiet_and_complete   Assert.InRange() Failure: Range: (1 - 3) Actual: 101
-SCAN files=5000 scan_ms=201 rescan_ms=145 first_pass_s=85.9 until_idle_s=86.8 cards=101 passes=2 state_saves=9994
-Failed FolderScenarioTests.Pack_and_Go_with_duplicate_names_then_the_inner_folder_is_renamed   Expected: 2, Actual: 15
-```
+- **A save after the crash.** `SyncEngine.Persistence.cs`: `StopSaving` set `failing = false`
+  instead of `true` (so, as on `1dcbcd4`, a group commit waiting at the crash serializes after
+  it). `c0ec708d60330b59139cdaa333e737a2c71648b1f1da602cebcca8142ca1b152`, broken
+  `47aa49b3fa0e7d8cfc8aa385e0fba0013813084bac9fe67ef24f4e3f875d1028`. The crash guard failed
+  at its first crash: "after-blob #4, 0 ms a save: the state was serialized 1 more times after
+  the crash".
+- **Names keyed by .NET's casing.** `SyncEngine.cs`: `NameKey` returned
+  `name.ToUpperInvariant()`. `3b0b22c32eefc67c115151fac3cbb6b257f0e61fff1be6d2f721dfaa0df66cbb`,
+  broken `b646b13f91621e64585a927e67716fa4cdc24a27a9cb50b7aca18767ec1d607e`. The name guard
+  failed: "Robot 2027/D/insert.SLDPRT" got the name that belongs to "Robot 2027/C/İnsert.SLDPRT",
+  the first in path order.
+- **Time left not corrected for its start.** `ActivityTracker.cs`: both rates read the bare
+  average (`BytesAverage`, `FilesAverage`) instead of dividing it by its weight.
+  `c670581645754dadca8b8cbf18aa11ee4b785abeae1bd0628e4ca65f27707f10`, broken
+  `f779adae701b1c1404ed7dffe9f8de4f1fb7166fa1aaa7302a67dd0143a17893`. The time-left guard
+  failed at once: "at 3.00 s: 127 s left, truly 57.0 s", the review's "about 2 min" for 57 s.
 
-Alex saw 101 cards (the import summary and one for each of the 100 shared names) instead of 2.
+### Breaks against the quiet guards
+
+Three one-line breaks of `src/Armory.Agent.Engine/SyncEngine.View.cs`, each built and run
+against the 5,000-file import and the Pack and Go scenario with `ARMORY_TEST_POSTGRES` set,
+then restored byte for byte (`git checkout`). SHA-256 before each break and after each restore
+`e9ccab2c502a7f3c1901ba7f7d689a988f12d7e0e7ccb3d4011240e71a1c21b8` (`bc60434`). Red 2 of 2
+each:
+
+- **(c) One notice per file**, as before (`var key = kind;` became
+  `var key = kind + ":" + item.Path;` at `// MUTATION: notices are grouped by kind`), broken
+  `7ec566521a58a8b0f76d285e5ba323d876108700e9bda7f0780ae24449066838`. The Pack and Go scenario
+  saw 15 cards instead of 2; the 5,000-file import failed at its first view with cards in it:
+  "view 3: 101 cards (nameShared: 1 file shares a name with another file in this project, ...)".
+- **(M2) v1's My files rule** (a "waiting to send" row for every file refused or not sent yet,
+  copied from `b18791d`), broken `447e3a432e7d6dd580faf5625475731e0bd3d6b6e5ccde69d00d9617b7895ebe`.
+  The review found that only the Pack and Go guard caught it, at its final view. Now the import
+  fails at its second view: "view 2: 5000 rows in My files, the first Robot 2027/Unzipped/Assembly
+  00/Sub 00/Import-0001.SLDPRT "Available" note "Waiting to send"", and the Pack and Go
+  scenario at its final My files check.
+- **(M3) One "Waiting to send" card per file not sent yet**, broken
+  `14244ce264f60ce70798187875ffc73837a79a7fc6d78b596375679e4d144c94`. The review found that both
+  guards stayed green (nothing waits once the run is idle; the import's last view had 2 cards in
+  this run too). Now both fail on their mid-pass views: the import at "view 2: 5001 cards
+  (cantSend: Waiting to send, ...)", the Pack and Go at "view 2: 40 cards".
+
+After the three restores the working tree matched the commit (`git status` showed only a
+document being edited).
+
+### Breaks (a) and (b) after the E3 review
+
+The two other v2 breaks, run again against the engine after the review (the anchors and the
+one-line edits as in "Deliberate breaks for v2"), each restored byte for byte; SHA-256 before
+the break and after the restore, then broken:
+
+- (a) `SyncEngine.Actions.cs` `d574681224e082dee4c2b3ec7630e282a61b72c9587521518d3edeeafa147071`,
+  broken `980ecb5b3cfdc00a31e3982df6fb730076911653ce3c7fc202ab5ad9c200d99a`. Red: the same 3 of 3
+  (`E2E_SEEDS count=200 first=0 elapsed=11.6s failures=200`, first `ARMORY_E2E_SEED=0`: "A0: Seed
+  0000/robot/plate.txt is writable but this computer has not checked it out (step 0)").
+- (b) `SyncEngine.Folders.cs` `80e0acc47f1446e6e9554714a953fb47b1e178572390eb7cb22a41dc86eefe44`,
+  broken `a916a0e74cf93bae0287b3c41557633d193b3a8aa8a75116a67ce0f9604fcf95`. Red: the same 3 of
+  the 13 folder scenarios, each at `RpcCount("armory_rename_folder")` (expected 1).
+
+After both restores `git status` showed only a document being edited.

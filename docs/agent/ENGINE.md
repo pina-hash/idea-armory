@@ -118,9 +118,14 @@ A pass has four phases. A, B and D run one step at a time; C moves files several
    pin and gate mode, the preserved hash, `CheckoutMode.Explicit` and the student's request
    (`CheckIn` or `Undo` from the file's state; a closed add counts as `CheckIn`). Offline
    plans only add journal intents (never a lock intent for a shared file). Online plans are
-   grouped into units: one file each, except that files sharing a name (in any case) in a
-   project are one unit, in path order, so which of them gets the name never depends on
-   timing. The activity panel learns here how many files and bytes will go each way.
+   grouped into units: one file each, except that files sharing a name in a project are one
+   unit, in path order, so which of them gets the name never depends on timing. "Sharing a
+   name" is decided by a key at least as coarse as the server's own rule
+   (`lower(normalize(name, NFC))` in PostgreSQL): `NameKey` folds compatibility forms and
+   accents away (NFKD, marks dropped, so the dotted capital I is I), makes the capital sharp s
+   the small one and folds case both ways, where .NET's casing alone keeps "ẞolt" and "ßolt",
+   or "İnsert" and "insert", apart. Folding more than the server only puts a few more files in
+   one unit. The activity panel learns here how many files and bytes will go each way.
 
 **Phase C. The units**, at most `EngineOptions.TransferConcurrency` at once. A unit runs its
    files' plans in order and each plan's actions in order; any failure stops that file until
@@ -135,10 +140,14 @@ A pass has four phases. A, B and D run one step at a time; C moves files several
    undo and a closed add let their lock go once the file is clean, and a lock taken only for
    a move or a removal as soon as that is done, whatever is on disk; always read-only first,
    then the release, and a read-only bit that can't be set keeps the lock until a later pass
-   can set it. The releases' in-flight records are saved together, once, and the releases
-   are then sent one by one. An asked-for check out keeps any lock this computer holds and
-   otherwise takes its own (see Check out). The read-only rule follows this computer's own
-   lock changes without another read (`KnowLock`).
+   can set it. An asked-for check out keeps any lock this computer holds and otherwise takes
+   its own (see Check out). The check outs are then taken, and the releases' in-flight
+   records saved together, once, and the releases sent, both `TransferConcurrency` at a
+   time like the units (a crash or the connection stops them as it stops the units). The
+   locks a check in or an add lets go of show in the upload direction as "Checking in 412 of
+   4,900 files", so the status line and the tray never fall back to "Checking for changes."
+   while a big import finishes. The read-only rule follows this computer's own lock changes
+   without another read (`KnowLock`).
    Known folders with nothing left in them are removed (D17).
 7. **The read-only rule** (D4), every pass, offline too, from the ownership this computer
    last knew (its own lock changes of the pass included; offline since the start, the
@@ -168,23 +177,39 @@ immutable snapshot bytes.
   (`publishedRemote`, replaced at the end of every read of the server and patched by
   `KnowLock`) and this computer's records between two steps of a pass.
 - **Units.** Phase C runs units as interleaved async tasks on the engine thread, at most
-  `TransferConcurrency` at once (default 6, chosen by measurement: docs/agent/PROOF.md). A
-  unit is one file's whole plan, or the files of a project that share a name, in path order.
+  `TransferConcurrency` at once (default 6, a judgment call on the measurements in
+  docs/agent/PROOF.md, not a knee: one computer alone keeps getting faster up to 24 at once,
+  and six computers behind one 25 MB/s school link fill it at 6 each). A unit is one
+  file's whole plan, or the files of a project that share a name (`NameKey`), in path order.
   Every crash point name fires once per file in the order it always did. A unit that finds
   the connection gone (`ArmoryOfflineException`) stops new units from starting; those already
   running end their current step and keep their in-flight record. Any failure that is not
-  one file's (a `SimulatedCrash` in tests, a bug) cancels the pass's units: each stops at its
-  next step (`Checkpoint`: the cancellation is checked before every named step and before
-  every save of an in-flight record), and the failure is thrown only after every unit has
-  stopped and every save already asked for is on disk, so a crashed engine never saves, sends
-  or writes after the test builds the next engine over the same stores. Folder, project, move
-  and check-in, undo and release work (phases A and D) stays one step at a time.
+  one file's (a `SimulatedCrash` in tests, a bug) stops all saving at the moment it is thrown
+  (`StopSaving`, from the crash point itself or an exception filter, before any other unit
+  runs again) and cancels the pass's units: each stops at its next step (`Checkpoint` and
+  `Proceed`: checked before every named step, before every save of an in-flight record and
+  right after every server call, before its answer is applied, so an answer that arrives
+  after the crash is dropped with its in-flight record kept, as a real crash loses it). From
+  that moment nothing is serialized: a group commit still waiting fails without serializing
+  (its waiters send nothing), and the failure is thrown only after every unit has stopped and
+  the writes serialized before it are on disk. The document on disk therefore never holds a
+  step half done (an answered lock or a created file still in flight), which no real crash
+  could leave, and a crashed engine never saves, sends or writes after it threw
+  (`ConcurrencyTests.A_crash_among_files_moving_at_once_...` holds the serialization count
+  across the crash and the saved records, with a 40 ms disk). A cancellation (the engine
+  stopping) is not such a failure: every unit stops between two steps, so what is in memory
+  may still be saved. Folder, project and move work (phase A) stays one step at a time; the
+  check outs and releases of phase D go several at a time.
 - **A storage refusal or timeout is one file's problem.** `BlobClient` throws
   `StorageTransferException` when file storage answers with anything but success, takes too
   long, or cuts a download off, and when ideabosco.com takes too long to sign a transfer; that
   file shows one `cantSend` item ("Plate.SLDPRT didn't go through this time") and goes again on
   the next pass. Only a connection that cannot be made (and the site's 5xx for storage, as the
   client guard tests require) is offline.
+- **One request per file body.** A file goes up in one PUT and comes down in one streamed GET
+  (its SHA-256 checked as it streams). There is no multipart upload: the contract signs one
+  PUT URL with a signed content length (decision D11). Ranged downloads of one file in
+  parallel were considered and not built (PROOF.md, "Multipart upload and ranged downloads").
 
 ## Saving state
 
@@ -202,7 +227,9 @@ The engine's whole state document (`EngineState`) is replaced atomically on ever
 - **An id before anything durable carries it.** Ids (captures, removals, check outs, folder
   operations) come from blocks of 1,024: `EngineState.Sequence` as saved is the end of the
   block in use, saved before the block's first id is handed out, so a crash never reuses an
-  id and 5,000 captures need five saves, not 5,000.
+  id and 5,000 captures need five saves, not 5,000. A block whose save fails (the state file
+  locked, the disk full) is given back (`ReserveIds(save)`): no id ever comes from a block
+  the disk never had, so none is handed out again after a restart.
 - **A folder move, or a folder operation, before it happens** (`SaveNow`, rare), as before.
 - **Everything else** marks the document dirty and is saved at the end of the pass (or of the
   action) that changed it. A crash replays from the last save: in-flight records are sent
@@ -236,17 +263,28 @@ and in all, the speed and the time left, the files moving now (at most 8 listed)
 waiting line. Phase B tells it what the pass will move; each transfer is an
 `IProgress<long>` that `BlobClient` reports bytes to (from any thread); a file counts once it
 is where it goes, and a file that did not go leaves the totals. Speed is an exponential
-average over about 5 seconds of `TimeProvider.GetTimestamp` time (bytes and files); time left
-is the larger of bytes left over byte speed and files left over file speed, shown after 3
-seconds and 2 files. Lines are the brief's words, sizes and times as the window writes them:
-"Downloading 412 of 1,280 files, 2.1 GB left, about 3 min", "Uploading 3 of 9 files, 48 MB
-left, about 20 sec", "Moving 120 files to Robot 2027 › Gearbox". A direction shows while files
-are on their way; `ActivityView.Line` is the line of the one with the most files left, and
-the status line (`SyncView.Line`) follows it while files move. Waiting: "3 files are waiting
+average over about 5 seconds of `TimeProvider.GetTimestamp` time (bytes and files), counted
+from the moment the direction's first file started (never from when the pass planned the
+files) and corrected for the time it has had: both averages start from zero and are divided
+by the weight they gathered (1 - e^(-t/5 s)), so a steady rate reads true from the first
+seconds instead of starting at nothing and climbing (which showed about twice the true time
+left for the first 10 seconds). Time left is the larger of bytes left over byte speed and
+files left over file speed, shown after 3 seconds and 2 files; a steady run is within a
+quarter of the truth from 3 seconds on (`Time_left_is_close_to_the_truth_from_three_seconds_on`).
+Lines are the brief's words, sizes and times as the window writes them: "Downloading 412 of
+1,280 files, 2.1 GB left, about 3 min", "Uploading 3 of 9 files, 48 MB left, about 20 sec",
+"Checking in 412 of 4,900 files" (the locks a check in or an add lets go of after the
+uploads, shown as the upload direction), "Moving 120 files to Robot 2027 › Gearbox". Moving
+is one operation from its start to its end, with its own count and its one target: the
+team's answer to a folder renamed here or in the window, the move on this disk and the
+records following it; the team's rename made here; a folder or project folder put back; the
+team's file moves of one pass (to the folder they share). A direction shows while files are
+on their way; `ActivityView.Line` is the line of the one with the most files left, and the
+status line (`SyncView.Line`) follows it while files move. Waiting: "3 files are waiting
 to upload. They upload when this computer is back online." (offline or paused) or "2
 checked-out files have changes. Check them in to share them." (never for an archived project).
-`ActivityChanged` is raised from a timer, at most four times a second while a pass runs and
-once more when it ends; the host posts `{type: 'activity', activity}` without the whole view
+`ActivityChanged` is raised from a timer, at most four times a second while a pass runs (or
+a window action moves a folder) and once more when it ends; the host posts `{type: 'activity', activity}` without the whole view
 (the page patches the panel and the status line in place), and the full view is rebuilt at
 most every 500 ms during a pass and at its end.
 
@@ -496,7 +534,10 @@ saying its own reason),
 `projectPutBack` (a project folder renamed or removed in Explorer, put back) and
 `projectRenaming` (a project renamed on the site, waiting for a file to close). "SolidWorks year not checked" is never a notice, only a tag on File detail; waiting
 to upload is activity, never rows. My files are the files this computer has checked out, in
-any project. Every row says who has it checked out ("Checked out by you", "Checked out by
+any project: a lock taken only for an add of a closed file (the pass checks it in) or only
+for a move or a removal is not listed, so a 5,000-file import lists nothing there while its
+files go in; a file added while it was open is, with "You added it while it was open", until
+it closes. Every row says who has it checked out ("Checked out by you", "Checked out by
 Maria Lopez on LAB-PC-07", "Checked out by you on LAB-PC-07" for my other computer,
 "Available"). Offline since the start, the team's files are listed as this computer last
 knew them (`FileState.Holder`, its base and its saves), each with its file id, label and

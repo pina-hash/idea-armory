@@ -19,7 +19,9 @@ public sealed record EngineOptions
     // The contract's PUT limit (2 GiB); tests lower it.
     public long MaximumFileBytes { get; init; } = Armory.Client.BlobClient.MaximumPutBytes;
     // How many files a pass moves at once (uploads, downloads and the server calls around them).
-    // Chosen by measurement on the school network profile (docs/agent/PROOF.md, ThroughputTests).
+    // A judgment call on the measurements in docs/agent/PROOF.md (ThroughputTests, the school
+    // network profile): one computer alone keeps getting faster up to 24 at once, and six
+    // computers behind one 25 MB/s school link fill it at 6 each.
     public int TransferConcurrency { get; init; } = DefaultTransferConcurrency;
     public const int DefaultTransferConcurrency = 6;
 }
