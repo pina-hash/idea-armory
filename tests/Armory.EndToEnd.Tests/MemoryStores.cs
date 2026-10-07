@@ -56,10 +56,13 @@ internal sealed class MemoryStateStore : IEngineStateStore
     private byte[] buffer = [];
     private int length = -1;
     public int Saves { get; private set; }
+    // A slow disk: every save takes this long (it runs off the engine thread).
+    public TimeSpan Delay { get; set; }
     public byte[]? Load() { lock (gate) return length < 0 ? null : buffer.AsSpan(0, length).ToArray(); }
     public void Save(byte[] value) => Save([value]);
     public void Save(IReadOnlyList<ReadOnlyMemory<byte>> parts)
     {
+        if (Delay > TimeSpan.Zero) Thread.Sleep(Delay);
         lock (gate)
         {
             var total = 0;

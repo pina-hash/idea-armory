@@ -30,8 +30,11 @@ public sealed partial class SyncEngine
     private async Task FlushSoonAsync()
     {
         // The units that are ready now (answers that just arrived) record their own writes
-        // first and join this save.
+        // first and join this save, and so does every unit that arrives while the save before
+        // it is still being written: a slow disk means fewer, larger groups, never a queue of
+        // writes.
         await Task.Yield();
+        await lastWrite.ContinueWith(static _ => { }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default); // its failure is its own waiters'
         nextFlush = null;
         await Write();
     }

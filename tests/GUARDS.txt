@@ -296,3 +296,4 @@ Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.ConcurrencyTests|A_storage_refusal_f
 Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.ConcurrencyTests|The_server_is_read_at_most_twice_a_pass_and_not_again_when_nothing_moved
 Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.ThroughputTests|Transfers_through_a_school_network_profile
 Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.ImportScaleTests|A_5000_file_import_is_quiet_and_complete
+Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.ConcurrencyTests|A_slow_disk_makes_fewer_larger_saves

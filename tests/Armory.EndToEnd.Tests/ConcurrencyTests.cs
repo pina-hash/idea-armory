@@ -101,6 +101,29 @@ public sealed class ConcurrencyTests
         Assert.Empty(t.A.Disk.OpenWriteViolations);
     }
 
+    // Saves before server writes are a group commit: units that are ready while the save before
+    // is still being written share the next one, so a slow disk makes fewer, larger saves rather
+    // than a queue of them. Here every save takes 50 ms while 36 new files go in: at most one
+    // save for every two server writes (a queue of saves was about one for each).
+    [PostgresFact]
+    public async Task A_slow_disk_makes_fewer_larger_saves()
+    {
+        await using var t = await TeamAsync();
+        await t.A.SyncAsync();
+        var paths = Enumerable.Range(0, 36).Select(i => $"Robot 2027/Batch/Part-{i:D2}.SLDPRT").ToArray();
+        foreach (var path in paths) t.A.Write(path, "bytes of " + path);
+        t.A.State.Delay = TimeSpan.FromMilliseconds(50);
+        var (saves, rpc, reads) = (t.A.State.Saves, t.A.Network.RpcRequests, Reads(t));
+        await t.A.SyncAsync();
+        saves = t.A.State.Saves - saves;
+        var after = Reads(t);
+        var writes = t.A.Network.RpcRequests - rpc - (after.Projects + after.Changes + after.Files - reads.Projects - reads.Changes - reads.Files);
+        foreach (var path in paths) Assert.Equal(1, await t.Versions(await t.FileId(Path.GetFileName(path))));
+        Assert.All(paths, path => Assert.True(t.A.Disk.IsReadOnly(path)));
+        Assert.True(writes >= 2 * paths.Length, $"{writes} server writes for {paths.Length} new files");
+        Assert.True(2 * saves <= writes, $"{saves} saves of the state document for {writes} server writes");
+    }
+
     // File storage refusing one file (or not answering in time) is that file's problem: the pass
     // stays online, the other files go, the one file says so in one item and goes next time.
     [PostgresFact]
