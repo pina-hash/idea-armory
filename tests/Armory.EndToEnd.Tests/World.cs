@@ -173,6 +173,8 @@ internal sealed class Computer : IAsyncDisposable
     public long MaximumFileBytes { get; set; } = BlobClient.MaximumPutBytes;
     // How many files a pass moves at once (EngineOptions.TransferConcurrency); null is the default.
     public int? TransferConcurrency { get; set; }
+    // A loop pass's slice (EngineOptions.PassSlice); null is the default.
+    public TimeSpan? PassSlice { get; set; }
     public SyncEngine Engine { get; private set; } = null!;
     public SessionManager Sessions { get; private set; } = null!;
     public bool Offline { get => network.Offline; set => network.Offline = value; }
@@ -206,6 +208,7 @@ internal sealed class Computer : IAsyncDisposable
         {
             VaultRoot = World.Root, MaximumFileBytes = MaximumFileBytes,
             TransferConcurrency = TransferConcurrency ?? EngineOptions.DefaultTransferConcurrency,
+            PassSlice = PassSlice ?? new EngineOptions { VaultRoot = World.Root }.PassSlice,
         }, new EngineDependencies
         {
             Files = Disk, Journal = Journal, Snapshots = Snapshots, State = State, Sessions = Sessions, Api = api,
@@ -270,7 +273,13 @@ internal sealed class Computer : IAsyncDisposable
     public void Open(string path) => Disk.Open(path);
     public void Close(string path) => Disk.Close(path);
 
-    public ValueTask DisposeAsync() { http.Dispose(); return ValueTask.CompletedTask; }
+    // A loop a test started stops before the world goes away.
+    public async ValueTask DisposeAsync()
+    {
+        try { await Engine.StopAsync().WaitAsync(TimeSpan.FromSeconds(30)); }
+        catch (Exception error) when (error is not OutOfMemoryException) { }
+        http.Dispose();
+    }
 
     private sealed class Launcher(Action<Uri> open) : IBrowserLauncher { public void Open(Uri uri) => open(uri); }
 }

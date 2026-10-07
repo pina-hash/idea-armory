@@ -12,8 +12,15 @@ namespace Armory.Agent.Engine;
 public sealed record EngineOptions
 {
     public required string VaultRoot { get; init; }
-    public TimeSpan ActivePollInterval { get; init; } = TimeSpan.FromSeconds(5);
-    public TimeSpan IdlePollInterval { get; init; } = TimeSpan.FromSeconds(60);
+    // How often the loop looks for the team's changes: every 2 seconds while anything moved in the
+    // last IdleAfter, every 10 seconds otherwise (docs/agent/ENGINE.md, "The loop"). A look that
+    // finds nothing new is two small server calls, and students asked for no dead zones.
+    public TimeSpan ActivePollInterval { get; init; } = TimeSpan.FromSeconds(2);
+    public TimeSpan IdlePollInterval { get; init; } = TimeSpan.FromSeconds(10);
+    // A loop pass starts no new transfer after this long moving files (phase C): it finishes the
+    // ones in flight and its phase D, and the loop starts the next pass at once, so the team's
+    // changes are read again at least this often during a long download or upload.
+    public TimeSpan PassSlice { get; init; } = TimeSpan.FromSeconds(8);
     public TimeSpan IdleAfter { get; init; } = TimeSpan.FromMinutes(2);
     public TimeSpan StaleMarkerAfter { get; init; } = TimeSpan.FromMinutes(10);
     // The contract's PUT limit (2 GiB); tests lower it.
@@ -177,15 +184,30 @@ public sealed partial class SyncEngine : IAsyncDisposable
         RequestPublish();
     });
 
+    // The loop (docs/agent/ENGINE.md, "The loop"): a pass, then a short wait (ActivePollInterval
+    // or IdlePollInterval) that any wake ends early. A pass cut short (PassSlice, or an action
+    // waiting) leaves files for the next one, which starts at once.
     private async Task<bool> LoopAsync(CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
         {
             if (!paused)
             {
-                try { await SyncOnceAsync(ct); }
+                try { await LoopPassAsync(ct); }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { return true; }
                 catch (Exception error) { lastLoopError = "Sync stopped for a moment: " + error.GetType().Name; RequestPublish(); }
+            }
+            if (cutShort && !paused)
+            {
+                cutShort = false;
+                while (wake.CurrentCount > 0) await wake.WaitAsync(0, ct);
+                continue;
+            }
+            if (cutShort)
+            {
+                // Paused with files left: nothing moves until the student resumes.
+                cutShort = false;
+                activity.Reset();
             }
             var idle = online != true || deps.Clock.GetUtcNow() - lastActivity > options.IdleAfter;
             var delay = idle ? options.IdlePollInterval : options.ActivePollInterval;
@@ -196,6 +218,24 @@ public sealed partial class SyncEngine : IAsyncDisposable
         return true;
     }
 
+    // The loop's own pass: it gives way to a window action (phase C starts no new file while one
+    // waits) and stops starting files after PassSlice.
+    private async Task LoopPassAsync(CancellationToken ct)
+    {
+        await passGate.WaitAsync(ct);
+        try
+        {
+            loopPass = true;
+            await PassLockedAsync(ct);
+        }
+        finally
+        {
+            loopPass = false;
+            passGate.Release();
+        }
+    }
+
+    // A whole pass, every file in it, as a test or a caller that wants everything done asks for it.
     public Task<SyncReport> SyncOnceAsync(CancellationToken cancellationToken = default) => engineThread.InvokeAsync(async () =>
     {
         await passGate.WaitAsync(cancellationToken);
@@ -203,13 +243,87 @@ public sealed partial class SyncEngine : IAsyncDisposable
         finally { passGate.Release(); }
     });
 
+    // Window actions waiting for the pass gate. While one waits, the loop's pass starts no new
+    // file (the files in flight finish, phase D runs) and hands the gate over.
+    private int actionsWaiting;
+    // The loop's pass holds the gate now.
+    private bool loopPass;
+    // The loop's last pass left files for the next one (PassSlice, or an action waiting).
+    private bool cutShort;
+    // The files an action's pass moves in phase C (null: every file). Phases A, B and D are whole.
+    private PassScope? passScope;
+
+    // A window action takes the pass gate: counted while it waits, so a loop pass gives way.
+    private async Task EnterActionAsync(CancellationToken ct)
+    {
+        actionsWaiting++;
+        try { await passGate.WaitAsync(ct); }
+        finally { actionsWaiting--; }
+    }
+
+    // The action is done: the gate goes back, and the loop is woken so the files left for it
+    // move again at once.
+    private void LeaveAction()
+    {
+        passGate.Release();
+        wake.Release();
+    }
+
+    // What an action's pass moves in phase C: units holding one of these files (by record, by
+    // server id, or at or under one of these paths). Everything else waits for the loop.
+    private sealed class PassScope
+    {
+        internal readonly HashSet<FileState> States = new(ReferenceEqualityComparer.Instance);
+        internal readonly HashSet<Guid> Files = [];
+        internal readonly List<string> Paths = [];
+
+        internal static PassScope Of(IEnumerable<FileState> states)
+        {
+            var scope = new PassScope();
+            foreach (var st in states)
+            {
+                scope.States.Add(st);
+                if (st.FileId is { } id) scope.Files.Add(id);
+            }
+            return scope;
+        }
+
+        internal static PassScope Under(params string[] paths)
+        {
+            var scope = new PassScope();
+            scope.Paths.AddRange(paths);
+            return scope;
+        }
+
+        internal static PassScope File(Guid id)
+        {
+            var scope = new PassScope();
+            scope.Files.Add(id);
+            return scope;
+        }
+
+        internal bool Covers(List<Planned> unit)
+        {
+            foreach (var planned in unit)
+            {
+                if (States.Contains(planned.State)) return true;
+                if (planned.State.FileId is { } id && Files.Contains(id)) return true;
+                if (planned.Remote is { } remote && Files.Contains(remote.Id)) return true;
+                foreach (var path in Paths) if (Inside(planned.Key, path)) return true;
+            }
+            return false;
+        }
+    }
+
     // One pass, by whoever holds the pass gate (the loop, a test, or an action from the window).
     // Every write it started is on disk before it returns; after a failure (a crash, in tests)
     // nothing more is saved: what was not on disk yet is lost, as it would be in a real crash.
-    private async Task<SyncReport> PassLockedAsync(CancellationToken ct)
+    // An action passes its scope: only its files move in phase C.
+    private async Task<SyncReport> PassLockedAsync(CancellationToken ct, PassScope? scope = null)
     {
         var failed = true;
         failing = false;
+        passScope = scope;
         try
         {
             syncing = true;
@@ -224,9 +338,12 @@ public sealed partial class SyncEngine : IAsyncDisposable
         catch (Exception error) when (StopSaving(error)) { throw; }
         finally
         {
+            passScope = null;
             inPass = false;
             syncing = false;
-            activity.Reset();
+            // A loop pass cut short keeps its counts ("Downloading 412 of 1,280 files"): the next
+            // pass starts at once and goes on from them.
+            if (failed || !(loopPass && cutShort)) activity.Reset();
             if (failed) await DrainAsync();
             else await SettleAsync();
             // Every unit has stopped and every save serialized before the failure is on disk:
@@ -691,8 +808,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
     // Phase B: every path is planned with Core, in path order, and grouped into units: one file
     // each, except that files sharing a name as the server compares names (NameKey) in a project
     // are one unit, in path order, so which of them gets the name never depends on timing.
-    // Offline, the plans only journal Core's intents and nothing is left to run. The activity
-    // panel learns here what the pass will move.
+    // Offline, the plans only journal Core's intents and nothing is left to run.
     private async Task<List<List<Planned>>> PlanAllAsync(bool isOnline, CancellationToken ct)
     {
         movingTo.Clear();
@@ -716,7 +832,6 @@ public sealed partial class SyncEngine : IAsyncDisposable
                 units.Add(unit);
             }
             unit.Add(planned);
-            ExpectTransfers(planned);
         }
         return units;
     }
@@ -846,20 +961,35 @@ public sealed partial class SyncEngine : IAsyncDisposable
     // are planned offline); any failure that is not one file's (a crash, in tests) stops every
     // unit at its next step and is thrown only after all of them stopped, so nothing of this
     // engine writes after it.
-    private Task RunUnitsAsync(List<List<Planned>> units, CancellationToken ct)
-        => RunConcurrentlyAsync(units, RunUnitAsync, notStarted: unit =>
+    // An action's pass runs only the units holding its files (passScope); the loop's pass starts
+    // no new unit while an action waits for the gate, nor after PassSlice. Units left are simply
+    // planned again by the next pass (online, nothing of them is journaled). The activity panel
+    // learns here what the pass will move.
+    private async Task RunUnitsAsync(List<List<Planned>> units, CancellationToken ct)
+    {
+        var run = passScope is { } scope ? units.Where(scope.Covers).ToList() : units;
+        foreach (var unit in run) foreach (var planned in unit) ExpectTransfers(planned);
+        var started = deps.Clock.GetTimestamp();
+        var next = await RunConcurrentlyAsync(run, RunUnitAsync, notStarted: unit =>
         {
             // Offline: what was not started yet is planned offline, its intents journaled.
             foreach (var planned in unit) JournalOffline(Reconciler.Plan(planned.Input with { IsOnline = false }), planned.State);
-        }, ct);
+        }, ct, startNoMore: () => loopPass && (actionsWaiting > 0 || deps.Clock.GetElapsedTime(started) >= options.PassSlice));
+        if (next >= run.Count || online != true) return;
+        // Left for the next pass, which the loop starts at once.
+        cutShort = true;
+        for (var i = next; i < run.Count; i++) foreach (var planned in run[i]) activity.Drop(planned.Key);
+    }
 
     // Runs each item (a unit, a check out, a release) at most TransferConcurrency at once, as
     // interleaved async tasks on the engine thread. Going offline starts nothing more (notStarted
-    // gets each item that never started); a failure that is not one item's cancels the others,
-    // each at its next step, and is thrown once every one of them has stopped.
-    private async Task RunConcurrentlyAsync<T>(IReadOnlyList<T> items, Func<T, CancellationToken, Task> run, Action<T>? notStarted, CancellationToken ct)
+    // gets each item that never started); so does startNoMore (the items left are the caller's,
+    // from the index returned); a failure that is not one item's cancels the others, each at its
+    // next step, and is thrown once every one of them has stopped. Returns how many started.
+    private async Task<int> RunConcurrentlyAsync<T>(IReadOnlyList<T> items, Func<T, CancellationToken, Task> run, Action<T>? notStarted, CancellationToken ct,
+        Func<bool>? startNoMore = null)
     {
-        if (items.Count == 0) return;
+        if (items.Count == 0) return 0;
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var concurrency = Math.Max(1, options.TransferConcurrency);
         List<Task> running = [];
@@ -867,7 +997,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
         var next = 0;
         while (true)
         {
-            while (fatal is null && online == true && next < items.Count && running.Count < concurrency)
+            while (fatal is null && online == true && next < items.Count && running.Count < concurrency && startNoMore?.Invoke() != true)
             {
                 var task = run(items[next++], stop.Token);
                 if (task.IsCompleted) Ended(task); // nothing to wait for (most files, most passes)
@@ -879,7 +1009,8 @@ public sealed partial class SyncEngine : IAsyncDisposable
             Ended(done);
         }
         fatal?.Throw();
-        if (notStarted is not null) for (; next < items.Count; next++) notStarted(items[next]);
+        if (online != true && notStarted is not null) for (var i = next; i < items.Count; i++) notStarted(items[i]);
+        return next;
 
         void Ended(Task task)
         {

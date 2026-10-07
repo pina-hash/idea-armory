@@ -573,7 +573,43 @@ removed on this disk).
 
 ## Schedule (contract section 4)
 
-The loop polls every 5 seconds while online and active, and backs off to 60 seconds after
-two minutes with no local or remote change. A disk hint (`Wake`) runs a pass at once.
-Offline, it retries on the idle interval. While paused, no pass runs and the window's
-actions say so.
+The loop looks for the team's changes every 2 seconds while online and active
+(`ActivePollInterval`), and every 10 seconds after two minutes with no local or remote
+change (`IdlePollInterval`). It was 5 and 60 seconds until v0.2.1; students saw a check out
+or a new version take up to a minute to reach another computer, and the requirement now is
+no dead zones. A look that finds nothing new costs two small server calls
+(`armory_my_projects` and one `armory_list_changes` per project); a project's files are read
+again only when its change feed moved. Realtime push (Supabase Realtime on the change feed)
+is requested from the website in docs/agent/website-requests-v0.3.md and would replace the
+active poll. A disk hint (`Wake`) runs a pass at once. Offline, it retries on the idle
+interval. While paused, no pass runs and the window's actions say so.
+
+## The loop and the window's actions (v0.2.1)
+
+Until v0.2.1 every window action waited for the pass gate and then ran a whole pass of its
+own: with a couple of thousand files downloading, a click waited minutes, and its own pass
+moved everything again. Now:
+
+- **An action never waits behind a whole pass.** An action counts itself while it waits for
+  the pass gate (`EnterActionAsync`). While one waits, the loop's pass starts no new unit in
+  phase C: the units in flight finish, the rest are simply left (they are planned again from
+  scratch by the next pass; online, nothing of them is journaled), and phase D still runs
+  (the check ins, undos and check outs already asked for, `TidyFolders`, the read-only rule).
+  The gate then goes to the action.
+- **An action's pass is scoped** (`PassScope`). Phases A, B and D are whole (a scan of 5,000
+  files is about 60 ms, and phase D must see every lock), but phase C runs only the units that
+  hold the action's files (by record, by server id, or at or under the folder it named).
+  Check in, undo and check out finish in phase D from those units alone. When the action
+  ends it wakes the loop, which carries on with everything else at once.
+- **Time slices.** A loop pass starts no new unit after `PassSlice` (8 seconds) of phase C,
+  finishes the ones in flight and its phase D, and the loop starts the next pass at once, so
+  the server is read again (others' check outs and versions appear) at least every 10 seconds
+  or so even during a bulk download or upload. The activity panel keeps its counts across
+  these slices ("Downloading 412 of 1,280 files").
+- `SyncOnceAsync` (tests, and anything that wants everything done) is still a whole pass:
+  it neither gives way nor slices.
+
+`ResponsivenessTests` holds all three: a check out answers in about a quarter of a second
+while 200 files download (the whole download takes about 9 seconds), a check in answers in
+about half a second while 200 files upload, and a check out made on another computer shows
+on a row about 8 seconds later in the middle of a 20-second download.

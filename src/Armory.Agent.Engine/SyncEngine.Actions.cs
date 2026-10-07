@@ -891,7 +891,7 @@ public sealed partial class SyncEngine
         if (!engineThread.IsCurrent) return await engineThread.InvokeAsync(() => MoveAsync(from, to, cancellationToken));
         if (!from.IsValid || !to.IsValid) return false;
         Guid operation;
-        await passGate.WaitAsync(cancellationToken);
+        await EnterActionAsync(cancellationToken);
         try
         {
             if (!state.Files.TryGetValue(from.Value, out var st) || st.FileId is null) return false;
@@ -902,7 +902,7 @@ public sealed partial class SyncEngine
             state.Moves.Add(new PendingMove(operation, st.FileId.Value, from.Value, to.Value));
             MarkDirty();
         }
-        finally { passGate.Release(); }
+        finally { LeaveAction(); }
         await SyncOnceAsync(cancellationToken);
         return moveResults.Remove(operation, out var done) && done;
     }

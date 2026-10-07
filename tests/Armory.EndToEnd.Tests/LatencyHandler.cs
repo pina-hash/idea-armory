@@ -62,6 +62,8 @@ internal sealed class LatencyHandler(LatencyProfile profile, int sitePort, int r
     public Func<HttpRequestMessage, HttpResponseMessage?>? StorageFault { get; set; }
     // A test's slow server call: extra time for a database call, by its path ("/rest/v1/rpc/...").
     public Func<string, TimeSpan>? RpcDelay { get; set; }
+    // A test's slow file storage on this computer only: extra time for one storage request.
+    public Func<HttpRequestMessage, TimeSpan>? StorageDelay { get; set; }
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
@@ -72,7 +74,7 @@ internal sealed class LatencyHandler(LatencyProfile profile, int sitePort, int r
             Interlocked.Increment(ref storageRequests);
             if (request.Method == HttpMethod.Get) Interlocked.Increment(ref storageGets);
             var sent = request.Content?.Headers.ContentLength ?? 0;
-            await Task.Delay(profile.StorageRoundTrip + Body(sent), cancellationToken);
+            await Task.Delay(profile.StorageRoundTrip + Body(sent) + (StorageDelay?.Invoke(request) ?? TimeSpan.Zero), cancellationToken);
             var response = await base.SendAsync(request, cancellationToken);
             var received = request.Method == HttpMethod.Get && response.IsSuccessStatusCode ? response.Content.Headers.ContentLength ?? 0 : 0;
             if (received > 0) await Task.Delay(Body(received), cancellationToken);

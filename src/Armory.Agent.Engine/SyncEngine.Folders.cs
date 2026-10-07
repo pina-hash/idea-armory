@@ -1030,7 +1030,7 @@ public sealed partial class SyncEngine
         if (!engineThread.IsCurrent) return await engineThread.InvokeAsync(() => CreateFolderAsync(projectId, parent, name, cancellationToken));
         name = name?.Trim() ?? "";
         if (!VaultPath.TryValidateName(name, out var problem)) return new(false, problem ?? "That name can't be used for a folder.");
-        await passGate.WaitAsync(cancellationToken);
+        await EnterActionAsync(cancellationToken);
         try
         {
             if (Unready() is { } why) return why;
@@ -1051,7 +1051,7 @@ public sealed partial class SyncEngine
             PublishLocked();
             return new(true, $"Made the folder {name} in {Where(inside)}.");
         }
-        finally { passGate.Release(); }
+        finally { LeaveAction(); }
     }
 
     // Rename folder: for everyone first (one armory_rename_folder, refused while someone else has
@@ -1062,7 +1062,7 @@ public sealed partial class SyncEngine
         if (!engineThread.IsCurrent) return await engineThread.InvokeAsync(() => RenameFolderAsync(projectId, folder, newName, cancellationToken));
         newName = newName?.Trim() ?? "";
         if (!VaultPath.TryValidateName(newName, out var problem)) return new(false, problem ?? "That name can't be used for a folder.");
-        await passGate.WaitAsync(cancellationToken);
+        await EnterActionAsync(cancellationToken);
         try
         {
             if (Unready() is { } why) return why;
@@ -1104,10 +1104,10 @@ public sealed partial class SyncEngine
                 deps.Log?.Invoke($"rename folder {from}: {error.Message}");
                 return new(true, $"Armory couldn't reach the server to rename {name}. It tries again by itself.");
             }
-            if (answer.Ok) await PassLockedAsync(cancellationToken);
+            if (answer.Ok) await PassLockedAsync(cancellationToken, PassScope.Under(to, from));
             return answer;
         }
-        finally { passGate.Release(); }
+        finally { LeaveAction(); }
     }
 
     // The window's rename, sent (or sent again with its own id) and then finished here in one
@@ -1162,7 +1162,7 @@ public sealed partial class SyncEngine
     public async Task<ActionResult> DeleteFolderAsync(Guid projectId, string folder, CancellationToken cancellationToken = default)
     {
         if (!engineThread.IsCurrent) return await engineThread.InvokeAsync(() => DeleteFolderAsync(projectId, folder, cancellationToken));
-        await passGate.WaitAsync(cancellationToken);
+        await EnterActionAsync(cancellationToken);
         try
         {
             if (Unready() is { } why) return why;
@@ -1204,11 +1204,11 @@ public sealed partial class SyncEngine
             if (FolderOnDisk(path) && !local.Keys.Any(k => Inside(k, path)) && fs.DeleteEmptyFolder(path)) ForgetFolder(path);
             SaveNow();
             // Kept copies first where needed, then recovery, then the empty folder (two passes at most).
-            await PassLockedAsync(cancellationToken);
-            if (local.Keys.Any(k => Inside(k, path))) await PassLockedAsync(cancellationToken);
+            await PassLockedAsync(cancellationToken, PassScope.Under(path));
+            if (local.Keys.Any(k => Inside(k, path))) await PassLockedAsync(cancellationToken, PassScope.Under(path));
             return answer;
         }
-        finally { passGate.Release(); }
+        finally { LeaveAction(); }
     }
 
     // The window's delete, sent (or sent again with its own id). Its folder, and every folder in
@@ -1251,7 +1251,7 @@ public sealed partial class SyncEngine
     {
         if (!engineThread.IsCurrent) return await engineThread.InvokeAsync(() => AddFilesAsync(projectId, folder, sources, cancellationToken));
         if (sources.Count == 0) return new(false, "");
-        await passGate.WaitAsync(cancellationToken);
+        await EnterActionAsync(cancellationToken);
         try
         {
             if (Unready() is { } why) return why;
@@ -1286,7 +1286,7 @@ public sealed partial class SyncEngine
             {
                 state.Imports.Add(new ImportRecord(Guid.NewGuid(), ps.Id, target, copied, deps.Clock.GetUtcNow()));
                 SaveNow();
-                await PassLockedAsync(cancellationToken);
+                await PassLockedAsync(cancellationToken, PassScope.Under([.. copied]));
             }
             var where = Where(target);
             var message = copied.Count > 0 ? $"Copied {Count(copied.Count, "file", "files")} into {where}." : $"Nothing was copied into {where}.";
@@ -1294,7 +1294,7 @@ public sealed partial class SyncEngine
             if (leftOut > 0) message += $" {Count(leftOut, "file", "files")} couldn't be copied.";
             return new(copied.Count > 0, message);
         }
-        finally { passGate.Release(); }
+        finally { LeaveAction(); }
     }
 
     private static readonly ActionResult NoProject = new(false, "That project isn't on this computer.");

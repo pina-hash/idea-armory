@@ -27,7 +27,7 @@ public sealed partial class SyncEngine
     public async Task<ActionResult> CheckOutAsync(IReadOnlyList<string> paths, bool open = false, CancellationToken cancellationToken = default)
     {
         if (!engineThread.IsCurrent) return await engineThread.InvokeAsync(() => CheckOutAsync(paths, open, cancellationToken));
-        await passGate.WaitAsync(cancellationToken);
+        await EnterActionAsync(cancellationToken);
         try
         {
             if (Unready() is { } why) return why;
@@ -52,10 +52,12 @@ public sealed partial class SyncEngine
             }
             await FlushAsync(); // the requests are durable before any server call
             checkOutResults.Clear();
-            await PassLockedAsync(cancellationToken);
+            // Only these files move in this pass; the loop moves everything else.
+            var scope = PassScope.Of(targets.Select(t => t.State));
+            await PassLockedAsync(cancellationToken, scope);
             // Ask again after one pass with the lock free (a download, or a kept copy put back).
             if (online == true && targets.Any(t => checkOutResults.GetValueOrDefault(t.State) == CheckOutOutcome.Waiting))
-                await PassLockedAsync(cancellationToken);
+                await PassLockedAsync(cancellationToken, scope);
             var wasOnline = online == true;
             foreach (var (st, _) in targets)
             {
@@ -71,7 +73,7 @@ public sealed partial class SyncEngine
                 return Offline("Files can be checked out once this computer is back online.");
             return CheckOutAnswer(targets, open, wasOnline);
         }
-        finally { passGate.Release(); }
+        finally { LeaveAction(); }
     }
 
     private ActionResult CheckOutAnswer(List<(FileState State, VaultPath Path)> targets, bool open, bool wasOnline)
@@ -171,7 +173,7 @@ public sealed partial class SyncEngine
     public async Task<ActionResult> CheckInAsync(IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
     {
         if (!engineThread.IsCurrent) return await engineThread.InvokeAsync(() => CheckInAsync(paths, cancellationToken));
-        await passGate.WaitAsync(cancellationToken);
+        await EnterActionAsync(cancellationToken);
         try
         {
             if (Unready() is { } why) return why;
@@ -181,10 +183,10 @@ public sealed partial class SyncEngine
             foreach (var (st, _) in targets) { st.Request = CheckoutRequest.CheckIn; st.CheckOut = null; }
             await FlushAsync(); // the requests are durable before any server call
             releaseResults.Clear();
-            await PassLockedAsync(cancellationToken);
+            await PassLockedAsync(cancellationToken, PassScope.Of(targets.Select(t => t.State)));
             return ReleaseAnswer(targets, undo: false, [], kept: false);
         }
-        finally { passGate.Release(); }
+        finally { LeaveAction(); }
     }
 
     // Undo check out: never while the file is open. Bytes not checked in are kept as a kept
@@ -193,7 +195,7 @@ public sealed partial class SyncEngine
     public async Task<ActionResult> UndoCheckOutAsync(IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
     {
         if (!engineThread.IsCurrent) return await engineThread.InvokeAsync(() => UndoCheckOutAsync(paths, cancellationToken));
-        await passGate.WaitAsync(cancellationToken);
+        await EnterActionAsync(cancellationToken);
         try
         {
             if (Unready() is { } why) return why;
@@ -208,12 +210,12 @@ public sealed partial class SyncEngine
             foreach (var (st, _) in closed) { st.Request = CheckoutRequest.Undo; st.CheckOut = null; }
             await FlushAsync(); // the requests are durable before any server call
             releaseResults.Clear();
-            await PassLockedAsync(cancellationToken);
+            await PassLockedAsync(cancellationToken, PassScope.Of(closed.Select(t => t.State)));
             // Bytes not checked in were kept as a kept copy; the answer says so.
             var kept = closed.SelectMany(t => t.State.Sides).Any(s => s.Reason == UndoReason && !keptBefore.Contains(s.VersionId));
             return ReleaseAnswer(closed, undo: true, open.Select(o => o.Path).ToList(), kept);
         }
-        finally { passGate.Release(); }
+        finally { LeaveAction(); }
     }
 
     private ActionResult ReleaseAnswer(List<(FileState State, VaultPath Path)> targets, bool undo, List<VaultPath> open, bool kept)
@@ -253,7 +255,7 @@ public sealed partial class SyncEngine
     public async Task<ActionResult> TakeBackAsync(Guid fileId, CancellationToken cancellationToken = default)
     {
         if (!engineThread.IsCurrent) return await engineThread.InvokeAsync(() => TakeBackAsync(fileId, cancellationToken));
-        await passGate.WaitAsync(cancellationToken);
+        await EnterActionAsync(cancellationToken);
         try
         {
             if (Unready() is { } why) return why;
@@ -278,15 +280,15 @@ public sealed partial class SyncEngine
             {
                 // The server would not take it back as asked (someone else already did, or the
                 // check out changed): read it again, and say what is true now.
-                await PassLockedAsync(cancellationToken);
+                await PassLockedAsync(cancellationToken, PassScope.File(fileId));
                 return new(false, $"{name} isn't checked out any more.");
             }
             if (broke) KnowLock(fileId, null);
-            await PassLockedAsync(cancellationToken);
+            await PassLockedAsync(cancellationToken, PassScope.File(fileId));
             var from = OwnershipOf(held) == LockOwnership.MyOtherDevice ? "your other computer, " + (held.HolderDeviceName ?? "another computer") : DisplayName(held.HolderEmail);
             return broke ? new(true, $"Took back {name} from {from}. Anything not checked in is kept in its history.") : new(false, $"{name} isn't checked out any more.");
         }
-        finally { passGate.Release(); }
+        finally { LeaveAction(); }
     }
 
     // Open: the file's own program (SolidWorks for a part). Programs and scripts are refused
@@ -311,7 +313,7 @@ public sealed partial class SyncEngine
         if (!VaultPath.TryCreate(from.Value[..(slash + 1)] + newName, out var to, out var tooLong, options.VaultRoot)) return new(false, tooLong ?? "That name can't be used here.");
         if (string.Equals(from.Value, to.Value, StringComparison.Ordinal)) return new(false, "That is already its name.");
         Guid operation;
-        await passGate.WaitAsync(cancellationToken);
+        await EnterActionAsync(cancellationToken);
         try
         {
             if (Unready() is { } why) return why;
@@ -345,7 +347,7 @@ public sealed partial class SyncEngine
                     st.Refusal = null; st.RefusalKind = null; st.CreateEntry = null;
                 }
                 SaveNow();
-                await PassLockedAsync(cancellationToken);
+                await PassLockedAsync(cancellationToken, PassScope.Under(to.Value));
                 return new(true, $"Renamed {from.Name} to {to.Name}.");
             }
             if (remoteById.TryGetValue(fileId, out var remote) && OwnershipOf(remote.File.Lock) is LockOwnership.OtherPerson or LockOwnership.MyOtherDevice)
@@ -353,9 +355,9 @@ public sealed partial class SyncEngine
             operation = Guid.NewGuid();
             state.Moves.Add(new PendingMove(operation, fileId, from.Value, to.Value));
             MarkDirty();
-            await PassLockedAsync(cancellationToken);
+            await PassLockedAsync(cancellationToken, PassScope.File(fileId));
         }
-        finally { passGate.Release(); }
+        finally { LeaveAction(); }
         return moveResults.Remove(operation, out var done) && done
             ? new(true, $"Renamed {from.Name} to {to.Name}.")
             : new(false, online != true ? $"You're offline. {from.Name} can be renamed once this computer is back online." : $"Armory couldn't rename {from.Name}. Someone may have it checked out, or {to.Name} is already used in the project.");
