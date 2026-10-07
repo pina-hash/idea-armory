@@ -59,7 +59,7 @@ public sealed partial class SyncEngine
         // An archived project's files wait for nothing (decision D8), unless they are mine to finish.
         if (state.Projects.GetValueOrDefault(st.ProjectId) is { Archived: true } && !MineToFinish(st)) return false;
         if (st.Inflight is { Kind: "create" or "commit" or "side" or "archive" } || st.Entries.Count > 0) return true;
-        return local.TryGetValue(st.Path, out var file) && file.Hash != st.BaseHash && file.Hash != st.Preserved;
+        return TryLocal(st.Path, out var file) && file.Hash != st.BaseHash && file.Hash != st.Preserved;
     }
 
     // ---- Activity ------------------------------------------------------------------------
@@ -76,7 +76,10 @@ public sealed partial class SyncEngine
 
     // ---- Notices -------------------------------------------------------------------------
 
-    private sealed record RawItem(string Id, Guid? FileId, string Path, string? Detail, string? Title = null, string? Flavor = null, (int Added, int Total)? Tally = null);
+    // ItemDetail is the item's own sentence in a card of several (who has its files checked out,
+    // why it went back); ReasonKind and Who let such a card name everyone in its title.
+    private sealed record RawItem(string Id, Guid? FileId, string Path, string? Detail, string? Title = null, string? Flavor = null, (int Added, int Total)? Tally = null,
+        string? ItemDetail = null, string? ReasonKind = null, string? Who = null);
     private sealed record RawGroup(string Key, string Kind, List<RawItem> Items);
 
     // The items each card showed when the view was last built: a dismissal hides exactly those.
@@ -107,9 +110,10 @@ public sealed partial class SyncEngine
         // A pass's notes, its problems among them (in plain words; the raw text goes to the log).
         foreach (var n in notes)
             Add(n.Kind, new RawItem($"{n.Kind}:{n.Path}:{n.Title}" + (n.Path.Length == 0 ? ":" + n.Detail : ""), n.FileId, n.Path, n.Detail, n.Title,
-                n.Title == StaleMarkerTitle ? "stale" : n.Title?.Contains("renamed", StringComparison.Ordinal) == true || n.Title?.EndsWith(" was moved", StringComparison.Ordinal) == true ? "rename" : null));
+                n.Title == StaleMarkerTitle ? "stale" : n.Title?.Contains("renamed", StringComparison.Ordinal) == true || n.Title?.EndsWith(" was moved", StringComparison.Ordinal) == true ? "rename" : null,
+                ItemDetail: n.ItemDetail, ReasonKind: n.ReasonKind, Who: n.Who));
         foreach (var n in state.Remembered.Where(n => now - n.At < TimeSpan.FromMinutes(30)))
-            Add(n.Kind, new RawItem($"{n.Kind}:{n.Path}:{n.At.UtcTicks}", n.FileId, n.Path, n.Detail, n.Title));
+            Add(n.Kind, new RawItem($"{n.Kind}:{n.Path}:{n.At.UtcTicks}", n.FileId, n.Path, n.Detail, n.Title, ItemDetail: n.ItemDetail, ReasonKind: n.ReasonKind, Who: n.Who));
         // One summary per bulk add (an unzip, a paste, a Pack and Go, Add files).
         foreach (var import in state.Imports.Where(i => now - i.At < ImportShownFor))
         {
@@ -126,7 +130,7 @@ public sealed partial class SyncEngine
         foreach (var st in files.OrderBy(f => f.Path, StringComparer.OrdinalIgnoreCase))
         {
             var name = NameOf(st.Path);
-            local.TryGetValue(st.Path, out var file);
+            TryLocal(st.Path, out var file);
             var remote = st.FileId is { } id && remoteById.TryGetValue(id, out var r) ? r.File : null;
             if (st.Refusal is not null)
             {
@@ -140,6 +144,11 @@ public sealed partial class SyncEngine
                 Add(NoticeKinds.NewerWaiting, new RawItem($"newer:{st.Path}:{remote?.Current?.Id}", st.FileId, st.Path,
                     $"Close {name} in SolidWorks to get it. Your copy stays as it is until then.",
                     st.NewerAuthor is { } author ? $"A newer {name} from {DisplayName(author)} is waiting" : null));
+            // Removed by the team while it is open here: nothing newer, nothing uploading.
+            if (st.RemovedWaiting)
+                Add(NoticeKinds.NewerWaiting, new RawItem($"removed:{st.Path}", st.FileId, st.Path,
+                    $"Close {name} in SolidWorks, and Armory moves your copy aside. Nothing is lost.",
+                    $"{name} was removed from {ProjectName(st)}", Flavor: "removed"));
             // One item per file: the newest take back, and the newest kept copy.
             var recent = st.Sides.Where(s => now - s.At < KeptCopiesShownFor).ToList();
             if (recent.LastOrDefault(s => s.Reason == LockBrokenReason) is { } taken && !st.BreakNotice)
@@ -204,9 +213,12 @@ public sealed partial class SyncEngine
                 n == 1 ? "Armory can't read a file on this computer" : $"Armory can't read {n:N0} files on this computer",
                 n == 1 ? first.Detail ?? "" : "Close any program that might be using them. Armory tries again by itself.", null),
             NoticeKinds.NewerWaiting => (NoticeTones.Look,
-                n == 1 ? first.Title ?? $"A newer {name} is waiting" : $"Newer versions of {n:N0} files are waiting",
-                n == 1 ? first.Detail ?? "" : "Close them in SolidWorks to get them. Your copies stay as they are until then.",
-                n == 1 && first.FileId is not null && first.Flavor != "rename" ? new NoticeActionView("Open it", BridgeMessages.LaunchFile, [first.Path]) : null),
+                n == 1 ? first.Title ?? $"A newer {name} is waiting" : items.All(i => i.Flavor == "removed") ? $"{n:N0} files were removed from the project"
+                    : items.Any(i => i.Flavor == "removed") ? $"{n:N0} files changed for the team" : $"Newer versions of {n:N0} files are waiting",
+                n == 1 ? first.Detail ?? "" : items.All(i => i.Flavor == "removed") ? "Close them in SolidWorks, and Armory moves your copies aside. Nothing is lost."
+                    : items.Any(i => i.Flavor == "removed") ? "Close them in SolidWorks to finish. Each one says what changed. Your copies stay as they are until then."
+                    : "Close them in SolidWorks to get them. Your copies stay as they are until then.",
+                n == 1 && first.FileId is not null && first.Flavor is not ("rename" or "removed") ? new NoticeActionView("Open it", BridgeMessages.LaunchFile, [first.Path]) : null),
             // Only a kept copy still waiting for its file to close, or one someone else's check in
             // overtook, needs the student; one whose checked-in version is back is news.
             NoticeKinds.KeptCopy => (items.Any(i => i.Flavor is "conflict" or "waiting") ? NoticeTones.Look : NoticeTones.Info,
@@ -221,8 +233,10 @@ public sealed partial class SyncEngine
                 n == 1 ? first.Detail ?? "" : "A mentor or CAD lead took them back. Your changes that weren't checked in are kept in their history, so nothing was lost.",
                 new NoticeActionView("OK", BridgeMessages.DismissNotice, [])),
             NoticeKinds.FolderPutBack => (NoticeTones.Look,
-                n == 1 ? first.Title ?? $"{name} was put back where it was" : $"{n:N0} renames were put back",
-                n == 1 ? first.Detail ?? "" : "Someone else has files in them checked out, so they can't be renamed or deleted now. Try again after they're checked in.", null),
+                n == 1 ? first.Title ?? $"{name} was put back where it was" : PutBackTitle(items),
+                n == 1 ? first.Detail ?? "" : items.All(i => i.ReasonKind == CheckedOutReason)
+                    ? "A folder is renamed or deleted only when nobody else has a file in it checked out. Ask them to check the files in, then try again."
+                    : "Each one says why.", n == 1 ? null : expand),
             NoticeKinds.Import => (NoticeTones.Info,
                 n == 1 ? first.Title ?? $"Added files to {name}" : $"Added {items.Sum(i => i.Tally?.Added ?? 0):N0} of {items.Sum(i => i.Tally?.Total ?? 0):N0} files to {n:N0} folders",
                 n == 1 ? first.Detail ?? "" : "Each folder says what came in.", new NoticeActionView("Done", BridgeMessages.DismissNotice, [])),
@@ -235,7 +249,21 @@ public sealed partial class SyncEngine
             _ => (NoticeTones.Info, first.Title ?? name, first.Detail ?? "", null),
         };
         return new NoticeGroupView(g.Key, g.Kind, tone, title, detail, n, action,
-            items.Take(NoticeItemsShown).Select(i => new NoticeItemView(i.FileId?.ToString(), i.Path, NameOf(i.Path), i.Detail)).ToArray());
+            items.Take(NoticeItemsShown).Select(i => new NoticeItemView(i.FileId?.ToString(), i.Path, NameOf(i.Path), i.ItemDetail ?? i.Detail)).ToArray());
+    }
+
+    // Several folders (or files) put back at once: what they are, and who has files in them
+    // checked out when that is why. "2 folders were put back: Maria Lopez and Sam Lee have files
+    // in them checked out".
+    private static string PutBackTitle(List<RawItem> items)
+    {
+        var files = items.Count(i => i.FileId is not null);
+        var folders = items.Count - files;
+        var what = files == 0 ? $"{folders:N0} folders were put back" : folders == 0 ? $"{files:N0} renames were put back" : $"{folders:N0} folders and {files:N0} files were put back";
+        if (files > 0 || items.Any(i => i.ReasonKind != CheckedOutReason)) return what;
+        var who = items.SelectMany(i => (i.Who ?? "").Split('\n', StringSplitOptions.RemoveEmptyEntries)).Distinct(StringComparer.Ordinal).ToList();
+        if (who.Count == 0 || items.Any(i => i.Who is null)) return what + ": someone else has files in them checked out";
+        return $"{what}: {Names(who)} {(who.Count == 1 ? "has" : "have")} files in them checked out";
     }
 
     // ---- The check-out question ------------------------------------------------------------
@@ -248,7 +276,7 @@ public sealed partial class SyncEngine
         List<string> open = [];
         foreach (var (document, firstSeen) in markerFirstSeen.OrderByDescending(m => m.Value).ThenBy(m => m.Key, StringComparer.OrdinalIgnoreCase))
         {
-            if (!markerDocuments.Contains(document) || !state.Files.TryGetValue(document, out var st) || st.FileId is not { } id) continue;
+            if (!markerDocuments.Contains(document) || !state.Files.TryGetValue(HomeOf(document) ?? document, out var st) || st.FileId is not { } id) continue;
             LockOwnership ownership;
             CheckoutView checkout;
             if (remoteById.TryGetValue(id, out var remote))
@@ -263,7 +291,8 @@ public sealed partial class SyncEngine
             open.Add(document);
             var key = PromptKey(document, firstSeen);
             if (prompt is not null || dismissedPrompts.Contains(key)) continue;
-            prompt = new PromptView(key, id.ToString(), document, NameOf(document), checkout, ownership == LockOwnership.Free);
+            // The file's own path (where it goes back to, when its folder is away), so Check out finds it.
+            prompt = new PromptView(key, id.ToString(), st.Path, NameOf(st.Path), checkout, ownership == LockOwnership.Free);
         }
         Volatile.Write(ref openWithoutCheckOut, open.ToArray());
         return prompt;
@@ -280,7 +309,7 @@ public sealed partial class SyncEngine
             if (st.FileId is not { } id) continue;
             CheckoutView checkout;
             RemoteFile? remote = null;
-            local.TryGetValue(st.Path, out var file);
+            TryLocal(st.Path, out var file);
             string status;
             if (remoteById.TryGetValue(id, out var known))
             {
@@ -315,7 +344,7 @@ public sealed partial class SyncEngine
                 foreach (var st in state.Files.Values.Where(f => f.ProjectId == project.Id && f.FileId is not null && f.BaseId?.StartsWith("tombstone:", StringComparison.Ordinal) != true))
                 {
                     if (!VaultPath.TryCreate(st.Path, out var known, out _, options.VaultRoot) || ProjectOf(known)?.Id != project.Id) continue;
-                    local.TryGetValue(st.Path, out var file);
+                    TryLocal(st.Path, out var file);
                     if (file is null && st.BaseHash is null) continue; // never here, and nothing known of it
                     var ownership = KnownOwnership(st);
                     Add(Split(known).Folder, new FileRowView(st.FileId.ToString(), known.Name, known.Value, KnownStatus(st, file, ownership), KnownCheckout(st),
@@ -326,7 +355,7 @@ public sealed partial class SyncEngine
             {
                 if (remote.Deleted || !remoteById.TryGetValue(remote.Id, out var known)) continue;
                 state.Files.TryGetValue(known.Path.Value, out var st);
-                local.TryGetValue(known.Path.Value, out var file);
+                TryLocal(known.Path.Value, out var file);
                 var ownership = OwnershipOf(remote.Lock);
                 Add(remote.Folder, new FileRowView(remote.Id.ToString(), remote.Name, known.Path.Value, StatusOf(st, remote, file, ownership), CheckoutOf(remote.Lock),
                     file is not null && st is not null && file.Hash != st.BaseHash, remote.Current?.ReleaseChecked == false,
@@ -337,9 +366,15 @@ public sealed partial class SyncEngine
             foreach (var (key, file) in local)
             {
                 if (shown.Contains(key) || ProjectOf(file.Path)?.Id != project.Id) continue;
+                if (HomeOf(key) is { } home && shown.Contains(home)) continue; // shown where it goes back to
                 state.Files.TryGetValue(key, out var st);
-                if (st?.FileId is { } id && remoteById.TryGetValue(id, out var elsewhere) && !elsewhere.File.Deleted) continue; // shown where the server has it
-                Add(Split(file.Path).Folder, new FileRowView(null, file.Path.Name, key, StatusOf(st, null, file, LockOwnership.Free), Available, false, false, null, null));
+                RemoteFile? gone = null;
+                if (st?.FileId is { } id && remoteById.TryGetValue(id, out var elsewhere))
+                {
+                    if (!elsewhere.File.Deleted) continue; // shown where the server has it
+                    gone = elsewhere.File;
+                }
+                Add(Split(file.Path).Folder, new FileRowView(null, file.Path.Name, key, StatusOf(st, gone, file, LockOwnership.Free), Available, false, false, null, null));
             }
             // Folders on this computer, empty ones too.
             var prefix = project.Folder + "/";
@@ -361,6 +396,9 @@ public sealed partial class SyncEngine
     // FileStatus v2 for one file. Waiting to upload is activity; a row says what the file is.
     private string StatusOf(FileState? st, RemoteFile? remote, LocalFile? file, LockOwnership ownership)
     {
+        // Removed by the team, its copy here waiting to go aside (open, or until the next pass).
+        if (remote is { Deleted: true } && st?.Base is { IsTombstone: false } && file is not null && (st.RemovedWaiting || file.Hash == st.BaseHash))
+            return FileStatuses.NotInArmory;
         if (remote is null || remote.Deleted)
         {
             if (st?.Refusal is not null || file is null) return FileStatuses.NotInArmory;
@@ -441,7 +479,7 @@ public sealed partial class SyncEngine
         try { history = await deps.Api.FileHistoryAsync(fileId, cancellationToken); }
         catch (ArmoryClientException) { history = []; }
         state.Files.TryGetValue(remote.Path.Value, out var st);
-        local.TryGetValue(remote.Path.Value, out var file);
+        TryLocal(remote.Path.Value, out var file);
         var currentId = remote.File.Current?.Id;
         var ordered = history.OrderBy(h => h.CreatedAt).ThenBy(h => h.Id).ToArray();
         // The server drops a revived file's removal from its history (0232 deletes the tombstone

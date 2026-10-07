@@ -214,6 +214,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
             Problem(NoticeKinds.CantRead, null, "Armory can't look through your Armory folder right now. It tries again by itself.", error.Message);
             return Report(true);
         }
+        scanned = true;
         foreach (var file in scan.Files) local[file.Path.Value] = file;
         folderScan = scan.Folders is not null;
         if (scan.Folders is { } folders) localFolders.UnionWith(folders);
@@ -238,8 +239,10 @@ public sealed partial class SyncEngine : IAsyncDisposable
             KeepCheckedOut();
             if (await ResumeInflightAsync(ct) && online == true) online = await RefreshAsync(ct);
             // A folder renamed or removed here: one server call each, after any file write a
-            // crash left in flight (which lands in the folder as it was).
-            if (online == true && await SendFolderOpsAsync(ct) && online == true) online = await RefreshAsync(ct);
+            // crash left in flight (which lands in the folder as it was). Only the projects a
+            // folder call changed are read again.
+            if (online == true) await SendFolderOpsAsync(ct);
+            if (online == true) online = await RefreshStaleAsync(ct);
         }
         if (online == true)
         {
@@ -257,7 +260,8 @@ public sealed partial class SyncEngine : IAsyncDisposable
             await ExecutePendingMovesAsync(ct);
             await ArchiveSupersededAsync(entries, ct);
             // A known folder gone for a second scan: one removal for the team.
-            if (online == true && await RemoveMissingFoldersAsync(ct) && online == true) online = await RefreshAsync(ct);
+            if (online == true) await RemoveMissingFoldersAsync(ct);
+            if (online == true) online = await RefreshStaleAsync(ct);
         }
 
         lastLoopError = null;
@@ -316,7 +320,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
         try { projects = await deps.Api.MyProjectsAsync(ct); }
         catch (ArmoryOfflineException) { return false; }
         catch (ArmorySignedOutException) { return false; }
-        remoteProjects.Clear(); remoteByPath.Clear(); remoteById.Clear();
+        remoteProjects.Clear(); remoteByPath.Clear(); remoteById.Clear(); staleProjects.Clear();
         var names = projects.GroupBy(p => p.Name, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
         foreach (var gone in state.Projects.Keys.Except(projects.Select(p => p.Id)).ToArray()) state.Projects[gone].Usable = false;
         foreach (var project in projects)
@@ -472,35 +476,52 @@ public sealed partial class SyncEngine : IAsyncDisposable
         notify |= online == false && state.Projects.Count > 0;
         foreach (var file in local.Values.OrderBy(f => f.Path))
         {
+            var key = file.Path.Value;
+            if (HeldForCapture(key))
+            {
+                // A folder on its way back where it was (a project folder renamed in Explorer, a
+                // refused rename waiting for a file to close): a file Armory knows there keeps
+                // every save, recorded under the path it goes back to, while it waits; a new file
+                // there waits until the folder is back.
+                var home = HomeOf(key) ?? key;
+                if (state.Files.TryGetValue(home, out var held) && VaultPath.TryCreate(home, out var homePath, out _, options.VaultRoot))
+                    CaptureSave(session, held, file, homePath);
+                continue;
+            }
             var project = ProjectOf(file.Path);
             if (project is null)
             {
-                // A project folder renamed in Explorer is put back, not a pile of files outside projects.
-                if (notify && !HeldForCapture(file.Path.Value)) Notice(NoticeKinds.CantSend, null, file.Path.Value, "It is outside every project. Move it into one of your project folders so Armory can keep it.");
+                if (notify) Notice(NoticeKinds.CantSend, null, key, "It is outside every project. Move it into one of your project folders so Armory can keep it.");
                 continue;
             }
-            if (HeldForCapture(file.Path.Value)) continue; // a folder on its way back where it was
-            var known = state.Files.TryGetValue(file.Path.Value, out var existing);
+            var known = state.Files.TryGetValue(key, out var existing);
             // Archived (decision D8): only this computer's own check outs there are kept up.
             if (project.Archived && !MineToFinish(existing)) continue;
-            if (!known) createdThisPass.Add(file.Path.Value);
-            var st = known ? existing! : FileFor(project, file.Path.Value);
-            if (file.Hash == st.BaseHash || file.Hash == st.LastCaptured) continue;
-            var id = state.NextId("save");
-            Save(); // the id is spent before it is used, so it is never reused
-            try
-            {
-                SavedSnapshot snapshot;
-                using (var source = fs.OpenRead(file.Path)) snapshot = recorder.Record(id, file.Path, session.Email, source);
-                st.Entries.Add(id);
-                st.LastCaptured = snapshot.Hash;
-                lastActivity = deps.Clock.GetUtcNow();
-                Save();
-            }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
-            {
-                Problem(NoticeKinds.CantRead, file.Path.Value, "Armory couldn't read it to keep your save. Close any program that might be using it. Armory tries again by itself.", error.Message);
-            }
+            if (!known) createdThisPass.Add(key);
+            CaptureSave(session, known ? existing! : FileFor(project, key), file, file.Path);
+        }
+    }
+
+    // One save of a file kept here (journal and snapshot) before anything else happens to it,
+    // recorded under the record's path; the bytes are read where the file is on disk now.
+    private void CaptureSave(ArmorySession session, FileState st, LocalFile file, VaultPath recordPath)
+    {
+        if (state.Projects.GetValueOrDefault(st.ProjectId) is { Archived: true } && !MineToFinish(st)) return;
+        if (file.Hash == st.BaseHash || file.Hash == st.LastCaptured) return;
+        var id = state.NextId("save");
+        Save(); // the id is spent before it is used, so it is never reused
+        try
+        {
+            SavedSnapshot snapshot;
+            using (var source = fs.OpenRead(file.Path)) snapshot = recorder.Record(id, recordPath, session.Email, source);
+            st.Entries.Add(id);
+            st.LastCaptured = snapshot.Hash;
+            lastActivity = deps.Clock.GetUtcNow();
+            Save();
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            Problem(NoticeKinds.CantRead, file.Path.Value, "Armory couldn't read it to keep your save. Close any program that might be using it. Armory tries again by itself.", error.Message);
         }
     }
 
@@ -561,6 +582,15 @@ public sealed partial class SyncEngine : IAsyncDisposable
         st ??= FileFor(project, key);
         if (remote.File is not null) st.FileId ??= remote.File.Id;
         if (st.Inflight is not null) return; // finished on the next online pass
+        // A file never added because another file holds its name, gone from this disk: the
+        // student removed it. Nothing of it can be sent (the name is taken), its saves stay in
+        // this computer's safe copies, and nothing is left waiting for it.
+        if (localFile is null && st.FileId is null && st.RefusalKind == NameTakenKind)
+        {
+            foreach (var entry in st.Entries.Concat(st.Drafts)) state.Completed.Add(entry);
+            state.Files.Remove(key);
+            return;
+        }
 
         // One scan's absence is not a deletion: wait for a second scan before planning one.
         if (localFile is null && st.BaseHash is not null)
@@ -590,7 +620,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
                 journal.Append(new JournalEntry($"{state.DeviceId}:intent:{intent.Kind}:{path}:{localHash}:{st.BaseId}", intent.Kind, path.Value, intent.Hash, null, state.Email!));
             return;
         }
-        st.Refusal = null; st.RefusalKind = null; st.NewerWaiting = false;
+        st.Refusal = null; st.RefusalKind = null; st.NewerWaiting = false; st.RemovedWaiting = false;
         foreach (var action in plan.Actions)
         {
             CrashPoint?.Invoke("before-" + action.Kind);
@@ -640,6 +670,8 @@ public sealed partial class SyncEngine : IAsyncDisposable
     // When this computer first saw each open document's ~$ marker: one check-out question per open.
     private readonly Dictionary<string, DateTimeOffset> markerFirstSeen = new(StringComparer.OrdinalIgnoreCase);
     private bool recovered;
+    // A pass has read the disk since this start: the window's actions act on what it found.
+    private bool scanned;
 
     private LockOwnership OwnershipOf(RemoteLock? held)
     {
@@ -706,15 +738,15 @@ public sealed partial class SyncEngine : IAsyncDisposable
             if (entries.TryGetValue(id, out var entry) && entry.Hash == hash) { state.Completed.Add(id); st.Entries.Remove(id); }
     }
 
-    private void Remember(string kind, Guid? fileId, string path, string title, string detail)
+    private void Remember(string kind, Guid? fileId, string path, string title, string detail, string? itemDetail = null, string? reasonKind = null, string? who = null)
     {
         state.Remembered.RemoveAll(n => n.Path == path && n.Kind == kind);
-        state.Remembered.Add(new RememberedNotice(kind, fileId, path, title, detail, deps.Clock.GetUtcNow()));
+        state.Remembered.Add(new RememberedNotice(kind, fileId, path, title, detail, deps.Clock.GetUtcNow(), itemDetail, reasonKind, who));
     }
 
     // A pass's own notice about one file or folder; the view groups them by kind into cards.
-    private void Notice(string kind, Guid? fileId, string path, string detail, string? title = null)
-        => notes.Add(new Note(kind, fileId, path, detail, title));
+    private void Notice(string kind, Guid? fileId, string path, string detail, string? title = null, string? itemDetail = null, string? reasonKind = null, string? who = null)
+        => notes.Add(new Note(kind, fileId, path, detail, title, itemDetail, reasonKind, who));
 
     // A problem with one file (path) or with this computer (no path): the window gets a plain
     // sentence as one notice item, and only the log gets the raw text.
@@ -809,4 +841,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
 }
 
 // A pass's notice about one file or folder, before the view groups it into a card by kind.
-internal sealed record Note(string Kind, Guid? FileId, string Path, string Detail, string? Title = null);
+// ItemDetail is the item's own sentence in a card of several; ReasonKind and Who let such a card
+// name everyone in its title.
+internal sealed record Note(string Kind, Guid? FileId, string Path, string Detail, string? Title = null, string? ItemDetail = null,
+    string? ReasonKind = null, string? Who = null);

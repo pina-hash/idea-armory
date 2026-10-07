@@ -63,6 +63,12 @@ internal sealed class EngineState
     public List<PendingFolderOp> FolderOps { get; set; } = [];
     // Folder renames the server announced (folder_renamed), not yet moved here in one step.
     public List<RemoteFolderRename> RemoteFolderRenames { get; set; } = [];
+    // A folder this engine is moving on this disk right now (the team's rename, the window's
+    // rename, a project renamed on the site, a folder put back). Saved before the move and
+    // cleared, with the records following, in the same save after it: a stop in between is
+    // finished from what the disk shows on the next start, before the scan's files are read,
+    // so the moved files are never taken for missing ones and new ones.
+    public List<MovingFolder> MovingFolders { get; set; } = [];
     // Bulk adds (an unzip, a paste, a Pack and Go, Add files): one import summary each.
     public List<ImportRecord> Imports { get; set; } = [];
 
@@ -86,6 +92,7 @@ internal sealed class EngineState
         state.AbsentFolders = new(state.AbsentFolders ?? [], StringComparer.OrdinalIgnoreCase);
         state.FolderOps ??= [];
         state.RemoteFolderRenames ??= [];
+        state.MovingFolders ??= [];
         state.Imports ??= [];
         state.Migrate();
         return state;
@@ -172,6 +179,8 @@ internal sealed class FileState
     public bool ReleaseNotChecked { get; set; }
     public bool NewerWaiting { get; set; }
     public string? NewerAuthor { get; set; }
+    // The team removed the file and it is open here: it goes aside once it is closed.
+    public bool RemovedWaiting { get; set; }
     // The ownership the read-only rule was last applied from: this computer's last knowledge
     // of who holds the file, used again while offline.
     public LockOwnership? AppliedOwnership { get; set; }
@@ -205,7 +214,10 @@ internal sealed class FileState
 }
 
 internal sealed record KnownLock(string Email, Guid Device, string? DeviceName, DateTimeOffset Since);
-internal sealed record RememberedNotice(string Kind, Guid? FileId, string Path, string Title, string Detail, DateTimeOffset At);
+// ItemDetail is the item's own sentence in a card of several (who has its files checked out,
+// why it went back); ReasonKind and Who let such a card name everyone in its title.
+internal sealed record RememberedNotice(string Kind, Guid? FileId, string Path, string Title, string Detail, DateTimeOffset At,
+    string? ItemDetail = null, string? ReasonKind = null, string? Who = null);
 internal sealed record SideRecord(Guid VersionId, string Hash, string Reason, DateTimeOffset At);
 
 // One server write that was about to be sent. Re-sent with the same operation id on the
@@ -218,12 +230,25 @@ internal sealed record Inflight(string Kind, Guid Operation, string? EntryId = n
 // engine detected (Local), whose bytes already sit at To.
 internal sealed record PendingMove(Guid Operation, Guid FileId, string From, string To, bool Local = false);
 
-// A folder change made on this disk (vault-relative folders), durable before its server call.
+// A folder change (vault-relative folders), durable before its server call. Rename and delete
+// operations keep the paths they had when they happened and are sent in order, the server read
+// again between them, so a chain or a swap goes through its temporary name as it did on disk.
 // "rename": the student moved LocalFrom to LocalTo; the file states already follow the disk,
 // and armory_rename_folder is sent once (contract C5). "delete": the known folder LocalFrom is
-// gone; armory_delete_folder is sent once (C6). "putBack": a refused rename, waiting to move
-// LocalTo back to LocalFrom (something inside was open). Who refused is named in Refusal.
-internal sealed record PendingFolderOp(string Kind, Guid Operation, Guid ProjectId, string LocalFrom, string LocalTo, string? Refusal = null);
+// gone; armory_delete_folder is sent once (C6). "appRename" and "appDelete": the window's Rename
+// folder and Delete folder, sent with this id (a lost answer is replayed from the server's
+// receipt), then finished here (the folder moved in one step, or its files moved aside).
+// "putBack": a folder waiting to move from LocalTo back to LocalFrom (a refused rename, a folder
+// moved out of its project); with AtHome its records stayed at LocalFrom while it sits at
+// LocalTo, otherwise they follow the disk. Reason is why ("Maria Lopez has 2 of its files
+// checked out"), ReasonKind its kind and Who the people it names.
+internal sealed record PendingFolderOp(string Kind, Guid Operation, Guid ProjectId, string LocalFrom, string LocalTo, string? Reason = null,
+    string? ReasonKind = null, string? Who = null, bool AtHome = false);
+
+// A local folder move in progress (EngineState.MovingFolders). Kind says what follows it: "team",
+// "app" and "project" move the records with the folder; "putBack" and "projectPutBack" put a
+// folder back where it was (with RecordsStay, its records never left there).
+internal sealed record MovingFolder(string Kind, string From, string To, Guid? ProjectId = null, bool RecordsStay = false);
 
 // folder_renamed from the change feed, in the server's spelling (project-relative).
 internal sealed record RemoteFolderRename(Guid ProjectId, string From, string To);

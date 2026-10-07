@@ -424,7 +424,7 @@ public sealed partial class SyncEngine
         if (!VaultPath.TryCreate(st.Path, out var path, out _, options.VaultRoot)) return;
         // A removed file has nothing left to check out, whoever's lock removed it.
         if (!asked && !remote.File.Deleted) return;
-        if (st.AutoCheckIn && st.Request == CheckoutRequest.None && !st.TransientLock && !remote.File.Deleted && IsOpenNow(path)) return; // an add stays checked out while open
+        if (st.AutoCheckIn && st.Request == CheckoutRequest.None && !st.TransientLock && !remote.File.Deleted && IsOpenNow(TryLocal(st.Path, out var where) ? where.Path : path)) return; // an add stays checked out while open
         if (state.Moves.Any(m => m.FileId == id) || st.LocalMoveTo is not null) return;
         // Bytes Armory can't take can never be checked in: the file stays checked out.
         if (st.RefusalKind is GateKind or TooLargeKind && (st.Request == CheckoutRequest.CheckIn || st.AutoCheckIn))
@@ -434,7 +434,7 @@ public sealed partial class SyncEngine
             Save();
             return;
         }
-        local.TryGetValue(st.Path, out var file);
+        TryLocal(st.Path, out var file);
         // A lock taken only for a move or a removal is let go as soon as that is done, whatever
         // is on disk: Core planned the file as nobody's, so bytes saved meanwhile are kept as a
         // kept copy and never wait on this lock.
@@ -473,16 +473,17 @@ public sealed partial class SyncEngine
             return;
         }
         if (ownership is LockOwnership.OtherPerson or LockOwnership.MyOtherDevice) { Answer(st, CheckOutOutcome.Held); return; }
-        // Hashed now: the bytes may have changed since this pass's scan.
+        // Hashed now, where the file is on disk: the bytes may have changed since this pass's scan.
+        var disk = TryLocal(st.Path, out var here) ? here.Path : path;
         string? hash;
         try
         {
-            await using var stream = fs.OpenRead(path);
+            await using var stream = fs.OpenRead(disk);
             hash = await ContentAddress.ComputeAsync(stream, ct);
         }
         catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException) { hash = null; }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException) { Answer(st, CheckOutOutcome.CantRead); return; }
-        switch (CheckoutRules.NextCheckOutStep(st.Base, hash, RevisionOf(remote.File), IsOpenNow(path)))
+        switch (CheckoutRules.NextCheckOutStep(st.Base, hash, RevisionOf(remote.File), IsOpenNow(disk)))
         {
             case CheckOutStep.TakeLock:
                 if (await AcquireAsync(st, st.CheckOut!, ct))
@@ -498,7 +499,7 @@ public sealed partial class SyncEngine
             case CheckOutStep.KeepChangesFirst:
                 // Closed, the pass already kept the bytes and put the shared version back unless
                 // something stopped it; open, they stay until the file is closed.
-                if (IsOpenNow(path)) Answer(st, CheckOutOutcome.ChangedHere);
+                if (IsOpenNow(disk)) Answer(st, CheckOutOutcome.ChangedHere);
                 else checkOutResults[st] = CheckOutOutcome.Waiting;
                 break;
             case CheckOutStep.CloseFirst: Answer(st, CheckOutOutcome.CloseFirst); break;
@@ -561,6 +562,14 @@ public sealed partial class SyncEngine
         if (online is not null && remoteProjects.Count > 0) return;
         if (state.Email is null) await PassLockedAsync(ct);
         else online = await RefreshAsync(ct);
+    }
+
+    // A folder action needs to know what is on this disk too: before any pass since this start,
+    // one whole pass runs first.
+    private async Task EnsureScannedAsync(CancellationToken ct)
+    {
+        if (!scanned) await PassLockedAsync(ct);
+        await EnsureKnownAsync(ct);
     }
 
     // Files this computer has checked out under the paths (a file, or every file in a folder):

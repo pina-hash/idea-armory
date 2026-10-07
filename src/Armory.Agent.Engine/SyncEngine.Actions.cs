@@ -29,6 +29,8 @@ public sealed partial class SyncEngine
                 if (input.LocalHash is not null && input.LocalHash == st.BaseHash) Complete(st, input.LocalHash);
                 return true;
             case SyncActionKind.NotifyNewerVersionWaiting:
+                // Removed by the team while open here: nothing newer is waiting, it goes aside once closed.
+                if (input.Remote is { IsTombstone: true }) { st.RemovedWaiting = true; return true; }
                 st.NewerWaiting = true;
                 st.NewerAuthor = remote?.Current?.Author;
                 return true;
@@ -48,7 +50,8 @@ public sealed partial class SyncEngine
             case SyncActionKind.SaveSideVersion:
                 return await PreserveAsync(st, project, path, input.LocalHash!, action.ReleaseNotChecked, input.SavedRelease, remote, action.Why, ct);
             case SyncActionKind.MoveLocalToRecovery:
-                if (IsOpenNow(path)) { st.NewerWaiting = true; return false; }
+                // Removed by the team: it goes aside once it is closed, never while open.
+                if (IsOpenNow(path)) { st.RemovedWaiting = true; return false; }
                 var moved = fs.MoveToRecovery(path, input.LocalHash!);
                 if (!moved.Succeeded)
                 {
@@ -203,6 +206,11 @@ public sealed partial class SyncEngine
         if (st.FileId is null) return true;
         // A deletion goes to the whole team: look once more that the file is really gone.
         if (Exists(path)) return false;
+        // The team's file lives at another path now and this computer has it there: it moved
+        // (a folder move whose record a stop left behind), it was never removed here.
+        if (remoteById.TryGetValue(st.FileId.Value, out var moved) && !string.Equals(moved.Path.Value, path.Value, StringComparison.OrdinalIgnoreCase) &&
+            TryLocal(moved.Path.Value, out var there) && (there.Hash == st.BaseHash || there.Hash == moved.File.Current?.Hash))
+            return false;
         if (st.DeleteEntry is null)
         {
             st.DeleteEntry = state.NextId("delete");
@@ -272,6 +280,20 @@ public sealed partial class SyncEngine
         var removed = revive && st.FileId is { } known && remoteById.TryGetValue(known, out var record) && record.File.Deleted;
         if (st.FileId is not null && !removed) return true;
         var (folder, name) = Split(path);
+        // The name is looked up in what the server listed this pass first: a name another live
+        // file holds is refused here, with no call, until that file is renamed or removed (a Pack
+        // and Go with a hundred shared names costs no server call on later passes).
+        if (LiveNameHolder(project, name) is { } holder)
+        {
+            if (string.Equals(holder.Folder, folder, StringComparison.OrdinalIgnoreCase) && string.Equals(holder.Name, name, StringComparison.OrdinalIgnoreCase))
+            {
+                // Someone else added this same path first: it is one file. Core decides the rest.
+                st.FileId = holder.Id;
+                return false;
+            }
+            RefuseName(st, holder.Folder, holder.Name);
+            return false;
+        }
         Inflight flight;
         if (removed) flight = new Inflight("create", OperationIds.Derive(entryId, "revive", st.FileId.ToString()!), entryId, project.Id, null, folder, name);
         else
@@ -280,6 +302,15 @@ public sealed partial class SyncEngine
             flight = new Inflight("create", OperationIds.Derive(st.CreateEntry, "create"), st.CreateEntry, project.Id, null, folder, name);
         }
         return await SendAsync(st, flight, ct) && st.FileId is not null;
+    }
+
+    // The live file in the project that holds this name, as this pass read the project (names
+    // compare as the server compares them: the same letters in any case).
+    private RemoteFile? LiveNameHolder(ProjectState project, string name)
+    {
+        if (!remoteProjects.TryGetValue(project.Id, out var files)) return null;
+        var wanted = name.Normalize(System.Text.NormalizationForm.FormC);
+        return files.FirstOrDefault(f => !f.Deleted && string.Equals(f.Name.Normalize(System.Text.NormalizationForm.FormC), wanted, StringComparison.OrdinalIgnoreCase));
     }
 
     // Contract v2 (C4, D6): a name whose only holder is a removed file revives that file, with its
@@ -385,7 +416,9 @@ public sealed partial class SyncEngine
         {
             case "create":
                 st.FileId = await deps.Api.CreateFileAsync(f.ProjectId!.Value, f.Folder!, f.Name!, device, f.Operation, ct);
-                await ContinueRevivedHistoryAsync(st, f.ProjectId!.Value, ct);
+                // An id this computer has seen is a revival (or this same create answered again):
+                // its history goes on. A new id is a new file, with nothing to read for it.
+                if (remoteById.ContainsKey(st.FileId.Value)) await ContinueRevivedHistoryAsync(st, f.ProjectId!.Value, ct);
                 return true;
             case "lock":
             {
@@ -486,11 +519,18 @@ public sealed partial class SyncEngine
             st.FileId = id;
             return false;
         }
+        RefuseName(st, folder ?? "", existingName ?? f.Name!);
+        return false;
+    }
+
+    // A name another file in the project holds: this file stays on this computer, in the
+    // nameShared card, until one of them is renamed.
+    private void RefuseName(FileState st, string folder, string name)
+    {
         var project = state.Projects.GetValueOrDefault(st.ProjectId)?.Name ?? "This project";
-        st.Refusal = $"{project} already has {existingName ?? f.Name} in {(string.IsNullOrEmpty(folder) ? "its top folder" : folder.Replace("/", " \u203a ", StringComparison.Ordinal))}.";
+        st.Refusal = $"{project} already has {name} in {(string.IsNullOrEmpty(folder) ? "its top folder" : folder.Replace("/", " \u203a ", StringComparison.Ordinal))}.";
         st.RefusalKind = NameTakenKind;
         refused++;
-        return false;
     }
 
     private static Guid? Parse(string? id) => Guid.TryParse(id, out var value) ? value : null;
@@ -584,6 +624,24 @@ public sealed partial class SyncEngine
         foreach (var st in state.Files.Values.Where(f => f.FileId is not null && f.LocalMoveTo is null).ToArray())
         {
             if (!remoteById.TryGetValue(st.FileId!.Value, out var remote) || string.Equals(remote.Path.Value, st.Path, StringComparison.Ordinal)) continue;
+            // Already where the team has it on this disk (a folder move whose record a stop left
+            // behind): the record follows, nothing moves, and the file is never taken as gone.
+            if (!local.ContainsKey(st.Path) && !remote.File.Deleted && local.TryGetValue(remote.Path.Value, out var there) &&
+                (there.Hash == st.BaseHash || there.Hash == remote.File.Current?.Hash) && !HeldByWork(remote.Path.Value))
+            {
+                if (state.Files.TryGetValue(remote.Path.Value, out var newcomer) && !ReferenceEquals(newcomer, st))
+                {
+                    // Captured at its new place as a new file: that is this file.
+                    if ((newcomer.FileId is { } other && other != st.FileId) || newcomer.Inflight is not null) continue;
+                    state.Files.Remove(remote.Path.Value);
+                    foreach (var id in newcomer.Entries) if (!st.Entries.Contains(id)) st.Entries.Add(id);
+                    st.LastCaptured = newcomer.LastCaptured ?? st.LastCaptured;
+                }
+                Rekey(st, remote.Path.Value);
+                if (st.BaseHash is not null) Complete(st, st.BaseHash);
+                any = true;
+                continue;
+            }
             // A folder being renamed or put back here moves as one, never file by file.
             if (Held(st.Path) || Held(remote.Path.Value)) continue;
             if (!VaultPath.TryCreate(st.Path, out var from, out _, options.VaultRoot)) continue;
@@ -726,7 +784,8 @@ public sealed partial class SyncEngine
             Remember(NoticeKinds.FolderPutBack, st.FileId, from.Value,
                 who is null ? $"{from.Name} was put back where it was" : $"{from.Name} was put back: {who} has it checked out.",
                 who is null ? $"It can't be renamed right now, so Armory put it back. Try again later."
-                    : $"A file can be renamed only while nobody else has it checked out. Try again after it's checked in.");
+                    : $"A file can be renamed only while nobody else has it checked out. Try again after it's checked in.",
+                who is null ? "It was put back where it was." : $"{who} has it checked out.", who is null ? null : CheckedOutReason);
         }
         else
         {
@@ -787,7 +846,8 @@ public sealed partial class SyncEngine
         List<FileState> changed = [];
         foreach (var st in state.Files.Values)
         {
-            if (st.FileId is not { } id || !local.TryGetValue(st.Path, out var file)) continue;
+            // Where the file is on disk (in a folder waiting to go back, too: the rule holds there).
+            if (st.FileId is not { } id || !TryLocal(st.Path, out var file)) continue;
             // Archived (decision D8): its files are left as they are.
             if (state.Projects.GetValueOrDefault(st.ProjectId) is { Archived: true }) continue;
             LockOwnership ownership;
@@ -823,16 +883,17 @@ public sealed partial class SyncEngine
         Save();
     }
 
-    // One file's read-only bit, now (a check out makes it writable; a check in read-only).
-    // False when the bit could not be set: a lock is then never let go over a writable file.
+    // One file's read-only bit, now (a check out makes it writable; a check in read-only), where
+    // the file is on disk. False when the bit could not be set: a lock is then never let go over
+    // a writable file.
     private bool SetAttribute(VaultPath path, FileState st, LockOwnership ownership)
     {
-        if (!local.TryGetValue(path.Value, out var file)) return true;
+        if (!TryLocal(path.Value, out var file)) return true;
         try
         {
-            fs.ApplyLockAttribute(path, ownership);
+            fs.ApplyLockAttribute(file.Path, ownership);
             st.AppliedOwnership = ownership;
-            local[path.Value] = file with { ReadOnly = CheckoutRules.IsReadOnlyOnDisk(ownership) };
+            local[file.Path.Value] = file with { ReadOnly = CheckoutRules.IsReadOnlyOnDisk(ownership) };
             return true;
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
