@@ -416,6 +416,8 @@ public sealed class FolderScenarioTests
             Assert.Null(c.Engine.View.Activity.Waiting);
         }
         Assert.Equal(SyncStates.Synced, t.A.Engine.View.Sync.State);
+        // The window's folder actions say so in the page's own words.
+        Assert.Equal("Robot 2027 is archived. It no longer updates.", (await t.A.Engine.CreateFolderAsync(t.Project, "Drivetrain", "Notes")).Message);
         Assert.Equal("bracket v1", t.B.Text(Bracket));
         // Alex's check out there is still his, listed, and he can check it in.
         Assert.Equal(Bracket, Assert.Single(t.A.Engine.View.MyFiles).Path);
