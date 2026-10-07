@@ -115,7 +115,7 @@ public sealed class ViewTests
         card = t.B.Card(NoticeKinds.KeptCopy)!;
         Assert.Equal(NoticeTones.Info, card.Tone); // news now: nothing waits on the student
         Assert.Equal(SyncStates.Synced, t.B.Engine.View.Sync.State);
-        t.B.Engine.DismissNotice(card.Key);
+        await t.B.Engine.DismissNoticeAsync(card.Key);
         await t.B.SyncAsync();
         Assert.Null(t.B.Card(NoticeKinds.KeptCopy));
         // In the file's history, a save kept while checked out is routine; Maria's are not.

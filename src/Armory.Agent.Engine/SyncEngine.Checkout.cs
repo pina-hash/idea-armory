@@ -8,7 +8,8 @@ namespace Armory.Agent.Engine;
 // v2 check out (docs/agent/ENGINE.md, v2-design.md 4.2, decisions D1 to D4 and D18): what the
 // student asks for in the window. Each request is durable in its FileState before any server
 // call and is carried out inside a pass, under the pass gate, with operation ids derived from
-// it; a crash finishes it on the next pass. Every action answers with one plain sentence.
+// it; a crash finishes it on the next pass. Every action answers with one plain sentence. Every
+// action runs on the engine thread: called from any other thread, it marshals there first.
 public sealed partial class SyncEngine
 {
     private enum CheckOutOutcome { Unknown, Done, AlreadyMine, Held, Waiting, ChangedHere, CloseFirst, Removed, NotShared, CantRead }
@@ -25,6 +26,7 @@ public sealed partial class SyncEngine
     // copy and puts the shared version back), and then the rule is asked again.
     public async Task<ActionResult> CheckOutAsync(IReadOnlyList<string> paths, bool open = false, CancellationToken cancellationToken = default)
     {
+        if (!engineThread.IsCurrent) return await engineThread.InvokeAsync(() => CheckOutAsync(paths, open, cancellationToken));
         await passGate.WaitAsync(cancellationToken);
         try
         {
@@ -40,7 +42,7 @@ public sealed partial class SyncEngine
                 // open, or holds only for a move keeps it checked out. That is decided inside the
                 // pass once the server was read (KeepCheckedOut), so a check out refused offline
                 // never cancels a check in or an undo still waiting.
-                st.CheckOut ??= state.NextId("checkout");
+                st.CheckOut ??= NextId("checkout");
                 targets.Add((st, path));
             }
             if (targets.Count == 0)
@@ -48,7 +50,7 @@ public sealed partial class SyncEngine
                 if (online != true) return Offline("Files can be checked out once this computer is back online.");
                 return new(false, paths.Count == 1 && !IsFolder(paths[0]) ? $"{NameOf(paths[0])} isn't in Armory yet." : "There are no files there to check out.");
             }
-            Save();
+            await FlushAsync(); // the requests are durable before any server call
             checkOutResults.Clear();
             await PassLockedAsync(cancellationToken);
             // Ask again after one pass with the lock free (a download, or a kept copy put back).
@@ -62,7 +64,7 @@ public sealed partial class SyncEngine
                 st.CheckOut = null;
                 if (!checkOutResults.ContainsKey(st)) checkOutResults[st] = CheckOutOutcome.Waiting;
             }
-            Save();
+            await SettleAsync();
             PublishLocked();
             // A lock taken before the connection dropped is a check out all the same.
             if (!wasOnline && !targets.Any(t => checkOutResults.GetValueOrDefault(t.State) is CheckOutOutcome.Done or CheckOutOutcome.AlreadyMine))
@@ -168,6 +170,7 @@ public sealed partial class SyncEngine
     // Check in: commit what is on disk if it changed, make it read-only, then let the lock go.
     public async Task<ActionResult> CheckInAsync(IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
     {
+        if (!engineThread.IsCurrent) return await engineThread.InvokeAsync(() => CheckInAsync(paths, cancellationToken));
         await passGate.WaitAsync(cancellationToken);
         try
         {
@@ -176,7 +179,7 @@ public sealed partial class SyncEngine
             var targets = MyCheckOuts(paths);
             if (targets.Count == 0) return new(false, "Nothing there is checked out by you.");
             foreach (var (st, _) in targets) { st.Request = CheckoutRequest.CheckIn; st.CheckOut = null; }
-            Save();
+            await FlushAsync(); // the requests are durable before any server call
             releaseResults.Clear();
             await PassLockedAsync(cancellationToken);
             return ReleaseAnswer(targets, undo: false, [], kept: false);
@@ -189,6 +192,7 @@ public sealed partial class SyncEngine
     // read-only, then the lock is let go.
     public async Task<ActionResult> UndoCheckOutAsync(IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
     {
+        if (!engineThread.IsCurrent) return await engineThread.InvokeAsync(() => UndoCheckOutAsync(paths, cancellationToken));
         await passGate.WaitAsync(cancellationToken);
         try
         {
@@ -202,7 +206,7 @@ public sealed partial class SyncEngine
             var closed = targets.Except(open).ToList();
             var keptBefore = closed.SelectMany(t => t.State.Sides).Select(s => s.VersionId).ToHashSet();
             foreach (var (st, _) in closed) { st.Request = CheckoutRequest.Undo; st.CheckOut = null; }
-            Save();
+            await FlushAsync(); // the requests are durable before any server call
             releaseResults.Clear();
             await PassLockedAsync(cancellationToken);
             // Bytes not checked in were kept as a kept copy; the answer says so.
@@ -248,6 +252,7 @@ public sealed partial class SyncEngine
     // anything not checked in as a kept copy, as for any taken-back check out.
     public async Task<ActionResult> TakeBackAsync(Guid fileId, CancellationToken cancellationToken = default)
     {
+        if (!engineThread.IsCurrent) return await engineThread.InvokeAsync(() => TakeBackAsync(fileId, cancellationToken));
         await passGate.WaitAsync(cancellationToken);
         try
         {
@@ -265,6 +270,7 @@ public sealed partial class SyncEngine
             var operation = OperationIds.Derive("take back", fileId.ToString(), held.HolderDeviceId.ToString(), held.AcquiredAt.UtcTicks.ToString(CultureInfo.InvariantCulture),
                 state.DeviceId.ToString()!);
             bool broke;
+            projectsWritten.Add(remote.Project.Id);
             try { broke = await deps.Api.BreakLockAsync(fileId, state.DeviceId!.Value, operation, cancellationToken); }
             catch (ArmoryOfflineException) { online = false; return Offline("A file can be taken back once this computer is back online."); }
             catch (ArmoryRpcException error) when (error.IsForbidden) { return new(false, "Only a mentor or CAD lead can take back a file."); }
@@ -285,18 +291,19 @@ public sealed partial class SyncEngine
 
     // Open: the file's own program (SolidWorks for a part). Programs and scripts are refused
     // (decision D14). Needs no pass, so it never waits behind one.
-    public Task<ActionResult> LaunchAsync(string path, CancellationToken cancellationToken = default)
+    public Task<ActionResult> LaunchAsync(string path, CancellationToken cancellationToken = default) => engineThread.InvokeAsync(() =>
     {
         if (!VaultPath.TryCreate(path, out var file, out _, options.VaultRoot)) return Task.FromResult(new ActionResult(false, "That isn't a file in your Armory folder."));
         var outcome = fs.Launch(file);
         return Task.FromResult(outcome.Succeeded ? new ActionResult(true, $"Opening {file.Name}.") : new ActionResult(false, outcome.Problem ?? $"Armory couldn't open {file.Name}."));
-    }
+    });
 
     // Rename one file in its folder (addendum 7). A file Armory does not have is renamed on this
     // disk; a file in Armory is renamed for everyone through armory_move_file under a lock taken
     // for the move (v1 MoveAsync), refused while someone else has it checked out.
     public async Task<ActionResult> RenameFileAsync(string path, string newName, CancellationToken cancellationToken = default)
     {
+        if (!engineThread.IsCurrent) return await engineThread.InvokeAsync(() => RenameFileAsync(path, newName, cancellationToken));
         newName = newName?.Trim() ?? "";
         if (!VaultPath.TryCreate(path, out var from, out _, options.VaultRoot)) return new(false, "That isn't a file in your Armory folder.");
         if (!VaultPath.TryValidateName(newName, out var problem)) return new(false, problem ?? "That name can't be used for a file.");
@@ -337,7 +344,7 @@ public sealed partial class SyncEngine
                     Rekey(st, to.Value);
                     st.Refusal = null; st.RefusalKind = null; st.CreateEntry = null;
                 }
-                Save();
+                SaveNow();
                 await PassLockedAsync(cancellationToken);
                 return new(true, $"Renamed {from.Name} to {to.Name}.");
             }
@@ -345,7 +352,7 @@ public sealed partial class SyncEngine
                 return new(false, $"{Who(remote.File.Lock!)} has {from.Name} checked out, so it can't be renamed now.");
             operation = Guid.NewGuid();
             state.Moves.Add(new PendingMove(operation, fileId, from.Value, to.Value));
-            Save();
+            MarkDirty();
             await PassLockedAsync(cancellationToken);
         }
         finally { passGate.Release(); }
@@ -354,14 +361,20 @@ public sealed partial class SyncEngine
             : new(false, online != true ? $"You're offline. {from.Name} can be renamed once this computer is back online." : $"Armory couldn't rename {from.Name}. Someone may have it checked out, or {to.Name} is already used in the project.");
     }
 
-    // A notice card's Done or OK, or "prompt:..." for one check-out question. Applied by
-    // whoever holds the pass gate next, so a window click never waits behind a pass.
-    public void DismissNotice(string key)
+    // A notice card's Done or OK, or "prompt:..." for one check-out question. Applied with the
+    // next view (during a pass, within half a second), so a window click never waits behind a pass.
+    public void DismissNotice(string key) => _ = DismissNoticeAsync(key);
+
+    // The same, done when the dismissal is in the view (or, during a pass or an action, queued
+    // for the next one) and saved.
+    public Task DismissNoticeAsync(string key) => engineThread.InvokeAsync(async () =>
     {
-        if (string.IsNullOrWhiteSpace(key)) return;
+        if (string.IsNullOrWhiteSpace(key)) return false;
         pendingDismissals.Enqueue(key);
-        Publish();
-    }
+        RequestPublish();
+        if (passGate.CurrentCount > 0) await SettleAsync();
+        return true;
+    });
 
     // The student dismissed the card as the window last showed it: those items are hidden, even
     // when this moment of a pass has not rebuilt them yet. Items that arrived since are news and
@@ -378,7 +391,7 @@ public sealed partial class SyncEngine
             foreach (var id in shown) hidden.Add(id);
             any = true;
         }
-        if (any) Save();
+        if (any) MarkDirty();
     }
 
     // ---- Inside a pass -------------------------------------------------------------------
@@ -386,53 +399,77 @@ public sealed partial class SyncEngine
     // After the plans ran and the server was read again: check ins, undos, closed adds and
     // locks taken only for a move or a removal let their lock go once the file is clean, and
     // asked-for check outs take theirs.
+    // One file at a time, in path order: check outs are taken, and each lock to let go is made
+    // ready (read-only first); then the releases' in-flight records are saved together, once,
+    // and the releases are sent one by one.
     private async Task FinishRequestsAsync(CancellationToken ct)
     {
+        List<(FileState State, Inflight Flight)> releases = [];
         foreach (var st in state.Files.Values.ToArray())
         {
-            if (online != true) return;
+            if (online != true) break;
             try
             {
                 // An asked-for check out keeps whatever lock this computer holds (KeepCheckedOut);
                 // a check in or undo waiting on a lock it no longer holds is over.
-                if (st.CheckOut is null) await FinishReleaseAsync(st, ct);
+                if (st.CheckOut is null)
+                {
+                    if (PrepareRelease(st) is { } flight) releases.Add((st, flight));
+                }
                 else
                 {
                     if (st.FileId is { } id && remoteById.TryGetValue(id, out var remote) && OwnershipOf(remote.File.Lock) != LockOwnership.ThisDevice) LetGoDone(st);
                     await FinishCheckOutAsync(st, ct);
                 }
             }
-            catch (ArmoryOfflineException) { online = false; return; }
+            catch (ArmoryOfflineException) { online = false; }
+            catch (Exception error) when (error is ArmoryClientException or IOException or UnauthorizedAccessException)
+            { FileProblem(st.Path, error); }
+        }
+        if (releases.Count > 0 && online == true) await FlushAsync();
+        foreach (var (st, flight) in releases)
+        {
+            if (online != true)
+            {
+                // Never sent: decided again on the next pass.
+                if (ReferenceEquals(st.Inflight, flight)) st.Inflight = null;
+                MarkDirty();
+                continue;
+            }
+            try { await SendReleaseAsync(st, flight, ct); }
+            catch (ArmoryOfflineException) { online = false; }
             catch (Exception error) when (error is ArmoryClientException or IOException or UnauthorizedAccessException)
             { FileProblem(st.Path, error); }
         }
     }
 
-    private async Task FinishReleaseAsync(FileState st, CancellationToken ct)
+    // A check in, an undo, a closed add or a lock held only for a move or a removal, once the file
+    // is clean: made read-only, and its release recorded in flight (null when it is not ready).
+    private Inflight? PrepareRelease(FileState st)
     {
-        if (st.Inflight is not null || st.FileId is not { } id || !remoteById.TryGetValue(id, out var remote)) return;
+        if (st.Inflight is not null || st.FileId is not { } id || !remoteById.TryGetValue(id, out var remote)) return null;
         var asked = st.Request != CheckoutRequest.None || st.AutoCheckIn || st.TransientLock;
         if (remote.File.Lock is not { IsLive: true } held || OwnershipOf(held) != LockOwnership.ThisDevice)
         {
             // Taken back, or let go already: nothing is left to check in or undo here.
-            if (!asked) return;
+            if (!asked) return null;
             if (st.Request != CheckoutRequest.None) releaseResults[st] = ReleaseOutcome.TakenBack;
             st.Request = CheckoutRequest.None; st.AutoCheckIn = false; st.TransientLock = false;
-            Save();
-            return;
+            MarkDirty();
+            return null;
         }
-        if (!VaultPath.TryCreate(st.Path, out var path, out _, options.VaultRoot)) return;
+        if (!VaultPath.TryCreate(st.Path, out var path, out _, options.VaultRoot)) return null;
         // A removed file has nothing left to check out, whoever's lock removed it.
-        if (!asked && !remote.File.Deleted) return;
-        if (st.AutoCheckIn && st.Request == CheckoutRequest.None && !st.TransientLock && !remote.File.Deleted && IsOpenNow(TryLocal(st.Path, out var where) ? where.Path : path)) return; // an add stays checked out while open
-        if (state.Moves.Any(m => m.FileId == id) || st.LocalMoveTo is not null) return;
+        if (!asked && !remote.File.Deleted) return null;
+        if (st.AutoCheckIn && st.Request == CheckoutRequest.None && !st.TransientLock && !remote.File.Deleted && IsOpenNow(TryLocal(st.Path, out var where) ? where.Path : path)) return null; // an add stays checked out while open
+        if (state.Moves.Any(m => m.FileId == id) || st.LocalMoveTo is not null) return null;
         // Bytes Armory can't take can never be checked in: the file stays checked out.
         if (st.RefusalKind is GateKind or TooLargeKind && (st.Request == CheckoutRequest.CheckIn || st.AutoCheckIn))
         {
             if (st.Request != CheckoutRequest.None) releaseResults[st] = ReleaseOutcome.Refused;
             st.Request = CheckoutRequest.None; st.AutoCheckIn = false;
-            Save();
-            return;
+            MarkDirty();
+            return null;
         }
         TryLocal(st.Path, out var file);
         // A lock taken only for a move or a removal is let go as soon as that is done, whatever
@@ -440,16 +477,23 @@ public sealed partial class SyncEngine
         // kept copy and never wait on this lock.
         var transientOnly = st.TransientLock && st.Request == CheckoutRequest.None && !st.AutoCheckIn;
         var clean = transientOnly || (remote.File.Deleted ? file is null : file?.Hash == st.BaseHash && st.Entries.Count == 0);
-        if (!clean) return;
+        if (!clean) return null;
         // Read-only before the lock goes, so the file is never writable without a check out. A
         // bit that can't be set now keeps the lock until a later pass can set it.
-        if (file is not null && !remote.File.Deleted && !SetAttribute(path, st, LockOwnership.Free)) return;
+        if (file is not null && !remote.File.Deleted && !SetAttribute(path, st, LockOwnership.Free)) return null;
         var flight = new Inflight("release", OperationIds.Derive("release", held.HolderDeviceId.ToString(), id.ToString(), held.AcquiredAt.UtcTicks.ToString(CultureInfo.InvariantCulture)),
             null, st.ProjectId, id, Device: held.HolderDeviceId);
-        if (!await SendAsync(st, flight, ct)) return;
+        st.Inflight = flight;
+        return flight;
+    }
+
+    // Sent once its in-flight record is on disk (FinishRequestsAsync saved them together).
+    private async Task SendReleaseAsync(FileState st, Inflight flight, CancellationToken ct)
+    {
+        if (!await SendDurableAsync(st, flight, ct)) return;
         if (st.Request != CheckoutRequest.None) releaseResults[st] = ReleaseOutcome.Released;
         st.Request = CheckoutRequest.None; st.AutoCheckIn = false; st.TransientLock = false;
-        Save();
+        MarkDirty();
     }
 
     private async Task FinishCheckOutAsync(FileState st, CancellationToken ct)
@@ -513,7 +557,7 @@ public sealed partial class SyncEngine
     {
         checkOutResults[st] = outcome;
         st.CheckOut = null;
-        Save();
+        MarkDirty();
     }
 
     // Nothing is waiting to let go of this file's lock any more.
@@ -538,7 +582,7 @@ public sealed partial class SyncEngine
             LetGoDone(st);
             any = true;
         }
-        if (any) Save();
+        if (any) MarkDirty();
     }
 
     // ---- Helpers ---------------------------------------------------------------------------

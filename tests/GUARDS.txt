@@ -284,4 +284,8 @@ Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.FolderSafetyTests|An_unzip_seen_over
 Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.FolderSafetyTests|A_folder_renamed_here_and_by_the_team_at_once_follows_the_team
 Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.FolderSafetyTests|A_file_removed_while_it_is_open_here_says_so
 # E3: the engine thread, files moved several at once, state saved in groups and in pieces, activity, and the 5,000-file import
+Armory.Agent.Engine.Tests|Armory.Agent.Engine.Tests.StateAndActivityTests|The_state_document_written_in_pieces_is_the_whole_document
+Armory.Agent.Engine.Tests|Armory.Agent.Engine.Tests.StateAndActivityTests|Every_field_of_a_file_record_marks_it_changed
+Armory.Agent.Engine.Tests|Armory.Agent.Engine.Tests.StateAndActivityTests|Ids_come_from_saved_blocks_and_never_repeat_after_a_restart
+Armory.Agent.Engine.Tests|Armory.Agent.Engine.Tests.StateAndActivityTests|The_activity_panel_says_what_moves_in_the_window_s_words
 Armory.Client.Tests|Armory.Client.Tests.ClientTests|A_storage_refusal_or_timeout_fails_one_transfer_and_a_dead_connection_is_offline

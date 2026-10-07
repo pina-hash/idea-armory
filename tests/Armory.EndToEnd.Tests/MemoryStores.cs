@@ -20,6 +20,7 @@ internal sealed class MemoryJournalStore : IJournalStore
 internal sealed class MemorySnapshotStore : ISnapshotStore
 {
     private readonly List<(SavedSnapshot Snapshot, byte[] Bytes)> items = [];
+    private readonly Dictionary<string, int> byId = new(StringComparer.Ordinal);
     public SavedSnapshot Capture(string id, VaultPath path, string author, Stream source)
     {
         using var copy = new MemoryStream();
@@ -28,24 +29,50 @@ internal sealed class MemorySnapshotStore : ISnapshotStore
         var snapshot = new SavedSnapshot(id, path.Value, Convert.ToHexStringLower(SHA256.HashData(bytes)), author);
         lock (items)
         {
-            var old = items.FirstOrDefault(i => i.Snapshot.Id == id);
-            if (old.Snapshot is not null)
+            if (byId.TryGetValue(id, out var at))
             {
-                if (old.Snapshot != snapshot) throw new InvalidDataException("A capture id cannot be reused for different bytes.");
-                return old.Snapshot;
+                var old = items[at].Snapshot;
+                if (old != snapshot) throw new InvalidDataException("A capture id cannot be reused for different bytes.");
+                return old;
             }
+            byId[id] = items.Count;
             items.Add((snapshot, bytes));
         }
         return snapshot;
     }
     public IReadOnlyList<SavedSnapshot> Enumerate() { lock (items) return items.Select(i => i.Snapshot).ToArray(); }
-    public Stream OpenRead(string id) { lock (items) return new MemoryStream(items.Single(i => i.Snapshot.Id == id).Bytes, writable: false); }
+    public Stream OpenRead(string id)
+    {
+        lock (items) return byId.TryGetValue(id, out var at) ? new MemoryStream(items[at].Bytes, writable: false) : throw new InvalidOperationException($"No snapshot {id}.");
+    }
     public IReadOnlyList<(SavedSnapshot Snapshot, byte[] Bytes)> All() { lock (items) return items.ToArray(); }
 }
 
+// Keeps the document in a buffer of its own, grown as needed and never shrunk, so 5,000 files
+// saved thousands of times do not allocate each time.
 internal sealed class MemoryStateStore : IEngineStateStore
 {
-    private byte[]? state;
-    public byte[]? Load() => state?.ToArray();
-    public void Save(byte[] value) => state = value.ToArray();
+    private readonly object gate = new();
+    private byte[] buffer = [];
+    private int length = -1;
+    public int Saves { get; private set; }
+    public byte[]? Load() { lock (gate) return length < 0 ? null : buffer.AsSpan(0, length).ToArray(); }
+    public void Save(byte[] value) => Save([value]);
+    public void Save(IReadOnlyList<ReadOnlyMemory<byte>> parts)
+    {
+        lock (gate)
+        {
+            var total = 0;
+            foreach (var part in parts) total += part.Length;
+            if (buffer.Length < total) buffer = new byte[Math.Max(total, buffer.Length * 2)];
+            var at = 0;
+            foreach (var part in parts)
+            {
+                part.Span.CopyTo(buffer.AsSpan(at));
+                at += part.Length;
+            }
+            length = total;
+            Saves++;
+        }
+    }
 }

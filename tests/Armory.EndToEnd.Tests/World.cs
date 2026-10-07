@@ -168,6 +168,8 @@ internal sealed class Computer : IAsyncDisposable
     public Action<string>? CrashPoint { get; set; }
     public TestClock Clock { get; } = new();
     public long MaximumFileBytes { get; set; } = BlobClient.MaximumPutBytes;
+    // How many files a pass moves at once (EngineOptions.TransferConcurrency); null is the default.
+    public int? TransferConcurrency { get; set; }
     public SyncEngine Engine { get; private set; } = null!;
     public SessionManager Sessions { get; private set; } = null!;
     public bool Offline { get => network.Offline; set => network.Offline = value; }
@@ -192,7 +194,11 @@ internal sealed class Computer : IAsyncDisposable
     {
         Sessions = new SessionManager(http, Secrets);
         var api = new ArmoryApi(new PostgrestClient(http, Sessions));
-        Engine = new SyncEngine(new EngineOptions { VaultRoot = World.Root, MaximumFileBytes = MaximumFileBytes }, new EngineDependencies
+        Engine = new SyncEngine(new EngineOptions
+        {
+            VaultRoot = World.Root, MaximumFileBytes = MaximumFileBytes,
+            TransferConcurrency = TransferConcurrency ?? EngineOptions.DefaultTransferConcurrency,
+        }, new EngineDependencies
         {
             Files = Disk, Journal = Journal, Snapshots = Snapshots, State = State, Sessions = Sessions, Api = api,
             Blobs = new BlobClient(http, http, world.Site.BaseUri, Sessions), ReleaseReader = ReleaseReader, Clock = Clock,

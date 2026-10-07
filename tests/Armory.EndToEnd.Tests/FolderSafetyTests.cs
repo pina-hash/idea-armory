@@ -167,7 +167,7 @@ public sealed class FolderSafetyTests
         Assert.Equal("Gearbox was put back: Maria Lopez has 1 of its files checked out.", Assert.Single(t.A.Engine.View.Notices).Title);
         Assert.All(await LiveFiles(t), f => Assert.Equal("Drivetrain/Gearbox", f.Folder));
 
-        t.A.Engine.DismissNotice(t.A.Card(NoticeKinds.FolderPutBack)!.Key);
+        await t.A.Engine.DismissNoticeAsync(t.A.Card(NoticeKinds.FolderPutBack)!.Key);
         t.A.RenameFolder("Robot 2027", "Robot X");
         CrashAt(t.A, "after-projectPutBack-folder-move");
         await Assert.ThrowsAsync<SimulatedCrash>(() => t.A.SyncAsync());

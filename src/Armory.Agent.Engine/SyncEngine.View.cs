@@ -35,13 +35,15 @@ public sealed partial class SyncEngine
         var files = state.Files.Values.ToArray();
         var pending = files.Count(Unsent);
         var notices = Notices(files);
+        var moving = Activity(files, pending);
         var sync = paused ? new SyncView(SyncStates.Paused, "Paused. Nothing uploads or downloads until you resume.", null, pending)
             : online == false ? new SyncView(SyncStates.Offline, "You're offline. Your work is safe on this computer.", pending > 0 ? null : LastChecked(), pending)
-            : syncing ? new SyncView(SyncStates.Syncing, "Checking for changes.", null, pending)
+            // While files move, the status line is the activity's line ("Downloading 412 of 1,280 files, ...").
+            : syncing ? new SyncView(SyncStates.Syncing, moving.Line ?? "Checking for changes.", null, pending)
             : notices.Any(n => n.Tone != NoticeTones.Info) ? new SyncView(SyncStates.Attention, "Everything else is saved. A few files need you.", LastChecked(), pending)
             : pending > 0 ? new SyncView(SyncStates.Syncing, "Uploading your saves.", null, pending)
             : new SyncView(SyncStates.Synced, "Everything is saved to Armory.", LastChecked(), 0);
-        return new AgentView(connection, new ConnectView(connectPhase, connectMessage), account, sync, Activity(pending), options.VaultRoot,
+        return new AgentView(connection, new ConnectView(connectPhase, connectMessage), account, sync, moving, options.VaultRoot,
             notices, Prompt(), MyFiles(files), Projects(), settings, effectiveTheme);
     }
 
@@ -64,14 +66,36 @@ public sealed partial class SyncEngine
 
     // ---- Activity ------------------------------------------------------------------------
 
-    // Stage E3 fills in what is moving right now; the waiting line for offline and paused works now.
-    private ActivityView Activity(int pending)
+    // What is moving right now (ActivityTracker), with what waits: files that upload once this
+    // computer is back online or resumed, or checked-out files whose changes are shared only at
+    // check in (v2-design.md 4.4).
+    private ActivityView Activity(FileState[] files, int pending)
     {
         WaitingView? waiting = null;
         if (pending > 0 && (paused || online == false))
             waiting = new WaitingView(pending, $"{Count(pending, "file is", "files are")} waiting to upload. {(pending == 1 ? "It uploads" : "They upload")} " +
                 (paused ? "when you resume." : "when this computer is back online."));
-        return new ActivityView(null, null, null, null, waiting, []);
+        else if (CheckedOutWithChanges(files) is var changed and > 0)
+            waiting = new WaitingView(changed, $"{(changed == 1 ? "1 checked-out file has" : $"{changed:N0} checked-out files have")} changes. Check {(changed == 1 ? "it" : "them")} in to share {(changed == 1 ? "it" : "them")}.");
+        activity.SetWaiting(waiting);
+        return activity.Snapshot();
+    }
+
+    // Files this computer has checked out whose bytes here differ from the shared version (not in
+    // an archived project, which says nothing, decision D8).
+    private int CheckedOutWithChanges(FileState[] files)
+    {
+        var count = 0;
+        foreach (var st in files)
+        {
+            if (st.FileId is not { } id || st.BaseHash is null || st.Request != CheckoutRequest.None || st.TransientLock) continue;
+            if (state.Projects.GetValueOrDefault(st.ProjectId) is { Archived: true }) continue;
+            var mine = remoteById.TryGetValue(id, out var remote)
+                ? !remote.File.Deleted && OwnershipOf(remote.File.Lock) == LockOwnership.ThisDevice
+                : KnownOwnership(st) == LockOwnership.ThisDevice;
+            if (mine && TryLocal(st.Path, out var file) && file.Hash != st.BaseHash) count++;
+        }
+        return count;
     }
 
     // ---- Notices -------------------------------------------------------------------------
@@ -186,7 +210,7 @@ public sealed partial class SyncEngine
             if (now.TryGetValue(key, out var items)) hidden.IntersectWith(items);
             if (!now.ContainsKey(key) || hidden.Count == 0) state.Dismissed.Remove(key);
         }
-        Save();
+        MarkDirty();
     }
 
     private static NoticeGroupView Group(RawGroup g)
@@ -351,9 +375,11 @@ public sealed partial class SyncEngine
                         file is not null && file.Hash != st.BaseHash, st.ReleaseNotChecked, null, null));
                     shown.Add(known.Value);
                 }
-            foreach (var remote in remoteProjects.GetValueOrDefault(project.Id) ?? [])
+            foreach (var listed in remoteProjects.GetValueOrDefault(project.Id) ?? [])
             {
-                if (remote.Deleted || !remoteById.TryGetValue(remote.Id, out var known)) continue;
+                // The file as this computer knows it now (its own lock changes since the read included).
+                if (listed.Deleted || !remoteById.TryGetValue(listed.Id, out var known)) continue;
+                var remote = known.File;
                 state.Files.TryGetValue(known.Path.Value, out var st);
                 TryLocal(known.Path.Value, out var file);
                 var ownership = OwnershipOf(remote.Lock);
@@ -465,16 +491,14 @@ public sealed partial class SyncEngine
 
     // ---- File detail ---------------------------------------------------------------------
 
-    public async Task<FileDetailView?> GetFileDetailAsync(Guid fileId, CancellationToken cancellationToken = default)
-    {
-        await passGate.WaitAsync(cancellationToken);
-        try { return await DetailLockedAsync(fileId, cancellationToken); }
-        finally { passGate.Release(); }
-    }
+    // On the engine thread, never behind a pass: the server's files as last published
+    // (publishedRemote), this computer's record and disk as they are between two steps of a pass.
+    public Task<FileDetailView?> GetFileDetailAsync(Guid fileId, CancellationToken cancellationToken = default)
+        => engineThread.InvokeAsync(() => DetailAsync(fileId, cancellationToken));
 
-    private async Task<FileDetailView?> DetailLockedAsync(Guid fileId, CancellationToken cancellationToken)
+    private async Task<FileDetailView?> DetailAsync(Guid fileId, CancellationToken cancellationToken)
     {
-        if (!remoteById.TryGetValue(fileId, out var remote)) return null;
+        if (!publishedRemote.TryGetValue(fileId, out var remote)) return null;
         IReadOnlyList<RemoteHistoryEntry> history;
         try { history = await deps.Api.FileHistoryAsync(fileId, cancellationToken); }
         catch (ArmoryClientException) { history = []; }

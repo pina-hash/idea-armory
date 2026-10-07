@@ -116,7 +116,18 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
         }
     }
 
+    // How long each Scan took (it reads and hashes every file, every time: the Windows adapter
+    // hashes again only what changed).
+    public List<TimeSpan> ScanTimes { get; } = [];
+
     public VaultScan Scan()
+    {
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        try { return ScanAll(); }
+        finally { lock (gate) ScanTimes.Add(System.Diagnostics.Stopwatch.GetElapsedTime(started)); }
+    }
+
+    private VaultScan ScanAll()
     {
         List<LocalFile> files = [];
         List<string> markers = [];

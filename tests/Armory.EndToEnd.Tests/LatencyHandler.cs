@@ -37,12 +37,16 @@ internal sealed class LatencyHandler(LatencyProfile profile, int sitePort, int r
     public long SiteRequests => Interlocked.Read(ref siteRequests);
     public long RpcRequests => Interlocked.Read(ref rpcRequests);
     public long StorageBytes => Interlocked.Read(ref storageBytes);
+    // A test's file storage trouble: an answer for a request to storage instead of storage's own
+    // (a refusal), or null to let it through.
+    public Func<HttpRequestMessage, HttpResponseMessage?>? StorageFault { get; set; }
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         var uri = request.RequestUri!;
         if (string.Equals(uri.Host, FakeNetworkHandler.S3Host, StringComparison.OrdinalIgnoreCase))
         {
+            if (StorageFault?.Invoke(request) is { } refused) return refused;
             Interlocked.Increment(ref storageRequests);
             if (request.Method == HttpMethod.Get) Interlocked.Increment(ref storageGets);
             var sent = request.Content?.Headers.ContentLength ?? 0;

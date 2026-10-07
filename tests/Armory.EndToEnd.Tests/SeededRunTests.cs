@@ -16,8 +16,9 @@ namespace Armory.EndToEnd.Tests;
 // file), check in, undo, and now and then clear the read-only attribute and save anyway.
 // Crashes land inside passes and inside check outs, check ins and undos, and the connection drops
 // inside them too, right after a lock was taken or let go (the pass carries on offline).
+// Even seeds move one file at a time and replay exactly; odd seeds move files several at once.
 // ARMORY_E2E_SEED=<n>
-// reproduces one seed; ARMORY_E2E_SEEDS=<count> changes the count (default 200);
+// reproduces one seed (an odd one up to the order in which concurrent transfers finish); ARMORY_E2E_SEEDS=<count> changes the count (default 200);
 // ARMORY_E2E_TRACE=1 prints every step to standard error.
 public sealed class SeededRunTests(ITestOutputHelper output)
 {
@@ -103,6 +104,15 @@ internal sealed class SeededRun(World world, Person mentor, int seed)
         await mentor.Api.AddMemberAsync(projectId, maria, MemberRole.Student, Guid.NewGuid());
         a = await world.ComputerAsync($"A{seed}", alex);
         b = await world.ComputerAsync($"B{seed}", maria);
+        // Even seeds move one file at a time, so their schedule of crash points is the one every
+        // seed always had and a failing seed replays exactly; odd seeds move them several at once
+        // (the default), so crashes and lost connections land among concurrent transfers too.
+        if (seed % 2 == 0)
+        {
+            a.TransferConcurrency = b.TransferConcurrency = 1;
+            a.Restart();
+            b.Restart();
+        }
         paths = [$"{project}/robot/plate.txt", $"{project}/robot/bracket.txt", $"{project}/class/gear.SLDPRT"];
         foreach (var path in paths) await SaveAsync(a, path);
         await SyncAsync(a);

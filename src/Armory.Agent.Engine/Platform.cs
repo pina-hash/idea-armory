@@ -99,24 +99,39 @@ public interface ISnapshotStore : ISaveSnapshotStore
     Stream OpenRead(string id);
 }
 
-// Durable, atomic replacement of the engine's whole state document.
+// Durable, atomic replacement of the engine's whole state document. The engine saves it as
+// pieces, written one after the other: the document is their concatenation.
 public interface IEngineStateStore
 {
     byte[]? Load();
     void Save(byte[] state);
+    void Save(IReadOnlyList<ReadOnlyMemory<byte>> parts)
+    {
+        var length = 0;
+        foreach (var part in parts) length += part.Length;
+        var state = new byte[length];
+        var at = 0;
+        foreach (var part in parts)
+        {
+            part.Span.CopyTo(state.AsSpan(at));
+            at += part.Length;
+        }
+        Save(state);
+    }
 }
 
 // Portable state store: write-through temp file, flush, then rename over the old file.
 public sealed class FileStateStore(string path) : IEngineStateStore
 {
     public byte[]? Load() => File.Exists(path) ? File.ReadAllBytes(path) : null;
-    public void Save(byte[] state)
+    public void Save(byte[] state) => Save([state]);
+    public void Save(IReadOnlyList<ReadOnlyMemory<byte>> parts)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
         var temp = path + ".pending";
-        using (var output = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough))
+        using (var output = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None, 64 * 1024, FileOptions.WriteThrough))
         {
-            output.Write(state);
+            foreach (var part in parts) output.Write(part.Span);
             output.Flush(true);
         }
         File.Move(temp, path, overwrite: true);

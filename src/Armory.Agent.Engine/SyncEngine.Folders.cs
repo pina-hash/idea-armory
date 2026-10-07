@@ -66,7 +66,7 @@ public sealed partial class SyncEngine
         foreach (var ps in state.Projects.Values.Where(p => p.Usable && !p.Archived && p.Folder.Length > 0).ToArray()) CheckProjectFolder(ps);
         PutFoldersBack();
         CountMissingFolders();
-        Save();
+        MarkDirty();
     }
 
     private static string Clean(string folder) => folder.Replace('\\', '/').Trim('/');
@@ -88,7 +88,7 @@ public sealed partial class SyncEngine
             FinishFolderMove(move, moveLocal: false);
             finished.Add((move.From, move.To));
         }
-        Save();
+        SaveNow();
         return finished;
     }
 
@@ -98,19 +98,22 @@ public sealed partial class SyncEngine
     private bool MoveFolderDurably(MovingFolder move)
     {
         state.MovingFolders.Add(move);
-        Save();
+        SaveNow();
+        var moving = local.Keys.Count(k => Inside(k, move.From));
+        activity.Moving(moving, move.To);
         var outcome = fs.MoveFolder(move.From, move.To);
+        activity.Moved(moving);
         if (!outcome.Succeeded)
         {
             state.MovingFolders.Remove(move);
-            Save();
+            SaveNow();
             deps.Log?.Invoke($"move folder {move.From} to {move.To}: {outcome.Problem}");
             return false;
         }
         CrashPoint?.Invoke($"after-{move.Kind}-folder-move");
         state.MovingFolders.Remove(move);
         FinishFolderMove(move, moveLocal: true);
-        Save();
+        SaveNow();
         return true;
     }
 
@@ -173,7 +176,7 @@ public sealed partial class SyncEngine
             else RekeyFolder(from, to, moveLocal: false); // its records follow the disk, and the put-back with them
             waiting = true;
         }
-        if (waiting) { Save(); return; }
+        if (waiting) { SaveNow(); return; }
         var source = ProjectOfFolder(from);
         if (source is null || source.Archived) return; // not a project this computer syncs, or archived (left as it is)
         if (Same(from, source.Folder))
@@ -181,7 +184,7 @@ public sealed partial class SyncEngine
             // The project's own folder (decision D16): put back, never followed, wherever it went
             // (into another project's folder too: its files never join that project).
             source.PutBackFrom = to;
-            Save();
+            SaveNow();
             return;
         }
         var target = ProjectOfFolder(to);
@@ -194,7 +197,7 @@ public sealed partial class SyncEngine
             {
                 state.FolderOps.Add(new PendingFolderOp(PutBackOp, Guid.NewGuid(), source.Id, from, to, "a folder can only move inside its project",
                     OutsideProjectReason, AtHome: true));
-                Save();
+                SaveNow();
             }
             else NewFilesLeftTheProject(from, to, target);
             return;
@@ -230,7 +233,7 @@ public sealed partial class SyncEngine
             }
             state.Imports.RemoveAll(i => Inside(i.Folder, from));
         }
-        Save();
+        SaveNow();
     }
 
     // A folder renamed (or moved inside its project) on this disk: its records follow the disk
@@ -242,13 +245,13 @@ public sealed partial class SyncEngine
         if (RekeyCollides(from, to))
         {
             state.FolderOps.Add(new PendingFolderOp(PutBackOp, Guid.NewGuid(), ps.Id, from, to, $"{Leaf(to)} still has files in Armory", NameInUseReason, AtHome: true));
-            Save();
+            SaveNow();
             return;
         }
-        var op = new PendingFolderOp(RenameOp, OperationIds.Derive(state.NextId("folder"), RenameOp), ps.Id, from, to);
+        var op = new PendingFolderOp(RenameOp, OperationIds.Derive(NextId("folder"), RenameOp), ps.Id, from, to);
         RekeyFolder(from, to, moveLocal: false);
         state.FolderOps.Add(op);
-        Save();
+        SaveNow();
     }
 
     // Without directory identity (VaultScan.FolderMoves null): a known folder that is gone,
@@ -317,7 +320,7 @@ public sealed partial class SyncEngine
                 // Its files come back where they belong.
                 RestoreFolder(op.LocalFrom, op.ReasonKind, op.Reason, op.Who);
             }
-            Save();
+            SaveNow();
             return;
         }
         var collides = !op.AtHome && RekeyCollides(op.LocalTo, op.LocalFrom);
@@ -414,7 +417,7 @@ public sealed partial class SyncEngine
         foreach (var known in state.KnownFolders.Where(k => Inside(k, ps.Folder)).ToArray()) state.AbsentFolders.Remove(known);
         Remember(NoticeKinds.ProjectPutBack, null, ps.Folder, $"The {ps.Folder} folder was put back",
             "A project's folder stays on this computer while you're in the project. Armory is downloading its files again.");
-        Save();
+        SaveNow();
     }
 
     // Known folders gone from this scan with files the server has in them.
@@ -483,7 +486,7 @@ public sealed partial class SyncEngine
             // answer was lost), never in Armory, or the team renamed the folder first.
             TeamRenamedItFirst(op, ps);
             state.FolderOps.Remove(op);
-            Save();
+            SaveNow();
             return;
         }
         var to = Relative(op.LocalTo, ps);
@@ -504,14 +507,14 @@ public sealed partial class SyncEngine
                 var (reason, kind, who) = await RenameRefusalAsync(error, op, ps, ct);
                 var putBack = new PendingFolderOp(PutBackOp, op.Operation, op.ProjectId, op.LocalFrom, op.LocalTo, reason, kind, who);
                 state.FolderOps[state.FolderOps.IndexOf(op)] = putBack;
-                Save();
+                SaveNow();
                 TryPutBack(putBack);
                 return;
             }
         }
         state.FolderOps.Remove(op);
         lastActivity = deps.Clock.GetUtcNow();
-        Save();
+        SaveNow();
     }
 
     private async Task<(string? Reason, string? Kind, string? Who)> RenameRefusalAsync(ArmoryRpcException error, PendingFolderOp op, ProjectState ps, CancellationToken ct)
@@ -556,7 +559,7 @@ public sealed partial class SyncEngine
         {
             state.FolderOps.Remove(op);
             state.AbsentFolders.Remove(op.LocalFrom);
-            Save();
+            SaveNow();
             return;
         }
         // ...and every file the team has in it now is one this computer had, as the team has it.
@@ -604,12 +607,12 @@ public sealed partial class SyncEngine
         ForgetFolder(op.LocalFrom);
         state.FolderOps.Remove(op);
         lastActivity = deps.Clock.GetUtcNow();
-        Save();
+        SaveNow();
     }
 
     // This computer has the file as the team has it now: its record's base is the file's current version.
     private bool HadAsTheTeamHasIt(RemoteFile file)
-        => file.Current is { } current && state.Files.Values.Any(f => f.FileId == file.Id && f.BaseId == current.Id.ToString());
+        => file.Current is { } current && state.WithFileId(file.Id).Any(f => f.BaseId == current.Id.ToString());
 
     // "Maria Lopez has newer work in it", "Maria Lopez and Sam Lee have newer work in it".
     private (string Text, string? Who) NewerWorkWords(IReadOnlyCollection<RemoteFile> newer)
@@ -654,7 +657,7 @@ public sealed partial class SyncEngine
                 OutsideProjectReason => "It was moved out of its project and then went missing, so its files are coming back where they belong.",
                 _ => "Armory couldn't remove it for the team, so its files are coming back. Try again later.",
             }, ItemOf(reason), reasonKind, who);
-        Save();
+        SaveNow();
     }
 
     // Who has files under a folder checked out, from this computer's own lock data (the
@@ -710,15 +713,9 @@ public sealed partial class SyncEngine
     {
         if (!staleProjects.Contains(ps.Id) && remoteProjects.ContainsKey(ps.Id)) return;
         var files = await deps.Api.ProjectFilesAsync(ps.Id, ct);
-        foreach (var (id, known) in remoteById.Where(r => r.Value.Project.Id == ps.Id).ToArray())
-        {
-            remoteById.Remove(id);
-            if (remoteByPath.TryGetValue(known.Path.Value, out var byPath) && byPath.File.Id == id) remoteByPath.Remove(known.Path.Value);
-        }
-        remoteProjects[ps.Id] = files;
-        foreach (var file in files) Know(ps, file);
+        KnowProject(ps, files);
         RememberHolders();
-        staleProjects.Remove(ps.Id);
+        PublishRemote();
     }
 
     // Every project a folder call changed, read again (only those: one call each, never the
@@ -731,7 +728,7 @@ public sealed partial class SyncEngine
             foreach (var id in staleProjects.ToArray())
                 if (state.Projects.TryGetValue(id, out var ps)) await FreshAsync(ps, ct);
                 else staleProjects.Remove(id);
-            Save();
+            MarkDirty();
             return true;
         }
         catch (ArmoryOfflineException) { return false; }
@@ -757,9 +754,9 @@ public sealed partial class SyncEngine
             // Moved out of it on their own (an Explorer move each), or still being sent: not yet.
             if (tracked.Any(f => f.LocalMoveTo is not null || f.Inflight is not null || state.Moves.Any(m => m.FileId == f.FileId))) continue;
             if (tracked.Any(f => VaultPath.TryCreate(f.Path, out var p, out _, options.VaultRoot) && Exists(p))) continue;
-            var op = new PendingFolderOp(DeleteOp, OperationIds.Derive(state.NextId("folder"), DeleteOp), ps.Id, folder, folder);
+            var op = new PendingFolderOp(DeleteOp, OperationIds.Derive(NextId("folder"), DeleteOp), ps.Id, folder, folder);
             state.FolderOps.Add(op);
-            Save();
+            SaveNow();
             try { await SendFolderDeleteAsync(op, ps, ct); }
             catch (ArmoryOfflineException) { online = false; break; }
             catch (ArmoryClientException error) { deps.Log?.Invoke($"folder delete {folder}: {error.Message}"); }
@@ -790,7 +787,7 @@ public sealed partial class SyncEngine
         }
         foreach (var ((from, to), count) in candidates.OrderBy(c => c.Key.From.Length))
             if (count >= 2) any |= TryMoveRemoteFolder(from, to, everyFile: true);
-        if (any) Save();
+        if (any) MarkDirty();
         return any;
     }
 
@@ -847,7 +844,7 @@ public sealed partial class SyncEngine
             // Nothing here to move: the records follow the new name.
             RekeyFolder(from, to, moveLocal: true);
             ps.Folder = to;
-            Save();
+            SaveNow();
             return;
         }
         if (MoveFolderDurably(new MovingFolder(ProjectMove, from, to, ps.Id))) return;
@@ -899,7 +896,7 @@ public sealed partial class SyncEngine
             ForgetFolder(folder);
             lastActivity = deps.Clock.GetUtcNow();
         }
-        Save();
+        MarkDirty();
     }
 
     private void ForgetFolder(string folder)
@@ -934,8 +931,7 @@ public sealed partial class SyncEngine
             if (now - import.At > ImportJoinWithin) continue;
             var joining = fresh.Where(p => state.Files[p].ProjectId == import.ProjectId && Inside(p, import.Folder)).ToHashSet(StringComparer.OrdinalIgnoreCase);
             if (joining.Count == 0) continue;
-            import.Paths.AddRange(fresh.Where(joining.Contains));
-            state.Imports[i] = import with { At = now };
+            state.Imports[i] = import with { Paths = [.. import.Paths, .. fresh.Where(joining.Contains)], At = now };
             fresh.RemoveAll(joining.Contains);
             changed = true;
         }
@@ -963,7 +959,7 @@ public sealed partial class SyncEngine
                 changed = true;
             }
         }
-        if (changed) Save();
+        if (changed) MarkDirty();
     }
 
     // The folder a new file came in with: the topmost folder that held nothing before (and was
@@ -1005,6 +1001,7 @@ public sealed partial class SyncEngine
     // team's as soon as a file is in it).
     public async Task<ActionResult> CreateFolderAsync(Guid projectId, string parent, string name, CancellationToken cancellationToken = default)
     {
+        if (!engineThread.IsCurrent) return await engineThread.InvokeAsync(() => CreateFolderAsync(projectId, parent, name, cancellationToken));
         name = name?.Trim() ?? "";
         if (!VaultPath.TryValidateName(name, out var problem)) return new(false, problem ?? "That name can't be used for a folder.");
         await passGate.WaitAsync(cancellationToken);
@@ -1036,6 +1033,7 @@ public sealed partial class SyncEngine
     // answer is asked again with the same id and finished here from the same record.
     public async Task<ActionResult> RenameFolderAsync(Guid projectId, string folder, string newName, CancellationToken cancellationToken = default)
     {
+        if (!engineThread.IsCurrent) return await engineThread.InvokeAsync(() => RenameFolderAsync(projectId, folder, newName, cancellationToken));
         newName = newName?.Trim() ?? "";
         if (!VaultPath.TryValidateName(newName, out var problem)) return new(false, problem ?? "That name can't be used for a folder.");
         await passGate.WaitAsync(cancellationToken);
@@ -1064,9 +1062,9 @@ public sealed partial class SyncEngine
             if (holders.Count > 0) return new(false, $"{name} can't be renamed now: {HoldersWords(holders, "its files").Text}.");
             if (!caseOnly && RekeyCollides(from, to)) return new(false, $"{newName} still has files in Armory. Try again in a moment.");
             if (online != true) return Offline("Folders can be renamed once this computer is back online.");
-            var op = new PendingFolderOp(AppRenameOp, OperationIds.Derive(state.NextId("folder"), AppRenameOp), ps.Id, from, to);
+            var op = new PendingFolderOp(AppRenameOp, OperationIds.Derive(NextId("folder"), AppRenameOp), ps.Id, from, to);
             state.FolderOps.Add(op);
-            Save();
+            SaveNow();
             ActionResult answer;
             try { answer = await SendAppRenameAsync(op, ps, cancellationToken); }
             catch (ArmoryOfflineException)
@@ -1108,7 +1106,7 @@ public sealed partial class SyncEngine
             {
                 deps.Log?.Invoke($"rename folder {op.LocalFrom}: {error.Message}");
                 state.FolderOps.Remove(op);
-                Save();
+                SaveNow();
                 if (FolderRefusal.TryParse(error.Details) is { IsTargetExists: true }) return new(false, $"{ps.Name} already has a folder named {newName}.");
                 if (error.IsInUse) return new(false, $"{name} can't be renamed now: {(await HoldersAsync(op.LocalFrom, ps, ct)).Text}.");
                 return new(false, $"Armory couldn't rename {name}. Try again in a moment.");
@@ -1118,7 +1116,7 @@ public sealed partial class SyncEngine
             !MoveFolderDurably(new MovingFolder(AppMove, op.LocalFrom, op.LocalTo, ps.Id)))
         {
             state.FolderOps.Remove(op);
-            Save();
+            SaveNow();
         }
         lastActivity = deps.Clock.GetUtcNow();
         return new(true, $"Renamed {name} to {newName}.");
@@ -1130,6 +1128,7 @@ public sealed partial class SyncEngine
     // like Rename folder.
     public async Task<ActionResult> DeleteFolderAsync(Guid projectId, string folder, CancellationToken cancellationToken = default)
     {
+        if (!engineThread.IsCurrent) return await engineThread.InvokeAsync(() => DeleteFolderAsync(projectId, folder, cancellationToken));
         await passGate.WaitAsync(cancellationToken);
         try
         {
@@ -1151,9 +1150,9 @@ public sealed partial class SyncEngine
             var holders = HeldUnder(path, ps);
             if (holders.Count > 0) return new(false, $"{name} can't be deleted now: {HoldersWords(holders, "its files").Text}.");
             if (online != true) return Offline("Folders can be deleted once this computer is back online.");
-            var op = new PendingFolderOp(AppDeleteOp, OperationIds.Derive(state.NextId("folder"), AppDeleteOp), ps.Id, path, path);
+            var op = new PendingFolderOp(AppDeleteOp, OperationIds.Derive(NextId("folder"), AppDeleteOp), ps.Id, path, path);
             state.FolderOps.Add(op);
-            Save();
+            SaveNow();
             ActionResult answer;
             try { answer = await SendAppDeleteAsync(op, ps, cancellationToken); }
             catch (ArmoryOfflineException)
@@ -1170,7 +1169,7 @@ public sealed partial class SyncEngine
             if (!answer.Ok) return answer;
             // Nothing of it on this computer but empty folders: gone at once.
             if (FolderOnDisk(path) && !local.Keys.Any(k => Inside(k, path)) && fs.DeleteEmptyFolder(path)) ForgetFolder(path);
-            Save();
+            SaveNow();
             // Kept copies first where needed, then recovery, then the empty folder (two passes at most).
             await PassLockedAsync(cancellationToken);
             if (local.Keys.Any(k => Inside(k, path))) await PassLockedAsync(cancellationToken);
@@ -1200,7 +1199,7 @@ public sealed partial class SyncEngine
             {
                 deps.Log?.Invoke($"delete folder {op.LocalFrom}: {error.Message}");
                 state.FolderOps.Remove(op);
-                Save();
+                SaveNow();
                 if (error.IsInUse) return new(false, $"{name} can't be deleted now: {(await HoldersAsync(op.LocalFrom, ps, ct)).Text}.");
                 return new(false, $"Armory couldn't delete {name}. Try again in a moment.");
             }
@@ -1209,7 +1208,7 @@ public sealed partial class SyncEngine
         foreach (var inside in localFolders.Where(f => Inside(f, op.LocalFrom))) state.KnownFolders.Add(inside);
         state.FolderOps.Remove(op);
         lastActivity = deps.Clock.GetUtcNow();
-        Save();
+        SaveNow();
         return new(true, removed == 0 ? $"Deleted {name}." : $"Deleted {name} and its {Count(removed, "file", "files")}. Their history is kept.");
     }
 
@@ -1217,6 +1216,7 @@ public sealed partial class SyncEngine
     // already there), then added by a pass. One import summary, however many there are.
     public async Task<ActionResult> AddFilesAsync(Guid projectId, string folder, IReadOnlyList<string> sources, CancellationToken cancellationToken = default)
     {
+        if (!engineThread.IsCurrent) return await engineThread.InvokeAsync(() => AddFilesAsync(projectId, folder, sources, cancellationToken));
         if (sources.Count == 0) return new(false, "");
         await passGate.WaitAsync(cancellationToken);
         try
@@ -1252,7 +1252,7 @@ public sealed partial class SyncEngine
             if (copied.Count > 0)
             {
                 state.Imports.Add(new ImportRecord(Guid.NewGuid(), ps.Id, target, copied, deps.Clock.GetUtcNow()));
-                Save();
+                SaveNow();
                 await PassLockedAsync(cancellationToken);
             }
             var where = Where(target);
@@ -1321,9 +1321,14 @@ public sealed partial class SyncEngine
         }
         for (var i = 0; i < state.Imports.Count; i++)
         {
+            // An import summary is replaced, never changed in place (the state document writes each once).
             var import = state.Imports[i];
-            for (var p = 0; p < import.Paths.Count; p++) if (Inside(import.Paths[p], from)) import.Paths[p] = Map(import.Paths[p]);
-            if (Inside(import.Folder, from)) state.Imports[i] = import with { Folder = Map(import.Folder) };
+            if (!Inside(import.Folder, from) && !import.Paths.Any(p => Inside(p, from))) continue;
+            state.Imports[i] = import with
+            {
+                Folder = Inside(import.Folder, from) ? Map(import.Folder) : import.Folder,
+                Paths = import.Paths.Select(p => Inside(p, from) ? Map(p) : p).ToList(),
+            };
         }
         for (var i = 0; i < createdThisPass.Count; i++) if (Inside(createdThisPass[i], from)) createdThisPass[i] = Map(createdThisPass[i]);
         RekeyDisk(from, to, moveLocal);

@@ -110,11 +110,13 @@ public sealed partial class SyncEngine
         var ownership = DesiredOwnership(st, OwnershipOf(remote.Lock), path);
         var readOnly = CheckoutRules.IsReadOnlyOnDisk(ownership);
         var staging = fs.CreateStaging(out var stagingName);
+        var transfer = activity.Start(Directions.Download, st.Path, current.Bytes);
+        var arrived = false;
         try
         {
-            await deps.Blobs.DownloadAsync(project.Id, current.Hash, current.Bytes, staging, ct);
+            await deps.Blobs.DownloadAsync(project.Id, current.Hash, current.Bytes, staging, ct, transfer);
             staging.Position = 0;
-            CrashPoint?.Invoke("before-replace");
+            Checkpoint("before-replace", ct);
             if (IsOpenNow(path)) { st.NewerWaiting = true; st.NewerAuthor = current.Author; return false; }
             var outcome = fs.Replace(path, input.LocalHash, staging, readOnly);
             if (!outcome.Succeeded)
@@ -123,9 +125,12 @@ public sealed partial class SyncEngine
                     outcome.Problem ?? "Replace refused");
                 return false;
             }
+            arrived = true;
         }
         finally
         {
+            if (arrived) activity.Finish(transfer);
+            else activity.Fail(transfer);
             await staging.DisposeAsync();
             fs.DeleteStaging(stagingName);
         }
@@ -139,8 +144,8 @@ public sealed partial class SyncEngine
         Complete(st, current.Hash);
         downloaded++;
         lastActivity = deps.Clock.GetUtcNow();
-        Save();
-        CrashPoint?.Invoke("after-download");
+        MarkDirty();
+        Checkpoint("after-download", ct);
         return true;
     }
 
@@ -213,9 +218,9 @@ public sealed partial class SyncEngine
             return false;
         if (st.DeleteEntry is null)
         {
-            st.DeleteEntry = state.NextId("delete");
+            st.DeleteEntry = NextId("delete");
             journal.Append(new JournalEntry(st.DeleteEntry, IntentKind.Tombstone, path.Value, null, null, state.Email!));
-            Save();
+            MarkDirty();
         }
         // Core is told a lock held only for a removal is nobody's; it is still held here.
         var holds = st.FileId is { } held && remoteById.TryGetValue(held, out var record) && OwnershipOf(record.File.Lock) == LockOwnership.ThisDevice;
@@ -252,15 +257,14 @@ public sealed partial class SyncEngine
     {
         var existing = SnapshotFor(st, hash);
         if (existing is not null) return existing;
-        var id = state.NextId("save");
-        Save();
+        var id = NextId("save");
         try
         {
             SavedSnapshot snapshot;
-            using (var source = fs.OpenRead(path)) snapshot = recorder.Record(id, path, state.Email!, source);
+            using (var source = fs.OpenRead(path)) snapshot = Record(id, path, state.Email!, source);
             st.Entries.Add(id);
             st.LastCaptured = snapshot.Hash;
-            Save();
+            MarkDirty();
             if (snapshot.Hash == hash) return snapshot;
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
@@ -309,9 +313,18 @@ public sealed partial class SyncEngine
     private RemoteFile? LiveNameHolder(ProjectState project, string name)
     {
         if (!remoteProjects.TryGetValue(project.Id, out var files)) return null;
-        var wanted = name.Normalize(System.Text.NormalizationForm.FormC);
-        return files.FirstOrDefault(f => !f.Deleted && string.Equals(f.Name.Normalize(System.Text.NormalizationForm.FormC), wanted, StringComparison.OrdinalIgnoreCase));
+        if (!liveNames.TryGetValue(project.Id, out var names))
+        {
+            // Built once per read of the project: the first live file with each name.
+            liveNames[project.Id] = names = new(StringComparer.OrdinalIgnoreCase);
+            foreach (var file in files)
+                if (!file.Deleted) names.TryAdd(file.Name.Normalize(System.Text.NormalizationForm.FormC), file);
+        }
+        return names.GetValueOrDefault(name.Normalize(System.Text.NormalizationForm.FormC));
     }
+
+    // Each project's live files by name (as the server compares names: the same letters in any case).
+    private readonly Dictionary<Guid, Dictionary<string, RemoteFile>> liveNames = [];
 
     // Contract v2 (C4, D6): a name whose only holder is a removed file revives that file, with its
     // id and history. The added bytes are committed on top of the revived file's current version:
@@ -340,16 +353,11 @@ public sealed partial class SyncEngine
         }
         else if (remoteById.TryGetValue(id, out var known)) current = known.File.Current;
         if (current is not null && st.Base is not { IsTombstone: false }) st.SetBase(new(current.Id.ToString(), current.Hash, current.Author));
-        foreach (var past in state.Files.Values.Where(f => f.FileId == id && !ReferenceEquals(f, st) && f.Inflight is null && !local.ContainsKey(f.Path)).ToArray())
+        foreach (var past in state.WithFileId(id, except: st).Where(f => f.Inflight is null && !local.ContainsKey(f.Path)))
             state.Files.Remove(past.Path);
     }
 
     private static string? ParentOf(FileState st) => Guid.TryParse(st.BaseId, out _) ? st.BaseId : null;
-    private long SizeOf(SavedSnapshot snapshot)
-    {
-        using var stream = deps.Snapshots.OpenRead(snapshot.Id);
-        return stream.Length;
-    }
 
     // The device that holds this file's live lock when it is one of this computer's ids
     // (a former id after a reconnect); otherwise this computer's current id.
@@ -366,17 +374,27 @@ public sealed partial class SyncEngine
     // cleared, and Core plans again from fresh state (the same intent re-derives its id).
     private async Task<bool> SendAsync(FileState st, Inflight flight, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested(); // a crash elsewhere in this pass: nothing more is saved or sent
         st.Inflight = flight;
+        await FlushAsync(); // group commit: durable before the call
+        return await SendDurableAsync(st, flight, ct);
+    }
+
+    // The write whose in-flight record is already on disk: sent, its answer applied, cleared.
+    private async Task<bool> SendDurableAsync(FileState st, Inflight flight, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
         wrote = true;
-        Save();
-        CrashPoint?.Invoke($"before-{flight.Kind}");
+        if (flight.ProjectId is { } written) projectsWritten.Add(written);
+        Checkpoint($"before-{flight.Kind}", ct);
         bool result;
         try { result = await SendRecordedAsync(st, flight, ct); }
         catch (ArmoryOfflineException) { online = false; throw; }
         catch (Exception error) when (error is ArmoryClientException or HashMismatchException or InvalidDataException or IOException or UnauthorizedAccessException)
         {
             st.Inflight = null;
-            if (flight.Kind == "create" && error is ArmoryRpcException { IsNameTaken: true } taken) result = AdoptOrRefuseName(st, flight, taken);
+            if (error is StorageTransferException) { FileProblem(st.Path, error); result = false; } // this file waits for the next try
+            else if (flight.Kind == "create" && error is ArmoryRpcException { IsNameTaken: true } taken) result = AdoptOrRefuseName(st, flight, taken);
             else if (flight.Kind is "lock" or "release" or "move")
             {
                 Problem(NoticeKinds.CantSend, st.Path, flight.Kind == "move" ? "The server didn't accept the rename, so it keeps its name for now."
@@ -384,12 +402,12 @@ public sealed partial class SyncEngine
                 result = false;
             }
             else { st.Refusal = PlainRefusal(error, state.Projects.GetValueOrDefault(st.ProjectId)); st.RefusalKind = RefusedKind; refused++; result = false; }
-            Save();
+            MarkDirty();
             return result;
         }
-        CrashPoint?.Invoke($"after-{flight.Kind}");
+        Checkpoint($"after-{flight.Kind}", ct);
         st.Inflight = null;
-        Save();
+        MarkDirty();
         return result;
     }
 
@@ -444,11 +462,22 @@ public sealed partial class SyncEngine
                 return false;
             case "commit":
             {
-                await UploadBlobAsync(f, ct);
-                CrashPoint?.Invoke("after-blob");
-                var answer = await deps.Api.CommitVersionWithReleaseAsync(f.FileId!.Value, Parse(f.ParentId), ContentObjectKey.FromHash(f.Hash!), f.Hash!, f.Bytes,
-                    device, f.Operation, f.SavedRelease, ct);
-                CrashPoint?.Invoke("after-commit-rpc");
+                var transfer = activity.Start(Directions.Upload, st.Path, f.Bytes);
+                CommitResult answer;
+                try
+                {
+                    await UploadBlobAsync(f, transfer, ct);
+                    Checkpoint("after-blob", ct);
+                    answer = await deps.Api.CommitVersionWithReleaseAsync(f.FileId!.Value, Parse(f.ParentId), ContentObjectKey.FromHash(f.Hash!), f.Hash!, f.Bytes,
+                        device, f.Operation, f.SavedRelease, ct);
+                }
+                catch
+                {
+                    activity.Fail(transfer);
+                    throw;
+                }
+                activity.Finish(transfer);
+                Checkpoint("after-commit-rpc", ct);
                 if (answer.Advanced)
                 {
                     st.SetBase(new(answer.VersionId.ToString(), f.Hash, state.Email!));
@@ -470,10 +499,21 @@ public sealed partial class SyncEngine
             case "side":
             case "archive":
             {
-                await UploadBlobAsync(f, ct);
-                CrashPoint?.Invoke("after-blob");
-                var id = await deps.Api.SaveSideVersionWithReleaseAsync(f.FileId!.Value, Parse(f.ParentId), ContentObjectKey.FromHash(f.Hash!), f.Hash!, f.Bytes,
-                    f.Reason ?? "conflict", device, f.Operation, f.SavedRelease, ct);
+                var transfer = activity.Start(Directions.Upload, st.Path, f.Bytes);
+                Guid id;
+                try
+                {
+                    await UploadBlobAsync(f, transfer, ct);
+                    Checkpoint("after-blob", ct);
+                    id = await deps.Api.SaveSideVersionWithReleaseAsync(f.FileId!.Value, Parse(f.ParentId), ContentObjectKey.FromHash(f.Hash!), f.Hash!, f.Bytes,
+                        f.Reason ?? "conflict", device, f.Operation, f.SavedRelease, ct);
+                }
+                catch
+                {
+                    activity.Fail(transfer);
+                    throw;
+                }
+                activity.Finish(transfer);
                 if (f.Kind == "side")
                 {
                     st.Preserved = f.Hash;
@@ -506,8 +546,8 @@ public sealed partial class SyncEngine
         sideVersions++;
     }
 
-    private async Task UploadBlobAsync(Inflight f, CancellationToken ct)
-        => await deps.Blobs.UploadAsync(f.ProjectId!.Value, f.Hash!, f.Bytes, () => deps.Snapshots.OpenRead(f.SnapshotId!), ct);
+    private async Task UploadBlobAsync(Inflight f, IProgress<long> progress, CancellationToken ct)
+        => await deps.Blobs.UploadAsync(f.ProjectId!.Value, f.Hash!, f.Bytes, () => deps.Snapshots.OpenRead(f.SnapshotId!), ct, progress);
 
     // The server refuses a name only while a live file holds it (a removed one is revived, C4).
     private bool AdoptOrRefuseName(FileState st, Inflight f, ArmoryRpcException error)
@@ -546,9 +586,11 @@ public sealed partial class SyncEngine
         {
             var project = state.Projects.GetValueOrDefault(st.ProjectId);
             if (project is null || !project.Usable) continue;
-            if (st.Inflight!.Kind is "release" or "tombstone") { st.Inflight = null; Save(); continue; }
-            try { await SendAsync(st, st.Inflight, ct); sent = true; }
+            if (st.Inflight!.Kind is "release" or "tombstone") { st.Inflight = null; MarkDirty(); continue; }
+            // Already on disk from before the stop: sent again as it is, with the same id.
+            try { await SendDurableAsync(st, st.Inflight, ct); sent = true; }
             catch (ArmoryOfflineException) { online = false; return sent; }
+            staleProjects.Add(project.Id);
         }
         return sent;
     }
@@ -570,7 +612,7 @@ public sealed partial class SyncEngine
                 if (entry.Hash == current?.Hash) continue; // the plan uploads the bytes on disk
                 if (entry.Hash == remote?.Current?.Hash || entry.Hash == st.BaseHash || st.Sides.Any(s => s.Hash == entry.Hash))
                 {
-                    state.Completed.Add(id); st.Entries.Remove(id); st.Drafts.Remove(id); Save();
+                    state.Completed.Add(id); st.Entries.Remove(id); st.Drafts.Remove(id); MarkDirty();
                     continue;
                 }
                 SolidWorksRelease? saved = null;
@@ -583,16 +625,16 @@ public sealed partial class SyncEngine
                     if (!gate.Allowed)
                     {
                         // Kept as a private draft on this computer; offered again if the gate changes.
-                        if (st.Entries.Remove(id)) { st.Drafts.Add(id); Save(); }
+                        if (st.Entries.Remove(id)) { st.Drafts.Add(id); MarkDirty(); }
                         continue;
                     }
                     notChecked = gate.ReleaseNotChecked;
                 }
                 try
                 {
-                    var snapshot = deps.Snapshots.Enumerate().First(s => s.Id == entry.SnapshotId);
+                    var snapshot = SnapshotById(entry.SnapshotId!) ?? throw new InvalidOperationException($"The safe copy {entry.SnapshotId} is missing.");
                     var bytes = SizeOf(snapshot);
-                    if (bytes > options.MaximumFileBytes) { if (st.Entries.Remove(id)) { st.Drafts.Add(id); Save(); } continue; }
+                    if (bytes > options.MaximumFileBytes) { if (st.Entries.Remove(id)) { st.Drafts.Add(id); MarkDirty(); } continue; }
                     if (!await EnsureServerFileAsync(st, project, path, id, revive: false, ct)) break;
                     var flight = new Inflight("archive", OperationIds.Derive(snapshot.Id, "side"), id, project.Id, st.FileId, ParentId: ParentOf(st),
                         Hash: entry.Hash, Bytes: bytes, SnapshotId: snapshot.Id, SavedRelease: saved?.Year, Reason: EarlierSaveReason, ReleaseNotChecked: notChecked);
@@ -661,7 +703,9 @@ public sealed partial class SyncEngine
                         sameName ? $"{from.Name} was moved" : $"{from.Name} was renamed");
                     continue;
                 }
+                activity.Moving(1, Parent(remote.Path.Value) ?? remote.Path.Value);
                 var outcome = fs.Move(from, remote.Path, file.Hash);
+                activity.Moved(1);
                 if (!outcome.Succeeded)
                 {
                     Problem(NoticeKinds.CantRead, from.Value, $"It was renamed to {remote.Path.Name} for the team, and Armory couldn't rename it here yet. Close any program that might be using it. Armory tries again by itself.",
@@ -674,7 +718,7 @@ public sealed partial class SyncEngine
             Rekey(st, remote.Path.Value);
             any = true;
         }
-        if (any) Save();
+        if (any) SaveNow();
         return any;
     }
 
@@ -711,7 +755,7 @@ public sealed partial class SyncEngine
             if (to is null || !VaultPath.TryCreate(to, out var target, out _, options.VaultRoot) || ProjectOf(target)?.Id != st.ProjectId) continue;
             st.LocalMoveTo = target.Value;
             state.Moves.Add(new PendingMove(Guid.NewGuid(), st.FileId.Value, st.Path, target.Value, Local: true));
-            Save();
+            MarkDirty();
         }
     }
 
@@ -722,9 +766,9 @@ public sealed partial class SyncEngine
         var any = false;
         foreach (var move in state.Moves.ToArray())
         {
-            var st = state.Files.Values.FirstOrDefault(f => f.FileId == move.FileId);
+            var st = state.FirstWithFileId(move.FileId);
             if (st is null || !VaultPath.TryCreate(move.To, out var to, out _, options.VaultRoot) || !VaultPath.TryCreate(move.From, out var from, out _, options.VaultRoot))
-            { state.Moves.Remove(move); moveResults[move.Operation] = false; Save(); continue; }
+            { state.Moves.Remove(move); moveResults[move.Operation] = false; MarkDirty(); continue; }
             remoteById.TryGetValue(move.FileId, out var remote);
             bool done;
             try
@@ -747,9 +791,11 @@ public sealed partial class SyncEngine
             state.Moves.Remove(move);
             moveResults[move.Operation] = done;
             if (move.Local) FinishLocalMove(st, from, to, done, remote.File?.Lock);
-            Save();
+            staleProjects.Add(st.ProjectId);
+            SaveNow();
         }
-        if (any && await RefreshAsync(ct)) ApplyRemoteMoves();
+        // The projects a move changed are read again (only those), and the team's moves follow.
+        if (any && await RefreshStaleAsync(ct)) ApplyRemoteMoves();
     }
 
     private void FinishLocalMove(FileState st, VaultPath from, VaultPath to, bool moved, RemoteLock? held)
@@ -799,6 +845,7 @@ public sealed partial class SyncEngine
 
     public async Task<bool> MoveAsync(VaultPath from, VaultPath to, CancellationToken cancellationToken = default)
     {
+        if (!engineThread.IsCurrent) return await engineThread.InvokeAsync(() => MoveAsync(from, to, cancellationToken));
         if (!from.IsValid || !to.IsValid) return false;
         Guid operation;
         await passGate.WaitAsync(cancellationToken);
@@ -810,7 +857,7 @@ public sealed partial class SyncEngine
             if (fs.IsOpen(from) || markerDocuments.Contains(from.Value) || state.Files.ContainsKey(to.Value) || Exists(to)) return false;
             operation = Guid.NewGuid();
             state.Moves.Add(new PendingMove(operation, st.FileId.Value, from.Value, to.Value));
-            Save();
+            MarkDirty();
         }
         finally { passGate.Release(); }
         await SyncOnceAsync(cancellationToken);
@@ -880,7 +927,7 @@ public sealed partial class SyncEngine
         {
             Problem(NoticeKinds.CantRead, null, "Armory couldn't set which files can be saved on this computer. It tries again by itself.", error.Message);
         }
-        Save();
+        MarkDirty();
     }
 
     // One file's read-only bit, now (a check out makes it writable; a check in read-only), where

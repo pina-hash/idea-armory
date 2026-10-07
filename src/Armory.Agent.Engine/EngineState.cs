@@ -21,8 +21,11 @@ public static class OperationIds
     }
 }
 
-// The engine's durable document. Saved atomically after every step that changes what the
-// engine knows, and always before a server write (the in-flight record).
+// The engine's durable document, replaced atomically on every save. A save is due before every
+// server write (the in-flight record, through the group commit in SyncEngine.Persistence.cs) and
+// before anything durable carries one of its ids; other changes are saved at the end of each
+// phase of a pass. Only the file records that changed since the last save are serialized again
+// (StateSerializer).
 internal sealed class EngineState
 {
     // 1 is 0.1.0. 2 is v2 check out (decision D15): see Migrate.
@@ -32,8 +35,19 @@ internal sealed class EngineState
     public Guid? DeviceId { get; set; }
     public long Sequence { get; set; }
     public Dictionary<Guid, ProjectState> Projects { get; set; } = [];
-    public Dictionary<string, FileState> Files { get; set; } = new(StringComparer.OrdinalIgnoreCase);
-    public HashSet<string> Completed { get; set; } = new(StringComparer.Ordinal);
+    private FileTable files = new();
+    public FileTable Files
+    {
+        get => files;
+        set
+        {
+            files = value ?? new();
+            files.Owner = this;
+            serializer = null;
+            foreach (var st in files.Values) Track(st);
+        }
+    }
+    public IdSet Completed { get; set; } = new();
     public List<PendingMove> Moves { get; set; } = [];
     // Device ids this vault was synced under before a reconnect. Their locks are still this
     // computer's, and writes under those locks use the holding id (the server accepts any
@@ -74,18 +88,100 @@ internal sealed class EngineState
 
     internal bool IsMine(Guid device) => device == DeviceId || FormerDevices.Contains(device);
 
-    internal string NextId(string kind) => $"{DeviceId}:{kind}:{++Sequence}";
+    // Ids (captures, removals, check outs, folder operations) are handed out from blocks:
+    // Sequence, as saved, is the end of the block in use, and it is saved before any id of a new
+    // block is used, so an id is never handed out twice, even after a crash, and a run of 5,000
+    // captures needs a save per block, not per id. The engine reserves (IdsRunOut, ReserveIds,
+    // then a save) before it takes one.
+    internal const long IdBlock = 1024;
+    private long issued = -1;
+    internal bool IdsRunOut => Issued >= Sequence;
+    private long Issued => issued < 0 ? Sequence : issued;
+    internal void ReserveIds()
+    {
+        issued = Issued;
+        Sequence = issued + IdBlock;
+    }
+    internal string NextId(string kind)
+    {
+        if (IdsRunOut) throw new InvalidOperationException("No id is reserved: reserve a block and save it first.");
+        issued = Issued + 1;
+        return $"{DeviceId}:{kind}:{issued}";
+    }
 
-    private static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web) { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull };
-    internal byte[] Serialize() => JsonSerializer.SerializeToUtf8Bytes(this, Options);
+    public EngineState() => files.Owner = this;
+
+    // File records by FileId, kept as FileId changes (FileState.FileId tells its owner). A record
+    // taken out of Files may stay in a list; lookups answer only records that are in Files.
+    private readonly Dictionary<Guid, List<FileState>> byFileId = [];
+    private void Track(FileState st)
+    {
+        st.Owner = this;
+        if (st.FileId is { } id) Index(st, id);
+    }
+
+    // Files tells its document of every record that comes and goes, and each record of every
+    // change (FileState.Changed): the FileId index and the serializer's blocks follow.
+    internal void FileAdded(string key, FileState st)
+    {
+        Track(st);
+        serializer?.Added(key, st);
+    }
+    internal void FileRemoved(FileState st) => serializer?.Removed(st);
+    internal void RecordChanged(FileState st) => serializer?.Changed(st);
+    internal void FileIdChanged(FileState st, Guid? old)
+    {
+        if (old is { } before && byFileId.TryGetValue(before, out var list))
+        {
+            list.Remove(st);
+            if (list.Count == 0) byFileId.Remove(before);
+        }
+        if (st.FileId is { } now) Index(st, now);
+    }
+    private void Index(FileState st, Guid id)
+    {
+        if (!byFileId.TryGetValue(id, out var list)) byFileId[id] = list = [];
+        if (!list.Contains(st)) list.Add(st);
+    }
+    private bool Holds(FileState st) => Files.TryGetValue(st.Path, out var current) && ReferenceEquals(current, st);
+    // The records with this FileId (almost always one), other than except.
+    internal List<FileState> WithFileId(Guid id, FileState? except = null)
+    {
+        List<FileState> found = [];
+        if (byFileId.TryGetValue(id, out var list))
+            foreach (var st in list)
+                if (!ReferenceEquals(st, except) && Holds(st)) found.Add(st);
+        return found;
+    }
+    internal FileState? FirstWithFileId(Guid id, FileState? except = null)
+    {
+        if (!byFileId.TryGetValue(id, out var list)) return null;
+        foreach (var st in list)
+            if (!ReferenceEquals(st, except) && Holds(st)) return st;
+        return null;
+    }
+
+    internal static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web)
+    {
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        // Set, not left to the first call, so StateSerializer can read the document's properties first.
+        TypeInfoResolver = new System.Text.Json.Serialization.Metadata.DefaultJsonTypeInfoResolver(),
+    };
+    private StateSerializer? serializer;
+    // The whole document, with only what changed since the last call serialized again.
+    internal byte[] Serialize() => StateSerializer.Join(SerializeParts(whole: true)!);
+    // The same as pieces to write one after the other (none of them is changed afterwards), or
+    // null when nothing in the document changed since the last call (unless whole).
+    internal IReadOnlyList<ReadOnlyMemory<byte>>? SerializeParts(bool whole) => (serializer ??= new StateSerializer(this)).Serialize(this, whole);
+    // The same document by the reflection serializer alone (tests compare the two).
+    internal byte[] SerializeWhole() => JsonSerializer.SerializeToUtf8Bytes(this, Options);
     internal static EngineState Load(IEngineStateStore store)
     {
         var bytes = store.Load();
         if (bytes is null || bytes.Length == 0) return new();
         var state = JsonSerializer.Deserialize<EngineState>(bytes, Options) ?? new();
-        // JSON does not preserve the comparers.
-        state.Files = new(state.Files, StringComparer.OrdinalIgnoreCase);
-        state.Completed = new(state.Completed, StringComparer.Ordinal);
+        // JSON does not preserve the comparers (Files keeps its own).
+        state.Completed ??= new();
         state.Dismissed = new(state.Dismissed, StringComparer.Ordinal);
         state.Revivals ??= [];
         state.KnownFolders = new(state.KnownFolders ?? [], StringComparer.OrdinalIgnoreCase);
@@ -158,62 +254,251 @@ internal sealed class ProjectState
 
 internal sealed class FileState
 {
-    public string Path { get; set; } = "";
-    public Guid ProjectId { get; set; }
-    public Guid? FileId { get; set; }
+    public FileState()
+    {
+        entries.Owner = this;
+        sides.Owner = this;
+        drafts.Owner = this;
+    }
+
+    // Moves on every change of a serialized field (a list's contents included), so the state
+    // document serializes this record again only when it changed (StateSerializer). A unit test
+    // sets each public property in turn and checks that it moves.
+    internal long Version { get; private set; }
+    internal void Changed()
+    {
+        Version++;
+        Owner?.RecordChanged(this);
+    }
+    // The serializer's block this record is written in.
+    internal StateSerializer.Block? Block;
+    // This record's entry in the files object as last written ("key":{...}), and for which key and version.
+    internal byte[]? Json;
+    internal string? JsonKey;
+    internal long JsonVersion = -1;
+
+    private string path = "";
+    private Guid projectId;
+    private string? baseId;
+    private string? baseHash;
+    private string? preserved;
+    private string? lastCaptured;
+    private ChangeList<string> entries = new();
+    private string? createEntry;
+    private string? deleteEntry;
+    private string? markerEntry;
+    private int attempt;
+    private bool breakNotice;
+    private string? refusal;
+    private string? refusalKind;
+    private bool releaseNotChecked;
+    private bool newerWaiting;
+    private string? newerAuthor;
+    private bool removedWaiting;
+    private LockOwnership? appliedOwnership;
+    private KnownLock? holder;
+    private ChangeList<SideRecord> sides = new();
+    private Inflight? inflight;
+    private int absentScans;
+    private string? localMoveTo;
+    private ChangeList<string> drafts = new();
+    private string? checkOut;
+    private CheckoutRequest request;
+    private bool autoCheckIn;
+    private bool transientLock;
+
+    private void Set<T>(ref T field, T value)
+    {
+        if (EqualityComparer<T>.Default.Equals(field, value)) return;
+        field = value;
+        Changed();
+    }
+
+    private ChangeList<T> Owned<T>(ChangeList<T>? list)
+    {
+        list ??= new();
+        list.Owner = this;
+        Changed();
+        return list;
+    }
+
+    public string Path { get => path; set => Set(ref path, value); }
+    public Guid ProjectId { get => projectId; set => Set(ref projectId, value); }
+    private Guid? fileId;
+    public Guid? FileId
+    {
+        get => fileId;
+        set
+        {
+            if (fileId == value) return;
+            var old = fileId;
+            fileId = value;
+            Changed();
+            Owner?.FileIdChanged(this, old);
+        }
+    }
+    // The state document this record belongs to, which keeps it findable by FileId.
+    internal EngineState? Owner { get; set; }
     // BASE: the remote revision the local file last matched. A tombstone base has a null hash.
-    public string? BaseId { get; set; }
-    public string? BaseHash { get; set; }
-    public string? Preserved { get; set; }
-    public string? LastCaptured { get; set; }
-    public List<string> Entries { get; set; } = [];
-    public string? CreateEntry { get; set; }
-    public string? DeleteEntry { get; set; }
+    public string? BaseId { get => baseId; set => Set(ref baseId, value); }
+    public string? BaseHash { get => baseHash; set => Set(ref baseHash, value); }
+    public string? Preserved { get => preserved; set => Set(ref preserved, value); }
+    public string? LastCaptured { get => lastCaptured; set => Set(ref lastCaptured, value); }
+    public ChangeList<string> Entries { get => entries; set => entries = Owned(value); }
+    public string? CreateEntry { get => createEntry; set => Set(ref createEntry, value); }
+    public string? DeleteEntry { get => deleteEntry; set => Set(ref deleteEntry, value); }
     // 0.1.0 only: the journal intent of a lock its ~$ marker took. v2 markers never lock;
     // Migrate completes it.
-    public string? MarkerEntry { get; set; }
-    public int Attempt { get; set; }
-    public bool BreakNotice { get; set; }
-    public string? Refusal { get; set; }
-    public string? RefusalKind { get; set; }
-    public bool ReleaseNotChecked { get; set; }
-    public bool NewerWaiting { get; set; }
-    public string? NewerAuthor { get; set; }
+    public string? MarkerEntry { get => markerEntry; set => Set(ref markerEntry, value); }
+    public int Attempt { get => attempt; set => Set(ref attempt, value); }
+    public bool BreakNotice { get => breakNotice; set => Set(ref breakNotice, value); }
+    public string? Refusal { get => refusal; set => Set(ref refusal, value); }
+    public string? RefusalKind { get => refusalKind; set => Set(ref refusalKind, value); }
+    public bool ReleaseNotChecked { get => releaseNotChecked; set => Set(ref releaseNotChecked, value); }
+    public bool NewerWaiting { get => newerWaiting; set => Set(ref newerWaiting, value); }
+    public string? NewerAuthor { get => newerAuthor; set => Set(ref newerAuthor, value); }
     // The team removed the file and it is open here: it goes aside once it is closed.
-    public bool RemovedWaiting { get; set; }
+    public bool RemovedWaiting { get => removedWaiting; set => Set(ref removedWaiting, value); }
     // The ownership the read-only rule was last applied from: this computer's last knowledge
     // of who holds the file, used again while offline.
-    public LockOwnership? AppliedOwnership { get; set; }
+    public LockOwnership? AppliedOwnership { get => appliedOwnership; set => Set(ref appliedOwnership, value); }
     // The file's live check out as this computer last knew it (from the server, or from its own
     // check out and let go), so the window still says who has it while offline.
-    public KnownLock? Holder { get; set; }
-    public List<SideRecord> Sides { get; set; } = [];
-    public Inflight? Inflight { get; set; }
+    public KnownLock? Holder { get => holder; set => Set(ref holder, value); }
+    public ChangeList<SideRecord> Sides { get => sides; set => sides = Owned(value); }
+    public Inflight? Inflight { get => inflight; set => Set(ref inflight, value); }
     // Consecutive scans that did not find a file this computer had: a deletion is planned
     // only after two, so one bad scan never deletes for the team.
-    public int AbsentScans { get; set; }
+    public int AbsentScans { get => absentScans; set => Set(ref absentScans, value); }
     // An Explorer rename or move of this file to another path, being sent as a server move.
-    public string? LocalMoveTo { get; set; }
+    public string? LocalMoveTo { get => localMoveTo; set => Set(ref localMoveTo, value); }
     // Journaled saves the release gate refused: private drafts kept on this computer. They
     // never hold the lock and are offered again whenever the gate would allow them.
-    public List<string> Drafts { get; set; } = [];
+    public ChangeList<string> Drafts { get => drafts; set => drafts = Owned(value); }
     // v2 check out (docs/agent/ENGINE.md). Each request is durable here before any server call,
     // so a crash finishes it on the next pass.
     // CheckOut: the student asked to check this file out; the lock's operation id derives from it.
-    public string? CheckOut { get; set; }
+    public string? CheckOut { get => checkOut; set => Set(ref checkOut, value); }
     // Check in or Undo check out, asked for a file this computer has checked out.
-    public CheckoutRequest Request { get; set; }
+    public CheckoutRequest Request { get => request; set => Set(ref request, value); }
     // A file added while open stays checked out to its creator and is checked in when it
     // closes (decision D2). A closed add is checked in by the same pass.
-    public bool AutoCheckIn { get; set; }
+    public bool AutoCheckIn { get => autoCheckIn; set => Set(ref autoCheckIn, value); }
     // The lock was taken only for a move or a removal, and is let go once that is done.
-    public bool TransientLock { get; set; }
+    public bool TransientLock { get => transientLock; set => Set(ref transientLock, value); }
 
     [JsonIgnore] public Revision? Base => BaseId is null ? null : new(BaseId, BaseHash, "");
     public void SetBase(Revision? revision) { BaseId = revision?.Id; BaseHash = revision?.Hash; }
 }
 
 internal sealed record KnownLock(string Email, Guid Device, string? DeviceName, DateTimeOffset Since);
+
+// The file records by vault path, compared as Windows compares paths. Every record added,
+// replaced or removed is told to the state document (EngineState.FileAdded, FileRemoved).
+internal sealed class FileTable : IDictionary<string, FileState>, IReadOnlyDictionary<string, FileState>
+{
+    private readonly Dictionary<string, FileState> items = new(StringComparer.OrdinalIgnoreCase);
+    internal EngineState? Owner { get; set; }
+
+    public FileState this[string key]
+    {
+        get => items[key];
+        set
+        {
+            if (items.TryGetValue(key, out var old))
+            {
+                if (ReferenceEquals(old, value)) return;
+                items.Remove(key);
+                Owner?.FileRemoved(old);
+            }
+            items[key] = value;
+            Owner?.FileAdded(key, value);
+        }
+    }
+    public int Count => items.Count;
+    public bool IsReadOnly => false;
+    public Dictionary<string, FileState>.KeyCollection Keys => items.Keys;
+    public Dictionary<string, FileState>.ValueCollection Values => items.Values;
+    ICollection<string> IDictionary<string, FileState>.Keys => items.Keys;
+    ICollection<FileState> IDictionary<string, FileState>.Values => items.Values;
+    IEnumerable<string> IReadOnlyDictionary<string, FileState>.Keys => items.Keys;
+    IEnumerable<FileState> IReadOnlyDictionary<string, FileState>.Values => items.Values;
+    public void Add(string key, FileState value)
+    {
+        items.Add(key, value);
+        Owner?.FileAdded(key, value);
+    }
+    public bool Remove(string key)
+    {
+        if (!items.Remove(key, out var old)) return false;
+        Owner?.FileRemoved(old);
+        return true;
+    }
+    public bool ContainsKey(string key) => items.ContainsKey(key);
+    public bool TryGetValue(string key, [System.Diagnostics.CodeAnalysis.MaybeNullWhen(false)] out FileState value) => items.TryGetValue(key, out value);
+    public void Clear()
+    {
+        var old = items.Values.ToArray();
+        items.Clear();
+        foreach (var st in old) Owner?.FileRemoved(st);
+    }
+    public Dictionary<string, FileState>.Enumerator GetEnumerator() => items.GetEnumerator();
+    IEnumerator<KeyValuePair<string, FileState>> IEnumerable<KeyValuePair<string, FileState>>.GetEnumerator() => items.GetEnumerator();
+    System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => items.GetEnumerator();
+    void ICollection<KeyValuePair<string, FileState>>.Add(KeyValuePair<string, FileState> item) => Add(item.Key, item.Value);
+    bool ICollection<KeyValuePair<string, FileState>>.Contains(KeyValuePair<string, FileState> item) => ((ICollection<KeyValuePair<string, FileState>>)items).Contains(item);
+    void ICollection<KeyValuePair<string, FileState>>.CopyTo(KeyValuePair<string, FileState>[] array, int arrayIndex) => ((ICollection<KeyValuePair<string, FileState>>)items).CopyTo(array, arrayIndex);
+    bool ICollection<KeyValuePair<string, FileState>>.Remove(KeyValuePair<string, FileState> item) => TryGetValue(item.Key, out var value) && ReferenceEquals(value, item.Value) && Remove(item.Key);
+}
+
+// A FileState's list: a change to its contents is a change of the record (FileState.Version).
+internal sealed class ChangeList<T> : System.Collections.ObjectModel.Collection<T>
+{
+    internal FileState? Owner { get; set; }
+    protected override void InsertItem(int index, T item) { base.InsertItem(index, item); Owner?.Changed(); }
+    protected override void RemoveItem(int index) { base.RemoveItem(index); Owner?.Changed(); }
+    protected override void SetItem(int index, T item) { base.SetItem(index, item); Owner?.Changed(); }
+    protected override void ClearItems() { base.ClearItems(); Owner?.Changed(); }
+    internal void RemoveRange(int index, int count)
+    {
+        for (var i = 0; i < count; i++) base.RemoveItem(index);
+        if (count > 0) Owner?.Changed();
+    }
+}
+
+// The ids of completed journal entries: only ever added to, and kept in the order they were
+// added, so the state document writes again only the ids added since its last save.
+internal sealed class IdSet : ICollection<string>, IReadOnlyCollection<string>
+{
+    private readonly HashSet<string> set = new(StringComparer.Ordinal);
+    private readonly List<string> order = [];
+    public int Count => order.Count;
+    public bool IsReadOnly => false;
+    // Moves on any removal, so a cached copy of the list knows to start again.
+    internal int Removals { get; private set; }
+    internal IReadOnlyList<string> InOrder => order;
+    public void Add(string item)
+    {
+        if (set.Add(item)) order.Add(item);
+    }
+    public bool Contains(string item) => set.Contains(item);
+    public bool Remove(string item)
+    {
+        if (!set.Remove(item)) return false;
+        order.Remove(item);
+        Removals++;
+        return true;
+    }
+    public void Clear()
+    {
+        set.Clear();
+        order.Clear();
+        Removals++;
+    }
+    public void CopyTo(string[] array, int arrayIndex) => order.CopyTo(array, arrayIndex);
+    public IEnumerator<string> GetEnumerator() => order.GetEnumerator();
+    System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+}
 // ItemDetail is the item's own sentence in a card of several (who has its files checked out,
 // why it went back); ReasonKind and Who let such a card name everyone in its title.
 internal sealed record RememberedNotice(string Kind, Guid? FileId, string Path, string Title, string Detail, DateTimeOffset At,
@@ -255,4 +540,4 @@ internal sealed record RemoteFolderRename(Guid ProjectId, string From, string To
 
 // One bulk add: the folder it landed in (vault-relative) and every file it brought. The
 // summary counts what is in Armory now, what shares a name, and the rest.
-internal sealed record ImportRecord(Guid Id, Guid ProjectId, string Folder, List<string> Paths, DateTimeOffset At);
+internal sealed record ImportRecord(Guid Id, Guid ProjectId, string Folder, IReadOnlyList<string> Paths, DateTimeOffset At);

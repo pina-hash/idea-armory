@@ -1,4 +1,5 @@
 using System.Text;
+using Armory.Agent.Engine;
 using Armory.Agent.Engine.View;
 using Armory.Client;
 using Armory.TestSupport;
@@ -42,7 +43,7 @@ public sealed class FolderScenarioTests
         // Maria added the project's parts earlier (her own import summary, which she closed).
         for (var i = 1; i <= 14; i++) t.B.Write($"Robot 2027/Parts/Shared-{i:D2}.SLDPRT", $"the project's own part {i}");
         await t.B.SyncAsync();
-        t.B.Engine.DismissNotice(t.B.Card(NoticeKinds.Import)!.Key);
+        await t.B.Engine.DismissNoticeAsync(t.B.Card(NoticeKinds.Import)!.Key);
         await t.A.SyncAsync();
         Assert.Empty(t.A.Engine.View.Notices);
 
@@ -50,18 +51,22 @@ public sealed class FolderScenarioTests
         for (var i = 1; i <= 46; i++) unzipped.Add($"{Inner}/{(i % 3 == 0 ? "Sub/" : "")}Copy-{i:D2}.SLDPRT");
         for (var i = 1; i <= 14; i++) unzipped.Add($"{Inner}/Shared-{i:D2}.SLDPRT");
         foreach (var path in unzipped) t.A.Write(path, "pack and go " + Path.GetFileName(path));
-        // The connection drops after 20 files are in.
+        // The connection drops after 20 files are in. Files are sent several at once
+        // (EngineOptions.TransferConcurrency), so the ones already on their way when it drops may
+        // land too, and a few more may be created without their bytes.
         var committed = 0;
-        t.A.CrashPoint = p => { if (p == "after-commit" && ++committed == 20) t.A.Offline = true; };
+        t.A.CrashPoint = p => { if (p == "after-commit" && Interlocked.Increment(ref committed) == 20) t.A.Offline = true; };
         t.A.Restart();
         await t.A.SyncAsync();
         t.A.CrashPoint = null;
         t.A.Restart();
         var before = (await LiveFiles(t)).Where(f => f.Folder.StartsWith("Pack/", StringComparison.Ordinal)).ToList();
-        Assert.InRange(before.Count, 20, 21); // the 21st may be created, without its bytes
+        Assert.InRange(before.Count, 20, 20 + EngineOptions.DefaultTransferConcurrency);
+        var landed = await t.World.CountAsync("select count(*) from armory_files where project_id=@p and folder like 'Pack/%' and current_version_id is not null", ("p", t.Project));
+        Assert.InRange(landed, 20, 46 - 1); // some are still to send when the folder is renamed
         await t.B.SyncAsync();
         var bHad = unzipped.Count(p => t.B.Read(p) is not null);
-        Assert.Equal(20, bHad);
+        Assert.Equal(landed, bHad);
         var (bGets, bReplaces) = (t.B.Network.StorageGets, t.B.Disk.Replaces);
 
         // The student renames the inner folder (still offline), then the connection comes back.
@@ -333,7 +338,7 @@ public sealed class FolderScenarioTests
         Assert.Equal(NoticeKinds.ProjectPutBack, notice.Kind);
         Assert.Equal("The Robot 2027 folder was renamed back", notice.Title);
         Assert.Equal("Project names are changed on ideabosco.com.", notice.Detail);
-        t.A.Engine.DismissNotice(notice.Key);
+        await t.A.Engine.DismissNoticeAsync(notice.Key);
         Assert.Empty(t.A.Engine.View.Notices);
 
         // Renamed again, and a file inside opened before Armory looks: nothing is made beside it

@@ -147,7 +147,7 @@ public sealed class CheckOutTests
         Assert.Equal("Plate.SLDPRT was taken back", notice.Title);
         Assert.Equal(1, await t.Versions(file));
         // The notice's OK dismisses it.
-        t.A.Engine.DismissNotice(notice.Key);
+        await t.A.Engine.DismissNoticeAsync(notice.Key);
         await t.A.SyncAsync();
         Assert.Empty(t.A.Engine.View.Notices);
         NoViolations(t.A);
@@ -171,7 +171,7 @@ public sealed class CheckOutTests
         Assert.Equal(Bracket, newest.Path); // the most recent open asks first
         Assert.StartsWith("prompt:" + Bracket + ":", newest.Key, StringComparison.Ordinal);
         Assert.Equal([Bracket, Plate], t.A.Engine.OpenWithoutCheckOut);
-        t.A.Engine.DismissNotice(newest.Key);
+        await t.A.Engine.DismissNoticeAsync(newest.Key);
         await t.A.SyncAsync();
         Assert.Equal(Plate, t.A.Engine.View.Prompt!.Path);
 

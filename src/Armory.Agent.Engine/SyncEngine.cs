@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Collections.Immutable;
+using System.Runtime.ExceptionServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Armory.Agent.Engine.View;
@@ -16,6 +18,10 @@ public sealed record EngineOptions
     public TimeSpan StaleMarkerAfter { get; init; } = TimeSpan.FromMinutes(10);
     // The contract's PUT limit (2 GiB); tests lower it.
     public long MaximumFileBytes { get; init; } = Armory.Client.BlobClient.MaximumPutBytes;
+    // How many files a pass moves at once (uploads, downloads and the server calls around them).
+    // Chosen by measurement on the school network profile (docs/agent/PROOF.md, ThroughputTests).
+    public int TransferConcurrency { get; init; } = DefaultTransferConcurrency;
+    public const int DefaultTransferConcurrency = 6;
 }
 
 public sealed class EngineDependencies
@@ -40,7 +46,8 @@ public sealed record SyncReport(bool SignedIn, bool Online, int Uploaded, int Do
 // Core's plans in order against the server and the disk, and records durable state. v2 check
 // out: Core runs in Explicit mode, a file the server has is read-only unless this computer has
 // it checked out, and the student's check out, check in and undo are durable requests the
-// pass carries out (SyncEngine.Checkout.cs).
+// pass carries out (SyncEngine.Checkout.cs). All of it runs on one engine thread (EngineThread):
+// every public method marshals onto it, and a pass moves files as interleaved async units on it.
 public sealed partial class SyncEngine : IAsyncDisposable
 {
     private readonly EngineOptions options;
@@ -48,11 +55,13 @@ public sealed partial class SyncEngine : IAsyncDisposable
     private readonly IVaultFileSystem fs;
     private readonly OfflineJournal journal;
     private readonly SaveRecorder recorder;
+    private readonly EngineThread engineThread;
+    private readonly ActivityTracker activity;
     private readonly SemaphoreSlim passGate = new(1, 1);
     private readonly SemaphoreSlim wake = new(0, int.MaxValue);
     private readonly CancellationTokenSource stopping = new();
     private readonly Dictionary<string, SolidWorksRelease?> releases = new(StringComparer.Ordinal);
-    private EngineState state;
+    private EngineState state = null!;
     private Task? loop;
     private volatile bool paused;
     private DateTimeOffset lastActivity = DateTimeOffset.MinValue;
@@ -63,7 +72,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
     private string? connectMessage;
     private SettingsView settings;
     private string effectiveTheme = "idea";
-    private AgentView view;
+    private AgentView view = null!;
 
     // Pass-scoped data.
     private readonly Dictionary<string, LocalFile> local = new(StringComparer.OrdinalIgnoreCase);
@@ -80,6 +89,14 @@ public sealed partial class SyncEngine : IAsyncDisposable
     // Test seams. CrashPoint throws to simulate a process crash between named steps.
     internal Action<string>? CrashPoint { get; set; }
 
+    // A named step inside a file's unit. After a crash in another unit (the pass's token is
+    // cancelled), no unit passes another step: none of them saves, sends or writes anything more.
+    private void Checkpoint(string point, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        CrashPoint?.Invoke(point);
+    }
+
     public SyncEngine(EngineOptions options, EngineDependencies dependencies)
     {
         this.options = options;
@@ -87,94 +104,127 @@ public sealed partial class SyncEngine : IAsyncDisposable
         fs = dependencies.Files;
         journal = new OfflineJournal(dependencies.Journal);
         recorder = new SaveRecorder(dependencies.Snapshots, journal);
-        state = EngineState.Load(dependencies.State);
         settings = new SettingsView(options.VaultRoot, true, "system");
-        view = BuildView();
+        activity = new ActivityTracker(dependencies.Clock);
+        engineThread = new EngineThread(error => dependencies.Log?.Invoke("engine: " + error));
+        // Even the state document is read on the engine thread.
+        engineThread.Send(_ =>
+        {
+            state = EngineState.Load(dependencies.State);
+            view = BuildView();
+            lastViewBuilt = dependencies.Clock.GetTimestamp();
+        }, null);
     }
-
-    // Pass-scoped helper so a long pass still shows progress after a slow step.
-    private void PublishIfPending() { if (publishPending) PublishLocked(); }
 
     public AgentView View => Volatile.Read(ref view);
+    // Raised on the engine thread with each new view.
     public event Action<AgentView>? ViewChanged;
+    // Raised at most four times a second while files move (and once when they stop), from a
+    // timer thread, with what is moving right now. The window patches its activity panel and
+    // status line from it without a whole view.
+    public event Action<ActivityView>? ActivityChanged;
     public bool IsPaused => paused;
-    public void Pause() { paused = true; Publish(); }
-    public void Resume() { paused = false; Publish(); Wake(); }
-    public void Wake() => wake.Release();
+    public void Pause() => engineThread.Enqueue(() => { paused = true; RequestPublish(); });
+    public void Resume() => engineThread.Enqueue(() => { paused = false; RequestPublish(); wake.Release(); });
+    public void Wake() => engineThread.Enqueue(() => wake.Release());
 
-    public void Start()
-    {
-        loop ??= Task.Run(() => LoopAsync(stopping.Token));
-    }
+    public void Start() => engineThread.Enqueue(() => loop ??= LoopAsync(stopping.Token));
 
-    public async Task StopAsync()
+    public Task StopAsync() => engineThread.InvokeAsync(async () =>
     {
         await stopping.CancelAsync();
         if (loop is not null) { try { await loop; } catch (OperationCanceledException) { } }
-    }
+        return true;
+    });
 
     public async ValueTask DisposeAsync()
     {
         await StopAsync();
+        await engineThread.InvokeAsync(async () =>
+        {
+            await SettleAsync();
+            StopActivity();
+            return true;
+        });
         stopping.Dispose();
     }
 
-    public void SetConnectState(string phase, string? message)
+    public void SetConnectState(string phase, string? message) => engineThread.Enqueue(() =>
     {
         connectPhase = phase;
         connectMessage = message;
-        Publish();
-        if (phase == "idle" && deps.Sessions.IsSignedIn) Wake();
-    }
+        RequestPublish();
+        if (phase == "idle" && deps.Sessions.IsSignedIn) wake.Release();
+    });
 
-    public void ApplySettings(SettingsView newSettings, string newEffectiveTheme)
+    public void ApplySettings(SettingsView newSettings, string newEffectiveTheme) => engineThread.Enqueue(() =>
     {
         settings = newSettings;
         effectiveTheme = newEffectiveTheme;
-        Publish();
-    }
+        RequestPublish();
+    });
 
-    private async Task LoopAsync(CancellationToken ct)
+    private async Task<bool> LoopAsync(CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
         {
             if (!paused)
             {
                 try { await SyncOnceAsync(ct); }
-                catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
-                catch (Exception error) { lastLoopError = "Sync stopped for a moment: " + error.GetType().Name; Publish(); }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { return true; }
+                catch (Exception error) { lastLoopError = "Sync stopped for a moment: " + error.GetType().Name; RequestPublish(); }
             }
             var idle = online != true || deps.Clock.GetUtcNow() - lastActivity > options.IdleAfter;
             var delay = idle ? options.IdlePollInterval : options.ActivePollInterval;
             try { await wake.WaitAsync(delay, ct); }
-            catch (OperationCanceledException) { return; }
+            catch (OperationCanceledException) { return true; }
             while (wake.CurrentCount > 0) await wake.WaitAsync(0, ct);
         }
+        return true;
     }
 
-    public async Task<SyncReport> SyncOnceAsync(CancellationToken cancellationToken = default)
+    public Task<SyncReport> SyncOnceAsync(CancellationToken cancellationToken = default) => engineThread.InvokeAsync(async () =>
     {
         await passGate.WaitAsync(cancellationToken);
         try { return await PassLockedAsync(cancellationToken); }
         finally { passGate.Release(); }
-    }
+    });
 
     // One pass, by whoever holds the pass gate (the loop, a test, or an action from the window).
+    // Every write it started is on disk before it returns; after a failure (a crash, in tests)
+    // nothing more is saved: what was not on disk yet is lost, as it would be in a real crash.
     private async Task<SyncReport> PassLockedAsync(CancellationToken ct)
     {
+        var failed = true;
         try
         {
             syncing = true;
+            inPass = true;
+            refreshesThisPass = 0;
+            StartActivity();
             PublishLocked();
-            return await PassAsync(ct);
+            var report = await PassAsync(ct);
+            failed = false;
+            return report;
         }
         finally
         {
+            inPass = false;
             syncing = false;
+            activity.Reset();
+            if (failed) await DrainAsync();
+            else await SettleAsync();
             PublishLocked();
+            StopActivity();
         }
     }
 
+    // A pass (docs/agent/ENGINE.md, "One pass"). Phase A, in order and one step at a time:
+    // identity, scan, folder changes, capture, refresh, writes a crash left in flight, folder
+    // operations, the team's moves, imports, Explorer moves, earlier saves, folder removals.
+    // Phase B plans every path with Core. Phase C runs each file's plan as one unit, units
+    // concurrently (EngineOptions.TransferConcurrency). Phase D reads the server again if
+    // anything was written, finishes check ins, undos and check outs, and applies the read-only rule.
     private async Task<SyncReport> PassAsync(CancellationToken ct)
     {
         problems.Clear(); notes.Clear();
@@ -192,7 +242,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
             if (state.DeviceId is { } former && !state.FormerDevices.Contains(former)) state.FormerDevices.Add(former);
             state.Email = session.Email;
             state.DeviceId = session.DeviceId;
-            Save();
+            SaveNow();
         }
 
         if (!recovered)
@@ -237,7 +287,8 @@ public sealed partial class SyncEngine : IAsyncDisposable
         {
             lastOnline = deps.Clock.GetUtcNow();
             KeepCheckedOut();
-            if (await ResumeInflightAsync(ct) && online == true) online = await RefreshAsync(ct);
+            // A write a crash left in flight is sent again; the projects it wrote to are read again.
+            if (await ResumeInflightAsync(ct) && online == true) online = await RefreshStaleAsync(ct);
             // A folder renamed or removed here: one server call each, after any file write a
             // crash left in flight (which lands in the folder as it was). Only the projects a
             // folder call changed are read again.
@@ -246,9 +297,10 @@ public sealed partial class SyncEngine : IAsyncDisposable
         }
         if (online == true)
         {
-            // The team's folder renames move here in one step each; anything else moves file by file.
-            var folderMoved = ApplyRemoteFolderMoves();
-            if (ApplyRemoteMoves() | folderMoved) online = await RefreshAsync(ct);
+            // The team's folder renames move here in one step each; anything else moves file by
+            // file. Moves on this disk change nothing on the server: nothing is read again.
+            ApplyRemoteFolderMoves();
+            ApplyRemoteMoves();
             AdoptIdenticalBases();
             Capture(session, notify: true); // projects learned this pass
         }
@@ -265,27 +317,21 @@ public sealed partial class SyncEngine : IAsyncDisposable
         }
 
         lastLoopError = null;
-        foreach (var path in AllPaths())
-        {
-            try { await PlanAndExecuteAsync(path, online == true, ct); }
-            catch (ArmoryOfflineException) { online = false; }
-            catch (Exception error) when (error is ArmoryClientException or Armory.Storage.HashMismatchException or IOException or UnauthorizedAccessException or InvalidDataException)
-            { FileProblem(path, error); }
-            Save();
-            PublishIfPending();
-        }
+        // Phase B: every path planned with Core, grouped into units; phase C: the units.
+        var units = await PlanAllAsync(online == true, ct);
+        await RunUnitsAsync(units, ct);
 
         if (online == true)
         {
             // Check outs, check ins and undos are decided on the server's state after this
-            // pass's own writes.
+            // pass's own writes (the second and last read of the server in a pass). Read-only
+            // then follows the locks as they are after this pass's own lock changes, which this
+            // computer knows without reading again (KnowLock).
             if (wrote) online = await RefreshAsync(ct);
             if (online == true)
             {
                 wrote = false;
                 await FinishRequestsAsync(ct);
-                // Read-only follows the locks as they are after this pass's own lock changes.
-                if (wrote && online == true) online = await RefreshAsync(ct);
             }
         }
         // Known folders with nothing left in them go, on every computer (decision D17).
@@ -314,91 +360,157 @@ public sealed partial class SyncEngine : IAsyncDisposable
 
     // ---- Refresh -------------------------------------------------------------------
 
+    // A project's files as last read: when, and under which folder (paths are made from it).
+    private sealed record ProjectRead(string Folder, long At);
+    private readonly Dictionary<Guid, ProjectRead> projectReads = [];
+    // Projects this computer wrote to since their files were last read.
+    private readonly HashSet<Guid> projectsWritten = [];
+    // Read again at least this often even when the change feed says nothing moved.
+    private static readonly TimeSpan SafetyRefresh = TimeSpan.FromSeconds(60);
+    private int refreshesThisPass;
+    private bool refreshing;
+
+    // armory_my_projects, then per project its change feed and, when the feed moved (or this
+    // computer wrote there, or a minute went by), its files. Every write emits a change, so a
+    // quiet feed means the files as last read are still the files; this computer's own lock
+    // changes are known without reading (KnowLock).
     private async Task<bool> RefreshAsync(CancellationToken ct)
     {
         IReadOnlyList<RemoteProject> projects;
         try { projects = await deps.Api.MyProjectsAsync(ct); }
         catch (ArmoryOfflineException) { return false; }
         catch (ArmorySignedOutException) { return false; }
-        remoteProjects.Clear(); remoteByPath.Clear(); remoteById.Clear(); staleProjects.Clear();
-        var names = projects.GroupBy(p => p.Name, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
-        foreach (var gone in state.Projects.Keys.Except(projects.Select(p => p.Id)).ToArray()) state.Projects[gone].Usable = false;
-        foreach (var project in projects)
-        {
-            if (!state.Projects.TryGetValue(project.Id, out var ps)) state.Projects[project.Id] = ps = new ProjectState { Id = project.Id };
-            ps.Name = project.Name;
-            ps.PinnedRelease = project.PinnedRelease;
-            ps.Enforce = project.ReleaseGate == ProjectReleaseGate.Enforce;
-            ps.Role = RoleName(project.Role);
-            ps.Archived = project.Archived;
-            ps.Usable = VaultPath.TryValidateName(project.Name, out _) && names[project.Name] == 1;
-            if (!ps.Usable)
-            {
-                Notice(NoticeKinds.CantSend, null, project.Name, $"{project.Name} can't be a folder name on Windows, so its files stay off this computer. A lead must rename the project on ideabosco.com.");
-                continue;
-            }
-            if (ps.Folder.Length == 0)
-            {
-                // New to this computer: its folder is its name, unless another project's folder
-                // still has that name (its rename waits for a file to close).
-                if (state.Projects.Values.Any(p => !ReferenceEquals(p, ps) && p.Usable && string.Equals(p.Folder, project.Name, StringComparison.OrdinalIgnoreCase)))
-                {
-                    ps.Usable = false;
-                    continue;
-                }
-                ps.Folder = project.Name;
-            }
-            // Archived (decision D8): skipped silently, its folder and files left as they are.
-            if (ps.Archived) continue;
-            // Renamed on the site (contract C2): the folder moves in place, once nothing in it is open.
-            if (!string.Equals(ps.Folder, ps.Name, StringComparison.Ordinal) && ps.PutBackFrom is null && !heldProjects.Contains(ps.Id)) MoveProjectFolder(ps);
-            // Removed on this disk: made again, its files downloaded (decision D16).
-            if (restoreProjects.Contains(ps.Id)) { RestoreProjectFolder(ps); continue; }
-            // Made only when it is not there and not waiting to be put back: never a second
-            // folder beside one a student renamed.
-            if (ps.PutBackFrom is not null || heldProjects.Contains(ps.Id) || FolderOnDisk(ps.Folder)) continue;
-            try { fs.EnsureFolder(ps.Folder); localFolders.Add(ps.Folder); }
-            catch (IOException error) { Problem(NoticeKinds.CantRead, ps.Folder, $"Armory couldn't make the folder for {project.Name} on this computer. It tries again by itself.", error.Message); }
-        }
+        if (inPass) refreshesThisPass++;
+        refreshing = true;
         try
         {
-            foreach (var ps in state.Projects.Values.Where(p => p.Usable))
+            var names = projects.GroupBy(p => p.Name, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
+            foreach (var gone in state.Projects.Keys.Except(projects.Select(p => p.Id)).ToArray()) state.Projects[gone].Usable = false;
+            foreach (var project in projects)
             {
-                // An archived project is not read, unless this computer still has check outs
-                // there to check in (addendum 7); its change cursor stays for when it is restored.
-                if (ps.Archived && !state.Files.Values.Any(f => f.ProjectId == ps.Id && MineToFinish(f))) continue;
-                if (!ps.Archived)
+                if (!state.Projects.TryGetValue(project.Id, out var ps)) state.Projects[project.Id] = ps = new ProjectState { Id = project.Id };
+                ps.Name = project.Name;
+                ps.PinnedRelease = project.PinnedRelease;
+                ps.Enforce = project.ReleaseGate == ProjectReleaseGate.Enforce;
+                ps.Role = RoleName(project.Role);
+                ps.Archived = project.Archived;
+                ps.Usable = VaultPath.TryValidateName(project.Name, out _) && names[project.Name] == 1;
+                if (!ps.Usable)
                 {
-                    var changes = await deps.Api.ListChangesAsync(ps.Id, ps.Cursor, ct);
-                    foreach (var change in changes)
-                    {
-                        if (change.Kind == "lock_broken" && change.Payload["former_device_id"]?.GetValue<string>() is { } former &&
-                            Guid.TryParse(former, out var device) && state.IsMine(device))
-                            foreach (var st in state.Files.Values.Where(f => f.FileId == change.EntityId)) st.BreakNotice = true;
-                        if (change.Kind == "file_revived") RecordRevival(change.EntityId, change.CreatedAt);
-                        // Another computer renamed a folder: moved here in one step (ApplyRemoteFolderMoves).
-                        if (change.Kind == "folder_renamed" && Text(change.Payload, "from") is { } from && Text(change.Payload, "to") is { } to &&
-                            !(Guid.TryParse(Text(change.Payload, "device_id"), out var by) && state.IsMine(by)))
-                            state.RemoteFolderRenames.Add(new RemoteFolderRename(ps.Id, from, to));
-                        ps.Cursor = Math.Max(ps.Cursor, change.Cursor);
-                    }
-                    if (changes.Count > 0) lastActivity = deps.Clock.GetUtcNow();
+                    Notice(NoticeKinds.CantSend, null, project.Name, $"{project.Name} can't be a folder name on Windows, so its files stay off this computer. A lead must rename the project on ideabosco.com.");
+                    continue;
                 }
-                var files = await deps.Api.ProjectFilesAsync(ps.Id, ct);
-                remoteProjects[ps.Id] = files;
-                foreach (var file in files) Know(ps, file);
+                if (ps.Folder.Length == 0)
+                {
+                    // New to this computer: its folder is its name, unless another project's folder
+                    // still has that name (its rename waits for a file to close).
+                    if (state.Projects.Values.Any(p => !ReferenceEquals(p, ps) && p.Usable && string.Equals(p.Folder, project.Name, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        ps.Usable = false;
+                        continue;
+                    }
+                    ps.Folder = project.Name;
+                }
+                // Archived (decision D8): skipped silently, its folder and files left as they are.
+                if (ps.Archived) continue;
+                // Renamed on the site (contract C2): the folder moves in place, once nothing in it is open.
+                if (!string.Equals(ps.Folder, ps.Name, StringComparison.Ordinal) && ps.PutBackFrom is null && !heldProjects.Contains(ps.Id)) MoveProjectFolder(ps);
+                // Removed on this disk: made again, its files downloaded (decision D16).
+                if (restoreProjects.Contains(ps.Id)) { RestoreProjectFolder(ps); continue; }
+                // Made only when it is not there and not waiting to be put back: never a second
+                // folder beside one a student renamed.
+                if (ps.PutBackFrom is not null || heldProjects.Contains(ps.Id) || FolderOnDisk(ps.Folder)) continue;
+                try { fs.EnsureFolder(ps.Folder); localFolders.Add(ps.Folder); }
+                catch (IOException error) { Problem(NoticeKinds.CantRead, ps.Folder, $"Armory couldn't make the folder for {project.Name} on this computer. It tries again by itself.", error.Message); }
             }
-            RememberHolders();
-            Save();
-            return true;
+            HashSet<Guid> read = [];
+            try
+            {
+                foreach (var ps in state.Projects.Values.Where(p => p.Usable).ToArray())
+                {
+                    // An archived project is not read, unless this computer still has check outs
+                    // there to check in (addendum 7); its change cursor stays for when it is restored.
+                    if (ps.Archived && !state.Files.Values.Any(f => f.ProjectId == ps.Id && MineToFinish(f))) continue;
+                    var moved = ps.Archived;
+                    if (!ps.Archived)
+                    {
+                        var changes = await deps.Api.ListChangesAsync(ps.Id, ps.Cursor, ct);
+                        foreach (var change in changes)
+                        {
+                            if (change.Kind == "lock_broken" && change.Payload["former_device_id"]?.GetValue<string>() is { } former &&
+                                Guid.TryParse(former, out var device) && state.IsMine(device))
+                                foreach (var st in state.WithFileId(change.EntityId)) st.BreakNotice = true;
+                            if (change.Kind == "file_revived") RecordRevival(change.EntityId, change.CreatedAt);
+                            // Another computer renamed a folder: moved here in one step (ApplyRemoteFolderMoves).
+                            if (change.Kind == "folder_renamed" && Text(change.Payload, "from") is { } from && Text(change.Payload, "to") is { } to &&
+                                !(Guid.TryParse(Text(change.Payload, "device_id"), out var by) && state.IsMine(by)))
+                                state.RemoteFolderRenames.Add(new RemoteFolderRename(ps.Id, from, to));
+                            ps.Cursor = Math.Max(ps.Cursor, change.Cursor);
+                        }
+                        if (changes.Count > 0) lastActivity = deps.Clock.GetUtcNow();
+                        moved = changes.Count > 0;
+                    }
+                    read.Add(ps.Id);
+                    if (!moved && FilesStillKnown(ps)) continue;
+                    KnowProject(ps, await deps.Api.ProjectFilesAsync(ps.Id, ct));
+                }
+                // A project not read now (no longer a member, archived, unusable): nothing of its is known.
+                foreach (var gone in remoteProjects.Keys.Where(id => !read.Contains(id)).ToArray()) ForgetProject(gone);
+                staleProjects.IntersectWith(read);
+                RememberHolders();
+                MarkDirty();
+                return true;
+            }
+            catch (ArmoryOfflineException) { MarkDirty(); return false; }
         }
-        catch (ArmoryOfflineException) { Save(); return false; }
+        finally
+        {
+            refreshing = false;
+            PublishRemote();
+            if (inPass) PublishSoon();
+        }
     }
+
+    // The project's files as last read are still the files: nothing moved in its change feed,
+    // this computer wrote nothing there, its folder is the same, and they were read in the last minute.
+    private bool FilesStillKnown(ProjectState ps)
+        => remoteProjects.ContainsKey(ps.Id) && !projectsWritten.Contains(ps.Id) && !staleProjects.Contains(ps.Id) &&
+           projectReads.TryGetValue(ps.Id, out var last) && string.Equals(last.Folder, ps.Folder, StringComparison.Ordinal) &&
+           deps.Clock.GetElapsedTime(last.At) < SafetyRefresh;
+
+    // A project's files as just read replace what was known of it.
+    private void KnowProject(ProjectState ps, IReadOnlyList<RemoteFile> files)
+    {
+        ForgetProject(ps.Id);
+        remoteProjects[ps.Id] = files;
+        foreach (var file in files) Know(ps, file, publish: false);
+        projectReads[ps.Id] = new ProjectRead(ps.Folder, deps.Clock.GetTimestamp());
+        projectsWritten.Remove(ps.Id);
+        staleProjects.Remove(ps.Id);
+    }
+
+    private void ForgetProject(Guid project)
+    {
+        remoteProjects.Remove(project);
+        foreach (var (id, known) in remoteById.Where(r => r.Value.Project.Id == project).ToArray())
+        {
+            remoteById.Remove(id);
+            if (remoteByPath.TryGetValue(known.Path.Value, out var byPath) && byPath.File.Id == id) remoteByPath.Remove(known.Path.Value);
+        }
+        liveNames.Remove(project);
+        projectReads.Remove(project);
+    }
+
+    // What File detail reads (GetFileDetailAsync): the server's files as last known, published
+    // whenever that changes, so a detail never waits for a pass or sees a read half done.
+    private ImmutableDictionary<Guid, (RemoteFile File, ProjectState Project, VaultPath Path)> publishedRemote = ImmutableDictionary<Guid, (RemoteFile, ProjectState, VaultPath)>.Empty;
+    private void PublishRemote() => publishedRemote = remoteById.ToImmutableDictionary();
 
     private static string? Text(JsonObject payload, string name) => payload[name] is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
 
-    // Records one server file under its local path.
-    private void Know(ProjectState ps, RemoteFile file)
+    // Records one server file under its local path (and, unless a whole project is being read,
+    // in what File detail reads).
+    private void Know(ProjectState ps, RemoteFile file, bool publish = true)
     {
         var relative = ps.Folder + "/" + (file.Folder.Length == 0 ? "" : file.Folder + "/") + file.Name;
         if (!VaultPath.TryCreate(relative, out var path, out var problem, options.VaultRoot))
@@ -411,6 +523,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
         if (remoteById.TryGetValue(file.Id, out var old)) remoteByPath.Remove(old.Path.Value);
         remoteByPath[path.Value] = (file, ps);
         remoteById[file.Id] = (file, ps, path);
+        if (publish && !refreshing) publishedRemote = publishedRemote.SetItem(file.Id, (file, ps, path));
     }
 
     // Every tracked file's check out as the server has it now, kept so the window still says who
@@ -428,12 +541,13 @@ public sealed partial class SyncEngine : IAsyncDisposable
     // connection drops before the server is read again.
     private void KnowLock(Guid fileId, RemoteLock? held)
     {
-        foreach (var st in state.Files.Values.Where(f => f.FileId == fileId)) st.Holder = Known(held);
+        foreach (var st in state.WithFileId(fileId)) st.Holder = Known(held);
         if (!remoteById.TryGetValue(fileId, out var known)) return;
         var file = known.File with { Lock = held };
         remoteById[fileId] = (file, known.Project, known.Path);
         if (remoteByPath.TryGetValue(known.Path.Value, out var byPath) && byPath.File.Id == fileId) remoteByPath[known.Path.Value] = (file, known.Project);
-        if (remoteProjects.TryGetValue(known.Project.Id, out var files)) remoteProjects[known.Project.Id] = files.Select(f => f.Id == fileId ? file : f).ToArray();
+        // The project's list keeps the lock as read; the window and every decision read remoteById.
+        if (!refreshing) publishedRemote = publishedRemote.SetItem(fileId, (file, known.Project, known.Path));
     }
 
     private void RecordRevival(Guid fileId, DateTimeOffset at)
@@ -458,15 +572,15 @@ public sealed partial class SyncEngine : IAsyncDisposable
             if (remote.File.Deleted || remote.File.Current is not { } current || !local.TryGetValue(key, out var file) || current.Hash != file.Hash) continue;
             state.Files.TryGetValue(key, out var st);
             if (st is not null && (st.Inflight is not null || (st.FileId is not null && st.FileId != remote.File.Id))) continue;
-            if (state.Files.Values.Any(f => f.FileId == remote.File.Id && !ReferenceEquals(f, st))) continue;
+            if (state.FirstWithFileId(remote.File.Id, except: st) is not null) continue;
             st ??= FileFor(remote.Project, key);
             st.FileId ??= remote.File.Id;
             if (st.BaseId == current.Id.ToString()) continue;
             st.SetBase(new(current.Id.ToString(), current.Hash, current.Author));
             st.LastCaptured ??= current.Hash;
             Complete(st, current.Hash);
+            MarkDirty();
         }
-        Save();
     }
 
     // ---- Capture -------------------------------------------------------------------
@@ -508,16 +622,17 @@ public sealed partial class SyncEngine : IAsyncDisposable
     {
         if (state.Projects.GetValueOrDefault(st.ProjectId) is { Archived: true } && !MineToFinish(st)) return;
         if (file.Hash == st.BaseHash || file.Hash == st.LastCaptured) return;
-        var id = state.NextId("save");
-        Save(); // the id is spent before it is used, so it is never reused
+        var id = NextId("save"); // saved (by its block) before it is used, so it is never reused
         try
         {
             SavedSnapshot snapshot;
-            using (var source = fs.OpenRead(file.Path)) snapshot = recorder.Record(id, recordPath, session.Email, source);
+            using (var source = fs.OpenRead(file.Path)) snapshot = Record(id, recordPath, session.Email, source);
+            // The journal holds the save now; a crash before the next save of this document is
+            // found again by AttachEntries.
             st.Entries.Add(id);
             st.LastCaptured = snapshot.Hash;
             lastActivity = deps.Clock.GetUtcNow();
-            Save();
+            MarkDirty();
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
@@ -542,7 +657,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
             st.LastCaptured = entry.Hash;
             changed = true;
         }
-        if (changed) Save();
+        if (changed) MarkDirty();
         return all;
     }
 
@@ -552,18 +667,57 @@ public sealed partial class SyncEngine : IAsyncDisposable
         => local.Keys.Concat(state.Files.Keys).Concat(remoteByPath.Keys).Distinct(StringComparer.OrdinalIgnoreCase)
             .Order(StringComparer.OrdinalIgnoreCase).ToArray();
 
-    private async Task PlanAndExecuteAsync(string key, bool isOnline, CancellationToken ct)
+    // One path's Core plan with everything it was made from (phase B), carried out in phase C.
+    private sealed record Planned(string Key, VaultPath Path, SyncInput Input, SyncPlan Plan, FileState State, ProjectState Project, RemoteFile? Remote);
+
+    // Phase B: every path is planned with Core, in path order, and grouped into units: one file
+    // each, except that files sharing a name (in any case) in a project are one unit, in path
+    // order, so which of them gets the name never depends on timing. Offline, the plans only
+    // journal Core's intents and nothing is left to run. The activity panel learns here what the
+    // pass will move.
+    private async Task<List<List<Planned>>> PlanAllAsync(bool isOnline, CancellationToken ct)
     {
-        if (!VaultPath.TryCreate(key, out var path, out _, options.VaultRoot)) return;
+        movingTo.Clear();
+        foreach (var st in state.Files.Values) if (st.LocalMoveTo is { } target) movingTo.Add(target);
+        List<List<Planned>> units = [];
+        var byName = new Dictionary<(Guid Project, string Name), List<Planned>>();
+        foreach (var key in AllPaths())
+        {
+            Planned? planned;
+            try { planned = await PlanPathAsync(key, isOnline, ct); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException)
+            {
+                FileProblem(key, error);
+                continue;
+            }
+            if (planned is null) continue;
+            var name = (planned.Project.Id, planned.Path.Name.ToUpperInvariant());
+            if (!byName.TryGetValue(name, out var unit))
+            {
+                byName[name] = unit = [];
+                units.Add(unit);
+            }
+            unit.Add(planned);
+            ExpectTransfers(planned);
+        }
+        return units;
+    }
+
+    // Paths a file is being renamed to here (an Explorer rename being sent): not planned on their own.
+    private readonly HashSet<string> movingTo = new(StringComparer.OrdinalIgnoreCase);
+
+    private async Task<Planned?> PlanPathAsync(string key, bool isOnline, CancellationToken ct)
+    {
+        if (!VaultPath.TryCreate(key, out var path, out _, options.VaultRoot)) return null;
         var project = ProjectOf(path);
-        if (project is null || !project.Usable) return;
+        if (project is null || !project.Usable) return null;
         // A folder being renamed or removed here, a project folder gone or waiting to be put
         // back, a known folder gone from the scan: nothing under it is planned file by file.
-        if (Held(key)) return;
+        if (Held(key)) return null;
         local.TryGetValue(key, out var localFile);
         state.Files.TryGetValue(key, out var st);
         // Archived (decision D8): only this computer's own check outs there are finished.
-        if (project.Archived && !MineToFinish(st)) return;
+        if (project.Archived && !MineToFinish(st)) return null;
         // A file this computer already tracks is planned against its own server record
         // (found by id, wherever it now lives); a server path whose file another state owns
         // is that file's pending move, not a new file.
@@ -571,17 +725,17 @@ public sealed partial class SyncEngine : IAsyncDisposable
         if (st?.FileId is { } id) { if (remoteById.TryGetValue(id, out var byId)) remote = (byId.File, byId.Project); }
         else if (remoteByPath.TryGetValue(key, out var byPath))
         {
-            if (state.Files.Values.Any(f => f.FileId == byPath.File.Id && !ReferenceEquals(f, st))) return;
+            if (state.FirstWithFileId(byPath.File.Id, except: st) is not null) return null;
             remote = byPath;
         }
-        if (st is null && localFile is null && remote.File is null) return;
-        if (st?.LocalMoveTo is not null || state.Files.Values.Any(f => string.Equals(f.LocalMoveTo, key, StringComparison.OrdinalIgnoreCase))) return;
+        if (st is null && localFile is null && remote.File is null) return null;
+        if (st?.LocalMoveTo is not null || movingTo.Contains(key)) return null;
         // A new file at a removed file's path is planned against that removed file: Core's
         // re-add, which the server answers by reviving the name with its history (contract
         // C4, EnsureServerFileAsync). Names are never refused here.
         st ??= FileFor(project, key);
         if (remote.File is not null) st.FileId ??= remote.File.Id;
-        if (st.Inflight is not null) return; // finished on the next online pass
+        if (st.Inflight is not null) return null; // finished on the next online pass
         // A file never added because another file holds its name, gone from this disk: the
         // student removed it. Nothing of it can be sent (the name is taken), its saves stay in
         // this computer's safe copies, and nothing is left waiting for it.
@@ -589,13 +743,14 @@ public sealed partial class SyncEngine : IAsyncDisposable
         {
             foreach (var entry in st.Entries.Concat(st.Drafts)) state.Completed.Add(entry);
             state.Files.Remove(key);
-            return;
+            MarkDirty();
+            return null;
         }
 
         // One scan's absence is not a deletion: wait for a second scan before planning one.
         if (localFile is null && st.BaseHash is not null)
         {
-            if (++st.AbsentScans < 2) return;
+            if (++st.AbsentScans < 2) return null;
         }
         else st.AbsentScans = 0;
 
@@ -616,15 +771,109 @@ public sealed partial class SyncEngine : IAsyncDisposable
         var plan = Reconciler.Plan(input);
         if (!isOnline)
         {
-            foreach (var intent in plan.Intents.Where(i => i.Kind != IntentKind.Upload))
-                journal.Append(new JournalEntry($"{state.DeviceId}:intent:{intent.Kind}:{path}:{localHash}:{st.BaseId}", intent.Kind, path.Value, intent.Hash, null, state.Email!));
-            return;
+            JournalOffline(plan, st);
+            return null;
         }
-        st.Refusal = null; st.RefusalKind = null; st.NewerWaiting = false; st.RemovedWaiting = false;
-        foreach (var action in plan.Actions)
+        return new Planned(key, path, input, plan, st, project, remote.File);
+    }
+
+    // Offline, a plan only records Core's intents (never an upload: the capture is the upload's).
+    private void JournalOffline(SyncPlan plan, FileState st)
+    {
+        var input = plan.Expected;
+        foreach (var intent in plan.Intents.Where(i => i.Kind != IntentKind.Upload))
+            journal.Append(new JournalEntry($"{state.DeviceId}:intent:{intent.Kind}:{input.Path}:{input.LocalHash}:{st.BaseId}", intent.Kind, input.Path.Value, intent.Hash, null, state.Email!));
+    }
+
+    // What the panel will show moving: an upload for bytes sent, a download for bytes received.
+    private void ExpectTransfers(Planned planned)
+    {
+        foreach (var action in planned.Plan.Actions)
         {
-            CrashPoint?.Invoke("before-" + action.Kind);
-            if (!await ExecuteAsync(action, input, st, project, remote.File, ct)) break;
+            switch (action.Kind)
+            {
+                case SyncActionKind.Upload or SyncActionKind.AcquireLockThenUpload or SyncActionKind.SaveSideVersion:
+                    activity.Expect(Directions.Upload, planned.Key, local.TryGetValue(planned.Key, out var file) ? file.Size : 0);
+                    break;
+                case SyncActionKind.Download:
+                    activity.Expect(Directions.Download, planned.Key, planned.Remote?.Current?.Bytes ?? 0);
+                    break;
+            }
+        }
+    }
+
+    // Phase C: the units, at most TransferConcurrency at once, as interleaved async tasks on the
+    // engine thread (state is only touched between awaits, on this thread). A unit runs its
+    // files' plans in order, each action in order, so every crash point fires once per file in
+    // the order it always did. Going offline in any unit stops new units from starting (the rest
+    // are planned offline); any failure that is not one file's (a crash, in tests) cancels every
+    // unit and is thrown only after all of them stopped, so nothing of this engine writes after it.
+    private async Task RunUnitsAsync(List<List<Planned>> units, CancellationToken ct)
+    {
+        if (units.Count == 0) return;
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var concurrency = Math.Max(1, options.TransferConcurrency);
+        List<Task> running = [];
+        ExceptionDispatchInfo? fatal = null;
+        var next = 0;
+        while (true)
+        {
+            while (fatal is null && online == true && next < units.Count && running.Count < concurrency)
+            {
+                var task = RunUnitAsync(units[next++], stop.Token);
+                if (task.IsCompleted) Ended(task); // nothing to wait for (most files, most passes)
+                else running.Add(task);
+            }
+            if (running.Count == 0) break;
+            var done = await Task.WhenAny(running);
+            running.Remove(done);
+            Ended(done);
+        }
+        fatal?.Throw();
+        // Offline: what was not started yet is planned offline, its intents journaled.
+        for (; next < units.Count; next++)
+            foreach (var planned in units[next]) JournalOffline(Reconciler.Plan(planned.Input with { IsOnline = false }), planned.State);
+
+        void Ended(Task task)
+        {
+            if (task.IsCompletedSuccessfully || fatal is not null) return;
+            fatal = ExceptionDispatchInfo.Capture(task.Exception?.InnerException ?? new OperationCanceledException(ct));
+            stop.Cancel();
+        }
+    }
+
+    private async Task RunUnitAsync(List<Planned> unit, CancellationToken ct)
+    {
+        foreach (var planned in unit)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (online != true)
+            {
+                JournalOffline(Reconciler.Plan(planned.Input with { IsOnline = false }), planned.State);
+                continue;
+            }
+            try { await ExecutePlannedAsync(planned, ct); }
+            catch (ArmoryOfflineException) { online = false; }
+            catch (Exception error) when (error is ArmoryClientException or Armory.Storage.HashMismatchException or IOException or UnauthorizedAccessException or InvalidDataException)
+            { FileProblem(planned.Key, error); }
+            finally { activity.Drop(planned.Key); }
+            MarkDirty();
+            viewWanted = true;
+            PublishSoon();
+        }
+    }
+
+    private async Task ExecutePlannedAsync(Planned planned, CancellationToken ct)
+    {
+        var st = planned.State;
+        // Its record left this computer's state meanwhile (a removed file's past, forgotten when
+        // the name was revived in this same unit): nothing is left to do for it.
+        if (!state.Files.TryGetValue(planned.Key, out var current) || !ReferenceEquals(current, st)) return;
+        st.Refusal = null; st.RefusalKind = null; st.NewerWaiting = false; st.RemovedWaiting = false;
+        foreach (var action in planned.Plan.Actions)
+        {
+            Checkpoint("before-" + action.Kind, ct);
+            if (!await ExecuteAsync(action, planned.Input, st, planned.Project, planned.Remote, ct)) break;
         }
     }
 
@@ -713,7 +962,10 @@ public sealed partial class SyncEngine : IAsyncDisposable
     private FileState FileFor(ProjectState project, string key)
     {
         if (!state.Files.TryGetValue(key, out var st))
+        {
             state.Files[key] = st = new FileState { Path = key, ProjectId = project.Id };
+            MarkDirty();
+        }
         return st;
     }
 
@@ -723,19 +975,17 @@ public sealed partial class SyncEngine : IAsyncDisposable
         return (string.Join('/', parts[1..^1]), parts[^1]);
     }
 
-    private SavedSnapshot? SnapshotFor(FileState st, string hash)
-    {
-        var all = deps.Snapshots.Enumerate();
-        var ids = st.Entries.ToHashSet(StringComparer.Ordinal);
-        return all.LastOrDefault(s => s.Hash == hash && ids.Contains(s.Id))
-            ?? all.LastOrDefault(s => s.Hash == hash && string.Equals(s.Path, st.Path, StringComparison.OrdinalIgnoreCase));
-    }
-
+    // The file's saves of these bytes are on the server now: their journal entries are done.
     private void Complete(FileState st, string hash)
     {
-        var entries = journal.Read().Entries.ToDictionary(e => e.Id, StringComparer.Ordinal);
-        foreach (var id in st.Entries.ToArray())
-            if (entries.TryGetValue(id, out var entry) && entry.Hash == hash) { state.Completed.Add(id); st.Entries.Remove(id); }
+        for (var i = st.Entries.Count - 1; i >= 0; i--)
+        {
+            var id = st.Entries[i];
+            if (!journal.TryGet(id, out var entry) || entry.Hash != hash) continue;
+            state.Completed.Add(id);
+            st.Entries.RemoveAt(i);
+            MarkDirty();
+        }
     }
 
     private void Remember(string kind, Guid? fileId, string path, string title, string detail, string? itemDetail = null, string? reasonKind = null, string? who = null)
@@ -763,6 +1013,10 @@ public sealed partial class SyncEngine : IAsyncDisposable
         var name = NameOf(path);
         switch (error)
         {
+            case StorageTransferException:
+                // File storage refused it or took too long this time: only this file waits.
+                Problem(NoticeKinds.CantSend, path, "File storage didn't answer in time or turned it away. Armory tries again by itself.", error.Message, $"{name} didn't go through this time");
+                break;
             case Armory.Storage.HashMismatchException:
                 Problem(NoticeKinds.CantSend, path, "What arrived didn't match the team's version. Armory tries again by itself.", error.Message, $"Armory couldn't download {name}");
                 break;
@@ -799,28 +1053,102 @@ public sealed partial class SyncEngine : IAsyncDisposable
         Problem(NoticeKinds.CantRead, path, plain, raw);
     }
 
-    private void Save() => deps.State.Save(state.Serialize());
+    // ---- Publishing --------------------------------------------------------------------
 
-    // The view is built only by whoever holds the pass gate: a pass publishes as it goes,
-    // and a call from another thread (pause, settings, connect state) during a pass leaves
-    // the publishing to that pass.
-    private void Publish()
+    private static readonly TimeSpan ViewEvery = TimeSpan.FromMilliseconds(500);
+    private static readonly TimeSpan ActivityEvery = TimeSpan.FromMilliseconds(250);
+    private bool inPass, viewWanted, viewTimerSet;
+    private long lastViewBuilt;
+
+    // Something the window shows changed. With nothing running the view is built now; during a
+    // pass at most every 500 ms (and at its end); during an action, when the action ends.
+    private void RequestPublish()
     {
-        if (!passGate.Wait(0)) { publishPending = true; return; }
-        try { PublishLocked(); }
-        finally { passGate.Release(); }
+        viewWanted = true;
+        if (passGate.CurrentCount > 0) PublishLocked();
+        else if (inPass) PublishSoon();
+    }
+
+    // During a pass: now if the last view is 500 ms old, else once that much time has passed. Never
+    // while the server is being read (the next look after the read builds it).
+    private void PublishSoon()
+    {
+        if (!viewWanted || refreshing || !inPass) return;
+        var since = deps.Clock.GetElapsedTime(lastViewBuilt);
+        if (since >= ViewEvery)
+        {
+            PublishLocked();
+            return;
+        }
+        if (viewTimerSet) return;
+        viewTimerSet = true;
+        _ = LaterAsync(ViewEvery - since);
+
+        async Task LaterAsync(TimeSpan wait)
+        {
+            await Task.Delay(wait);
+            viewTimerSet = false;
+            PublishSoon();
+        }
     }
 
     private void PublishLocked()
     {
-        publishPending = false;
+        viewWanted = false;
+        lastViewBuilt = deps.Clock.GetTimestamp();
         ApplyDismissals();
         var next = BuildView();
         Volatile.Write(ref view, next);
         ViewChanged?.Invoke(next);
     }
 
-    private volatile bool publishPending;
+    // What is moving right now goes out on its own, at most four times a second, from a timer
+    // that runs while a pass does (and once more after it, so the window sees it stop).
+    private readonly object activityGate = new();
+    private Timer? activityTimer;
+    private bool activityStopping;
+    private long activityRaisedAt, activityVersionRaised = -1;
+
+    private void StartActivity()
+    {
+        lock (activityGate)
+        {
+            activityStopping = false;
+            activityTimer ??= new Timer(_ => RaiseActivity(), null, ActivityEvery, ActivityEvery);
+        }
+    }
+
+    private void StopActivity()
+    {
+        lock (activityGate) activityStopping = true;
+    }
+
+    private void RaiseActivity()
+    {
+        ActivityView snapshot;
+        lock (activityGate)
+        {
+            var now = System.Diagnostics.Stopwatch.GetTimestamp();
+            if (activityRaisedAt != 0 && System.Diagnostics.Stopwatch.GetElapsedTime(activityRaisedAt, now) < ActivityEvery) return;
+            var version = activity.Version;
+            var busy = activity.Busy;
+            if (version == activityVersionRaised && !busy)
+            {
+                if (activityStopping)
+                {
+                    activityTimer?.Dispose();
+                    activityTimer = null;
+                }
+                return;
+            }
+            snapshot = activity.Snapshot();
+            activityVersionRaised = version;
+            activityRaisedAt = now;
+            try { ActivityChanged?.Invoke(snapshot); }
+            catch (Exception error) when (error is not OutOfMemoryException) { deps.Log?.Invoke("activity: " + error.Message); }
+        }
+    }
+
     private volatile string? lastLoopError;
     private readonly ConcurrentQueue<string> pendingDismissals = new();
 
