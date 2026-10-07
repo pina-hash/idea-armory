@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The flight recorder, the glitch rules and the incident files (docs/agent/TELEMETRY.md).
+       No network and no UI: the client records into it and the agent uploads from it. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="Armory.Telemetry.Tests" />
+  </ItemGroup>
+</Project>
