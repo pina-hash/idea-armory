@@ -91,8 +91,9 @@ internal sealed class EngineState
     // Ids (captures, removals, check outs, folder operations) are handed out from blocks:
     // Sequence, as saved, is the end of the block in use, and it is saved before any id of a new
     // block is used, so an id is never handed out twice, even after a crash, and a run of 5,000
-    // captures needs a save per block, not per id. The engine reserves (IdsRunOut, ReserveIds,
-    // then a save) before it takes one.
+    // captures needs a save per block, not per id. The engine reserves a block with its save
+    // (ReserveIds(save)) before it takes one; a block whose save fails is given back, so no id
+    // comes from a block the disk never had.
     internal const long IdBlock = 1024;
     private long issued = -1;
     internal bool IdsRunOut => Issued >= Sequence;
@@ -101,6 +102,17 @@ internal sealed class EngineState
     {
         issued = Issued;
         Sequence = issued + IdBlock;
+    }
+    internal void ReserveIds(Action save)
+    {
+        var (sequence, before) = (Sequence, issued);
+        ReserveIds();
+        try { save(); }
+        catch
+        {
+            (Sequence, issued) = (sequence, before);
+            throw;
+        }
     }
     internal string NextId(string kind)
     {

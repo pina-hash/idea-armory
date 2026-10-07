@@ -340,11 +340,13 @@ public sealed partial class SyncEngine
         if (st.FileId is not { } id || !state.Projects.TryGetValue(projectId, out var project)) return;
         RemoteVersion? current = null;
         var changes = await deps.Api.ListChangesAsync(project.Id, project.Cursor, ct);
+        Proceed(ct);
         var revival = changes.FirstOrDefault(c => c.Kind == "file_revived" && c.EntityId == id);
         if (revival is not null)
         {
             RecordRevival(id, revival.CreatedAt);
             var files = await deps.Api.ProjectFilesAsync(project.Id, ct);
+            Proceed(ct);
             if (files.FirstOrDefault(f => f.Id == id) is { } revived)
             {
                 Know(project, revived);
@@ -374,7 +376,7 @@ public sealed partial class SyncEngine
     // cleared, and Core plans again from fresh state (the same intent re-derives its id).
     private async Task<bool> SendAsync(FileState st, Inflight flight, CancellationToken ct)
     {
-        ct.ThrowIfCancellationRequested(); // a crash elsewhere in this pass: nothing more is saved or sent
+        Proceed(ct); // a crash elsewhere in this pass: nothing more is saved or sent
         st.Inflight = flight;
         await FlushAsync(); // group commit: durable before the call
         return await SendDurableAsync(st, flight, ct);
@@ -383,7 +385,7 @@ public sealed partial class SyncEngine
     // The write whose in-flight record is already on disk: sent, its answer applied, cleared.
     private async Task<bool> SendDurableAsync(FileState st, Inflight flight, CancellationToken ct)
     {
-        ct.ThrowIfCancellationRequested();
+        Proceed(ct);
         wrote = true;
         if (flight.ProjectId is { } written) projectsWritten.Add(written);
         Checkpoint($"before-{flight.Kind}", ct);
@@ -427,31 +429,42 @@ public sealed partial class SyncEngine
         _ => "This save couldn't be read back from this computer's safe copy. It stays on this computer.",
     };
 
+    // Every answer is applied only while the pass goes on (Proceed right after each call): after
+    // a crash elsewhere, an answer that arrives is dropped with its in-flight record kept, exactly
+    // as a real crash would lose it, so the state saved never holds half of a step.
     private async Task<bool> SendRecordedAsync(FileState st, Inflight f, CancellationToken ct)
     {
         var device = f.Device ?? state.DeviceId!.Value;
         switch (f.Kind)
         {
             case "create":
-                st.FileId = await deps.Api.CreateFileAsync(f.ProjectId!.Value, f.Folder!, f.Name!, device, f.Operation, ct);
+            {
+                var created = await deps.Api.CreateFileAsync(f.ProjectId!.Value, f.Folder!, f.Name!, device, f.Operation, ct);
+                Proceed(ct);
+                st.FileId = created;
                 // An id this computer has seen is a revival (or this same create answered again):
                 // its history goes on. A new id is a new file, with nothing to read for it.
-                if (remoteById.ContainsKey(st.FileId.Value)) await ContinueRevivedHistoryAsync(st, f.ProjectId!.Value, ct);
+                if (remoteById.ContainsKey(created)) await ContinueRevivedHistoryAsync(st, f.ProjectId!.Value, ct);
                 return true;
+            }
             case "lock":
             {
                 // Every answer spends the attempt: a later acquire is a new intent.
                 var held = await deps.Api.AcquireLockAsync(f.FileId!.Value, device, f.Operation, ct);
+                Proceed(ct);
                 st.Attempt++;
                 if (held) KnowLock(f.FileId.Value, new RemoteLock(state.Email!, device, deps.Sessions.Current?.DeviceName, deps.Clock.GetUtcNow(), null, null, null, null));
                 return held;
             }
             case "release":
                 await deps.Api.ReleaseLockAsync(f.FileId!.Value, device, f.Operation, ct);
+                Proceed(ct);
                 KnowLock(f.FileId.Value, null);
                 return true;
             case "tombstone":
-                if (await deps.Api.TombstoneAsync(f.FileId!.Value, Parse(f.ParentId), device, f.Operation, ct))
+                var removed = await deps.Api.TombstoneAsync(f.FileId!.Value, Parse(f.ParentId), device, f.Operation, ct);
+                Proceed(ct);
+                if (removed)
                 {
                     st.SetBase(new($"tombstone:{f.FileId}", null, ""));
                     state.Completed.Add(f.EntryId!);
@@ -470,6 +483,7 @@ public sealed partial class SyncEngine
                     Checkpoint("after-blob", ct);
                     answer = await deps.Api.CommitVersionWithReleaseAsync(f.FileId!.Value, Parse(f.ParentId), ContentObjectKey.FromHash(f.Hash!), f.Hash!, f.Bytes,
                         device, f.Operation, f.SavedRelease, ct);
+                    Proceed(ct);
                 }
                 catch
                 {
@@ -507,6 +521,7 @@ public sealed partial class SyncEngine
                     Checkpoint("after-blob", ct);
                     id = await deps.Api.SaveSideVersionWithReleaseAsync(f.FileId!.Value, Parse(f.ParentId), ContentObjectKey.FromHash(f.Hash!), f.Hash!, f.Bytes,
                         f.Reason ?? "conflict", device, f.Operation, f.SavedRelease, ct);
+                    Proceed(ct);
                 }
                 catch
                 {
@@ -529,7 +544,11 @@ public sealed partial class SyncEngine
                 return true;
             }
             case "move":
-                return await deps.Api.MoveFileAsync(f.FileId!.Value, f.Folder!, f.Name!, device, f.Operation, ct);
+            {
+                var moved = await deps.Api.MoveFileAsync(f.FileId!.Value, f.Folder!, f.Name!, device, f.Operation, ct);
+                Proceed(ct);
+                return moved;
+            }
             default:
                 throw new InvalidOperationException($"Unknown in-flight write {f.Kind}.");
         }
@@ -663,63 +682,87 @@ public sealed partial class SyncEngine
     private bool ApplyRemoteMoves()
     {
         var any = false;
-        foreach (var st in state.Files.Values.Where(f => f.FileId is not null && f.LocalMoveTo is null).ToArray())
+        var moving = state.Files.Values.Where(f => f.FileId is not null && f.LocalMoveTo is null &&
+            remoteById.TryGetValue(f.FileId.Value, out var remote) && !string.Equals(remote.Path.Value, f.Path, StringComparison.Ordinal)).ToArray();
+        if (moving.Length == 0) return false;
+        // The pass's moves are one operation, shown as moving to the folder they all go to.
+        BeginMoving(moving.Count(f => local.ContainsKey(f.Path)), CommonFolder(moving.Select(f => remoteById[f.FileId!.Value].Path.Value)));
+        try
         {
-            if (!remoteById.TryGetValue(st.FileId!.Value, out var remote) || string.Equals(remote.Path.Value, st.Path, StringComparison.Ordinal)) continue;
-            // Already where the team has it on this disk (a folder move whose record a stop left
-            // behind): the record follows, nothing moves, and the file is never taken as gone.
-            if (!local.ContainsKey(st.Path) && !remote.File.Deleted && local.TryGetValue(remote.Path.Value, out var there) &&
-                (there.Hash == st.BaseHash || there.Hash == remote.File.Current?.Hash) && !HeldByWork(remote.Path.Value))
-            {
-                if (state.Files.TryGetValue(remote.Path.Value, out var newcomer) && !ReferenceEquals(newcomer, st))
-                {
-                    // Captured at its new place as a new file: that is this file.
-                    if ((newcomer.FileId is { } other && other != st.FileId) || newcomer.Inflight is not null) continue;
-                    state.Files.Remove(remote.Path.Value);
-                    foreach (var id in newcomer.Entries) if (!st.Entries.Contains(id)) st.Entries.Add(id);
-                    st.LastCaptured = newcomer.LastCaptured ?? st.LastCaptured;
-                }
-                Rekey(st, remote.Path.Value);
-                if (st.BaseHash is not null) Complete(st, st.BaseHash);
-                any = true;
-                continue;
-            }
-            // A folder being renamed or put back here moves as one, never file by file.
-            if (Held(st.Path) || Held(remote.Path.Value)) continue;
-            if (!VaultPath.TryCreate(st.Path, out var from, out _, options.VaultRoot)) continue;
-            if (state.Files.TryGetValue(remote.Path.Value, out var occupant) && !ReferenceEquals(occupant, st) && !string.Equals(remote.Path.Value, st.Path, StringComparison.OrdinalIgnoreCase))
-            {
-                Notice(NoticeKinds.NameShared, null, remote.Path.Value, $"{from.Name} was renamed to {remote.Path.Name} on the team's side. Rename your own {remote.Path.Name} so both can stay.");
-                continue;
-            }
-            if (local.TryGetValue(st.Path, out var file))
-            {
-                if (IsOpenNow(from))
-                {
-                    // Its folder was renamed or moved for the team (the rest of the folder moved already).
-                    var sameName = string.Equals(from.Name, remote.Path.Name, StringComparison.Ordinal);
-                    Notice(NoticeKinds.NewerWaiting, st.FileId, st.Path,
-                        sameName ? $"It was moved to {Where(Parent(remote.Path.Value)!)}. Close {from.Name} to finish moving it." : $"It was renamed to {remote.Path.Name}. Close {from.Name} to finish moving it.",
-                        sameName ? $"{from.Name} was moved" : $"{from.Name} was renamed");
-                    continue;
-                }
-                activity.Moving(1, Parent(remote.Path.Value) ?? remote.Path.Value);
-                var outcome = fs.Move(from, remote.Path, file.Hash);
-                activity.Moved(1);
-                if (!outcome.Succeeded)
-                {
-                    Problem(NoticeKinds.CantRead, from.Value, $"It was renamed to {remote.Path.Name} for the team, and Armory couldn't rename it here yet. Close any program that might be using it. Armory tries again by itself.",
-                        outcome.Problem ?? "Move refused");
-                    continue;
-                }
-                local.Remove(st.Path);
-                local[remote.Path.Value] = file with { Path = remote.Path };
-            }
-            Rekey(st, remote.Path.Value);
-            any = true;
+            foreach (var st in moving) any |= ApplyRemoteMove(st);
         }
+        finally { EndMoving(); }
         if (any) SaveNow();
         return any;
+    }
+
+    // The folder every one of these paths is in (the deepest one they share).
+    private static string CommonFolder(IEnumerable<string> paths)
+    {
+        string[]? common = null;
+        foreach (var path in paths)
+        {
+            var parts = path.Split('/')[..^1];
+            if (common is null) { common = parts; continue; }
+            var same = 0;
+            while (same < common.Length && same < parts.Length && string.Equals(common[same], parts[same], StringComparison.OrdinalIgnoreCase)) same++;
+            common = common[..same];
+        }
+        return string.Join('/', common ?? []);
+    }
+
+    // One file whose server folder or name changed. True when it moved (or its record did).
+    private bool ApplyRemoteMove(FileState st)
+    {
+        if (!remoteById.TryGetValue(st.FileId!.Value, out var remote) || string.Equals(remote.Path.Value, st.Path, StringComparison.Ordinal)) return false;
+        // Already where the team has it on this disk (a folder move whose record a stop left
+        // behind): the record follows, nothing moves, and the file is never taken as gone.
+        if (!local.ContainsKey(st.Path) && !remote.File.Deleted && local.TryGetValue(remote.Path.Value, out var there) &&
+            (there.Hash == st.BaseHash || there.Hash == remote.File.Current?.Hash) && !HeldByWork(remote.Path.Value))
+        {
+            if (state.Files.TryGetValue(remote.Path.Value, out var newcomer) && !ReferenceEquals(newcomer, st))
+            {
+                // Captured at its new place as a new file: that is this file.
+                if ((newcomer.FileId is { } other && other != st.FileId) || newcomer.Inflight is not null) return false;
+                state.Files.Remove(remote.Path.Value);
+                foreach (var id in newcomer.Entries) if (!st.Entries.Contains(id)) st.Entries.Add(id);
+                st.LastCaptured = newcomer.LastCaptured ?? st.LastCaptured;
+            }
+            Rekey(st, remote.Path.Value);
+            if (st.BaseHash is not null) Complete(st, st.BaseHash);
+            return true;
+        }
+        // A folder being renamed or put back here moves as one, never file by file.
+        if (Held(st.Path) || Held(remote.Path.Value)) return false;
+        if (!VaultPath.TryCreate(st.Path, out var from, out _, options.VaultRoot)) return false;
+        if (state.Files.TryGetValue(remote.Path.Value, out var occupant) && !ReferenceEquals(occupant, st) && !string.Equals(remote.Path.Value, st.Path, StringComparison.OrdinalIgnoreCase))
+        {
+            Notice(NoticeKinds.NameShared, null, remote.Path.Value, $"{from.Name} was renamed to {remote.Path.Name} on the team's side. Rename your own {remote.Path.Name} so both can stay.");
+            return false;
+        }
+        if (local.TryGetValue(st.Path, out var file))
+        {
+            if (IsOpenNow(from))
+            {
+                // Its folder was renamed or moved for the team (the rest of the folder moved already).
+                var sameName = string.Equals(from.Name, remote.Path.Name, StringComparison.Ordinal);
+                Notice(NoticeKinds.NewerWaiting, st.FileId, st.Path,
+                    sameName ? $"It was moved to {Where(Parent(remote.Path.Value)!)}. Close {from.Name} to finish moving it." : $"It was renamed to {remote.Path.Name}. Close {from.Name} to finish moving it.",
+                    sameName ? $"{from.Name} was moved" : $"{from.Name} was renamed");
+                return false;
+            }
+            var outcome = fs.Move(from, remote.Path, file.Hash);
+            if (!outcome.Succeeded)
+            {
+                Problem(NoticeKinds.CantRead, from.Value, $"It was renamed to {remote.Path.Name} for the team, and Armory couldn't rename it here yet. Close any program that might be using it. Armory tries again by itself.",
+                    outcome.Problem ?? "Move refused");
+                return false;
+            }
+            local.Remove(st.Path);
+            local[remote.Path.Value] = file with { Path = remote.Path };
+        }
+        Rekey(st, remote.Path.Value);
+        return true;
     }
 
     private void Rekey(FileState st, string to)

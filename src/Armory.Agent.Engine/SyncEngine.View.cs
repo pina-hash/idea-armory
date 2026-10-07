@@ -325,12 +325,17 @@ public sealed partial class SyncEngine
     // ---- My files and the team's files ------------------------------------------------------
 
     // The files this computer has checked out (addendum 7), in every project, archived ones too.
+    // A lock taken only for an add of a closed file (the same pass checks it in) or only for a
+    // move or a removal is no check out of the student's: never listed, so a 5,000-file import
+    // lists nothing here while its files go in. A file added while it was open is, until it
+    // closes.
     private IReadOnlyList<MyFileView> MyFiles(FileState[] files)
     {
         List<MyFileView> mine = [];
         foreach (var st in files.OrderBy(f => f.Path, StringComparer.OrdinalIgnoreCase))
         {
             if (st.FileId is not { } id) continue;
+            if (st.Request == CheckoutRequest.None && (st.TransientLock || (st.AutoCheckIn && !OpenHere(st)))) continue;
             CheckoutView checkout;
             RemoteFile? remote = null;
             TryLocal(st.Path, out var file);
@@ -354,6 +359,9 @@ public sealed partial class SyncEngine
         }
         return mine;
     }
+
+    // The file is open here now (where it is on disk; a file not on disk is not open).
+    private bool OpenHere(FileState st) => TryLocal(st.Path, out var file) && IsOpenNow(file.Path);
 
     private IReadOnlyList<ProjectView> Projects()
     {

@@ -99,22 +99,43 @@ public sealed partial class SyncEngine
     {
         state.MovingFolders.Add(move);
         SaveNow();
-        var moving = local.Keys.Count(k => Inside(k, move.From));
-        activity.Moving(moving, move.To);
-        var outcome = fs.MoveFolder(move.From, move.To);
-        activity.Moved(moving);
-        if (!outcome.Succeeded)
+        BeginMoving(local.Keys.Count(k => Inside(k, move.From)), move.To);
+        try
         {
+            var outcome = fs.MoveFolder(move.From, move.To);
+            if (!outcome.Succeeded)
+            {
+                state.MovingFolders.Remove(move);
+                SaveNow();
+                deps.Log?.Invoke($"move folder {move.From} to {move.To}: {outcome.Problem}");
+                return false;
+            }
+            CrashAt($"after-{move.Kind}-folder-move");
             state.MovingFolders.Remove(move);
+            FinishFolderMove(move, moveLocal: true);
             SaveNow();
-            deps.Log?.Invoke($"move folder {move.From} to {move.To}: {outcome.Problem}");
-            return false;
+            return true;
         }
-        CrashPoint?.Invoke($"after-{move.Kind}-folder-move");
-        state.MovingFolders.Remove(move);
-        FinishFolderMove(move, moveLocal: true);
-        SaveNow();
-        return true;
+        finally { EndMoving(); }
+    }
+
+    // One move operation, shown as moving ("Moving 120 files to Robot 2027 › Gearbox") from its
+    // start to its end: the team's answer to a rename made here, the move on this disk and the
+    // records following it. A move inside one already shown is part of it. The window hears of it
+    // through the activity messages, during a pass or a window action alike.
+    private int movingDepth;
+    private void BeginMoving(int files, string target)
+    {
+        if (movingDepth++ > 0) return;
+        activity.Moving(files, target);
+        StartActivity();
+    }
+
+    private void EndMoving()
+    {
+        if (movingDepth == 0 || --movingDepth > 0) return;
+        activity.Moved();
+        if (!inPass) StopActivity();
     }
 
     // What follows a folder move, right after it or after a stop (moveLocal: this pass's picture of
@@ -492,19 +513,24 @@ public sealed partial class SyncEngine
         var to = Relative(op.LocalTo, ps);
         foreach (var from in folders)
         {
+            ArmoryRpcException? refused = null;
+            // The team's files move with this one call: shown as moving until it answers.
+            BeginMoving(local.Keys.Count(k => Inside(k, op.LocalTo)), op.LocalTo);
             try
             {
-                CrashPoint?.Invoke("before-folder");
+                CrashAt("before-folder");
                 wrote = true;
                 staleProjects.Add(ps.Id);
                 await deps.Api.RenameFolderAsync(ps.Id, from, to, state.DeviceId!.Value, OperationIds.Derive(op.Operation.ToString(), from), ct);
-                CrashPoint?.Invoke("after-folder");
+                CrashAt("after-folder");
             }
-            catch (ArmoryRpcException error) when (!error.IsTransient)
+            catch (ArmoryRpcException error) when (!error.IsTransient) { refused = error; }
+            finally { EndMoving(); }
+            if (refused is not null)
             {
                 // Refused (someone else has a file in it checked out, or the project already has
                 // that folder): put back where it was, with one notice naming who.
-                var (reason, kind, who) = await RenameRefusalAsync(error, op, ps, ct);
+                var (reason, kind, who) = await RenameRefusalAsync(refused, op, ps, ct);
                 var putBack = new PendingFolderOp(PutBackOp, op.Operation, op.ProjectId, op.LocalFrom, op.LocalTo, reason, kind, who);
                 state.FolderOps[state.FolderOps.IndexOf(op)] = putBack;
                 SaveNow();
@@ -580,11 +606,11 @@ public sealed partial class SyncEngine
         {
             try
             {
-                CrashPoint?.Invoke("before-folder");
+                CrashAt("before-folder");
                 wrote = true;
                 staleProjects.Add(ps.Id);
                 await deps.Api.DeleteFolderAsync(ps.Id, folder, state.DeviceId!.Value, OperationIds.Derive(op.Operation.ToString(), folder), ct);
-                CrashPoint?.Invoke("after-folder");
+                CrashAt("after-folder");
             }
             catch (ArmoryRpcException error) when (!error.IsTransient)
             {
@@ -1092,32 +1118,39 @@ public sealed partial class SyncEngine
         var name = Leaf(op.LocalFrom);
         var newName = Leaf(op.LocalTo);
         await FreshAsync(ps, ct);
-        foreach (var serverFolder in ServerFolders(op.LocalFrom, ps))
+        // The team's files move with the call, then the folder here: one operation, shown as
+        // moving from the call to the end of the move here.
+        BeginMoving(local.Keys.Count(k => Inside(k, op.LocalFrom)), op.LocalTo);
+        try
         {
-            try
+            foreach (var serverFolder in ServerFolders(op.LocalFrom, ps))
             {
-                CrashPoint?.Invoke("before-folder");
-                wrote = true;
-                staleProjects.Add(ps.Id);
-                await deps.Api.RenameFolderAsync(ps.Id, serverFolder, Relative(op.LocalTo, ps), state.DeviceId!.Value, OperationIds.Derive(op.Operation.ToString(), serverFolder), ct);
-                CrashPoint?.Invoke("after-folder");
+                try
+                {
+                    CrashAt("before-folder");
+                    wrote = true;
+                    staleProjects.Add(ps.Id);
+                    await deps.Api.RenameFolderAsync(ps.Id, serverFolder, Relative(op.LocalTo, ps), state.DeviceId!.Value, OperationIds.Derive(op.Operation.ToString(), serverFolder), ct);
+                    CrashAt("after-folder");
+                }
+                catch (ArmoryRpcException error) when (!error.IsTransient)
+                {
+                    deps.Log?.Invoke($"rename folder {op.LocalFrom}: {error.Message}");
+                    state.FolderOps.Remove(op);
+                    SaveNow();
+                    if (FolderRefusal.TryParse(error.Details) is { IsTargetExists: true }) return new(false, $"{ps.Name} already has a folder named {newName}.");
+                    if (error.IsInUse) return new(false, $"{name} can't be renamed now: {(await HoldersAsync(op.LocalFrom, ps, ct)).Text}.");
+                    return new(false, $"Armory couldn't rename {name}. Try again in a moment.");
+                }
             }
-            catch (ArmoryRpcException error) when (!error.IsTransient)
+            if (!FolderOnDisk(op.LocalFrom) || (!Same(op.LocalFrom, op.LocalTo) && RekeyCollides(op.LocalFrom, op.LocalTo)) ||
+                !MoveFolderDurably(new MovingFolder(AppMove, op.LocalFrom, op.LocalTo, ps.Id)))
             {
-                deps.Log?.Invoke($"rename folder {op.LocalFrom}: {error.Message}");
                 state.FolderOps.Remove(op);
                 SaveNow();
-                if (FolderRefusal.TryParse(error.Details) is { IsTargetExists: true }) return new(false, $"{ps.Name} already has a folder named {newName}.");
-                if (error.IsInUse) return new(false, $"{name} can't be renamed now: {(await HoldersAsync(op.LocalFrom, ps, ct)).Text}.");
-                return new(false, $"Armory couldn't rename {name}. Try again in a moment.");
             }
         }
-        if (!FolderOnDisk(op.LocalFrom) || (!Same(op.LocalFrom, op.LocalTo) && RekeyCollides(op.LocalFrom, op.LocalTo)) ||
-            !MoveFolderDurably(new MovingFolder(AppMove, op.LocalFrom, op.LocalTo, ps.Id)))
-        {
-            state.FolderOps.Remove(op);
-            SaveNow();
-        }
+        finally { EndMoving(); }
         lastActivity = deps.Clock.GetUtcNow();
         return new(true, $"Renamed {name} to {newName}.");
     }
@@ -1189,11 +1222,11 @@ public sealed partial class SyncEngine
         {
             try
             {
-                CrashPoint?.Invoke("before-folder");
+                CrashAt("before-folder");
                 wrote = true;
                 staleProjects.Add(ps.Id);
                 removed += await deps.Api.DeleteFolderAsync(ps.Id, serverFolder, state.DeviceId!.Value, OperationIds.Derive(op.Operation.ToString(), serverFolder), ct);
-                CrashPoint?.Invoke("after-folder");
+                CrashAt("after-folder");
             }
             catch (ArmoryRpcException error) when (!error.IsTransient)
             {

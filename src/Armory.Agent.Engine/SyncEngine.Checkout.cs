@@ -398,16 +398,17 @@ public sealed partial class SyncEngine
 
     // After the plans ran and the server was read again: check ins, undos, closed adds and
     // locks taken only for a move or a removal let their lock go once the file is clean, and
-    // asked-for check outs take theirs.
-    // One file at a time, in path order: check outs are taken, and each lock to let go is made
-    // ready (read-only first); then the releases' in-flight records are saved together, once,
-    // and the releases are sent one by one.
+    // asked-for check outs take theirs. File by file in path order, each lock to let go is made
+    // ready (read-only first) and each asked-for check out is noted; the check outs are then
+    // taken, and once the releases' in-flight records are saved together (once), the releases
+    // are sent, both EngineOptions.TransferConcurrency at a time like the units. What a check in
+    // or an add waits for shows as "Checking in 412 of 4,900 files" in the upload direction.
     private async Task FinishRequestsAsync(CancellationToken ct)
     {
         List<(FileState State, Inflight Flight)> releases = [];
+        List<FileState> checkOuts = [];
         foreach (var st in state.Files.Values.ToArray())
         {
-            if (online != true) break;
             try
             {
                 // An asked-for check out keeps whatever lock this computer holds (KeepCheckedOut);
@@ -419,28 +420,47 @@ public sealed partial class SyncEngine
                 else
                 {
                     if (st.FileId is { } id && remoteById.TryGetValue(id, out var remote) && OwnershipOf(remote.File.Lock) != LockOwnership.ThisDevice) LetGoDone(st);
-                    await FinishCheckOutAsync(st, ct);
+                    checkOuts.Add(st);
                 }
             }
-            catch (ArmoryOfflineException) { online = false; }
             catch (Exception error) when (error is ArmoryClientException or IOException or UnauthorizedAccessException)
             { FileProblem(st.Path, error); }
         }
-        if (releases.Count > 0 && online == true) await FlushAsync();
-        foreach (var (st, flight) in releases)
+        await RunConcurrentlyAsync(checkOuts, async (st, token) =>
         {
-            if (online != true)
-            {
-                // Never sent: decided again on the next pass.
-                if (ReferenceEquals(st.Inflight, flight)) st.Inflight = null;
-                MarkDirty();
-                continue;
-            }
-            try { await SendReleaseAsync(st, flight, ct); }
+            try { await FinishCheckOutAsync(st, token); }
             catch (ArmoryOfflineException) { online = false; }
             catch (Exception error) when (error is ArmoryClientException or IOException or UnauthorizedAccessException)
             { FileProblem(st.Path, error); }
-        }
+            catch (Exception error) when (StopSaving(error)) { throw; }
+        }, notStarted: null, ct);
+        foreach (var (st, _) in releases)
+            if (st.Request == CheckoutRequest.CheckIn || (st.AutoCheckIn && st.Request == CheckoutRequest.None && !st.TransientLock)) activity.Expect(ActivityTracker.CheckIn, st.Path, 0);
+        if (releases.Count > 0 && online == true) await FlushAsync();
+        await RunConcurrentlyAsync(releases, async (release, token) =>
+        {
+            var (st, flight) = release;
+            try
+            {
+                if (await SendReleaseAsync(st, flight, token)) activity.Done(ActivityTracker.CheckIn, st.Path);
+            }
+            catch (ArmoryOfflineException) { online = false; }
+            catch (Exception error) when (error is ArmoryClientException or IOException or UnauthorizedAccessException)
+            { FileProblem(st.Path, error); }
+            catch (Exception error) when (StopSaving(error)) { throw; }
+            finally
+            {
+                activity.Drop(st.Path);
+                viewWanted = true;
+                PublishSoon();
+            }
+        }, notStarted: release =>
+        {
+            // Never sent (the connection is gone): decided again on the next pass.
+            if (ReferenceEquals(release.State.Inflight, release.Flight)) release.State.Inflight = null;
+            activity.Drop(release.State.Path);
+            MarkDirty();
+        }, ct);
     }
 
     // A check in, an undo, a closed add or a lock held only for a move or a removal, once the file
@@ -488,12 +508,14 @@ public sealed partial class SyncEngine
     }
 
     // Sent once its in-flight record is on disk (FinishRequestsAsync saved them together).
-    private async Task SendReleaseAsync(FileState st, Inflight flight, CancellationToken ct)
+    // True once the lock is let go.
+    private async Task<bool> SendReleaseAsync(FileState st, Inflight flight, CancellationToken ct)
     {
-        if (!await SendDurableAsync(st, flight, ct)) return;
+        if (!await SendDurableAsync(st, flight, ct)) return false;
         if (st.Request != CheckoutRequest.None) releaseResults[st] = ReleaseOutcome.Released;
         st.Request = CheckoutRequest.None; st.AutoCheckIn = false; st.TransientLock = false;
         MarkDirty();
+        return true;
     }
 
     private async Task FinishCheckOutAsync(FileState st, CancellationToken ct)

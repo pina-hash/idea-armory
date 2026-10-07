@@ -10,12 +10,37 @@ namespace Armory.Agent.Engine;
 // Everything else marks the document dirty and is saved at the end of the pass phase, or of the
 // action, that changed it. A crash replays from the last save: in-flight records are sent again
 // with the same operation id, and what was not saved yet is found again (AttachEntries,
-// AdoptIdenticalBases).
+// AdoptIdenticalBases). From the moment a pass fails with anything that is not one file's (a
+// simulated crash in tests, a bug), nothing is serialized again until the next pass starts: the
+// saves already serialized finish, as they would in a real crash, and nothing the failure left
+// half done (or an answer that arrived after it) ever reaches the disk.
 public sealed partial class SyncEngine
 {
     private bool dirty;
     private Task? nextFlush;
     private Task lastWrite = Task.CompletedTask;
+    // Set at the moment of a failure that is not one file's; cleared when the next pass starts.
+    private bool failing;
+    // Serializations of the state document since this start (tests compare it across a crash).
+    internal int Serializations { get; private set; }
+
+    // A failure that is not one file's: from now on no unit takes another step or applies an
+    // answer, and nothing is serialized (an exception filter calls it as the failure is thrown,
+    // before any other unit's continuation can run). A cancellation (the engine stopping) is not
+    // one: every step stops between two steps, so what is in memory may still be saved.
+    private bool StopSaving(Exception error)
+    {
+        if (error is not OperationCanceledException) failing = true;
+        return false;
+    }
+
+    // A unit (or a release) goes on to its next step, or applies an answer it was waiting for,
+    // only while the pass is neither failing nor canceled.
+    private void Proceed(CancellationToken ct)
+    {
+        if (failing) throw new OperationCanceledException("The pass failed elsewhere.");
+        ct.ThrowIfCancellationRequested();
+    }
 
     // A change that needs no save of its own: the next save carries it.
     private void MarkDirty() => dirty = true;
@@ -25,7 +50,8 @@ public sealed partial class SyncEngine
     private void SaveNow() => Write().GetAwaiter().GetResult();
 
     // Durable before the caller goes on: every caller waiting at this moment shares one save.
-    private Task FlushAsync() => nextFlush ??= FlushSoonAsync();
+    // After a failure it fails (canceled) instead, so nothing waiting on it is sent.
+    private Task FlushAsync() => failing ? Task.FromCanceled(new CancellationToken(canceled: true)) : nextFlush ??= FlushSoonAsync();
 
     private async Task FlushSoonAsync()
     {
@@ -40,9 +66,12 @@ public sealed partial class SyncEngine
     }
 
     // Serializes now (on the engine thread) and writes after every earlier write (off it). A
-    // document that did not change since the last save is not written again.
+    // document that did not change since the last save is not written again. After a failure
+    // nothing is serialized: the caller's save fails (canceled).
     private Task Write()
     {
+        if (failing) return Task.FromCanceled(new CancellationToken(canceled: true));
+        Serializations++;
         var parts = state.SerializeParts(whole: false);
         dirty = false;
         if (parts is null)
@@ -55,9 +84,15 @@ public sealed partial class SyncEngine
     }
 
     // Saves what is dirty and waits until every write so far is on disk (the end of a pass, an
-    // action or the engine). A failed write is reported to its own waiters, not here.
+    // action or the engine). A failed write is reported to its own waiters, not here. After a
+    // failure only the writes serialized before it finish.
     private async Task SettleAsync()
     {
+        if (failing)
+        {
+            await DrainAsync();
+            return;
+        }
         try
         {
             if (nextFlush is { } pending) await pending;
@@ -70,24 +105,25 @@ public sealed partial class SyncEngine
         }
     }
 
-    // After a failure (a crash, in tests): the saves already asked for finish, and nothing else is
-    // saved, as in a real crash; a new engine over the same stores never sees a write after its start.
+    // After a failure (a crash, in tests): the writes serialized before it finish and nothing
+    // else is serialized (a group commit still waiting fails without serializing), as in a real
+    // crash; a new engine over the same stores never sees a write after its start. After a
+    // cancellation (the engine stopping) a group commit still waiting is written: every unit
+    // stopped between two steps.
     private async Task DrainAsync()
     {
         try { if (nextFlush is { } pending) await pending; }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or OperationCanceledException) { }
         try { await lastWrite; }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
     }
 
-    // One id, never handed out before (EngineState.NextId): a new block is saved before its first id.
+    // One id, never handed out before (EngineState.NextId): a new block is saved before its first
+    // id, and a block whose save failed is given back, so no id ever comes from a block the disk
+    // never had.
     private string NextId(string kind)
     {
-        if (state.IdsRunOut)
-        {
-            state.ReserveIds();
-            SaveNow();
-        }
+        if (state.IdsRunOut) state.ReserveIds(SaveNow);
         return state.NextId(kind);
     }
 

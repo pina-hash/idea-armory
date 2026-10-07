@@ -88,13 +88,24 @@ public sealed partial class SyncEngine : IAsyncDisposable
 
     // Test seams. CrashPoint throws to simulate a process crash between named steps.
     internal Action<string>? CrashPoint { get; set; }
+    // What the activity panel would show now (tests read it from a crash point).
+    internal ActivityView ActivityNow => activity.Snapshot();
 
-    // A named step inside a file's unit. After a crash in another unit (the pass's token is
-    // canceled), no unit passes another step: none of them saves, sends or writes anything more.
+    // A named step inside a file's unit. After a crash in another unit (the pass is failing, or
+    // its token is canceled), no unit passes another step: none of them saves, sends or writes
+    // anything more. A crash here stops all saving at once, before any other unit runs again.
     private void Checkpoint(string point, CancellationToken ct)
     {
-        ct.ThrowIfCancellationRequested();
-        CrashPoint?.Invoke(point);
+        Proceed(ct);
+        try { CrashPoint?.Invoke(point); }
+        catch (Exception error) when (StopSaving(error)) { throw; }
+    }
+
+    // A named step outside the units (phases A and D, a window action): the same, without the token.
+    private void CrashAt(string point)
+    {
+        try { CrashPoint?.Invoke(point); }
+        catch (Exception error) when (StopSaving(error)) { throw; }
     }
 
     public SyncEngine(EngineOptions options, EngineDependencies dependencies)
@@ -196,6 +207,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
     private async Task<SyncReport> PassLockedAsync(CancellationToken ct)
     {
         var failed = true;
+        failing = false;
         try
         {
             syncing = true;
@@ -207,6 +219,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
             failed = false;
             return report;
         }
+        catch (Exception error) when (StopSaving(error)) { throw; }
         finally
         {
             inPass = false;
@@ -214,6 +227,9 @@ public sealed partial class SyncEngine : IAsyncDisposable
             activity.Reset();
             if (failed) await DrainAsync();
             else await SettleAsync();
+            // Every unit has stopped and every save serialized before the failure is on disk:
+            // the engine saves again from its next pass (a test builds a new engine instead).
+            failing = false;
             PublishLocked();
             StopActivity();
         }
@@ -280,7 +296,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
         // this computer from keeping every save.
         AttachEntries();
         Capture(session, notify: false);
-        CrashPoint?.Invoke("after-capture");
+        CrashAt("after-capture");
 
         online = await RefreshAsync(ct);
         if (online == true)
@@ -671,10 +687,10 @@ public sealed partial class SyncEngine : IAsyncDisposable
     private sealed record Planned(string Key, VaultPath Path, SyncInput Input, SyncPlan Plan, FileState State, ProjectState Project, RemoteFile? Remote);
 
     // Phase B: every path is planned with Core, in path order, and grouped into units: one file
-    // each, except that files sharing a name (in any case) in a project are one unit, in path
-    // order, so which of them gets the name never depends on timing. Offline, the plans only
-    // journal Core's intents and nothing is left to run. The activity panel learns here what the
-    // pass will move.
+    // each, except that files sharing a name as the server compares names (NameKey) in a project
+    // are one unit, in path order, so which of them gets the name never depends on timing.
+    // Offline, the plans only journal Core's intents and nothing is left to run. The activity
+    // panel learns here what the pass will move.
     private async Task<List<List<Planned>>> PlanAllAsync(bool isOnline, CancellationToken ct)
     {
         movingTo.Clear();
@@ -691,7 +707,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
                 continue;
             }
             if (planned is null) continue;
-            var name = (planned.Project.Id, planned.Path.Name.ToUpperInvariant());
+            var name = (planned.Project.Id, NameKey(planned.Path.Name));
             if (!byName.TryGetValue(name, out var unit))
             {
                 byName[name] = unit = [];
@@ -701,6 +717,25 @@ public sealed partial class SyncEngine : IAsyncDisposable
             ExpectTransfers(planned);
         }
         return units;
+    }
+
+    // The key files sharing a name are chained by (one unit). It is at least as coarse as the
+    // server's own rule, lower(normalize(name, NFC)) in PostgreSQL, so two names the server holds
+    // for one are never sent at once: compatibility forms and accents are folded away (NFKD, marks
+    // dropped, which also turns the dotted capital I into I), the capital sharp s becomes the
+    // small one, and case is folded both ways. Folding more than the server only puts a few more
+    // files in one unit.
+    internal static string NameKey(string name)
+    {
+        var decomposed = name.Normalize(System.Text.NormalizationForm.FormKD);
+        var key = new System.Text.StringBuilder(decomposed.Length);
+        foreach (var c in decomposed)
+        {
+            if (System.Globalization.CharUnicodeInfo.GetUnicodeCategory(c) is System.Globalization.UnicodeCategory.NonSpacingMark
+                or System.Globalization.UnicodeCategory.SpacingCombiningMark or System.Globalization.UnicodeCategory.EnclosingMark) continue;
+            key.Append(c == '\u1E9E' ? '\u00DF' : c);
+        }
+        return key.ToString().ToLowerInvariant().ToUpperInvariant();
     }
 
     // Paths a file is being renamed to here (an Explorer rename being sent): not planned on their own.
@@ -806,11 +841,23 @@ public sealed partial class SyncEngine : IAsyncDisposable
     // engine thread (state is only touched between awaits, on this thread). A unit runs its
     // files' plans in order, each action in order, so every crash point fires once per file in
     // the order it always did. Going offline in any unit stops new units from starting (the rest
-    // are planned offline); any failure that is not one file's (a crash, in tests) cancels every
-    // unit and is thrown only after all of them stopped, so nothing of this engine writes after it.
-    private async Task RunUnitsAsync(List<List<Planned>> units, CancellationToken ct)
+    // are planned offline); any failure that is not one file's (a crash, in tests) stops every
+    // unit at its next step and is thrown only after all of them stopped, so nothing of this
+    // engine writes after it.
+    private Task RunUnitsAsync(List<List<Planned>> units, CancellationToken ct)
+        => RunConcurrentlyAsync(units, RunUnitAsync, notStarted: unit =>
+        {
+            // Offline: what was not started yet is planned offline, its intents journaled.
+            foreach (var planned in unit) JournalOffline(Reconciler.Plan(planned.Input with { IsOnline = false }), planned.State);
+        }, ct);
+
+    // Runs each item (a unit, a check out, a release) at most TransferConcurrency at once, as
+    // interleaved async tasks on the engine thread. Going offline starts nothing more (notStarted
+    // gets each item that never started); a failure that is not one item's cancels the others,
+    // each at its next step, and is thrown once every one of them has stopped.
+    private async Task RunConcurrentlyAsync<T>(IReadOnlyList<T> items, Func<T, CancellationToken, Task> run, Action<T>? notStarted, CancellationToken ct)
     {
-        if (units.Count == 0) return;
+        if (items.Count == 0) return;
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var concurrency = Math.Max(1, options.TransferConcurrency);
         List<Task> running = [];
@@ -818,9 +865,9 @@ public sealed partial class SyncEngine : IAsyncDisposable
         var next = 0;
         while (true)
         {
-            while (fatal is null && online == true && next < units.Count && running.Count < concurrency)
+            while (fatal is null && online == true && next < items.Count && running.Count < concurrency)
             {
-                var task = RunUnitAsync(units[next++], stop.Token);
+                var task = run(items[next++], stop.Token);
                 if (task.IsCompleted) Ended(task); // nothing to wait for (most files, most passes)
                 else running.Add(task);
             }
@@ -830,9 +877,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
             Ended(done);
         }
         fatal?.Throw();
-        // Offline: what was not started yet is planned offline, its intents journaled.
-        for (; next < units.Count; next++)
-            foreach (var planned in units[next]) JournalOffline(Reconciler.Plan(planned.Input with { IsOnline = false }), planned.State);
+        if (notStarted is not null) for (; next < items.Count; next++) notStarted(items[next]);
 
         void Ended(Task task)
         {
@@ -846,7 +891,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
     {
         foreach (var planned in unit)
         {
-            ct.ThrowIfCancellationRequested();
+            Proceed(ct);
             if (online != true)
             {
                 JournalOffline(Reconciler.Plan(planned.Input with { IsOnline = false }), planned.State);
@@ -856,6 +901,8 @@ public sealed partial class SyncEngine : IAsyncDisposable
             catch (ArmoryOfflineException) { online = false; }
             catch (Exception error) when (error is ArmoryClientException or Armory.Storage.HashMismatchException or IOException or UnauthorizedAccessException or InvalidDataException)
             { FileProblem(planned.Key, error); }
+            // Anything else is not this file's: nothing is saved from the moment it is thrown.
+            catch (Exception error) when (StopSaving(error)) { throw; }
             finally { activity.Drop(planned.Key); }
             MarkDirty();
             viewWanted = true;
