@@ -19,9 +19,9 @@
  * state can be drawn without a click:
  *   project=<projectId>  folder=<folder path in the project; empty for its top>
  *   select=<name>,<name> (files in that folder)  expand=<notice key>
- *   dialog=newFolder|renameFolder|deleteFolder|checkOutAll|takeBack|forceAll|renameFile
+ *   dialog=newFolder|renameFolder|deleteFolder|checkOutAll|takeBack|forceAll|renameFile|report
  *     (renameFile asks about the first file in the open notice list; forceAll is Force check
- *     in all for the open folder)
+ *     in all for the open folder; report is Report a problem)
  *   press=<control key> (the page presses that key once it is drawn, and the demo holds every
  *     answer, so what a press shows while it waits stays in view)
  *   drag=1 (files held over the list)
@@ -259,7 +259,7 @@
 	/**
 	 * Page to host. Fields per type (an action also carries the requestId its actionResult
 	 * answers; ACTIONS below lists them):
-	 *   ready, connect, cancelConnect, signOut, pause, resume, openVault, chooseVaultRoot: none
+	 *   ready, connect, cancelConnect, signOut, pause, resume, openVault, chooseVaultRoot, openIncidents: none
 	 *   openFile: { fileId }                  (the host answers with fileDetail)
 	 *   launchFile: { path }                  (opens it in its own program: SolidWorks for a part)
 	 *   showInFolder: { path }
@@ -271,10 +271,14 @@
 	 *   dropFiles: { projectId, folder }      (sent with the dropped File objects)
 	 *   dismissNotice: { key }               (a notice card's key, or the check-out question's)
 	 *   saveSettings: { vaultRoot, startAtSignIn, theme }
+	 *   reportProblem: { kind, body }         (kind: bug, idea or other; the host saves it with a
+	 *                                          fresh incident and answers in one sentence)
+	 *   openIncidents: none                   (opens the incidents folder in File Explorer)
 	 * @typedef {'ready' | 'connect' | 'cancelConnect' | 'signOut' | 'pause' | 'resume'
 	 *   | 'openVault' | 'openFile' | 'launchFile' | 'showInFolder' | 'checkOut' | 'checkIn'
 	 *   | 'undoCheckOut' | 'takeBack' | 'createFolder' | 'renameFolder' | 'deleteFolder' | 'renameFile'
-	 *   | 'addFiles' | 'dropFiles' | 'dismissNotice' | 'saveSettings' | 'chooseVaultRoot'} PageMessageType
+	 *   | 'addFiles' | 'dropFiles' | 'dismissNotice' | 'saveSettings' | 'chooseVaultRoot'
+	 *   | 'reportProblem' | 'openIncidents'} PageMessageType
 	 */
 
 	/**
@@ -287,7 +291,7 @@
 	 * @property {string | null} folder    a folder path in that project
 	 * @property {string[]} select         file names in that folder
 	 * @property {string | null} expand    a notice key
-	 * @property {string | null} dialog    newFolder, renameFolder, deleteFolder, checkOutAll, takeBack, forceAll or renameFile
+	 * @property {string | null} dialog    newFolder, renameFolder, deleteFolder, checkOutAll, takeBack, forceAll, renameFile or report
 	 * @property {boolean} drag
 	 * @property {string | null} at        a part of Home to scroll into view: browser
 	 * @property {string | null} press     a control key the page presses once it is drawn
@@ -296,7 +300,7 @@
 	/* ------------------------------------------------------- Message lists */
 
 	/** Page to host message types (BRIDGE.md, "Page to host"). */
-	var PAGE_TO_HOST = ['ready', 'connect', 'cancelConnect', 'signOut', 'pause', 'resume', 'openVault', 'openFile', 'launchFile', 'showInFolder', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'dismissNotice', 'saveSettings', 'chooseVaultRoot'];
+	var PAGE_TO_HOST = ['ready', 'connect', 'cancelConnect', 'signOut', 'pause', 'resume', 'openVault', 'openFile', 'launchFile', 'showInFolder', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'dismissNotice', 'saveSettings', 'chooseVaultRoot', 'reportProblem', 'openIncidents'];
 
 	/** Host to page message types (BRIDGE.md, "Host to page"). */
 	var HOST_TO_PAGE = ['view', 'fileDetail', 'activity', 'actionResult'];
@@ -317,11 +321,12 @@
 		addFiles: ['projectId', 'folder'],
 		dropFiles: ['projectId', 'folder'],
 		dismissNotice: ['key'],
-		saveSettings: ['vaultRoot', 'startAtSignIn', 'theme']
+		saveSettings: ['vaultRoot', 'startAtSignIn', 'theme'],
+		reportProblem: ['kind', 'body']
 	};
 
 	/** Actions: each carries a requestId, and the host answers it with one actionResult. */
-	var ACTIONS = ['launchFile', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles'];
+	var ACTIONS = ['launchFile', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'reportProblem'];
 
 	/* ----------------------------------------------------------- Plumbing */
 
@@ -726,10 +731,15 @@
 					view.vaultRoot = demo.pickedVaultRoot;
 					postView();
 					break;
+				case 'reportProblem':
+					// The website's side is not live yet: the app saves the report and says so.
+					result(message, true, 'Saved. It will be sent when the website is ready.');
+					break;
 				case 'openVault':
 				case 'showInFolder':
 				case 'addFiles':
 				case 'dropFiles':
+				case 'openIncidents':
 					// In the app these open File Explorer or a file picker, or copy the dropped
 					// files in. The demo has nothing to open or copy, so it only says so.
 					console.info('Armory demo: ' + message.type, message.path || message.folder || view.vaultRoot, files ? files.length + ' dropped' : '');

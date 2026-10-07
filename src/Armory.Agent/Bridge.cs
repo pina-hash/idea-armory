@@ -22,6 +22,8 @@ internal sealed record AddFilesMessage(string? ProjectId, string? Folder, string
 internal sealed record DropFilesMessage(string? ProjectId, string? Folder, string? RequestId);
 internal sealed record DismissNoticeMessage(string? Key);
 internal sealed record SaveSettingsMessage(string? VaultRoot, bool? StartAtSignIn, string? Theme);
+// Report a problem: kind is bug, idea or other; body is what the person wrote.
+internal sealed record ReportProblemMessage(string? Kind, string? Body, string? RequestId);
 
 // What the bridge needs from the window it lives in. Every member runs on the UI thread.
 internal interface IBridgeWindow
@@ -68,6 +70,8 @@ internal sealed class Bridge(AgentHost host, IBridgeWindow window, AgentLog log)
         [BridgeMessages.DismissNotice] = typeof(DismissNoticeMessage),
         [BridgeMessages.SaveSettings] = typeof(SaveSettingsMessage),
         [BridgeMessages.ChooseVaultRoot] = null,
+        [BridgeMessages.ReportProblem] = typeof(ReportProblemMessage),
+        [BridgeMessages.OpenIncidents] = null,
     };
 
     // The answer to an action the window sent with something unusable in it.
@@ -118,6 +122,9 @@ internal sealed class Bridge(AgentHost host, IBridgeWindow window, AgentLog log)
     internal async Task HandleAsync(string webMessageJson, IReadOnlyList<string>? files = null)
     {
         if (!TryRead(webMessageJson, out var type, out var message)) return;
+        // When the window asked: an action's answer is timed from here (the flight recorder's
+        // window actions, and the slowAction rule over 10 seconds).
+        var asked = host.Telemetry.Recorder.Now();
         try
         {
             switch (type)
@@ -148,30 +155,30 @@ internal sealed class Bridge(AgentHost host, IBridgeWindow window, AgentLog log)
                     break;
                 case BridgeMessages.LaunchFile:
                     var launch = Read<LaunchFileMessage>(message);
-                    await AnswerAsync(launch?.RequestId, TryPath(launch?.Path, out var file) ? host.LaunchFileAsync(file) : Refuse(NotAFile));
+                    await AnswerAsync(type, 1, asked, launch?.RequestId, TryPath(launch?.Path, out var file) ? host.LaunchFileAsync(file) : Refuse(NotAFile));
                     break;
                 case BridgeMessages.ShowInFolder:
                     ShowInFolder(Read<ShowInFolderMessage>(message));
                     break;
                 case BridgeMessages.CheckOut:
                     var checkOut = Read<CheckOutMessage>(message);
-                    await AnswerAsync(checkOut?.RequestId, TryPaths(checkOut?.Paths, out var outPaths) ? host.CheckOutAsync(outPaths, checkOut!.Open == true) : Refuse(NotAFile));
+                    await AnswerAsync(type, checkOut?.Paths?.Count ?? 0, asked, checkOut?.RequestId, TryPaths(checkOut?.Paths, out var outPaths) ? host.CheckOutAsync(outPaths, checkOut!.Open == true) : Refuse(NotAFile));
                     break;
                 case BridgeMessages.CheckIn:
                     var checkIn = Read<CheckInMessage>(message);
-                    await AnswerAsync(checkIn?.RequestId, TryPaths(checkIn?.Paths, out var inPaths) ? host.CheckInAsync(inPaths) : Refuse(NotAFile));
+                    await AnswerAsync(type, checkIn?.Paths?.Count ?? 0, asked, checkIn?.RequestId, TryPaths(checkIn?.Paths, out var inPaths) ? host.CheckInAsync(inPaths) : Refuse(NotAFile));
                     break;
                 case BridgeMessages.UndoCheckOut:
                     var undo = Read<UndoCheckOutMessage>(message);
-                    await AnswerAsync(undo?.RequestId, TryPaths(undo?.Paths, out var undoPaths) ? host.UndoCheckOutAsync(undoPaths) : Refuse(NotAFile));
+                    await AnswerAsync(type, undo?.Paths?.Count ?? 0, asked, undo?.RequestId, TryPaths(undo?.Paths, out var undoPaths) ? host.UndoCheckOutAsync(undoPaths) : Refuse(NotAFile));
                     break;
                 case BridgeMessages.TakeBack:
                     var takeBack = Read<TakeBackMessage>(message);
-                    await AnswerAsync(takeBack?.RequestId, Guid.TryParse(takeBack?.FileId, out var taken) ? host.TakeBackAsync(taken) : Refuse(NotAFile));
+                    await AnswerAsync(type, 1, asked, takeBack?.RequestId, Guid.TryParse(takeBack?.FileId, out var taken) ? host.TakeBackAsync(taken) : Refuse(NotAFile));
                     break;
                 case BridgeMessages.CreateFolder:
                     var create = Read<CreateFolderMessage>(message);
-                    await AnswerAsync(create?.RequestId,
+                    await AnswerAsync(type, 1, asked, create?.RequestId,
                         !Guid.TryParse(create?.ProjectId, out var createIn) ? Refuse(NotAProject)
                         : !TryFolder(create!.Parent, allowTop: true, out var parent) ? Refuse(NotAFile)
                         : !TryName(create.Name, out var newFolder) ? Refuse(NotAName)
@@ -179,7 +186,7 @@ internal sealed class Bridge(AgentHost host, IBridgeWindow window, AgentLog log)
                     break;
                 case BridgeMessages.RenameFolder:
                     var rename = Read<RenameFolderMessage>(message);
-                    await AnswerAsync(rename?.RequestId,
+                    await AnswerAsync(type, 1, asked, rename?.RequestId,
                         !Guid.TryParse(rename?.ProjectId, out var renameIn) ? Refuse(NotAProject)
                         : !TryFolder(rename!.Folder, allowTop: false, out var renamed) ? Refuse(NotAFile)
                         : !TryName(rename.NewName, out var newName) ? Refuse(NotAName)
@@ -187,14 +194,14 @@ internal sealed class Bridge(AgentHost host, IBridgeWindow window, AgentLog log)
                     break;
                 case BridgeMessages.DeleteFolder:
                     var delete = Read<DeleteFolderMessage>(message);
-                    await AnswerAsync(delete?.RequestId,
+                    await AnswerAsync(type, 1, asked, delete?.RequestId,
                         !Guid.TryParse(delete?.ProjectId, out var deleteIn) ? Refuse(NotAProject)
                         : !TryFolder(delete!.Folder, allowTop: false, out var deleted) ? Refuse(NotAFile)
                         : host.DeleteFolderAsync(deleteIn, deleted));
                     break;
                 case BridgeMessages.RenameFile:
                     var renameFile = Read<RenameFileMessage>(message);
-                    await AnswerAsync(renameFile?.RequestId,
+                    await AnswerAsync(type, 1, asked, renameFile?.RequestId,
                         !TryPath(renameFile?.Path, out var renamedFile) ? Refuse(NotAFile)
                         : !TryName(renameFile!.NewName, out var newFileName) ? Refuse(NotAFileName)
                         : host.RenameFileAsync(renamedFile, newFileName));
@@ -202,16 +209,21 @@ internal sealed class Bridge(AgentHost host, IBridgeWindow window, AgentLog log)
                 case BridgeMessages.AddFiles:
                     // The Windows file picker chooses the files (on this, the window's thread);
                     // closing it adds nothing and says nothing.
+                    // The time the student spends in the picker is not the app's: the answer is
+                    // timed from when the picker closes.
                     var add = Read<AddFilesMessage>(message);
-                    await AnswerAsync(add?.RequestId,
-                        !Guid.TryParse(add?.ProjectId, out var addIn) ? Refuse(NotAProject)
-                        : !TryFolder(add!.Folder, allowTop: true, out var addTo) ? Refuse(NotAFile)
-                        : window.ChooseFiles(AddTitle(addTo)) is { Count: > 0 } chosen ? host.AddFilesAsync(addIn, addTo, chosen)
-                        : Refuse(Nothing));
+                    if (!Guid.TryParse(add?.ProjectId, out var addIn)) await AnswerAsync(type, 0, asked, add?.RequestId, Refuse(NotAProject));
+                    else if (!TryFolder(add!.Folder, allowTop: true, out var addTo)) await AnswerAsync(type, 0, asked, add.RequestId, Refuse(NotAFile));
+                    else
+                    {
+                        var chosen = window.ChooseFiles(AddTitle(addTo));
+                        await AnswerAsync(type, chosen?.Count ?? 0, host.Telemetry.Recorder.Now(), add.RequestId,
+                            chosen is { Count: > 0 } ? host.AddFilesAsync(addIn, addTo, chosen) : Refuse(Nothing));
+                    }
                     break;
                 case BridgeMessages.DropFiles:
                     var drop = Read<DropFilesMessage>(message);
-                    await AnswerAsync(drop?.RequestId,
+                    await AnswerAsync(type, files?.Count ?? 0, asked, drop?.RequestId,
                         !Guid.TryParse(drop?.ProjectId, out var dropIn) ? Refuse(NotAProject)
                         : !TryFolder(drop!.Folder, allowTop: true, out var dropTo) ? Refuse(NotAFile)
                         : host.AddFilesAsync(dropIn, dropTo, files ?? []));
@@ -226,6 +238,15 @@ internal sealed class Bridge(AgentHost host, IBridgeWindow window, AgentLog log)
                 case BridgeMessages.ChooseVaultRoot:
                     await ChooseVaultRootAsync();
                     break;
+                case BridgeMessages.ReportProblem:
+                    var report = Read<ReportProblemMessage>(message);
+                    await AnswerAsync(type, 0, asked, report?.RequestId, host.ReportProblemAsync(report?.Kind, report?.Body));
+                    break;
+                case BridgeMessages.OpenIncidents:
+                    // The incidents folder, so a person can hand the files over by hand today.
+                    Directory.CreateDirectory(host.Telemetry.IncidentsFolder);
+                    Shell.OpenFolder(host.Telemetry.IncidentsFolder);
+                    break;
                 default:
                     log.Info("ignored a window message of unknown type " + type);
                     return;
@@ -234,6 +255,7 @@ internal sealed class Bridge(AgentHost host, IBridgeWindow window, AgentLog log)
         catch (Exception error) when (error is not OutOfMemoryException)
         {
             log.Error("window message " + type + " failed", error);
+            host.Telemetry.Recorder.Exception("window message " + type, error);
         }
     }
 
@@ -245,17 +267,21 @@ internal sealed class Bridge(AgentHost host, IBridgeWindow window, AgentLog log)
 
     private void PostView() => window.Post(BridgeMessages.ViewMessage(host.View));
 
-    // Every action gets exactly one actionResult, with its requestId, even when it fails.
-    private async Task AnswerAsync(string? requestId, Task<ActionResult> work)
+    // Every action gets exactly one actionResult, with its requestId, even when it fails. How
+    // long the window waited for it goes into the flight recorder.
+    private async Task AnswerAsync(string type, int targets, long asked, string? requestId, Task<ActionResult> work)
     {
         ActionResult result;
         try { result = await work; }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
             log.Error("a window action failed", error);
+            host.Telemetry.Recorder.Exception("window action " + type, error);
             result = new ActionResult(false, "Armory couldn't do that. Try again in a moment.");
         }
         window.Post(BridgeMessages.ActionResultMessage(requestId, result.Ok, result.Message));
+        var recorder = host.Telemetry.Recorder;
+        recorder.WindowAction(type, targets, recorder.MillisecondsSince(asked), result.Ok);
     }
 
     private static Task<ActionResult> Refuse(ActionResult why) => Task.FromResult(why);

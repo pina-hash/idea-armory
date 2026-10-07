@@ -48,7 +48,7 @@
 //               fully painted in both.
 //   bridge      inside a stand-in WebView2 host (no demo transport): the page says ready
 //               first, renders Home, detail and Connect from host messages alone, wears
-//               effectiveTheme, ignores a stray or unknown message, and every one of the 23
+//               effectiveTheme, ignores a stray or unknown message, and every one of the 25
 //               page-to-host types is sent by the control that should send it, carrying
 //               exactly the fields BRIDGE.md gives it (an action's requestId included; a
 //               drop goes with its files through postMessageWithAdditionalObjects). An
@@ -1085,13 +1085,30 @@ for (const size of SIZES) {
 		expect(!(await page.$('.prompt-card')), 'the question stayed after Check out and reopen');
 		expect(/^Checked out Plate-Left\.SLDPRT\. Close Plate-Left\.SLDPRT in SolidWorks first/.test(await text(page, '#result-word')), `the answer says "${await text(page, '#result-word')}"`);
 	});
+	await flow('report a problem', size, 'synced', async (page, expect) => {
+		await page.click('[data-key="hdr-settings"]');
+		await settle(page);
+		await page.click('[data-key="set-report"]');
+		await settle(page);
+		expect(await page.evaluate(() => document.getElementById('ask').open && !document.getElementById('settings').open), 'Report a problem did not open over Home');
+		expect((await page.evaluate(() => document.activeElement && document.activeElement.id)) === 'ask-report', 'the words field does not have focus');
+		expect((await page.getAttribute('[data-key="ask-kind-bug"]', 'aria-pressed')) === 'true', 'a report does not start as a bug');
+		await page.click('[data-key="ask-kind-other"]');
+		expect((await page.getAttribute('[data-key="ask-kind-other"]', 'aria-pressed')) === 'true' && (await page.getAttribute('[data-key="ask-kind-bug"]', 'aria-pressed')) === 'false', 'Other did not become the kind');
+		await page.fill('#ask-report', 'The ring stayed at 0 after I signed in.');
+		await page.click('[data-key="ask-ok"]');
+		await settle(page);
+		expect(!(await page.evaluate(() => document.getElementById('ask').open)), 'Send left the dialog open');
+		expect((await text(page, '#result-word')) === 'Saved. It will be sent when the website is ready.', `the answer says "${await text(page, '#result-word')}"`);
+		expect((await page.evaluate(() => document.activeElement && document.activeElement.getAttribute('data-key'))) === 'hdr-settings', 'focus did not come back to Settings');
+	});
 	await flow('settings sheet', size, 'synced', async (page, expect) => {
 		await page.click('[data-key="hdr-settings"]');
 		await settle(page);
 		expect(await page.evaluate(() => document.getElementById('settings').open), 'Settings did not open');
 		// A theme pad says its name and, under it, what it is ("Dark", "Light"); the name is the setting.
 		const keys = await page.$$eval('#settings button', (b) => b.map((x) => (x.querySelector('.seg-name') || x).textContent.trim()));
-		expect(keys.join('|') === 'Done|Change|On|Match Windows|IDEA|Space White', `sheet holds ${keys.join(', ')}`);
+		expect(keys.join('|') === 'Done|Change|On|Match Windows|IDEA|Space White|Report a problem|Open incidents folder', `sheet holds ${keys.join(', ')}`);
 		await page.click('[data-key="set-theme-spaceWhite"]');
 		await settle(page);
 		expect((await page.getAttribute('html', 'data-theme')) === 'spaceWhite', 'Space White did not apply');
@@ -1243,7 +1260,9 @@ const CONTRACT = {
 	dropFiles: ['projectId', 'folder', ...ACT],
 	dismissNotice: ['key'],
 	saveSettings: ['vaultRoot', 'startAtSignIn', 'theme'],
-	chooseVaultRoot: []
+	chooseVaultRoot: [],
+	reportProblem: ['kind', 'body', ...ACT],
+	openIncidents: []
 };
 tally.bridgeFailures = 0;
 tally.bridgeTypes = 0;
@@ -1519,6 +1538,20 @@ tally.bridgeTypes = 0;
 		expect(m.type === 'saveSettings' && m.startAtSignIn === false && m.theme === 'system' && m.vaultRoot === 'C:\\IDEA\\Armory', 'the switch sent ' + JSON.stringify(m));
 		m = await click('[data-key="set-theme-spaceWhite"]');
 		expect(m.type === 'saveSettings' && m.theme === 'spaceWhite' && m.startAtSignIn === true, 'a theme pad sent ' + JSON.stringify(m));
+		m = await click('[data-key="set-incidents"]');
+		expect(m.type === 'openIncidents', 'Open incidents folder sent ' + JSON.stringify(m));
+		// Report a problem: nothing goes until Send, and empty words are refused in the page.
+		m = await click('[data-key="set-report"]');
+		expect(!m.type && (await page.evaluate(() => document.getElementById('ask').open)), 'Report a problem did not open its dialog: ' + JSON.stringify(m));
+		m = await click('[data-key="ask-ok"]');
+		expect(!m.type && /Write a few words/.test(await page.textContent('#ask-error')), 'an empty report was sent: ' + JSON.stringify(m));
+		await click('[data-key="ask-kind-idea"]');
+		await page.fill('#ask-report', 'A button to check in every file I have.');
+		m = await click('[data-key="ask-ok"]');
+		expect(m.type === 'reportProblem' && m.kind === 'idea' && m.body === 'A button to check in every file I have.', 'Send sent ' + JSON.stringify(m));
+		await host({ type: 'actionResult', requestId: m.requestId, ok: true, message: 'Saved. It will be sent when the website is ready.' });
+		expect((await page.textContent('#result-word')) === 'Saved. It will be sent when the website is ready.', 'the report\'s answer was not shown');
+		await click('[data-key="hdr-settings"]');
 		await page.keyboard.press('Escape');
 		m = await click('[data-key="signout"]');
 		expect(m.type === 'signOut', 'Sign out sent ' + JSON.stringify(m));

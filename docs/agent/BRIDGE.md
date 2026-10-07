@@ -263,6 +263,8 @@ replaces all of it. The spinner holds still under `prefers-reduced-motion`.
 | `dismissNotice` | `key` | a notice's Done or OK (`dismissNotice` action); Not now or OK on the check-out question (its `PromptView.key`) | the host drops that notice card, or that one question and asks about the next file SolidWorks has open without a check out |
 | `saveSettings` | `vaultRoot`, `startAtSignIn`, `theme` | a setting, Use (a folder of my own) | saves settings; host answers with `view` |
 | `chooseVaultRoot` | | Change, Choose another folder | host shows a folder picker, then answers with `view` |
+| `reportProblem` | `kind`, `body`, `requestId` | Send in Report a problem (Settings), after the page refuses empty words | `kind` is `bug`, `idea` or `other`; the host saves the words with a fresh `userReport` incident and sends them when the website can take them (docs/agent/TELEMETRY.md); the answer is one sentence, "Saved. It will be sent when the website is ready." while the site's half is not live |
+| `openIncidents` | | Open incidents folder (Settings) | opens `%LOCALAPPDATA%\IDEA Armory\incidents` in File Explorer, so the files can be handed over by hand |
 
 ## The demo
 
@@ -271,9 +273,9 @@ Outside WebView2, `?state=<name>` picks a demo state (`demo/states.js`), `theme=
 screen and `file=<fileId>` the file on File detail. The page-only places, so every
 state can be drawn without a click, are `project=<projectId>`, `folder=<path in the
 project>`, `select=<name>,<name>` (files in that folder), `expand=<notice key>`,
-`dialog=newFolder|renameFolder|deleteFolder|checkOutAll|takeBack|forceAll|renameFile`
+`dialog=newFolder|renameFolder|deleteFolder|checkOutAll|takeBack|forceAll|renameFile|report`
 (renameFile asks about the first file of the open notice list; forceAll is Force check in
-all for the open folder), `drag=1` (files held over the list), `at=browser` (Home
+all for the open folder; report is Report a problem), `drag=1` (files held over the list), `at=browser` (Home
 scrolled to Team files) and `press=<control key>` (the page presses that key once it is
 drawn, and the demo holds every answer, so the working state stays in view); `result=<words>` (with
 `resultOk=0` for a refusal) has the demo answer as if an action had just come back.

@@ -1645,6 +1645,16 @@
 				'<span class="seg-words"><span class="seg-name">' + esc(t[1]) + '</span><span class="seg-sub">' + esc(t[2]) + '</span></span></button>';
 		});
 		html += '</div></section>';
+
+		// Something wrong: a person's own report, and the folder of saved reports to hand over by hand.
+		html += '<section class="setting" aria-labelledby="set-report-label">';
+		html += '<h3 class="section-label" id="set-report-label">Something not working?</h3>';
+		html += '<div class="setting-row">';
+		html += '<button class="key" type="button" data-action="askReport" data-key="set-report" aria-haspopup="dialog">Report a problem</button>';
+		html += '<button class="textlink" type="button" data-action="openIncidents" data-key="set-incidents">' + icon('folder') + '<span>Open incidents folder</span></button>';
+		html += '</div>';
+		html += '<p class="setting-help">Armory keeps a short record of what it was doing when something goes wrong: file names, never what is in your files. A report sends your words with it.</p>';
+		html += '</section>';
 		return html;
 	}
 
@@ -1684,7 +1694,7 @@
 		ui.ask = { kind: kind, ctx: ctx, returnKey: returnKey || null };
 		ask.innerHTML = askHtml(kind, ctx);
 		if (!ask.open) ask.showModal();
-		var field = ask.querySelector('input');
+		var field = ask.querySelector('input, textarea');
 		if (field) {
 			field.focus();
 			// A file's new name usually keeps its kind: only the part before the dot is picked.
@@ -1703,7 +1713,14 @@
 		// A question whose answer locks the team out of files, or removes something, starts
 		// on Cancel, so Enter never does it by accident.
 		var cancelFirst = false;
-		if (kind === 'checkOutAll') {
+		var extra = '';
+		if (kind === 'report') {
+			title = 'Report a problem';
+			body = 'Tell us what went wrong, or what would make Armory better. Your words go with a short record of what Armory was doing: file names, never what is in your files.';
+			extra = reportKindsHtml(c.kind);
+			field = areaHtml('What happened?');
+			ok = 'Send';
+		} else if (kind === 'checkOutAll') {
 			title = 'Check out all';
 			var them = c.count === 1 ? 'it' : 'them';
 			body =
@@ -1747,11 +1764,36 @@
 			titleBar('h2', title, ' id="ask-title"') +
 			'<div class="ask-body">' +
 			'<p class="ask-words" id="ask-words">' + esc(glue(body)) + '</p>' +
+			extra +
 			field +
 			'<div class="ask-keys">' +
 			'<button class="key' + (danger ? ' danger' : cancelFirst ? '' : ' primary') + '" type="button" data-action="askOk" data-key="ask-ok">' + esc(glue(ok)) + '</button>' +
 			'<button class="key" type="button" data-action="askCancel" data-key="ask-cancel"' + (field || !(danger || cancelFirst) ? '' : ' data-ask-first="true"') + '>Cancel</button>' +
 			'</div></div>'
+		);
+	}
+
+	/** A report is a bug, an idea or something else: one choice of three, like the theme. */
+	function reportKindsHtml(picked) {
+		var kinds = [
+			['bug', 'Bug', 'Something broke'],
+			['idea', 'Idea', 'Something to add'],
+			['other', 'Other', 'Anything else']
+		];
+		var html = '<div class="segmented report-kinds" role="group" aria-label="What kind of report">';
+		kinds.forEach(function (k) {
+			html +=
+				'<button class="pad seg seg-plain" type="button" data-action="reportKind" data-value="' + k[0] + '" data-key="ask-kind-' + k[0] + '" aria-pressed="' + (picked === k[0]) + '">' +
+				'<span class="seg-words"><span class="seg-name">' + esc(k[1]) + '</span><span class="seg-sub">' + esc(k[2]) + '</span></span></button>';
+		});
+		return html + '</div>';
+	}
+
+	function areaHtml(label) {
+		return (
+			'<label class="field-label label" for="ask-report">' + esc(label) + '</label>' +
+			'<textarea class="field field-area" id="ask-report" data-key="ask-report" rows="5" maxlength="8000" spellcheck="true" aria-describedby="ask-words ask-error"></textarea>' +
+			'<p class="field-error" id="ask-error" aria-live="polite"></p>'
 		);
 	}
 
@@ -1792,7 +1834,17 @@
 		var a = ui.ask;
 		if (!a) return;
 		var c = a.ctx;
-		if (a.kind === 'renameFile') {
+		if (a.kind === 'report') {
+			var area = ask.querySelector('#ask-report');
+			var words = area.value.trim();
+			if (!words) {
+				ask.querySelector('#ask-error').textContent = 'Write a few words about what happened.';
+				area.setAttribute('aria-invalid', 'true');
+				area.focus();
+				return;
+			}
+			act('reportProblem', { kind: c.kind, body: words }, { key: a.returnKey });
+		} else if (a.kind === 'renameFile') {
 			var fileInput = ask.querySelector('#ask-name');
 			var newName = fileInput.value.trim();
 			var wrong = fileNameProblem(newName, c);
@@ -2057,6 +2109,8 @@
 				return { line: 'Choosing files to add...', row: null };
 			case 'dropFiles':
 				return { line: 'Adding files...', row: null };
+			case 'reportProblem':
+				return { line: 'Sending your report...', row: null };
 		}
 		return { line: null, row: null };
 	}
@@ -2667,6 +2721,22 @@
 			case 'openSettings':
 				openSettings();
 				break;
+			case 'askReport':
+				// Report a problem opens over Home; closing it comes back to the Settings key.
+				sheet.close();
+				openAsk('report', { kind: 'bug' }, 'hdr-settings');
+				break;
+			case 'reportKind':
+				if (ui.ask && ui.ask.kind === 'report') {
+					ui.ask.ctx.kind = el.getAttribute('data-value');
+					Array.prototype.forEach.call(ask.querySelectorAll('[data-action="reportKind"]'), function (b) {
+						b.setAttribute('aria-pressed', String(b === el));
+					});
+				}
+				break;
+			case 'openIncidents':
+				bridge.send('openIncidents');
+				break;
 			case 'closeSettings':
 				sheet.close();
 				break;
@@ -2844,6 +2914,7 @@
 
 	function routeDialog(r) {
 		if (!r || !r.dialog) return;
+		if (r.dialog === 'report') openAsk('report', { kind: 'bug' }, 'hdr-settings');
 		if (r.dialog === 'takeBack' && ui.detail) askTakeBack([findRow(ui.detail.fileId)], 'd-takeback');
 		if (r.dialog === 'forceAll') {
 			var here = browserPlace();

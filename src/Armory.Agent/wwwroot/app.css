@@ -3804,6 +3804,16 @@ dialog.housing.ask {
 	line-height: 1.35;
 	color: var(--ink-bad);
 }
+/* A report's words: the same well, several lines tall. */
+.field-area {
+	min-height: 7.5rem;
+	resize: vertical;
+}
+/* A choice with words and no swatch (what kind of report). */
+.pad.seg.seg-plain {
+	grid-template-columns: minmax(0, 1fr);
+	min-height: 52px;
+}
 .ask-keys {
 	display: flex;
 	flex-wrap: wrap;

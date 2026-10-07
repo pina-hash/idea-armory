@@ -763,6 +763,13 @@
 			view: signedIn({ sync: SYNCED, changes: shared({}) })
 		},
 
+		reportProblem: {
+			label: 'Report a problem (from Settings): what kind, the words, and that only file names go with them',
+			screens: ['home'],
+			params: { dialog: 'report' },
+			view: signedIn({ sync: SYNCED, changes: shared({}) })
+		},
+
 		partialCheckOut: {
 			label: 'A folder checked out, two of its files held by someone else: the answer at the foot',
 			screens: ['home'],
