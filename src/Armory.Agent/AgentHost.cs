@@ -79,6 +79,9 @@ internal sealed class AgentHost : IAsyncDisposable
 
     // Raised on any thread; the window and the tray marshal to the UI thread.
     internal event Action<AgentView>? ViewChanged;
+    // What is moving right now, at most four times a second while files move (the engine's
+    // ActivityChanged): the window patches its activity panel and status line from it alone.
+    internal event Action<ActivityView>? ActivityChanged;
 
     internal AgentView View
     {
@@ -143,15 +146,16 @@ internal sealed class AgentHost : IAsyncDisposable
         }
     }
 
-    // Runs one window action on the engine, off the window's thread. An engine that is not
-    // running, or a failure, is a plain sentence, never silence.
+    // Runs one window action on the engine (every engine method marshals onto the engine's own
+    // thread, so the window's thread only awaits). An engine that is not running, or a failure,
+    // is a plain sentence, never silence.
     private async Task<ActionResult> OnEngineAsync(string what, Func<SyncEngine, Task<ActionResult>> action)
     {
         var engine = Volatile.Read(ref runtime)?.Engine;
         if (engine is null) return new ActionResult(false, runtimeProblem ?? "Armory is starting. Try again in a moment.");
         try
         {
-            var result = await Task.Run(() => action(engine)).ConfigureAwait(false);
+            var result = await action(engine).ConfigureAwait(false);
             log.Info("window: " + what + (result.Ok ? " done" : " refused"));
             return result;
         }
@@ -317,6 +321,7 @@ internal sealed class AgentHost : IAsyncDisposable
                 // Opening the journal, snapshots and read-only intents touches the disk: off the UI thread.
                 created = await Task.Run(() => VaultRuntime.Create(target.VaultRoot, Sessions, Api, Blobs, log));
                 created.Engine.ViewChanged += OnEngineView;
+                created.Engine.ActivityChanged += OnEngineActivity;
                 ApplySettingsTo(created.Engine);
                 lock (gate) { if (connectPhase != "idle") created.Engine.SetConnectState(connectPhase, connectMessage); }
                 created.Engine.Start();
@@ -343,6 +348,7 @@ internal sealed class AgentHost : IAsyncDisposable
     private async Task StopRuntimeAsync(VaultRuntime old)
     {
         old.Engine.ViewChanged -= OnEngineView;
+        old.Engine.ActivityChanged -= OnEngineActivity;
         try
         {
             var stop = old.Engine.StopAsync();
@@ -359,6 +365,8 @@ internal sealed class AgentHost : IAsyncDisposable
         if (settled is not null && view.Connection is Connections.SignedIn or Connections.VaultOwnedByOther) settled.TrySetResult();
         ViewChanged?.Invoke(view);
     }
+
+    private void OnEngineActivity(ActivityView activity) => ActivityChanged?.Invoke(activity);
 
     private void RaiseView()
     {

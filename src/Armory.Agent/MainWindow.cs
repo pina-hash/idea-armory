@@ -22,6 +22,8 @@ internal sealed class MainWindow : Form, IBridgeWindow
     private bool allowClose;
     private string? pendingView;
     private bool viewPostScheduled;
+    private string? pendingActivity;
+    private bool activityPostScheduled;
     private readonly object viewGate = new();
 
     internal MainWindow(AgentHost host, AgentPaths paths, AgentLog log, Icon icon)
@@ -37,6 +39,7 @@ internal sealed class MainWindow : Form, IBridgeWindow
         MinimumSize = new Size(720, 520);
         BackColor = Background(host.EffectiveTheme);
         host.ViewChanged += OnViewChanged;
+        host.ActivityChanged += OnActivityChanged;
     }
 
     internal void Open()
@@ -74,6 +77,7 @@ internal sealed class MainWindow : Form, IBridgeWindow
         if (disposing)
         {
             host.ViewChanged -= OnViewChanged;
+            host.ActivityChanged -= OnActivityChanged;
             web?.Dispose();
         }
         base.Dispose(disposing);
@@ -288,6 +292,41 @@ internal sealed class MainWindow : Form, IBridgeWindow
         var theme = host.EffectiveTheme;
         BackColor = Background(theme);
         if (web is not null) web.DefaultBackgroundColor = Background(theme);
+    }
+
+    // What is moving right now (at most four a second, from the engine's timer thread): posted on
+    // its own as an 'activity' message, newest only, and never with a whole view. The page patches
+    // its activity panel and status line in place (app.js patchActivity).
+    private void OnActivityChanged(ActivityView activity)
+    {
+        var json = BridgeMessages.ActivityMessage(activity);
+        lock (viewGate)
+        {
+            pendingActivity = json;
+            if (activityPostScheduled) return;
+            activityPostScheduled = true;
+        }
+        if (!IsHandleCreated || IsDisposed)
+        {
+            lock (viewGate) activityPostScheduled = false;
+            return;
+        }
+        try { BeginInvoke(FlushActivity); }
+        catch (InvalidOperationException) { lock (viewGate) activityPostScheduled = false; }
+    }
+
+    private void FlushActivity()
+    {
+        string? json;
+        lock (viewGate)
+        {
+            json = pendingActivity;
+            pendingActivity = null;
+            activityPostScheduled = false;
+        }
+        if (json is null || web?.CoreWebView2 is not { } core) return;
+        try { core.PostWebMessageAsJson(json); }
+        catch (Exception error) when (error is InvalidOperationException or System.Runtime.InteropServices.COMException) { }
     }
 
     void IBridgeWindow.Post(string json)
