@@ -43,7 +43,10 @@ Renames require an identical NTFS volume/file id. Ambiguous hard-link identities
 guessed. File renames come in path order, except that a rename onto a path another rename
 leaves comes after it, so a chain (Plate to "Plate old", then "Plate v2" to Plate) applies
 one by one; two files swapped have no such order and are listed next to each other. Hashing holds a read handle that denies writers but shares read and delete, so a
-student can rename or delete the file, or a folder above it, during a scan; the adapter's
+student can rename or delete the file itself during a scan, and the scan holds no handle once a
+file's hash is taken. A folder above a file that is being hashed at that very moment cannot be
+renamed (NTFS refuses to rename a folder with any file inside it open, whatever the sharing; Explorer
+offers Try Again), so that window is one file's hash long. The adapter's
 `OpenRead` (captures) shares delete the same way. A problem keeps, as they were, only the
 entries it could hide: everything under a directory that could not be listed, an entry whose
 attributes could not be read, or a reparse point (excluded and reported, never traversed); a
@@ -67,7 +70,7 @@ against a fresh scanner. All 5,000 renames must be recognized. Other tests: an e
 keeps size and timestamp is caught by an aged full scan and, inside the racy window, by any
 scan; unchanged metadata avoids hashing even on a full rescan; a folder rename (and a rename
 above and below at once) is reported top-most first with no re-hash; a folder can be
-renamed while the scan holds a file's hashing handle; markers, attribute changes and folder
+renamed after the scan returns and a file can be renamed while it is being hashed; markers, attribute changes and folder
 events wake the engine while `.armory` and desktop.ini do not; a 250-character path, a file
 renamed to a name that does not fit and a file held open with no sharing never hide a deleted
 file or a deleted folder elsewhere, on three scans in a row; a folder that cannot be listed (a

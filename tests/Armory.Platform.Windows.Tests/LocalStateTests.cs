@@ -207,7 +207,7 @@ public sealed class LocalStateTests(ITestOutputHelper output)
         Assert.Empty(moved.Renames!);
         Assert.Equal(0, moved.HashesComputed);
         Assert.Equal(3, moved.HashesReused);
-        Assert.Equal(["Robot/Gearbox/a.txt", "Robot/Gearbox/Sub/b.txt", "Robot/Gearbox/Sub/Deep/c.txt"], moved.Files.Where(f => f.Path.Value.StartsWith("Robot/Gearbox/", StringComparison.Ordinal)).Select(f => f.Path.Value).Order(StringComparer.Ordinal));
+        Assert.Equal(["Robot/Gearbox/Sub/Deep/c.txt", "Robot/Gearbox/Sub/b.txt", "Robot/Gearbox/a.txt"], moved.Files.Where(f => f.Path.Value.StartsWith("Robot/Gearbox/", StringComparison.Ordinal)).Select(f => f.Path.Value).Order(StringComparer.Ordinal));
         Assert.Empty(scanner.Scan().FolderMoves!);
 
         // A rename above and a rename below at once: top-most first, each applicable in order.
@@ -230,6 +230,11 @@ public sealed class LocalStateTests(ITestOutputHelper output)
         Assert.Equal(0, absorbed.HashesReused);
     }
 
+    // NTFS refuses to rename a folder while any file inside it is open, whatever the sharing
+    // mode (measured on windows-latest: "Access to the path ... is denied"). So the scan cannot
+    // make a folder rename possible during the moment it hashes a file inside; what it can do,
+    // and this proves, is let the file itself be renamed while it is being hashed (it shares
+    // delete), and hold no handle once its hash is taken, so the folder renames at once after.
     [WindowsFact]
     public void Hashing_never_blocks_a_rename_of_the_file_or_its_folder()
     {
@@ -242,14 +247,17 @@ public sealed class LocalStateTests(ITestOutputHelper output)
         scanner.WhileHashing = _ =>
         {
             if (Interlocked.Exchange(ref renamed, 1) != 0) return;
-            try { Directory.Move(vault.File("Gearbox"), vault.File("Drivetrain")); }
+            try { File.Move(vault.File("Gearbox/part.txt"), vault.File("Gearbox/plate.txt")); }
             catch (Exception error) { refused = error; }
         };
         _ = scanner.Scan();
         Assert.Null(refused);
-        Assert.True(File.Exists(vault.File("Drivetrain/part.txt")));
+        Assert.True(File.Exists(vault.File("Gearbox/plate.txt")));
         scanner.WhileHashing = null;
-        Assert.Equal("Drivetrain/part.txt", Assert.Single(scanner.Scan().Files).Path.Value);
+        Assert.Equal("Gearbox/plate.txt", Assert.Single(scanner.Scan().Files).Path.Value);
+        // The scan returned: nothing of it is still open, so the folder renames at once.
+        Directory.Move(vault.File("Gearbox"), vault.File("Drivetrain"));
+        Assert.Equal("Drivetrain/plate.txt", Assert.Single(scanner.Scan().Files).Path.Value);
     }
 
     [WindowsFact]
