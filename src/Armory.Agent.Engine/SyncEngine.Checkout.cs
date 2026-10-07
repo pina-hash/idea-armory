@@ -733,6 +733,7 @@ public sealed partial class SyncEngine
             st.FileId = id;
             st.Holder = Known(held);
             deps.Log?.Invoke($"check out: the lock on {path} had no record here; it is shown as checked out by you");
+            flight?.RepairedCheckout(path.Value);
         }
     }
 

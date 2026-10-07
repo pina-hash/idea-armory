@@ -50,6 +50,10 @@ public sealed class EngineDependencies
     // Where the raw text of a problem goes (the agent's log). The window only ever shows a
     // plain sentence for it.
     public Action<string>? Log { get; init; }
+    // The flight recorder (docs/agent/TELEMETRY.md): passes and their phases, notices, file
+    // failures, exceptions, read-only breaks and repaired check outs. Recording is a few dozen
+    // nanoseconds and never touches the disk; null records nothing.
+    public Armory.Telemetry.FlightRecorder? Recorder { get; init; }
 }
 
 public sealed record SyncReport(bool SignedIn, bool Online, int Uploaded, int Downloaded, int SideVersions, int Refused, IReadOnlyList<string> Problems);
@@ -129,7 +133,12 @@ public sealed partial class SyncEngine : IAsyncDisposable
         recorder = new SaveRecorder(dependencies.Snapshots, journal);
         settings = new SettingsView(options.VaultRoot, true, "system");
         activity = new ActivityTracker(dependencies.Clock);
-        engineThread = new EngineThread(error => dependencies.Log?.Invoke("engine: " + error), stackBytes: options.EngineStackBytes);
+        flight = dependencies.Recorder;
+        engineThread = new EngineThread(error =>
+        {
+            flight?.Exception("engine thread", error, fatal: true);
+            dependencies.Log?.Invoke("engine: " + error);
+        }, stackBytes: options.EngineStackBytes);
         // Even the state document is read on the engine thread.
         engineThread.Send(_ =>
         {
@@ -198,7 +207,13 @@ public sealed partial class SyncEngine : IAsyncDisposable
             {
                 try { await LoopPassAsync(ct); }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { return true; }
-                catch (Exception error) { lastLoopError = "Sync stopped for a moment: " + error.GetType().Name; RequestPublish(); }
+                catch (Exception error)
+                {
+                    // Nothing in the pass handled it: a crash incident, though the loop goes on.
+                    flight?.Exception("engine loop", error, fatal: true);
+                    lastLoopError = "Sync stopped for a moment: " + error.GetType().Name;
+                    RequestPublish();
+                }
             }
             if (cutShort && !paused)
             {
@@ -330,6 +345,10 @@ public sealed partial class SyncEngine : IAsyncDisposable
         passStarted = deps.Clock.GetTimestamp();
         lastHeartbeat = passStarted;
         passMoving = 0;
+        noticesRecorded = 0;
+        var kind = scope is not null ? "action" : PassKind();
+        flight?.PassStart(kind);
+        phaseStarted = flight?.Now() ?? 0;
         try
         {
             syncing = true;
@@ -345,6 +364,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
         finally
         {
             LogPass(failed, scope is not null);
+            RecordPass(kind, failed);
             passScope = null;
             inPass = false;
             syncing = false;
@@ -423,6 +443,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
         AttachEntries();
         Capture(session, notify: false);
         CrashAt("after-capture");
+        Phase("scan");
 
         online = await RefreshAsync(ct);
         if (online == true)
@@ -460,9 +481,12 @@ public sealed partial class SyncEngine : IAsyncDisposable
         }
 
         lastLoopError = null;
+        Phase("server");
         // Phase B: every path planned with Core, grouped into units; phase C: the units.
         var units = await PlanAllAsync(online == true, ct);
+        Phase("plan");
         await RunUnitsAsync(units, ct);
+        Phase("move");
 
         if (online == true)
         {
@@ -485,6 +509,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
         OpenArrived();
         // Every notice of this pass is known now, so dismissed items that are gone are forgotten.
         if (online == true) PruneDismissed();
+        Phase("finish");
         return Report(true);
     }
 
@@ -1021,6 +1046,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
         if (next >= run.Count || online != true) return;
         // Left for the next pass, which the loop starts at once.
         cutShort = true;
+        flight?.PassYield(actionsWaiting > 0 ? "action" : "slice", run.Count - next, (long)deps.Clock.GetElapsedTime(started).TotalMilliseconds);
         for (var i = next; i < run.Count; i++) foreach (var planned in run[i]) activity.Drop(planned.Key);
     }
 
@@ -1077,7 +1103,11 @@ public sealed partial class SyncEngine : IAsyncDisposable
                 JournalOffline(Reconciler.Plan(planned.Input with { IsOnline = false }), planned.State);
                 continue;
             }
-            try { await ExecutePlannedAsync(planned, ct); }
+            try
+            {
+                await ExecutePlannedAsync(planned, ct);
+                if (failedFiles.Count > 0 && failedFiles.Remove(planned.Key)) flight?.FileRecovered(planned.Key);
+            }
             catch (ArmoryOfflineException) { online = false; }
             catch (Exception error) when (error is ArmoryClientException or Armory.Storage.HashMismatchException or IOException or UnauthorizedAccessException or InvalidDataException)
             { FileProblem(planned.Key, error); }
@@ -1224,7 +1254,11 @@ public sealed partial class SyncEngine : IAsyncDisposable
 
     // A pass's own notice about one file or folder; the view groups them by kind into cards.
     private void Notice(string kind, Guid? fileId, string path, string detail, string? title = null, string? itemDetail = null, string? reasonKind = null, string? who = null)
-        => notes.Add(new Note(kind, fileId, path, detail, title, itemDetail, reasonKind, who));
+    {
+        notes.Add(new Note(kind, fileId, path, detail, title, itemDetail, reasonKind, who));
+        // A 5,000-file import is 5,000 notices: the first few hundred of a pass are plenty.
+        if (flight is not null && noticesRecorded++ < MaximumNoticesRecorded) flight.Notice(kind, path, detail);
+    }
 
     // A problem with one file (path) or with this computer (no path): the window gets a plain
     // sentence as one notice item, and only the log gets the raw text.
@@ -1232,12 +1266,18 @@ public sealed partial class SyncEngine : IAsyncDisposable
     {
         problems.Add(string.IsNullOrEmpty(path) ? raw : $"{path}: {raw}");
         notes.Add(new Note(kind, null, path ?? "", plain, title));
+        flight?.Notice(kind, path, raw);
     }
 
     // A failure while planning or carrying out one file's plan, in the window's words: the
     // server's refusals are things Armory can't send, the disk's are things it can't read.
     private void FileProblem(string path, Exception error)
     {
+        if (flight is not null)
+        {
+            flight.FileFailed(path, error);
+            if (failedFiles.Count < 10_000) failedFiles.Add(path);
+        }
         var name = NameOf(path);
         switch (error)
         {

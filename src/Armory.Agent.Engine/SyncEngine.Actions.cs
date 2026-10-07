@@ -974,6 +974,9 @@ public sealed partial class SyncEngine
             else continue;
             var desired = DesiredOwnership(st, ownership, file.Path);
             if (st.AppliedOwnership == desired && file.ReadOnly == CheckoutRules.IsReadOnlyOnDisk(desired)) continue;
+            // The rule was applied and the scan finds the file writable all the same: someone (or
+            // some program) cleared the bit. It is put back below; the flight recorder keeps it.
+            if (st.AppliedOwnership == desired && !file.ReadOnly && CheckoutRules.IsReadOnlyOnDisk(desired)) flight?.ReadOnlyBroken(file.Path.Value);
             batch.Add((file.Path, desired));
             changed.Add(st);
         }

@@ -170,6 +170,8 @@ internal sealed class Computer : IAsyncDisposable
     public ISavedReleaseReader? ReleaseReader { get; set; }
     public Action<string>? CrashPoint { get; set; }
     public TestClock Clock { get; } = new();
+    // This computer's flight recorder, across restarts (docs/agent/TELEMETRY.md).
+    public Armory.Telemetry.FlightRecorder Flight { get; } = new();
     public long MaximumFileBytes { get; set; } = BlobClient.MaximumPutBytes;
     // How many files a pass moves at once (EngineOptions.TransferConcurrency); null is the default.
     public int? TransferConcurrency { get; set; }
@@ -205,7 +207,7 @@ internal sealed class Computer : IAsyncDisposable
     public void Restart()
     {
         Sessions = new SessionManager(http, Secrets);
-        var api = new ArmoryApi(new PostgrestClient(http, Sessions));
+        var api = new ArmoryApi(new PostgrestClient(http, Sessions, Flight));
         Engine = new SyncEngine(new EngineOptions
         {
             VaultRoot = World.Root, MaximumFileBytes = MaximumFileBytes,
@@ -215,8 +217,8 @@ internal sealed class Computer : IAsyncDisposable
         }, new EngineDependencies
         {
             Files = Disk, Journal = Journal, Snapshots = Snapshots, State = State, Sessions = Sessions, Api = api,
-            Blobs = new BlobClient(http, http, world.Site.BaseUri, Sessions), ReleaseReader = ReleaseReader, Clock = Clock,
-            Log = line => { lock (Logged) Logged.Add(line); },
+            Blobs = new BlobClient(http, http, world.Site.BaseUri, Sessions, Flight), ReleaseReader = ReleaseReader, Clock = Clock,
+            Log = line => { lock (Logged) Logged.Add(line); }, Recorder = Flight,
         })
         { CrashPoint = CrashPoint };
         Engine.ViewChanged += view => Views?.Invoke(view);
