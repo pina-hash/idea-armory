@@ -63,17 +63,18 @@ public sealed class IncidentReporter : IFlightObserver
         JsonNode? snapshot = null;
         if (sources.Snapshot is { } take)
         {
+            using var deadline = new CancellationTokenSource(IncidentSources.SnapshotDeadline);
+            Task<JsonNode?>? asked = null;
             try
             {
-                using var deadline = new CancellationTokenSource(IncidentSources.SnapshotDeadline);
-                var asked = take(deadline.Token);
-                var done = await Task.WhenAny(asked, Task.Delay(IncidentSources.SnapshotDeadline)).ConfigureAwait(false);
-                snapshot = done == asked ? await asked.ConfigureAwait(false) : new JsonObject { ["unavailable"] = "the engine did not answer within 3 seconds" };
+                asked = take(deadline.Token);
+                await Task.WhenAny(asked, Task.Delay(IncidentSources.SnapshotDeadline)).ConfigureAwait(false);
             }
-            catch (Exception error) when (error is not OutOfMemoryException)
-            {
-                snapshot = new JsonObject { ["unavailable"] = error.GetType().Name + ": " + error.Message };
-            }
+            catch (Exception error) when (error is not OutOfMemoryException) { snapshot = new JsonObject { ["unavailable"] = error.GetType().Name + ": " + error.Message }; }
+            if (asked is { IsCompletedSuccessfully: true } && !deadline.IsCancellationRequested) snapshot = asked.Result;
+            else if (asked is { IsFaulted: true } && asked.Exception!.InnerException is { } failed and not OperationCanceledException)
+                snapshot = new JsonObject { ["unavailable"] = failed.GetType().Name + ": " + failed.Message };
+            else snapshot ??= new JsonObject { ["unavailable"] = "the engine did not answer within 3 seconds" };
         }
         else snapshot = Quick();
         return Write(glitch, snapshot, feedback);

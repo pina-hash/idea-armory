@@ -1,10 +1,11 @@
 using System.Diagnostics;
+using Xunit.Abstractions;
 
 namespace Armory.Telemetry.Tests;
 
 // The flight recorder (docs/agent/TELEMETRY.md): a fixed ring, oldest first, and recording so
 // cheap the engine never notices it.
-public sealed class FlightRecorderTests
+public sealed class FlightRecorderTests(ITestOutputHelper output)
 {
     [Fact]
     public void The_ring_keeps_the_last_events_oldest_first()
@@ -87,6 +88,7 @@ public sealed class FlightRecorderTests
         watch.Stop();
         var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
         var nanoseconds = watch.Elapsed.TotalNanoseconds / events;
+        output.WriteLine($"{nanoseconds:F1} ns and {(double)allocated / events:F4} bytes per event ({allocated:N0} bytes for {events:N0})");
         Assert.True(nanoseconds < 1000, $"recording took {nanoseconds:F0} ns per event");
         Assert.True(allocated < 1024, $"recording {events:N0} events allocated {allocated:N0} bytes");
         Assert.Equal(events + 20_000, recorder.Recorded);
