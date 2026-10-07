@@ -254,7 +254,10 @@ public sealed class WindowsVaultFileSystemTests
         using var files = new WindowsVaultFileSystem(vault.Root);
         var first = files.Scan();
         Assert.Equal(["Robot 2027", "Robot 2027/CopyDesignTemp", "Robot 2027/CopyDesignTemp/Sub", "Robot 2027/Empty"], first.Folders);
-        Assert.Empty(first.FolderMoves!);
+        // The first scan of a new vault has nothing to compare with: it cannot tell, which is
+        // not the same as "nothing moved".
+        Assert.Null(first.FolderMoves);
+        Assert.Null(first.Renames);
 
         Directory.Move(vault.File("Robot 2027/CopyDesignTemp"), vault.File("Robot 2027/Gearbox"));
         File.Move(vault.File("Robot 2027/Gearbox/Sub/Gear.SLDPRT"), vault.File("Robot 2027/Gearbox/Sub/Spur Gear.SLDPRT"));

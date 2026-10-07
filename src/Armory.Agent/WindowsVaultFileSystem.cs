@@ -76,7 +76,9 @@ public sealed class WindowsVaultFileSystem : IVaultFileSystem, IDisposable
 
     // One walk of the vault: files (hashing only what changed), folders with their directory
     // ids, folder moves, and "~$" markers. .armory, "~$" folders and reparse points are never
-    // entered. Every scan enumerates everything; hints only make one come sooner.
+    // entered. Every scan enumerates everything; hints only make one come sooner. Renames is
+    // null on the first scan after a start (no earlier file map); FolderMoves is null when the
+    // moves cannot be proven (no folder map in .armory yet, or an unreadable folder id).
     public VaultScan Scan()
     {
         lock (gate)
@@ -88,9 +90,9 @@ public sealed class WindowsVaultFileSystem : IVaultFileSystem, IDisposable
             problems.AddRange(scan.Problems);
             var files = scan.Files.Select(f => new LocalFile(f.Path, f.Hash, f.Size, f.ReadOnly)).ToArray();
             return new VaultScan(files, scan.Markers, problems,
-                scan.Renames.Select(r => new LocalMove(r.Before, r.After)).ToArray(),
+                scan.Renames?.Select(r => new LocalMove(r.Before, r.After)).ToArray(),
                 scan.Folders.Select(f => f.Path).ToArray(),
-                scan.FolderMoves.Select(m => new FolderMove(m.Before, m.After)).ToArray());
+                scan.FolderMoves?.Select(m => new FolderMove(m.Before, m.After)).ToArray());
         }
     }
 

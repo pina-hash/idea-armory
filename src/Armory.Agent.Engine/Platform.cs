@@ -13,12 +13,21 @@ public sealed record LocalFile(VaultPath Path, string Hash, long Size, bool Read
 // Folders are every vault-relative directory ("Robot 2027/Gearbox": forward slashes, no
 // leading or trailing slash, valid VaultPath segments), empty ones included, excluding the
 // root, .armory, "~$" folders and reparse points. FolderMoves are directories the platform
-// proved moved since the previous scan by directory identity (the NTFS directory id), listed
-// once: only the top-most moved directory, in the order to apply them, each From being the
-// path after the earlier moves in the list. A file that only rode along with a folder move is
+// proved moved since the previous scan by directory identity (the NTFS directory id): only
+// the top-most moved directory, in an order that can be applied one by one (each From is the
+// path after the earlier moves in the list; each To is free at that moment, so a chain such as
+// Gearbox to "Gearbox old" then "Gearbox v2" to Gearbox vacates Gearbox first, and a swap, or a
+// folder in the way, first moves aside under a temporary "<name> (moving)" in the same
+// top-level folder). A file that only rode along with a folder move is
 // not repeated in Renames; a file that also moved on its own is listed in Renames with From
 // expressed after every folder move. A move the agent made itself (MoveFolder) is not
-// reported. Null means the platform cannot tell (no directory identity).
+// reported. A move is reported at least once: after a crash, the first scan may report the
+// last scan's moves again. For both lists, null means the platform could not check this time
+// (the first scan after a start, with no earlier map; a folder id it could not read; no
+// directory identity at all), so the engine falls back to its own evidence; an empty list
+// means checked, none. Files and Folders keep, as they were, only the entries a problem could
+// hide (an unreadable folder or file, a path the vault refuses, a reparse point): anything
+// else missing is missing.
 public sealed record VaultScan(IReadOnlyList<LocalFile> Files, IReadOnlyList<string> Markers, IReadOnlyList<string> Problems,
     IReadOnlyList<LocalMove>? Renames = null, IReadOnlyList<string>? Folders = null, IReadOnlyList<FolderMove>? FolderMoves = null);
 public sealed record LocalMove(VaultPath From, VaultPath To);

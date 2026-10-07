@@ -39,7 +39,7 @@ public sealed class LocalStateTests(ITestOutputHelper output)
         var first = scanner.Scan();
         File.Move(vault.File("part.txt"), vault.File("renamed.txt"));
         var next = scanner.Scan();
-        var rename = Assert.Single(next.Renames);
+        var rename = Assert.Single(next.Renames!);
         Assert.Equal(first.Files[0].FileId, rename.FileId);
         Assert.Equal("part.txt", rename.Before.Value);
         Assert.Equal("renamed.txt", rename.After.Value);
@@ -98,7 +98,7 @@ public sealed class LocalStateTests(ITestOutputHelper output)
         Parallel.For(0, 5000, i => File.WriteAllText(vault.File($"file-{i:D5}.txt"), $"edited--{i}"));
         Parallel.For(0, 5000, i => File.Move(vault.File($"file-{i:D5}.txt"), vault.File($"renamed-{i:D5}.txt")));
         var renamed = scanner.Scan();
-        Assert.Equal(5000, renamed.Renames.Count);
+        Assert.Equal(5000, renamed.Renames!.Count);
         Parallel.For(0, 2500, i => File.Delete(vault.File($"renamed-{i:D5}.txt")));
         var final = scanner.Scan(fullRescan: true);
         using var clean = new LocalChangeDetector(vault.Paths, TimeSpan.Zero);
@@ -200,15 +200,15 @@ public sealed class LocalStateTests(ITestOutputHelper output)
 
         Directory.Move(vault.File("Robot/CopyDesignTemp"), vault.File("Robot/Gearbox"));
         var moved = scanner.Scan();
-        var move = Assert.Single(moved.FolderMoves);
+        var move = Assert.Single(moved.FolderMoves!);
         Assert.Equal("Robot/CopyDesignTemp", move.Before);
         Assert.Equal("Robot/Gearbox", move.After);
         Assert.Equal(first.Folders.Single(f => f.Path == "Robot/CopyDesignTemp").FolderId, move.FolderId);
-        Assert.Empty(moved.Renames);
+        Assert.Empty(moved.Renames!);
         Assert.Equal(0, moved.HashesComputed);
         Assert.Equal(3, moved.HashesReused);
         Assert.Equal(["Robot/Gearbox/a.txt", "Robot/Gearbox/Sub/b.txt", "Robot/Gearbox/Sub/Deep/c.txt"], moved.Files.Where(f => f.Path.Value.StartsWith("Robot/Gearbox/", StringComparison.Ordinal)).Select(f => f.Path.Value).Order(StringComparer.Ordinal));
-        Assert.Empty(scanner.Scan().FolderMoves);
+        Assert.Empty(scanner.Scan().FolderMoves!);
 
         // A rename above and a rename below at once: top-most first, each applicable in order.
         Directory.Move(vault.File("Robot"), vault.File("Robot 2028"));
@@ -216,16 +216,16 @@ public sealed class LocalStateTests(ITestOutputHelper output)
         Directory.Move(vault.File("Robot 2028/Other"), vault.File("Robot 2028/Gearbox/Other"));
         var nested = scanner.Scan();
         Assert.Equal([("Robot", "Robot 2028"), ("Robot 2028/Other", "Robot 2028/Gearbox/Other"), ("Robot 2028/Gearbox/Sub", "Robot 2028/Gearbox/Shafts")],
-            nested.FolderMoves.Select(m => (m.Before, m.After)));
+            nested.FolderMoves!.Select(m => (m.Before, m.After)));
         Assert.Equal(0, nested.HashesComputed);
-        Assert.Empty(nested.Renames);
+        Assert.Empty(nested.Renames!);
 
         // The agent's own move is absorbed: not reported, not re-hashed.
         Directory.Move(vault.File("Robot 2028/Gearbox"), vault.File("Robot 2028/Drivetrain"));
         scanner.Absorb("Robot 2028/Gearbox", "Robot 2028/Drivetrain");
         var absorbed = scanner.Scan();
-        Assert.Empty(absorbed.FolderMoves);
-        Assert.Empty(absorbed.Renames);
+        Assert.Empty(absorbed.FolderMoves!);
+        Assert.Empty(absorbed.Renames!);
         Assert.Equal(0, absorbed.HashesComputed);
         Assert.Equal(0, absorbed.HashesReused);
     }
@@ -275,6 +275,153 @@ public sealed class LocalStateTests(ITestOutputHelper output)
         var scan = scanner.Scan();
         Assert.Equal(["~$part.SLDPRT"], scan.Markers);
         Assert.True(Assert.Single(scan.Files).ReadOnly);
+    }
+
+    // The review's case: one path over the 240-character limit (a Pack and Go tree) used to
+    // keep every missing file and folder in the whole vault, forever. A problem now keeps only
+    // what it could hide: the file renamed to a name that does not fit (its id is seen), and a
+    // file another program holds (at its own path). Deletions elsewhere show, every scan.
+    [WindowsFact]
+    public async Task A_long_path_or_an_unreadable_file_never_hides_a_deletion_elsewhere()
+    {
+        using var vault = new TestVault();
+        Directory.CreateDirectory(vault.File("Robot/Old"));
+        Directory.CreateDirectory(vault.File("Robot/Pack"));
+        foreach (var name in new[] { "Robot/Old/a.txt", "Robot/gone.txt", "Robot/kept.txt", "Robot/held.txt", "Robot/Pack/renamed.txt" })
+            File.WriteAllText(vault.File(name), name);
+        using var scanner = new LocalChangeDetector(vault.Paths);
+        Assert.Empty(scanner.Scan().Problems);
+        string LongName(int total, char fill) => new string(fill, total - (Path.GetFullPath(vault.Root).Length + 1 + "Robot/Pack/".Length) - 4) + ".txt";
+        File.WriteAllText(vault.File("Robot/Pack/" + LongName(250, 'p')), "too long");
+        File.Move(vault.File("Robot/Pack/renamed.txt"), vault.File("Robot/Pack/" + LongName(245, 'r')));
+        File.Delete(vault.File("Robot/gone.txt"));
+        Directory.Delete(vault.File("Robot/Old"), recursive: true);
+        using var child = new ChildProcess("hold", vault.File("Robot/held.txt"));
+        Assert.Equal("READY", await child.ReadLine());
+        for (var pass = 0; pass < 3; pass++)
+        {
+            var scan = scanner.Scan();
+            Assert.Equal(3, scan.Problems.Count);
+            var files = scan.Files.Select(f => f.Path.Value).ToArray();
+            Assert.Equal(["Robot/Pack/renamed.txt", "Robot/held.txt", "Robot/kept.txt"], files.Order(StringComparer.Ordinal));
+            Assert.Equal(["Robot", "Robot/Pack"], scan.Folders.Select(f => f.Path));
+            Assert.Empty(scan.FolderMoves!);
+            Assert.Empty(scan.Renames!);
+        }
+        child.Kill();
+        var released = scanner.Scan();
+        Assert.Equal(2, released.Problems.Count);
+        Assert.Contains(released.Files, f => f.Path.Value == "Robot/held.txt" && f.Hash == TestVault.Hash("Robot/held.txt"u8.ToArray()));
+        Assert.DoesNotContain(released.Folders, f => f.Path == "Robot/Old");
+    }
+
+    // A folder that cannot be listed keeps what is inside it, and only that.
+    [WindowsFact]
+    public void A_folder_that_cannot_be_listed_keeps_only_what_is_inside_it()
+    {
+        using var vault = new TestVault();
+        Directory.CreateDirectory(vault.File("Locked/Inner"));
+        Directory.CreateDirectory(vault.File("Other"));
+        File.WriteAllText(vault.File("Locked/Inner/inside.txt"), "inside");
+        File.WriteAllText(vault.File("Other/gone.txt"), "gone");
+        File.WriteAllText(vault.File("loose.txt"), "loose");
+        using var scanner = new LocalChangeDetector(vault.Paths);
+        _ = scanner.Scan();
+        var locked = new DirectoryInfo(vault.File("Locked"));
+        var deny = new System.Security.AccessControl.FileSystemAccessRule(System.Security.Principal.WindowsIdentity.GetCurrent().User!,
+            System.Security.AccessControl.FileSystemRights.ListDirectory, System.Security.AccessControl.AccessControlType.Deny);
+        var security = locked.GetAccessControl();
+        security.AddAccessRule(deny);
+        locked.SetAccessControl(security);
+        try
+        {
+            Directory.Delete(vault.File("Other"), recursive: true);
+            File.Delete(vault.File("loose.txt"));
+            var scan = scanner.Scan();
+            Assert.NotEmpty(scan.Problems);
+            Assert.Equal(["Locked/Inner/inside.txt"], scan.Files.Select(f => f.Path.Value));
+            Assert.Equal(["Locked", "Locked/Inner"], scan.Folders.Select(f => f.Path));
+            Assert.Empty(scan.FolderMoves!);
+        }
+        finally
+        {
+            security.RemoveAccessRule(deny);
+            locked.SetAccessControl(security);
+        }
+    }
+
+    // The review's ordering cases on real folders: a chain (Gearbox to "Gearbox old", then
+    // "Gearbox v2" to Gearbox) vacates Gearbox first, and a swap goes through a temporary name.
+    [WindowsFact]
+    public void Folder_moves_come_in_an_order_that_can_be_applied()
+    {
+        using var vault = new TestVault();
+        foreach (var folder in new[] { "Robot/Gearbox/Sub", "Robot/Gearbox v2/Sub", "Robot/A", "Robot/B" }) Directory.CreateDirectory(vault.File(folder));
+        foreach (var file in new[] { "Robot/Gearbox/Sub/old.txt", "Robot/Gearbox v2/Sub/new.txt", "Robot/A/a.txt", "Robot/B/b.txt" })
+            File.WriteAllText(vault.File(file), file);
+        using var scanner = new LocalChangeDetector(vault.Paths);
+        _ = scanner.Scan();
+        Directory.Move(vault.File("Robot/Gearbox"), vault.File("Robot/Gearbox old"));
+        Directory.Move(vault.File("Robot/Gearbox v2"), vault.File("Robot/Gearbox"));
+        var chain = scanner.Scan();
+        Assert.Equal([("Robot/Gearbox", "Robot/Gearbox old"), ("Robot/Gearbox v2", "Robot/Gearbox")], chain.FolderMoves!.Select(m => (m.Before, m.After)));
+        Assert.Empty(chain.Renames!);
+
+        Directory.Move(vault.File("Robot/A"), vault.File("Robot/T"));
+        Directory.Move(vault.File("Robot/B"), vault.File("Robot/A"));
+        Directory.Move(vault.File("Robot/T"), vault.File("Robot/B"));
+        var swap = scanner.Scan();
+        Assert.Equal([("Robot/A", "Robot/A (moving)"), ("Robot/B", "Robot/A"), ("Robot/A (moving)", "Robot/B")], swap.FolderMoves!.Select(m => (m.Before, m.After)));
+        Assert.Empty(swap.Renames!);
+        Assert.Equal(TestVault.Hash("Robot/B/b.txt"u8.ToArray()), swap.Files.Single(f => f.Path.Value == "Robot/A/b.txt").Hash);
+        Assert.Equal(TestVault.Hash("Robot/A/a.txt"u8.ToArray()), swap.Files.Single(f => f.Path.Value == "Robot/B/a.txt").Hash);
+    }
+
+    // The folder map survives a restart (.armory\folder-ids.json), so a folder renamed while
+    // Armory was closed is still one move. Without a map the first scan says it cannot tell
+    // (null), never "none". A scan's moves are written only when the next scan starts, so a
+    // crash before the engine handled them reports them again; the agent's own moves are
+    // written at once and never come back.
+    [WindowsFact]
+    public void The_first_scan_after_a_start_proves_moves_only_from_a_saved_folder_map()
+    {
+        using var vault = new TestVault();
+        Directory.CreateDirectory(vault.File("Robot/Gearbox"));
+        File.WriteAllText(vault.File("Robot/Gearbox/part.txt"), "part");
+        (string, string)[] Moves(LocalScan scan) => scan.FolderMoves!.Select(m => (m.Before, m.After)).ToArray();
+        using (var scanner = new LocalChangeDetector(vault.Paths))
+        {
+            var first = scanner.Scan();
+            Assert.Null(first.FolderMoves);
+            Assert.Null(first.Renames);
+            var second = scanner.Scan();
+            Assert.Empty(second.FolderMoves!);
+            Assert.Empty(second.Renames!);
+        }
+        Directory.Move(vault.File("Robot/Gearbox"), vault.File("Robot/Drivetrain"));
+        using (var restarted = new LocalChangeDetector(vault.Paths))
+        {
+            var scan = restarted.Scan();
+            Assert.Equal([("Robot/Gearbox", "Robot/Drivetrain")], Moves(scan));
+            Assert.Null(scan.Renames);
+        }
+        // That instance stopped before another scan: the move is reported again.
+        using (var again = new LocalChangeDetector(vault.Paths))
+        {
+            Assert.Equal([("Robot/Gearbox", "Robot/Drivetrain")], Moves(again.Scan()));
+            Assert.Empty(again.Scan().FolderMoves!);
+        }
+        using (var acknowledged = new LocalChangeDetector(vault.Paths))
+        {
+            Assert.Empty(acknowledged.Scan().FolderMoves!);
+            Directory.Move(vault.File("Robot/Drivetrain"), vault.File("Robot/Intake"));
+            acknowledged.Absorb("Robot/Drivetrain", "Robot/Intake");
+        }
+        using (var afterOwnMove = new LocalChangeDetector(vault.Paths))
+            Assert.Empty(afterOwnMove.Scan().FolderMoves!);
+        File.WriteAllText(vault.File(".armory/" + LocalChangeDetector.FolderMapName), "{not json");
+        using (var unreadable = new LocalChangeDetector(vault.Paths))
+            Assert.Null(unreadable.Scan().FolderMoves);
     }
 }
 
