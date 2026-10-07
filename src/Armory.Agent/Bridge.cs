@@ -29,7 +29,6 @@ internal interface IBridgeWindow
     void Post(string json);
     string? ChooseFolder(string current);
     // Add files: the Windows file picker, several files at once. Null when the student cancels.
-    // Called once the bridge carries addFiles (the integration with the v2 engine).
     IReadOnlyList<string>? ChooseFiles(string title);
     void ShowProblem(string message);
 }
@@ -76,6 +75,10 @@ internal sealed class Bridge(AgentHost host, IBridgeWindow window, AgentLog log)
     private static readonly ActionResult NotAProject = new(false, "That project isn't on this computer.");
     private static readonly ActionResult NotAName = new(false, "That name can't be used for a folder.");
     private static readonly ActionResult NotAFileName = new(false, "That name can't be used for a file.");
+    // The picker was closed without choosing: no sentence (the page shows none for an empty one).
+    private static readonly ActionResult Nothing = new(false, "");
+
+    private static string AddTitle(string folder) => folder.Length == 0 ? "Add files to Armory" : "Add files to " + folder[(folder.LastIndexOf('/') + 1)..];
 
     internal static bool TryRead(string webMessageJson, out string type, out JsonElement message)
     {
@@ -109,9 +112,9 @@ internal sealed class Bridge(AgentHost host, IBridgeWindow window, AgentLog log)
 
     // files: the full paths of File objects the page sent with the message
     // (chrome.webview.postMessageWithAdditionalObjects, read by MainWindow from
-    // CoreWebView2WebMessageReceivedEventArgs.AdditionalObjects), such as files dropped on the
-    // window. Empty for every other message. Only the message that adds dropped files (handled
-    // once the engine can add files) may use them, and only through CopyIn's own checks.
+    // CoreWebView2WebMessageReceivedEventArgs.AdditionalObjects): the files and folders dropped
+    // on the window. Empty for every other message. Only dropFiles uses them, and only through
+    // the engine's AddFilesAsync and the file system's CopyIn checks (a folder is copied whole).
     internal async Task HandleAsync(string webMessageJson, IReadOnlyList<string>? files = null)
     {
         if (!TryRead(webMessageJson, out var type, out var message)) return;
@@ -197,13 +200,14 @@ internal sealed class Bridge(AgentHost host, IBridgeWindow window, AgentLog log)
                         : host.RenameFileAsync(renamedFile, newFileName));
                     break;
                 case BridgeMessages.AddFiles:
-                    // The picker (the Windows file dialog) chooses the files once the engine
-                    // can copy them in; until then the host says so.
+                    // The Windows file picker chooses the files (on this, the window's thread);
+                    // closing it adds nothing and says nothing.
                     var add = Read<AddFilesMessage>(message);
                     await AnswerAsync(add?.RequestId,
                         !Guid.TryParse(add?.ProjectId, out var addIn) ? Refuse(NotAProject)
                         : !TryFolder(add!.Folder, allowTop: true, out var addTo) ? Refuse(NotAFile)
-                        : host.AddFilesAsync(addIn, addTo, []));
+                        : window.ChooseFiles(AddTitle(addTo)) is { Count: > 0 } chosen ? host.AddFilesAsync(addIn, addTo, chosen)
+                        : Refuse(Nothing));
                     break;
                 case BridgeMessages.DropFiles:
                     var drop = Read<DropFilesMessage>(message);

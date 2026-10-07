@@ -110,9 +110,8 @@ internal sealed class AgentHost : IAsyncDisposable
 
     // The window's actions (docs/agent/BRIDGE.md, "Page to host"; v2-design.md 4.2 and 4.3).
     // Paths are vault-relative and already checked by the Bridge; a folder means every file
-    // under it. Each one goes to the engine, which answers with one plain sentence; the
-    // folder and add-file actions come with the engine's stage E2, and until then say plainly
-    // that this version can't do them, so no action is ever dropped without a word.
+    // under it. Each one goes to the engine, which answers with one plain sentence, so no
+    // action is ever dropped without a word.
     internal Task<ActionResult> LaunchFileAsync(string path) => OnEngineAsync("open", e => e.LaunchAsync(path));
     internal Task<ActionResult> CheckOutAsync(IReadOnlyList<string> paths, bool open) => OnEngineAsync("check out", e => e.CheckOutAsync(paths, open));
     internal Task<ActionResult> CheckInAsync(IReadOnlyList<string> paths) => OnEngineAsync("check in", e => e.CheckInAsync(paths));
@@ -121,11 +120,14 @@ internal sealed class AgentHost : IAsyncDisposable
     // One file, in the same folder: a file Armory doesn't have yet is renamed on disk; a file in
     // Armory is renamed for everyone (refused while someone else has it checked out).
     internal Task<ActionResult> RenameFileAsync(string path, string newName) => OnEngineAsync("rename a file", e => e.RenameFileAsync(path, newName));
-    internal Task<ActionResult> CreateFolderAsync(Guid project, string parent, string name) => NotYet("new folder in " + project);
-    internal Task<ActionResult> RenameFolderAsync(Guid project, string folder, string newName) => NotYet("rename a folder in " + project);
-    internal Task<ActionResult> DeleteFolderAsync(Guid project, string folder) => NotYet("delete a folder in " + project);
-    // sources: full paths on this computer (the file picker's, or the files dropped on the window).
-    internal Task<ActionResult> AddFilesAsync(Guid project, string folder, IReadOnlyList<string> sources) => NotYet("add " + sources.Count + " files to " + project);
+    // Folders (contract C5 and C6): a rename or a removal goes to the team in one call, then here.
+    internal Task<ActionResult> CreateFolderAsync(Guid project, string parent, string name) => OnEngineAsync("new folder", e => e.CreateFolderAsync(project, parent, name));
+    internal Task<ActionResult> RenameFolderAsync(Guid project, string folder, string newName) => OnEngineAsync("rename a folder", e => e.RenameFolderAsync(project, folder, newName));
+    internal Task<ActionResult> DeleteFolderAsync(Guid project, string folder) => OnEngineAsync("delete a folder", e => e.DeleteFolderAsync(project, folder));
+    // sources: full paths on this computer (the file picker's, or the files and folders dropped on
+    // the window); a folder is copied whole. Copied in, never over anything already there.
+    internal Task<ActionResult> AddFilesAsync(Guid project, string folder, IReadOnlyList<string> sources)
+        => sources.Count == 0 ? Task.FromResult(new ActionResult(false, "")) : OnEngineAsync("add " + sources.Count + " files or folders", e => e.AddFilesAsync(project, folder, sources));
 
     // A notice card's Done or OK, or a check-out question's key ("prompt:<path>:<when>").
     internal void DismissNotice(string key) => OnEngine("dismiss notice", e => e.DismissNotice(key));
@@ -158,12 +160,6 @@ internal sealed class AgentHost : IAsyncDisposable
             LogEngineFailure(what, error);
             return new ActionResult(false, "Armory couldn't do that. Try again in a moment.");
         }
-    }
-
-    private Task<ActionResult> NotYet(string what)
-    {
-        log.Info("window action not in this engine yet: " + what);
-        return Task.FromResult(new ActionResult(false, "This version of Armory can't do that yet."));
     }
 
     internal void SignOut()
