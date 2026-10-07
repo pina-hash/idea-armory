@@ -1435,6 +1435,28 @@ tally.bridgeTypes = 0;
 		await host({ type: 'fileDetail', detail: demo.detailFor('synced', 'f-wheel-hub') });
 		m = await click('[data-key="d-checkout"]');
 		expect(m.type === 'checkOut' && m.paths.join() === HUB && m.open === false, 'detail Check out sent ' + JSON.stringify(m));
+		// v0.2.1: the instant it is pressed, the key is busy (and takes no second press), the line
+		// at the foot says what is under way, and its answer by requestId puts both back.
+		let working = await page.evaluate(() => ({
+			busy: document.querySelector('[data-key="d-checkout"]').getAttribute('aria-busy'),
+			spin: !!document.querySelector('[data-key="d-checkout"] .spin'),
+			line: document.getElementById('result-word').textContent,
+			on: document.getElementById('result').getAttribute('data-on'),
+			working: document.getElementById('result').getAttribute('data-working')
+		}));
+		expect(
+			working.busy === 'true' && working.spin && working.line === 'Checking out Wheel-Hub.SLDPRT...' && working.on === 'true' && working.working === 'true',
+			'a pressed key did not show it was working: ' + JSON.stringify(working)
+		);
+		const again = await click('[data-key="d-checkout"]', { force: true });
+		expect(!again.type, 'a busy key sent a second ' + JSON.stringify(again));
+		await host({ type: 'actionResult', requestId: m.requestId, ok: true, message: 'Checked out Wheel-Hub.SLDPRT.' });
+		working = await page.evaluate(() => ({
+			busy: document.querySelector('[data-key="d-checkout"]').getAttribute('aria-busy'),
+			line: document.getElementById('result-word').textContent,
+			working: document.getElementById('result').getAttribute('data-working')
+		}));
+		expect(working.busy === null && working.line === 'Checked out Wheel-Hub.SLDPRT.' && working.working === null, 'an answer did not end the working state: ' + JSON.stringify(working));
 		m = await click('[data-key="d-checkout-open"]');
 		expect(m.type === 'checkOut' && m.open === true, 'Check out and open sent ' + JSON.stringify(m));
 		m = await click('[data-key="d-open"]');
@@ -1452,10 +1474,12 @@ tally.bridgeTypes = 0;
 		await host({ type: 'view', view: view('takeBack') });
 		m = await click('[data-key="row-f-plate-left"]');
 		await host({ type: 'fileDetail', detail: demo.detailFor('takeBack', 'f-plate-left') });
+		expect((await page.textContent('[data-key="d-takeback"]')).trim() === 'Force check in', 'the detail key is not Force check in');
 		await click('[data-key="d-takeback"]');
-		expect(/Any changes Maria hasn't checked in are kept/.test(await page.textContent('#ask-words')), 'Take back does not say what happens to Maria\'s changes');
+		const forceWords = await page.textContent('#ask-words');
+		expect(/Maria Lopez has it checked out now/.test(forceWords) && /Any changes Maria hasn't checked in are kept as Maria's own copy/.test(forceWords), 'Force check in does not say who has it and what happens to Maria\'s changes: ' + forceWords);
 		m = await click('[data-key="ask-ok"]');
-		expect(m.type === 'takeBack' && m.fileId === 'f-plate-left', 'Take back sent ' + JSON.stringify(m));
+		expect(m.type === 'takeBack' && m.fileId === 'f-plate-left', 'Force check in sent ' + JSON.stringify(m));
 		await click('[data-key="back"]');
 
 		// A notice's action.

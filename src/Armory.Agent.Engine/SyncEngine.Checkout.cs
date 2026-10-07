@@ -250,8 +250,9 @@ public sealed partial class SyncEngine
         return new(done.Count > 0 || pending.Count > 0, message);
     }
 
-    // Take back (armory_break_lock), for a mentor or CAD lead. The holder's computer keeps
-    // anything not checked in as a kept copy, as for any taken-back check out.
+    // Force check in (armory_break_lock; "take back" until v0.2.1), for a mentor or CAD lead.
+    // The holder's computer keeps anything not checked in as their own copy (a kept copy), as
+    // for any check out taken back.
     public async Task<ActionResult> TakeBackAsync(Guid fileId, CancellationToken cancellationToken = default)
     {
         if (!engineThread.IsCurrent) return await engineThread.InvokeAsync(() => TakeBackAsync(fileId, cancellationToken));
@@ -262,7 +263,7 @@ public sealed partial class SyncEngine
             await EnsureKnownAsync(cancellationToken);
             if (!remoteById.TryGetValue(fileId, out var remote) || remote.File.Deleted) return new(false, "That file isn't in your projects.");
             var name = remote.File.Name;
-            if (!remote.Project.CanTakeBack) return new(false, "Only a mentor or CAD lead can take back a file.");
+            if (!remote.Project.CanTakeBack) return new(false, "Only a mentor or CAD lead can force a check in.");
             if (remote.File.Lock is not { IsLive: true } held) return new(false, $"{name} isn't checked out.");
             if (OwnershipOf(held) == LockOwnership.ThisDevice) return new(false, $"You have {name} checked out. Check it in or undo the check out instead.");
             // The operation id belongs to this one check out and this computer, so asking twice
@@ -274,8 +275,8 @@ public sealed partial class SyncEngine
             bool broke;
             projectsWritten.Add(remote.Project.Id);
             try { broke = await deps.Api.BreakLockAsync(fileId, state.DeviceId!.Value, operation, cancellationToken); }
-            catch (ArmoryOfflineException) { online = false; return Offline("A file can be taken back once this computer is back online."); }
-            catch (ArmoryRpcException error) when (error.IsForbidden) { return new(false, "Only a mentor or CAD lead can take back a file."); }
+            catch (ArmoryOfflineException) { online = false; return Offline("A check in can be forced once this computer is back online."); }
+            catch (ArmoryRpcException error) when (error.IsForbidden) { return new(false, "Only a mentor or CAD lead can force a check in."); }
             catch (ArmoryRpcException)
             {
                 // The server would not take it back as asked (someone else already did, or the
@@ -286,7 +287,8 @@ public sealed partial class SyncEngine
             if (broke) KnowLock(fileId, null);
             await PassLockedAsync(cancellationToken, PassScope.File(fileId));
             var from = OwnershipOf(held) == LockOwnership.MyOtherDevice ? "your other computer, " + (held.HolderDeviceName ?? "another computer") : DisplayName(held.HolderEmail);
-            return broke ? new(true, $"Took back {name} from {from}. Anything not checked in is kept in its history.") : new(false, $"{name} isn't checked out any more.");
+            var kept = OwnershipOf(held) == LockOwnership.MyOtherDevice ? "Anything not checked in there is kept as your own copy." : "Anything they hadn't checked in is kept as their own copy.";
+            return broke ? new(true, $"Force checked in {name} from {from}. {kept}") : new(false, $"{name} isn't checked out any more.");
         }
         finally { LeaveAction(); }
     }

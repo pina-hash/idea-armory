@@ -19,8 +19,11 @@
  * state can be drawn without a click:
  *   project=<projectId>  folder=<folder path in the project; empty for its top>
  *   select=<name>,<name> (files in that folder)  expand=<notice key>
- *   dialog=newFolder|renameFolder|deleteFolder|checkOutAll|takeBack|renameFile
- *     (renameFile asks about the first file in the open notice list)
+ *   dialog=newFolder|renameFolder|deleteFolder|checkOutAll|takeBack|forceAll|renameFile
+ *     (renameFile asks about the first file in the open notice list; forceAll is Force check
+ *     in all for the open folder)
+ *   press=<control key> (the page presses that key once it is drawn, and the demo holds every
+ *     answer, so what a press shows while it waits stays in view)
  *   drag=1 (files held over the list)
  *   at=browser (Home scrolled so the team's files are in view)
  *   result=<words> (the demo answers as if an action had just come back with these words;
@@ -284,9 +287,10 @@
 	 * @property {string | null} folder    a folder path in that project
 	 * @property {string[]} select         file names in that folder
 	 * @property {string | null} expand    a notice key
-	 * @property {string | null} dialog    newFolder, renameFolder, deleteFolder, checkOutAll, takeBack or renameFile
+	 * @property {string | null} dialog    newFolder, renameFolder, deleteFolder, checkOutAll, takeBack, forceAll or renameFile
 	 * @property {boolean} drag
 	 * @property {string | null} at        a part of Home to scroll into view: browser
+	 * @property {string | null} press     a control key the page presses once it is drawn
 	 */
 
 	/* ------------------------------------------------------- Message lists */
@@ -407,7 +411,8 @@
 			expand: params.get('expand'),
 			dialog: params.get('dialog'),
 			drag: params.get('drag') === '1',
-			at: params.get('at')
+			at: params.get('at'),
+			press: params.get('press')
 		};
 
 		function firstFileId(v) {
@@ -430,6 +435,8 @@
 			deliver({ type: 'view', view: view });
 		}
 		function result(message, ok, words) {
+			// A state drawn with a key just pressed keeps waiting for its answer.
+			if (route.press) return;
 			deliver({ type: 'actionResult', requestId: message.requestId, ok: ok, message: words });
 		}
 		function useState(name) {
@@ -620,7 +627,11 @@
 					});
 					refreshMine();
 					postView();
-					result(message, !!taken, taken ? 'Took back ' + taken.row.name + ' from ' + taken.from + '. Anything not checked in is kept in its history.' : 'That file is not checked out.');
+					result(
+						message,
+						!!taken,
+						taken ? 'Force checked in ' + taken.row.name + ' from ' + taken.from + '. Anything they hadn\'t checked in is kept as their own copy.' : 'That file isn\'t checked out.'
+					);
 					break;
 				case 'createFolder':
 					p = projectById(message.projectId);

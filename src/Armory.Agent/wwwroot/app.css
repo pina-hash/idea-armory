@@ -3860,6 +3860,63 @@ dialog.housing.ask {
 	color: var(--tone-ink, var(--ink-ok));
 }
 
+/* ---- Working: an action the host has not answered yet ---- */
+
+/* A small ring that turns while something is under way: in the busy key's glyph place, in
+   the line at the window's foot, and in a row that says "Checking out...". It holds still
+   (a ring with one bright arc) when the student asks for less motion. */
+.spin {
+	display: inline-block;
+	flex: none;
+	width: 14px;
+	height: 14px;
+	box-sizing: border-box;
+	border-radius: 50%;
+	border: 2px solid var(--plate-hair);
+	border-top-color: var(--ink-ok);
+	vertical-align: -2px;
+}
+@media (prefers-reduced-motion: no-preference) {
+	.spin {
+		animation: armory-spin 0.9s linear infinite;
+	}
+}
+@keyframes armory-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+.key[aria-busy='true'] {
+	cursor: progress;
+}
+.key[aria-busy='true'] .spin {
+	width: 16px;
+	height: 16px;
+}
+/* A busy key shows the spinner in its glyph's place. */
+.key[aria-busy='true'] .spin + .icon {
+	display: none;
+}
+.row-pending {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.4rem;
+}
+/* While a row's action is under way, its label says so in place of who has it. */
+.row-pending + .chip.who,
+.row-pending + .row-avail {
+	display: none;
+}
+.result-chip .spin {
+	display: none;
+}
+.result-line[data-working='true'] .result-chip .spin {
+	display: inline-block;
+}
+.result-line[data-working='true'] .result-chip svg {
+	display: none;
+}
+
 /* ---- Narrow windows ---- */
 
 @media (max-width: 760px) {

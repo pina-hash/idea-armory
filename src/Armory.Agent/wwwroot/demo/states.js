@@ -720,7 +720,7 @@
 		},
 
 		takeBack: {
-			label: 'As a mentor: take back a file someone else has checked out',
+			label: 'As a mentor: force check in a file someone else has checked out (on its row, its page and the folder keys)',
 			screens: ['home', 'detail'],
 			detailFileId: 'f-plate-left',
 			params: { folder: 'Drivetrain', select: 'Plate-Left.SLDPRT', at: 'browser' },
@@ -728,11 +728,25 @@
 		},
 
 		takeBackConfirm: {
-			label: 'As a mentor, taking a file back: what happens to the changes not checked in',
+			label: 'As a mentor, forcing a check in: who has it, and what happens to the changes not checked in',
 			screens: ['detail'],
 			detailFileId: 'f-plate-left',
 			params: { dialog: 'takeBack' },
 			view: signedIn({ sync: SYNCED, changes: shared({ 'f-plate-left': MARIA_HAS_PLATE }), opts: { lead: true } })
+		},
+
+		forceAllConfirm: {
+			label: 'As a mentor, Force check in all for a folder: whose files, and that their changes are kept as their own copies',
+			screens: ['home'],
+			params: { folder: 'Drivetrain', at: 'browser', dialog: 'forceAll' },
+			view: signedIn({ sync: SYNCED, changes: shared({ 'f-plate-left': MARIA_HAS_PLATE }), opts: { lead: true } })
+		},
+
+		working: {
+			label: 'Just pressed Check out: the key turns, its row says Checking out, and the line at the foot says what is under way',
+			screens: ['home'],
+			params: { folder: 'Drivetrain', at: 'browser', press: 'state-f-plate-right' },
+			view: signedIn({ sync: SYNCED, changes: shared({}) })
 		},
 
 		renameFile: {

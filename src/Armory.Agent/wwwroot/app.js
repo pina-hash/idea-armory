@@ -52,6 +52,7 @@
 		follow: null, // a folder renamed from here: the browser follows it to its new name
 		drag: false,
 		resultTimer: 0,
+		pending: {}, // requestId -> an action the host has not answered yet (see Working)
 		routed: false,
 		ready: false,
 		waitingForDetail: false
@@ -357,16 +358,18 @@
 	/** A key with a glyph and its word; the word hides in a narrow window (`tight`), and
 	 *  stays for screen readers and in the tooltip. */
 	function key(o) {
+		var busy = o.key && busyKey(o.key);
 		return (
 			'<button class="key' + (o.cls ? ' ' + o.cls : '') + '" type="button" data-action="' + o.action + '"' +
 			(o.key ? ' data-key="' + esc(o.key) + '"' : '') +
+			(busy ? busyAttrs(o.key) : '') +
 			(o.path != null ? ' data-path="' + esc(o.path) + '"' : '') +
 			(o.fileId ? ' data-file-id="' + esc(o.fileId) + '"' : '') +
 			(o.extra || '') +
 			(o.title ? ' title="' + esc(o.title) + '"' : '') +
 			(o.label ? ' aria-label="' + esc(o.label) + '"' : '') +
 			(o.disabled ? ' disabled' : '') +
-			'>' + (o.glyph ? icon(o.glyph) : '') + '<span class="key-word">' + esc(o.word) + '</span></button>'
+			'>' + (busy ? spinHtml() : '') + (o.glyph ? icon(o.glyph) : '') + '<span class="key-word">' + esc(o.word) + '</span></button>'
 		);
 	}
 
@@ -1105,7 +1108,7 @@
 	function fileLine(r) {
 		var meta = r.updatedBy ? metaLine(['Checked in by ' + r.updatedBy, r.updatedAt ? agoWhole(r.updatedAt) : '']) : '';
 		var first;
-		if (r.fileId) first = checkoutMark(checkoutOf(r)) + statusChip(r.status, r.changed);
+		if (r.fileId) first = pendingHtml(r) + checkoutMark(checkoutOf(r)) + statusChip(r.status, r.changed);
 		else if (r.status === 'notInArmory') first = statusChip(r.status, false);
 		else first = '<span class="row-avail">' + esc(r.status === 'uploading' ? 'New, uploading now' : 'New, not uploaded yet') + '</span>';
 		return first + kindChip(r.name) + (meta ? '<span class="row-meta">' + esc(meta) + '</span>' : '');
@@ -1113,25 +1116,33 @@
 
 	function openKey(path, name, k) {
 		return (
-			'<button class="key row-key" type="button" data-rove="open" data-action="launch" data-path="' + esc(path) + '" data-key="open-' + esc(k) + '"' +
-			' aria-label="Open ' + esc(name) + '" title="Open ' + esc(name) + ' to look at it">' + icon('open') + '<span class="key-word">Open</span></button>'
+			'<button class="key row-key" type="button" data-rove="open" data-action="launch" data-path="' + esc(path) + '" data-key="open-' + esc(k) + '"' + busyAttrs('open-' + k) +
+			' aria-label="Open ' + esc(name) + '" title="Open ' + esc(name) + ' to look at it">' + busyGlyph('open-' + k, 'open') + '<span class="key-word">Open</span></button>'
 		);
 	}
 
 	/** A file row's one state key, beside Open: Check out while nobody has it, Check in
-	 *  while I have it here. Someone else's file has none: its line says who has it. */
+	 *  while I have it here, and for a mentor or CAD lead, Force check in while someone else
+	 *  has it. Anyone else's view of someone else's file has none: its line says who has it. */
 	function stateKey(r, k) {
 		if (!r.fileId) return '';
 		var c = checkoutOf(r);
+		var sk = 'state-' + k;
 		if (c.state === 'available')
 			return (
-				'<button class="key row-key state-key" type="button" data-rove="state" data-action="checkOut" data-path="' + esc(r.path) + '" data-key="state-' + esc(k) + '"' +
-				' aria-label="Check out ' + esc(r.name) + '" title="Check out ' + esc(r.name) + ' to make changes">' + icon('checkout') + '<span class="key-word">Check out</span></button>'
+				'<button class="key row-key state-key" type="button" data-rove="state" data-action="checkOut" data-path="' + esc(r.path) + '" data-key="' + esc(sk) + '"' + busyAttrs(sk) +
+				' aria-label="Check out ' + esc(r.name) + '" title="Check out ' + esc(r.name) + ' to make changes">' + busyGlyph(sk, 'checkout') + '<span class="key-word">Check out</span></button>'
 			);
 		if (c.state === 'mine')
 			return (
-				'<button class="key row-key state-key" type="button" data-rove="state" data-action="checkIn" data-path="' + esc(r.path) + '" data-key="state-' + esc(k) + '"' +
-				' aria-label="Check in ' + esc(r.name) + '" title="Check in ' + esc(r.name) + ' to share your changes">' + icon('checkin') + '<span class="key-word">Check in</span></button>'
+				'<button class="key row-key state-key" type="button" data-rove="state" data-action="checkIn" data-path="' + esc(r.path) + '" data-key="' + esc(sk) + '"' + busyAttrs(sk) +
+				' aria-label="Check in ' + esc(r.name) + '" title="Check in ' + esc(r.name) + ' to share your changes">' + busyGlyph(sk, 'checkin') + '<span class="key-word">Check in</span></button>'
+			);
+		var found = findRow(r.fileId);
+		if ((c.state === 'other' || c.state === 'myOtherComputer') && found && found.project.canTakeBack)
+			return (
+				'<button class="key row-key state-key" type="button" data-rove="state" data-action="askTakeBack" data-file-id="' + esc(r.fileId) + '" data-key="' + esc(sk) + '"' + busyAttrs(sk) +
+				' aria-label="Force check in ' + esc(r.name) + '" title="Force check in ' + esc(r.name) + ' (' + esc(c.label || '') + ')">' + busyGlyph(sk, 'takeback') + '<span class="key-word">Force check in</span></button>'
 			);
 		return '';
 	}
@@ -1179,8 +1190,8 @@
 		var extra = '';
 		if (checkoutOf(f).state === 'mine')
 			extra +=
-				'<button class="key row-key state-key" type="button" data-rove="in" data-action="checkIn" data-path="' + esc(f.path) + '" data-key="in-' + esc(k) + '"' +
-				' aria-label="Check in ' + esc(f.name) + '" title="Check in ' + esc(f.name) + ' to share your changes">' + icon('checkin') + '<span class="key-word">Check in</span></button>';
+				'<button class="key row-key state-key" type="button" data-rove="in" data-action="checkIn" data-path="' + esc(f.path) + '" data-key="in-' + esc(k) + '"' + busyAttrs('in-' + k) +
+				' aria-label="Check in ' + esc(f.name) + '" title="Check in ' + esc(f.name) + ' to share your changes">' + busyGlyph('in-' + k, 'checkin') + '<span class="key-word">Check in</span></button>';
 		extra += openKey(f.path, f.name, k);
 		return rowHtml({
 			i: i,
@@ -1189,7 +1200,7 @@
 			hit: f.fileId ? { action: 'openFile', fileId: f.fileId } : { action: 'showInFolder', path: f.path, hint: 'Show in folder' },
 			k: k,
 			name: f.name,
-			line: checkoutMark(checkoutOf(f)) + statusChip(f.status, r.changed) + kindChip(f.name) + '<span class="row-meta">' + esc(whereIs(f.path)) + '</span>',
+			line: pendingHtml(f) + checkoutMark(checkoutOf(f)) + statusChip(f.status, r.changed) + kindChip(f.name) + '<span class="row-meta">' + esc(whereIs(f.path)) + '</span>',
 			extra: extra,
 			go: f.fileId ? 'chev-right' : 'folder-go'
 		});
@@ -1295,6 +1306,10 @@
 		var canIn = rows.some(function (r) {
 			return checkoutOf(r).state === 'mine';
 		});
+		var held = rows.filter(function (r) {
+			var st = checkoutOf(r).state;
+			return r.fileId && (st === 'other' || st === 'myOtherComputer');
+		});
 		var name = folder ? folder.split('/').pop() : p.name;
 		var inside = (pi.children[folder] || []).length ? ' and the folders in it' : '';
 		var html = '<div class="folder-keys" role="group" aria-label="' + esc('Folder ' + name) + '">';
@@ -1306,6 +1321,9 @@
 		}
 		html += key({ action: 'askCheckOutAll', key: 'fk-out', cls: 'tool keep-word', glyph: 'checkout', word: 'Check out all', title: 'Check out every file in ' + name + inside, disabled: !canOut });
 		html += key({ action: 'folderCheckIn', key: 'fk-in', cls: 'tool keep-word', glyph: 'checkin', word: 'Check in all', title: 'Check in every file you have checked out in ' + name + inside, disabled: !canIn });
+		// A mentor or CAD lead can check in, for everyone, every file someone else has here.
+		if (p.canTakeBack)
+			html += key({ action: 'askForceAll', key: 'fk-force', cls: 'tool keep-word', glyph: 'takeback', word: 'Force check in all', title: 'Force check in every file someone else has checked out in ' + name + inside, disabled: !held.length });
 		return html + '</div>';
 	}
 
@@ -1396,7 +1414,7 @@
 		html += key({ action: 'selCheckOut', key: 'sel-out', cls: 'tool', glyph: 'checkout', word: 'Check out', disabled: !any('available') });
 		html += key({ action: 'selCheckIn', key: 'sel-in', cls: 'tool', glyph: 'checkin', word: 'Check in', disabled: !any('mine') });
 		html += key({ action: 'selUndo', key: 'sel-undo', cls: 'tool', glyph: 'undo', word: 'Undo check out', disabled: !any('mine') });
-		if (lead) html += key({ action: 'askTakeBackPicked', key: 'sel-take', cls: 'tool', glyph: 'takeback', word: 'Take back', disabled: !any('other') });
+		if (lead) html += key({ action: 'askTakeBackPicked', key: 'sel-take', cls: 'tool', glyph: 'takeback', word: 'Force check in', disabled: !any('other') && !any('myOtherComputer') });
 		html += key({ action: 'selClear', key: 'sel-clear', cls: 'tool sel-clear', word: 'Clear' });
 		html += '<span class="sel-break" aria-hidden="true"></span>';
 		return html + '</div>';
@@ -1491,7 +1509,7 @@
 			keys += key({ action: 'checkIn', key: 'd-checkin', cls: 'tool', glyph: 'checkin', word: 'Check in', path: d.path });
 			keys += key({ action: 'undoCheckOut', key: 'd-undo', cls: 'tool', glyph: 'undo', word: 'Undo check out', path: d.path });
 		}
-		if ((c.state === 'other' || c.state === 'myOtherComputer') && d.canTakeBack) keys += key({ action: 'askTakeBack', key: 'd-takeback', cls: 'tool', glyph: 'takeback', word: 'Take back', fileId: d.fileId });
+		if ((c.state === 'other' || c.state === 'myOtherComputer') && d.canTakeBack) keys += key({ action: 'askTakeBack', key: 'd-takeback', cls: 'tool', glyph: 'takeback', word: 'Force check in', fileId: d.fileId });
 		if (keys) html += '<div class="detail-keys">' + keys + '</div>';
 		html += '<button class="textlink" type="button" data-action="showInFolder" data-path="' + esc(d.path) + '" data-key="show-in-folder">' + icon('folder') + '<span>Show in folder</span></button>';
 		return html + '</div>';
@@ -1658,7 +1676,7 @@
 	/* ------------------------------------------------------ The small dialog */
 
 	/*
-	 * New folder, Rename folder, Delete folder and Take back ask in one small housing.
+	 * New folder, Rename folder, Delete folder and Force check in ask in one small housing.
 	 * It is filled once when it opens and never redrawn by a host update, so the words a
 	 * student is typing stay put. Its name field is the inset field recipe at 44px.
 	 */
@@ -1717,11 +1735,12 @@
 			ok = 'Delete folder';
 			danger = true;
 		} else {
-			title = 'Take back';
+			title = c.count === 1 ? 'Force check in' : 'Force check in all';
 			body =
-				'Take back ' + c.what + '? Any changes ' + c.who + ' hasn\'t checked in are kept in ' + (c.count === 1 ? 'the file\'s history' : 'each file\'s history') +
+				'Force check in ' + c.what + '? ' + c.holders + (c.people === 1 ? ' has ' : ' have ') + (c.count === 1 ? 'it' : 'them') + ' checked out now. ' +
+				'Any changes ' + c.who + ' hasn\'t checked in are kept as ' + c.whose + ' own copy in ' + (c.count === 1 ? 'the file\'s history' : 'each file\'s history') +
 				', so nothing is lost. Then anyone can check ' + (c.count === 1 ? 'it' : 'them') + ' out.';
-			ok = 'Take back';
+			ok = c.count === 1 ? 'Force check in' : 'Force check in ' + plural(c.count, 'file', 'files');
 			danger = true;
 		}
 		return (
@@ -1783,7 +1802,7 @@
 				fileInput.focus();
 				return;
 			}
-			act('renameFile', { path: c.path, newName: newName });
+			act('renameFile', { path: c.path, newName: newName }, { key: a.returnKey });
 		} else if (a.kind === 'newFolder' || a.kind === 'renameFolder') {
 			var input = ask.querySelector('#ask-name');
 			var name = input.value.trim();
@@ -1794,17 +1813,17 @@
 				input.focus();
 				return;
 			}
-			if (a.kind === 'newFolder') act('createFolder', { projectId: c.projectId, parent: c.folder, name: name });
+			if (a.kind === 'newFolder') act('createFolder', { projectId: c.projectId, parent: c.folder, name: name }, { key: a.returnKey });
 			else {
-				act('renameFolder', { projectId: c.projectId, folder: c.folder, newName: name });
+				act('renameFolder', { projectId: c.projectId, folder: c.folder, newName: name }, { key: a.returnKey });
 				// When the host's next view has the new name, the browser goes with it.
 				ui.follow = { projectId: c.projectId, from: c.folder, to: c.folder.split('/').slice(0, -1).concat([name]).join('/') };
 			}
-		} else if (a.kind === 'checkOutAll') act('checkOut', { paths: [c.path], open: false });
-		else if (a.kind === 'deleteFolder') act('deleteFolder', { projectId: c.projectId, folder: c.folder });
+		} else if (a.kind === 'checkOutAll') act('checkOut', { paths: [c.path], open: false }, { key: a.returnKey });
+		else if (a.kind === 'deleteFolder') act('deleteFolder', { projectId: c.projectId, folder: c.folder }, { key: a.returnKey });
 		else
 			c.fileIds.forEach(function (id) {
-				act('takeBack', { fileId: id });
+				act('takeBack', { fileId: id }, { key: a.returnKey, words: c.count === 1 ? null : 'Force checking in ' + plural(c.count, 'file', 'files') + '...' });
 			});
 		ask.close();
 	}
@@ -1871,7 +1890,8 @@
 		openAsk('renameFile', { path: path, name: name, where: parts.join(' \u203a '), project: project ? project.name : root, taken: taken }, from);
 	}
 
-	/** Take back one file, or the picked files someone else has. */
+	/** Force check in one file, or the picked files (or a folder's files) someone else has,
+	 *  naming who has them. */
 	function askTakeBack(hits, from) {
 		hits = hits.filter(function (h) {
 			var st = h ? checkoutOf(h.row).state : 'available';
@@ -1883,6 +1903,7 @@
 			people[checkoutOf(h.row).name || 'someone'] = true;
 		});
 		var names = Object.keys(people);
+		var holders = names.length <= 2 ? names.join(' and ') : names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1];
 		openAsk(
 			'takeBack',
 			{
@@ -1891,8 +1912,10 @@
 				}),
 				count: hits.length,
 				people: names.length,
-				what: (hits.length === 1 ? hits[0].row.name : plural(hits.length, 'file', 'files')) + ' from ' + names.join(' and '),
-				who: names.length === 1 ? firstName(names[0]) : 'anyone'
+				holders: holders,
+				what: hits.length === 1 ? hits[0].row.name : plural(hits.length, 'file', 'files'),
+				who: names.length === 1 ? firstName(names[0]) : 'anyone',
+				whose: names.length === 1 ? firstName(names[0]) + '\'s' : 'their'
 			},
 			from
 		);
@@ -1900,15 +1923,186 @@
 
 	/* ------------------------------------------------------------- Actions */
 
-	/** Sends an action; its actionResult comes back to the quiet line at the foot. */
-	function act(type, fields) {
-		return bridge.send(type, fields);
+	/* ------------------------------------------------------------- Working */
+
+	/*
+	 * The instant a key is pressed the page says it heard. The key turns busy (a small
+	 * spinner in place of its glyph, aria-busy, and a second press does nothing) until the
+	 * host answers that action by its requestId; the line at the window's foot says what
+	 * is under way in plain words ("Checking out Bracket.SLDPRT..."), with a spinner; and
+	 * the rows it touches say so ("Checking out...") in place of who has them. The answer
+	 * replaces all of it. The spinner holds still when the student asks for less motion.
+	 */
+	function spinHtml() {
+		return '<span class="spin" aria-hidden="true"></span>';
+	}
+
+	/** The requestId of the action a control is waiting on, or null. */
+	function busyKey(dataKey) {
+		for (var id in ui.pending) if (ui.pending[id].key && ui.pending[id].key === dataKey) return id;
+		return null;
+	}
+
+	/** A busy control carries its request (data-req), so its answer can end it in place. */
+	function busyAttrs(dataKey) {
+		var id = busyKey(dataKey);
+		return id ? ' aria-busy="true" aria-disabled="true" data-req="' + esc(id) + '"' : '';
+	}
+
+	/** Its glyph, with the spinner beside it while it is busy (the style shows one of them). */
+	function busyGlyph(dataKey, glyph) {
+		return (busyKey(dataKey) ? spinHtml() : '') + icon(glyph);
+	}
+
+	/** What a row says while an action on it is under way: the words, and the request. */
+	function pendingOf(r) {
+		for (var id in ui.pending) {
+			var p = ui.pending[id];
+			if (!p.row) continue;
+			if (r.fileId && p.fileIds.indexOf(r.fileId) >= 0) return { id: id, words: p.row };
+			for (var i = 0; i < p.paths.length; i++) if (r.path === p.paths[i] || String(r.path).indexOf(p.paths[i] + '/') === 0) return { id: id, words: p.row };
+		}
+		return null;
+	}
+
+	/** The working label a row shows ahead of who has it (the style hides who has it while
+	 *  the label is there). */
+	function pendingHtml(r) {
+		var p = pendingOf(r);
+		return p ? '<span class="row-avail row-pending" data-req="' + esc(p.id) + '">' + spinHtml() + esc(p.words) + '</span>' : '';
+	}
+
+	/** An action was sent: its key and the rows it touches say so, in place (no redraw, so
+	 *  focus and scroll stay where they are; rows a long list draws later say it as drawn). */
+	function startWorking(id) {
+		var p = ui.pending[id];
+		if (p.key)
+			Array.prototype.forEach.call(document.querySelectorAll('[data-key="' + String(p.key).replace(/["\\]/g, '') + '"]'), function (el) {
+				el.setAttribute('aria-busy', 'true');
+				el.setAttribute('aria-disabled', 'true');
+				el.setAttribute('data-req', id);
+				if (!el.querySelector('.spin')) el.insertAdjacentHTML('afterbegin', spinHtml());
+			});
+		if (!p.row || !ui.index) return;
+		Object.keys(ui.index.byPath).forEach(function (path) {
+			var r = ui.index.byPath[path].row;
+			var mine = pendingOf(r);
+			if (!r.fileId || !mine || mine.id !== id) return;
+			[r.fileId, 'mine:' + r.fileId].forEach(function (vkey) {
+				var line = document.querySelector('li[data-vkey="' + String(vkey).replace(/["\\]/g, '') + '"] .row-line');
+				if (line && !line.querySelector('.row-pending')) line.insertAdjacentHTML('afterbegin', pendingHtml(r));
+			});
+		});
+	}
+
+	/** An action was answered: its controls and rows go back as they were, in place (no
+	 *  redraw, so focus and scroll stay exactly where they are). */
+	function endWorking(id) {
+		Array.prototype.forEach.call(document.querySelectorAll('[data-req="' + String(id).replace(/["\\]/g, '') + '"]'), function (el) {
+			if (el.classList.contains('row-pending')) {
+				el.parentNode.removeChild(el);
+				return;
+			}
+			el.removeAttribute('aria-busy');
+			el.removeAttribute('aria-disabled');
+			el.removeAttribute('data-req');
+			var spin = el.querySelector('.spin');
+			if (spin) spin.parentNode.removeChild(spin);
+		});
+	}
+
+	function leaf(path) {
+		return String(path).split('/').pop();
+	}
+
+	/** "Bracket.SLDPRT", or "3 files" for a folder or several. */
+	function filesWords(paths) {
+		if (paths.length === 1 && ui.index && ui.index.byPath[paths[0]]) return leaf(paths[0]);
+		var n = 0;
+		if (ui.index)
+			Object.keys(ui.index.byPath).forEach(function (path) {
+				for (var i = 0; i < paths.length; i++)
+					if (path === paths[i] || path.indexOf(paths[i] + '/') === 0) {
+						n++;
+						break;
+					}
+			});
+		return n ? plural(n, 'file', 'files') : paths.length === 1 ? leaf(paths[0]) : plural(paths.length, 'file', 'files');
+	}
+
+	/** The working line for an action, and what its rows say meanwhile. */
+	function workingOf(type, f) {
+		var paths = f.paths || (f.path ? [f.path] : []);
+		var row = findRow(f.fileId);
+		switch (type) {
+			case 'checkOut':
+				return { line: (f.open ? 'Checking out and opening ' : 'Checking out ') + filesWords(paths) + '...', row: 'Checking out...' };
+			case 'checkIn':
+				return { line: 'Checking in ' + filesWords(paths) + '...', row: 'Checking in...' };
+			case 'undoCheckOut':
+				return { line: 'Undoing the check out of ' + filesWords(paths) + '...', row: 'Undoing the check out...' };
+			case 'launchFile':
+				return { line: 'Opening ' + leaf(f.path) + '...', row: null };
+			case 'takeBack':
+				return { line: 'Force checking in ' + (row ? row.row.name : 'the file') + '...', row: 'Force checking in...' };
+			case 'renameFile':
+				return { line: 'Renaming ' + leaf(f.path) + ' to ' + f.newName + '...', row: 'Renaming...' };
+			case 'createFolder':
+				return { line: 'Making the folder ' + f.name + '...', row: null };
+			case 'renameFolder':
+				return { line: 'Renaming ' + leaf(f.folder) + ' to ' + f.newName + '...', row: null };
+			case 'deleteFolder':
+				return { line: 'Deleting ' + leaf(f.folder) + '...', row: null };
+			case 'addFiles':
+				return { line: 'Choosing files to add...', row: null };
+			case 'dropFiles':
+				return { line: 'Adding files...', row: null };
+		}
+		return { line: null, row: null };
+	}
+
+	/** Sends an action and shows at once that it is under way; its actionResult comes back
+	 *  to the quiet line at the foot. how: { key: the control pressed, words: a line of its own }. */
+	function act(type, fields, how) {
+		var id = bridge.send(type, fields);
+		if (!id) return id;
+		how = how || {};
+		var w = workingOf(type, fields || {});
+		ui.pending[id] = {
+			type: type,
+			key: how.key || null,
+			paths: (fields && (fields.paths || (fields.path ? [fields.path] : []))) || [],
+			fileIds: fields && fields.fileId ? [fields.fileId] : [],
+			row: w.row
+		};
+		showWorking(how.words || w.line);
+		startWorking(id);
+		return id;
+	}
+
+	/** The line at the foot while an action is under way: its words and a spinner. */
+	function showWorking(words) {
+		if (!words) return;
+		clearTimeout(ui.resultTimer);
+		resultWord.textContent = words;
+		resultBox.setAttribute('data-tone', 'ok');
+		resultBox.setAttribute('data-working', 'true');
+		resultBox.setAttribute('aria-busy', 'true');
+		resultBox.setAttribute('data-on', 'true');
 	}
 
 	/** The host's word on an action: a small tag at the window's foot, read out by a
 	 *  screen reader, that fades after a while. Never an alert, never a focus change. */
 	function showResult(ok, message) {
-		if (!message) return;
+		if (!message) {
+			// An answer with nothing to say (a file picker closed): the working line goes.
+			if (resultBox.getAttribute('data-working') === 'true') resultBox.setAttribute('data-on', 'false');
+			resultBox.removeAttribute('data-working');
+			resultBox.removeAttribute('aria-busy');
+			return;
+		}
+		resultBox.removeAttribute('data-working');
+		resultBox.removeAttribute('aria-busy');
 		resultWord.textContent = message;
 		resultBox.setAttribute('data-tone', ok ? 'ok' : 'look');
 		resultBox.setAttribute('data-on', 'true');
@@ -2355,7 +2549,8 @@
 		// A chip in a row sits above the row's key so it keeps the arrow cursor (a tag is
 		// never a button); a click on it is still a click on the row.
 		if (!el && e.target.closest && e.target.closest('.row .chip')) el = e.target.closest('.row-main').querySelector('.row-hit');
-		if (!el || el.disabled) return;
+		// Disabled, or busy with an action the host has not answered yet: a second press does nothing.
+		if (!el || el.disabled || el.getAttribute('aria-busy') === 'true') return;
 		var action = el.getAttribute('data-action');
 		var path = el.getAttribute('data-path');
 		var from = el.getAttribute('data-key');
@@ -2370,19 +2565,19 @@
 				bridge.send('showInFolder', { path: path });
 				break;
 			case 'launch':
-				act('launchFile', { path: path });
+				act('launchFile', { path: path }, { key: from });
 				break;
 			case 'checkOut':
-				act('checkOut', { paths: [path], open: false });
+				act('checkOut', { paths: [path], open: false }, { key: from });
 				break;
 			case 'checkOutOpen':
-				act('checkOut', { paths: [path], open: true });
+				act('checkOut', { paths: [path], open: true }, { key: from });
 				break;
 			case 'checkIn':
-				act('checkIn', { paths: [path] });
+				act('checkIn', { paths: [path] }, { key: from });
 				break;
 			case 'undoCheckOut':
-				act('undoCheckOut', { paths: [path] });
+				act('undoCheckOut', { paths: [path] }, { key: from });
 				break;
 			case 'askTakeBack':
 				askTakeBack([findRow(el.getAttribute('data-file-id'))], from);
@@ -2390,7 +2585,7 @@
 			case 'promptCheckOut':
 				// Check out and reopen: the host checks it out, then opens it again here once
 				// SolidWorks has closed it (until then it says to close it first).
-				act('checkOut', { paths: [path], open: true });
+				act('checkOut', { paths: [path], open: true }, { key: from });
 				ui.promptGone = promptKey(ui.view.prompt);
 				render();
 				break;
@@ -2409,12 +2604,21 @@
 				var paths = pickedRows().map(function (h) {
 					return h.row.path;
 				});
-				if (action === 'selCheckOut') act('checkOut', { paths: paths, open: false });
-				else if (action === 'selCheckIn') act('checkIn', { paths: paths });
-				else act('undoCheckOut', { paths: paths });
+				if (action === 'selCheckOut') act('checkOut', { paths: paths, open: false }, { key: from });
+				else if (action === 'selCheckIn') act('checkIn', { paths: paths }, { key: from });
+				else act('undoCheckOut', { paths: paths }, { key: from });
 				break;
 			case 'askTakeBackPicked':
 				askTakeBack(pickedRows(), from);
+				break;
+			case 'askForceAll':
+				var at = browserPlace();
+				askTakeBack(
+					rowsUnder(at.pi, at.folder).map(function (r) {
+						return { row: r, project: at.project };
+					}),
+					from
+				);
 				break;
 			case 'selClear':
 				clearPicked();
@@ -2436,7 +2640,7 @@
 				break;
 			case 'addFiles':
 				var place = browserPlace();
-				act('addFiles', { projectId: place.project.id, folder: place.folder });
+				act('addFiles', { projectId: place.project.id, folder: place.folder }, { key: from });
 				break;
 			case 'askCheckOutAll':
 				askFolder('checkOutAll', from);
@@ -2446,7 +2650,7 @@
 				break;
 			case 'folderCheckIn':
 				var here = browserPlace();
-				act('checkIn', { paths: [folderPathOf(here.pi, here.folder)] });
+				act('checkIn', { paths: [folderPathOf(here.pi, here.folder)] }, { key: from });
 				break;
 			case 'askOk':
 				askOk();
@@ -2630,12 +2834,27 @@
 		}
 		if (r.screen === 'settings') openSettings();
 		routeDialog(r);
+		// A demo state drawn just after a key was pressed (the demo holds the answer).
+		if (r.press) {
+			var pressed = document.querySelector('[data-key="' + String(r.press).replace(/["\\]/g, '') + '"]');
+			if (pressed) pressed.click();
+		}
 		markReady();
 	}
 
 	function routeDialog(r) {
 		if (!r || !r.dialog) return;
 		if (r.dialog === 'takeBack' && ui.detail) askTakeBack([findRow(ui.detail.fileId)], 'd-takeback');
+		if (r.dialog === 'forceAll') {
+			var here = browserPlace();
+			if (here)
+				askTakeBack(
+					rowsUnder(here.pi, here.folder).map(function (row) {
+						return { row: row, project: here.project };
+					}),
+					'fk-force'
+				);
+		}
 		else if (r.dialog === 'newFolder' || r.dialog === 'renameFolder' || r.dialog === 'deleteFolder' || r.dialog === 'checkOutAll') askFolder(r.dialog, null);
 		else if (r.dialog === 'renameFile') {
 			// The first file in the open notice list that Armory doesn't have yet.
@@ -2685,6 +2904,8 @@
 		} else if (message.type === 'activity') {
 			patchActivity(message.activity);
 		} else if (message.type === 'actionResult') {
+			delete ui.pending[message.requestId];
+			endWorking(message.requestId);
 			showResult(!!message.ok, message.message);
 		}
 	});

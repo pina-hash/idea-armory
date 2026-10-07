@@ -39,11 +39,13 @@ uses a demo transport that answers from `wwwroot/demo/states.js`. See "The demo"
   computer has checked out, in every project, an archived one too), and Team files:
   project tabs, then the open project's card with where you are (Project › Folder ›
   Subfolder), the folder's keys (New folder, Add files, Rename folder, Delete folder,
-  Check out all, Check in all), and its folder rows and file rows. Files dragged from
+  Check out all, Check in all, and for a mentor or CAD lead Force check in all), and its
+  folder rows and file rows. A file row's state key is Check out, Check in, or for a
+  mentor or CAD lead on a file someone else has, Force check in. Files dragged from
   File Explorer drop into the open folder. How many files wait to upload is said once,
   by Right now (`activity.waiting`), never as a tag on each row.
 - **File detail**: the file's display (its state and who has it), Open as the primary
-  key, then Check out, Check out and open, Check in, Undo check out or Take back as its
+  key, then Check out, Check out and open, Check in, Undo check out or Force check in as its
   state allows, Show in folder as a quiet link, Checked out (the person and computer,
   or "Available. Check it out to make changes."), and the history.
 - **Settings** is a sheet over Home with exactly the folder (and Change), Start Armory
@@ -52,7 +54,8 @@ uses a demo transport that answers from `wwwroot/demo/states.js`. See "The demo"
   folder, Check out all (how many files, in that folder and its folders, and that
   nobody else can save them until they are checked in; it starts on Cancel), Rename
   file (a notice's file that shares its name with another file in the project) and
-  Take back. It is filled once when it opens and never redrawn by a host message, so
+  Force check in (one file, the picked files, or all of a folder's: who has them, and that
+  anything they hadn't checked in is kept as their own copy). It is filled once when it opens and never redrawn by a host message, so
   typed words stay.
 
 Every file row shows who has it checked out, always: "Checked out by you" or "Checked
@@ -227,6 +230,15 @@ Plate.SLDPRT.", "Close Plate.SLDPRT in SolidWorks first."). The actions are
 `launchFile`, `checkOut`, `checkIn`, `undoCheckOut`, `takeBack`, `createFolder`,
 `renameFolder`, `deleteFolder`, `renameFile`, `addFiles` and `dropFiles`.
 
+The page shows an action is under way from the moment it is sent until its
+`actionResult` arrives (v0.2.1): the pressed key gets `aria-busy="true"` and
+`aria-disabled="true"`, a small spinner in place of its glyph, and ignores a second
+press; the quiet line at the foot says what is under way in plain words ("Checking out
+Bracket.SLDPRT...", "Checking in 3 files...", "Opening Bracket.SLDPRT...") with a
+spinner (`data-working="true"` on `#result`); and the rows the action touches say so
+("Checking out...") in place of who has them. The answer with the same `requestId`
+replaces all of it. The spinner holds still under `prefers-reduced-motion`.
+
 | `type` | fields | sent by | effect |
 |---|---|---|---|
 | `ready` | | the page, once, first | host answers with `view` |
@@ -241,7 +253,7 @@ Plate.SLDPRT.", "Close Plate.SLDPRT in SolidWorks first."). The actions are
 | `checkOut` | `paths`, `open`, `requestId` | Check out (a file row, File detail, the selection bar), Check out and open on File detail and Check out and reopen on the question (`open: true`), Check out all after the small dialog (the folder's path) | takes each file to change it, makes it writable here, downloads a newer version first; with `open`, then opens it (asking first for SolidWorks to close it, if it has it open) |
 | `checkIn` | `paths`, `requestId` | Check in (a file row, File detail, My files, the selection bar), Check in all | uploads the changes, makes the file read-only, lets it go |
 | `undoCheckOut` | `paths`, `requestId` | Undo check out (File detail, the selection bar) | puts back the version from before the check out (changes are kept in the history), lets it go |
-| `takeBack` | `fileId`, `requestId` | Take back, after the small dialog asks (mentors and CAD leads) | takes a check out away from its holder; their changes are kept in the history |
+| `takeBack` | `fileId`, `requestId` | Force check in (a file row, File detail, the selection bar; one message per file for Force check in all), after the small dialog asks (mentors and CAD leads) | ends the check out for its holder (the type keeps its old name); anything they hadn't checked in is kept as their own copy |
 | `createFolder` | `projectId`, `parent`, `name`, `requestId` | New folder, after the small dialog | makes the folder |
 | `renameFolder` | `projectId`, `folder`, `newName`, `requestId` | Rename folder, after the small dialog | renames it for everyone (refused, and put back, when someone else has a file in it checked out) |
 | `deleteFolder` | `projectId`, `folder`, `requestId` | Delete folder, after the small dialog | removes it and its files for everyone; their history is kept |
@@ -259,9 +271,11 @@ Outside WebView2, `?state=<name>` picks a demo state (`demo/states.js`), `theme=
 screen and `file=<fileId>` the file on File detail. The page-only places, so every
 state can be drawn without a click, are `project=<projectId>`, `folder=<path in the
 project>`, `select=<name>,<name>` (files in that folder), `expand=<notice key>`,
-`dialog=newFolder|renameFolder|deleteFolder|checkOutAll|takeBack|renameFile` (renameFile
-asks about the first file of the open notice list), `drag=1` (files held over the
-list) and `at=browser` (Home scrolled to Team files); `result=<words>` (with
+`dialog=newFolder|renameFolder|deleteFolder|checkOutAll|takeBack|forceAll|renameFile`
+(renameFile asks about the first file of the open notice list; forceAll is Force check in
+all for the open folder), `drag=1` (files held over the list), `at=browser` (Home
+scrolled to Team files) and `press=<control key>` (the page presses that key once it is
+drawn, and the demo holds every answer, so the working state stays in view); `result=<words>` (with
 `resultOk=0` for a refusal) has the demo answer as if an action had just come back.
 The demo transport answers every page-to-host type the way the engine would (a check
 out changes the rows and answers with an `actionResult`, a rename adds the file and

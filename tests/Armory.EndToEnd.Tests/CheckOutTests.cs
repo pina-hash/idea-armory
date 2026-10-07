@@ -131,11 +131,11 @@ public sealed class CheckOutTests
         var file = await t.FileId("Plate.SLDPRT");
         Assert.True((await t.A.CheckOutAsync(Plate)).Ok);
         t.A.Save(Plate, "Alex unfinished");
-        Assert.Equal("Only a mentor or CAD lead can take back a file.", (await t.B.TakeBackAsync(file)).Message);
+        Assert.Equal("Only a mentor or CAD lead can force a check in.", (await t.B.TakeBackAsync(file)).Message);
         await mentor.SyncAsync();
         var taken = await mentor.TakeBackAsync(file);
         Assert.True(taken.Ok);
-        Assert.Equal("Took back Plate.SLDPRT from Alex Kim. Anything not checked in is kept in its history.", taken.Message);
+        Assert.Equal("Force checked in Plate.SLDPRT from Alex Kim. Anything they hadn't checked in is kept as their own copy.", taken.Message);
         Assert.Equal(0, await t.LiveLocks(file));
         Assert.Equal("Plate.SLDPRT isn't checked out.", (await mentor.TakeBackAsync(file)).Message);
         await t.A.SyncAsync();
