@@ -99,20 +99,21 @@ public sealed class IncidentUploader
         finally { gate.Release(); }
     }
 
-    // Rounds every minute (sooner after Wake) until canceled.
+    // Rounds every minute (sooner after Wake) until canceled. The first comes a minute after
+    // the start (or at the first Wake), so a start's first pass has the network to itself.
     public async Task RunAsync(CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
         {
-            try { await StepAsync(ct); }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
-            catch (Exception error) when (error is not OutOfMemoryException) { log?.Invoke("incident upload: " + error.GetType().Name + ": " + error.Message); }
             try
             {
                 await wake.WaitAsync(Every, ct);
                 while (wake.CurrentCount > 0) await wake.WaitAsync(0, ct);
             }
             catch (OperationCanceledException) { return; }
+            try { await StepAsync(ct); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
+            catch (Exception error) when (error is not OutOfMemoryException) { log?.Invoke("incident upload: " + error.GetType().Name + ": " + error.Message); }
         }
     }
 
