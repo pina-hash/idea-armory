@@ -30,6 +30,26 @@ public sealed record FileDetailView(string FileId, string Name, string Path, str
     bool ReleaseNotChecked, IReadOnlyList<HistoryEntryView> History);
 public sealed record HistoryEntryView(string Id, string Kind, string Author, string At, long Bytes, string Note, bool ReleaseNotChecked, bool IsCurrent);
 
+// v2 records the page already reads (docs/agent/BRIDGE.md, v2-design.md 4.6). The engine
+// lane puts them into AgentView (activity, notices, prompt, every row's checkout) when it
+// rebuilds the records above to v2; until then they serialize on their own messages.
+// AgentViewContractTests holds every record here to the fields wwwroot/bridge.js names.
+public sealed record CheckoutView(string State, string Label, string? Name, string? Email, string? Device, string? Since);
+public sealed record PromptView(string? FileId, string Path, string Name, CheckoutView Checkout, bool CanCheckOut);
+public sealed record ActivityView(string? Line, DirectionView? Upload, DirectionView? Download, DirectionView? Move, WaitingView? Waiting,
+    IReadOnlyList<ActiveTransferView> Active);
+public sealed record DirectionView(int FilesDone, int FilesTotal, long BytesDone, long BytesTotal, long BytesPerSecond, int? SecondsLeft, string Line);
+public sealed record WaitingView(int Count, string Line);
+public sealed record ActiveTransferView(string Path, string Name, string Direction, long BytesDone, long BytesTotal);
+public sealed record NoticeGroupView(string Key, string Kind, string Tone, string Title, string Detail, int Count, NoticeActionView? Action,
+    IReadOnlyList<NoticeItemView> Items);
+public sealed record NoticeActionView(string Label, string Command, IReadOnlyList<string> Paths);
+public sealed record NoticeItemView(string? FileId, string Path, string Name, string? Detail);
+
+// What an action from the window came to, in one plain sentence (v2-design.md 4.2):
+// "Checked in Plate.SLDPRT.", "Close Plate.SLDPRT in SolidWorks first."
+public sealed record ActionResult(bool Ok, string Message);
+
 public static class Connections
 {
     public const string SignedOut = "signedOut", Connecting = "connecting", SignedIn = "signedIn", VaultOwnedByOther = "vaultOwnedByOther";
@@ -49,6 +69,24 @@ public static class AttentionKinds
 {
     public const string NewerWaiting = "newerWaiting", SideVersion = "sideVersion", Refused = "refused", LockBroken = "lockBroken",
         NameTaken = "nameTaken", ReleaseNotChecked = "releaseNotChecked";
+}
+public static class CheckoutStates
+{
+    public const string Available = "available", Mine = "mine", Other = "other", MyOtherComputer = "myOtherComputer";
+}
+public static class Directions
+{
+    public const string Upload = "upload", Download = "download", Move = "move";
+}
+public static class NoticeTones
+{
+    public const string Info = "info", Look = "look", Bad = "bad";
+}
+public static class NoticeKinds
+{
+    public const string Import = "import", NameShared = "nameShared", NewerWaiting = "newerWaiting", KeptCopy = "keptCopy", TakenBack = "takenBack",
+        FolderPutBack = "folderPutBack", ProjectPutBack = "projectPutBack", ProjectRenaming = "projectRenaming", CantSend = "cantSend",
+        CantRead = "cantRead", CheckInPartial = "checkInPartial";
 }
 
 // Message names on the bridge, both directions. AgentViewContractTests keeps
@@ -70,4 +108,8 @@ public static class BridgeMessages
     };
     public static string ViewMessage(AgentView view) => JsonSerializer.Serialize(new { type = View, view }, Json);
     public static string DetailMessage(FileDetailView detail) => JsonSerializer.Serialize(new { type = FileDetail, detail }, Json);
+    public static string ActivityMessage(ActivityView activity) => JsonSerializer.Serialize(new { type = Activity, activity }, Json);
+    // The one answer to an action: the action's requestId comes back with it.
+    public static string ActionResultMessage(string? requestId, bool ok, string message)
+        => JsonSerializer.Serialize(new { type = ActionResult, requestId, ok, message }, Json);
 }
