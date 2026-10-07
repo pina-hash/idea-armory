@@ -25,6 +25,11 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
     [
         ".exe", ".com", ".bat", ".cmd", ".ps1", ".psm1", ".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh", ".hta", ".msi", ".msp", ".scr",
         ".lnk", ".url", ".reg", ".cpl", ".jar", ".appref-ms",
+        ".pif", ".scf", ".website", ".settingcontent-ms", ".theme", ".themepack", ".deskthemepack",
+        ".application", ".appinstaller", ".appx", ".appxbundle", ".msix", ".msixbundle", ".xbap", ".vsto", ".jnlp", ".diagcab",
+        ".wsc", ".sct", ".ws", ".msc", ".gadget", ".inf", ".shb", ".shs", ".chm", ".xll", ".ade", ".adp",
+        ".py", ".pyw", ".pyz", ".pyzw", ".pyc", ".pyo", ".sh", ".pl", ".rb", ".ahk", ".au3",
+        ".psd1", ".ps1xml", ".psc1", ".psc2", ".ps2", ".ps2xml", ".msh", ".msh1", ".msh2", ".mshxml", ".msh1xml", ".msh2xml",
     ];
     private readonly object gate = new();
     private readonly HashSet<string> open = new(StringComparer.OrdinalIgnoreCase);

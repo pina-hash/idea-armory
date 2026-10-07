@@ -420,5 +420,14 @@ public sealed class WindowsVaultFileSystemTests
         var none = files.Launch(TempFolder.PathValue("Robot/Plate.SLDPRT"));
         Assert.False(none.Succeeded);
         Assert.Equal("No program on this computer opens .SLDPRT files.", none.Problem);
+        // A program that is there but did not answer (a failed DDE conversation, a missing DLL)
+        // is not "no program".
+        foreach (var code in new[] { 1156, 1157 })
+        {
+            files.StartShell = _ => throw new System.ComponentModel.Win32Exception(code);
+            var busy = files.Launch(TempFolder.PathValue("Robot/Plate.SLDPRT"));
+            Assert.False(busy.Succeeded);
+            Assert.Equal("Windows could not open Plate.SLDPRT. Wait a moment, then try again.", busy.Problem);
+        }
     }
 }

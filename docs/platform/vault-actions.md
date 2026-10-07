@@ -42,7 +42,16 @@ prefix, refuses programs, scripts, installers and shortcuts (`.exe .com .bat .cm
 .vbs .vbe .js .jse .wsf .wsh .hta .msi .msp .scr .lnk .url .reg .cpl .jar .appref-ms` and
 every type in the computer's PATHEXT), and starts the file with `UseShellExecute = true`,
 verb `open` and its folder as the working directory, so SolidWorks opens SolidWorks files.
-No association becomes "No program on this computer opens .X files."
+The review of 0.2.0 extended D14's list with the types the shell also runs without PATHEXT
+naming them: `.pif .scf .website .settingcontent-ms .theme .themepack .deskthemepack`,
+`.application .appinstaller .appx .appxbundle .msix .msixbundle .xbap .vsto .jnlp .diagcab`,
+`.wsc .sct .ws .msc .gadget .inf .shb .shs .chm .xll .ade .adp`, the scripts an installed
+runtime associates (`.py .pyw .pyz .pyzw .pyc .pyo .sh .pl .rb .ahk .au3`) and the
+PowerShell data and console types. It stays a denylist rather than a list of allowed
+documents, so every CAD exchange type (STEP, IGES, STL, DXF, DWG, Parasolid) still opens.
+No association (`ERROR_NO_ASSOCIATION`, 1155) becomes "No program on this computer opens .X
+files."; a failed DDE conversation or a missing DLL (1156, 1157, a program that is there
+but busy starting) becomes "Windows could not open X. Wait a moment, then try again."
 
 Tests (Windows only, real disk): `MoveFolder_moves_a_closed_folder_and_refuses_open_files_existing_targets_and_long_paths`,
 `DeleteEmptyFolder_removes_only_folders_without_files`, `CopyIn_copies_through_staging_and_never_overwrites`,

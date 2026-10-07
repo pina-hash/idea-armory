@@ -103,8 +103,11 @@ public sealed class WindowsVaultFileSystem : IVaultFileSystem, IDisposable
         return openFiles.Inspect(file!).IsOpen;
     }
 
+    // Captures and reads share delete as the scan does: a student can rename the file, or a
+    // folder above it, while Armory reads it. The open handle still reads the same bytes, and
+    // nobody can write them meanwhile (write is not shared).
     public Stream OpenRead(VaultPath path)
-        => new FileStream(paths.Resolve(path), FileMode.Open, FileAccess.Read, FileShare.Read, 81920, FileOptions.SequentialScan);
+        => new FileStream(paths.Resolve(path), FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete, 81920, FileOptions.SequentialScan);
 
     public ReplaceOutcome Replace(VaultPath path, string? expectedHash, Stream content, bool readOnly = false)
     {
@@ -366,8 +369,12 @@ public sealed class WindowsVaultFileSystem : IVaultFileSystem, IDisposable
             StartShell(start);
             return ReplaceOutcome.Done;
         }
-        catch (Win32Exception error) when (error.NativeErrorCode is 1155 or 1156 or 1157)
+        // ERROR_NO_ASSOCIATION is the only "no program" answer. A failed DDE conversation or a
+        // missing DLL (1156, 1157) happens when the program is there but busy starting.
+        catch (Win32Exception error) when (error.NativeErrorCode is 1155)
         { return ReplaceOutcome.Refused($"No program on this computer opens {Path.GetExtension(path.Name)} files."); }
+        catch (Win32Exception error) when (error.NativeErrorCode is 1156 or 1157)
+        { return ReplaceOutcome.Refused($"Windows could not open {path.Name}. Wait a moment, then try again."); }
         catch (Win32Exception error) when (error.NativeErrorCode is 1223)
         { return ReplaceOutcome.Refused($"Opening {path.Name} was canceled."); }
         catch (Exception error) when (error is Win32Exception or InvalidOperationException or IOException)
@@ -546,13 +553,25 @@ public sealed class WindowsVaultFileSystem : IVaultFileSystem, IDisposable
 
 // Decision D14: file types that run code when opened are never launched from the vault, even
 // when a teammate synced one: programs, scripts, installers, shortcuts and everything the
-// computer's PATHEXT lists as runnable.
+// computer's PATHEXT lists as runnable. The review of 0.2.0 extended D14's list with the types
+// ShellExecute also runs without PATHEXT naming them: shortcuts and shell commands (.pif .scf
+// .website .settingcontent-ms .theme .themepack .deskthemepack), app and add-in installers
+// (.application .appinstaller .appx .appxbundle .msix .msixbundle .xbap .vsto .jnlp .diagcab),
+// scriptlets and consoles (.wsc .sct .ws .msc .gadget .inf .shb .shs .chm .xll .ade .adp), and
+// the scripts an installed runtime associates (.py .pyw .pyz .pyzw .pyc .pyo .sh .pl .rb .ahk
+// .au3 and the PowerShell data and console types). A denylist, not an allowlist, so every CAD
+// exchange type (STEP, IGES, STL, DXF, DWG, Parasolid) still opens.
 internal static class LaunchPolicy
 {
     private static readonly string[] Refused =
     [
         ".exe", ".com", ".bat", ".cmd", ".ps1", ".psm1", ".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh", ".hta", ".msi", ".msp", ".scr",
         ".lnk", ".url", ".reg", ".cpl", ".jar", ".appref-ms",
+        ".pif", ".scf", ".website", ".settingcontent-ms", ".theme", ".themepack", ".deskthemepack",
+        ".application", ".appinstaller", ".appx", ".appxbundle", ".msix", ".msixbundle", ".xbap", ".vsto", ".jnlp", ".diagcab",
+        ".wsc", ".sct", ".ws", ".msc", ".gadget", ".inf", ".shb", ".shs", ".chm", ".xll", ".ade", ".adp",
+        ".py", ".pyw", ".pyz", ".pyzw", ".pyc", ".pyo", ".sh", ".pl", ".rb", ".ahk", ".au3",
+        ".psd1", ".ps1xml", ".psc1", ".psc2", ".ps2", ".ps2xml", ".msh", ".msh1", ".msh2", ".mshxml", ".msh1xml", ".msh2xml",
     ];
 
     internal static bool IsRefused(string fileName, string? pathExt)
