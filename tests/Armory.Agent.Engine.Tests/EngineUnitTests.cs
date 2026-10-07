@@ -117,6 +117,14 @@ public sealed class EngineUnitTests
         Assert.Equal("actionResult", r.RootElement.GetProperty("type").GetString());
         Assert.Equal("r3", r.RootElement.GetProperty("requestId").GetString());
         Assert.True(r.RootElement.GetProperty("ok").GetBoolean());
+
+        // The check-out question carries its own key (one per open), which Not now sends
+        // back in dismissNotice; the page reads these names.
+        var prompt = new PromptView("prompt:Robot/Plate.SLDPRT:2026-10-01T22:28:00.000Z", "f", "Robot/Plate.SLDPRT", "Plate.SLDPRT",
+            new CheckoutView(CheckoutStates.Available, "Available", null, null, null, null), true);
+        using var q = JsonDocument.Parse(JsonSerializer.Serialize(prompt, BridgeMessages.Json));
+        Assert.Equal(["key", "fileId", "path", "name", "checkout", "canCheckOut"], q.RootElement.EnumerateObject().Select(p => p.Name).ToArray());
+        Assert.Equal("available", q.RootElement.GetProperty("checkout").GetProperty("state").GetString());
     }
 
     private sealed class MemoryState : IEngineStateStore

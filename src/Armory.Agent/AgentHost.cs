@@ -116,10 +116,13 @@ internal sealed class AgentHost : IAsyncDisposable
     internal Task<ActionResult> CreateFolderAsync(Guid project, string parent, string name) => NotYet("new folder in " + project);
     internal Task<ActionResult> RenameFolderAsync(Guid project, string folder, string newName) => NotYet("rename a folder in " + project);
     internal Task<ActionResult> DeleteFolderAsync(Guid project, string folder) => NotYet("delete a folder in " + project);
+    // One file, in the same folder: a file Armory doesn't have yet is renamed on disk; a file in
+    // Armory is renamed for everyone (refused while someone else has it checked out).
+    internal Task<ActionResult> RenameFileAsync(string path, string newName) => NotYet("rename a file");
     // sources: full paths on this computer (the file picker's, or the files dropped on the window).
     internal Task<ActionResult> AddFilesAsync(Guid project, string folder, IReadOnlyList<string> sources) => NotYet("add " + sources.Count + " files to " + project);
 
-    // A notice card's Done, or "prompt:<path>" for Not now on the check-out question.
+    // A notice card's Done, or a check-out question's key (PromptView.Key) for its Not now.
     internal void DismissNotice(string key)
     {
         log.Info("window: dismiss notice, not in this engine yet");

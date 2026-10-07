@@ -35,7 +35,9 @@ public sealed record HistoryEntryView(string Id, string Kind, string Author, str
 // rebuilds the records above to v2; until then they serialize on their own messages.
 // AgentViewContractTests holds every record here to the fields wwwroot/bridge.js names.
 public sealed record CheckoutView(string State, string Label, string? Name, string? Email, string? Device, string? Since);
-public sealed record PromptView(string? FileId, string Path, string Name, CheckoutView Checkout, bool CanCheckOut);
+// Key: one per open of the file in SolidWorks ("prompt:<path>:<marker first seen, ISO-8601>"), so
+// Not now (dismissNotice with this key) hides this one question and the next open asks again.
+public sealed record PromptView(string Key, string? FileId, string Path, string Name, CheckoutView Checkout, bool CanCheckOut);
 public sealed record ActivityView(string? Line, DirectionView? Upload, DirectionView? Download, DirectionView? Move, WaitingView? Waiting,
     IReadOnlyList<ActiveTransferView> Active);
 public sealed record DirectionView(int FilesDone, int FilesTotal, long BytesDone, long BytesTotal, long BytesPerSecond, int? SecondsLeft, string Line);
@@ -98,9 +100,10 @@ public static class BridgeMessages
     public const string Ready = "ready", Connect = "connect", CancelConnect = "cancelConnect", SignOut = "signOut", Pause = "pause", Resume = "resume",
         OpenVault = "openVault", OpenFile = "openFile", LaunchFile = "launchFile", ShowInFolder = "showInFolder", CheckOut = "checkOut", CheckIn = "checkIn",
         UndoCheckOut = "undoCheckOut", TakeBack = "takeBack", CreateFolder = "createFolder", RenameFolder = "renameFolder", DeleteFolder = "deleteFolder",
-        AddFiles = "addFiles", DropFiles = "dropFiles", DismissNotice = "dismissNotice", SaveSettings = "saveSettings", ChooseVaultRoot = "chooseVaultRoot";
+        RenameFile = "renameFile", AddFiles = "addFiles", DropFiles = "dropFiles", DismissNotice = "dismissNotice", SaveSettings = "saveSettings", ChooseVaultRoot = "chooseVaultRoot";
     public static readonly IReadOnlyList<string> PageToHost = [Ready, Connect, CancelConnect, SignOut, Pause, Resume, OpenVault, OpenFile, LaunchFile, ShowInFolder,
-        CheckOut, CheckIn, UndoCheckOut, TakeBack, CreateFolder, RenameFolder, DeleteFolder, AddFiles, DropFiles, DismissNotice, SaveSettings, ChooseVaultRoot];
+        CheckOut, CheckIn, UndoCheckOut, TakeBack, CreateFolder, RenameFolder, DeleteFolder, RenameFile, AddFiles, DropFiles, DismissNotice, SaveSettings,
+        ChooseVaultRoot];
 
     public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
     {
