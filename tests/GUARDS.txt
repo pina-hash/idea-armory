@@ -308,3 +308,5 @@ Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.ResponsivenessTests|A_check_in_answe
 Armory.Agent.Engine.Tests|Armory.Agent.Engine.Tests.StateAndActivityTests|The_view_timer_always_really_waits
 Armory.Agent.Tests|Armory.Agent.Tests.HostPiecesTests|A_run_that_died_without_a_word_is_named_by_the_next_start
 Armory.Agent.Tests|Armory.Agent.Tests.HostPiecesTests|A_crash_line_is_written_even_when_the_error_cannot_describe_itself
+Armory.Agent.Engine.Tests|Armory.Agent.Engine.Tests.StateAndActivityTests|Continuations_never_nest_on_the_engine_thread
+Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.FirstSyncTests|A_new_computer_downloads_3000_files_on_a_small_stack

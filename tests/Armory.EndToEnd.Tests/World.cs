@@ -173,6 +173,8 @@ internal sealed class Computer : IAsyncDisposable
     public long MaximumFileBytes { get; set; } = BlobClient.MaximumPutBytes;
     // How many files a pass moves at once (EngineOptions.TransferConcurrency); null is the default.
     public int? TransferConcurrency { get; set; }
+    // The engine thread's stack in bytes (0: the default); a small one surfaces deep recursion.
+    public int EngineStackBytes { get; set; }
     // A loop pass's slice (EngineOptions.PassSlice); null is the default.
     public TimeSpan? PassSlice { get; set; }
     public SyncEngine Engine { get; private set; } = null!;
@@ -208,6 +210,7 @@ internal sealed class Computer : IAsyncDisposable
         {
             VaultRoot = World.Root, MaximumFileBytes = MaximumFileBytes,
             TransferConcurrency = TransferConcurrency ?? EngineOptions.DefaultTransferConcurrency,
+            EngineStackBytes = EngineStackBytes,
             PassSlice = PassSlice ?? new EngineOptions { VaultRoot = World.Root }.PassSlice,
         }, new EngineDependencies
         {

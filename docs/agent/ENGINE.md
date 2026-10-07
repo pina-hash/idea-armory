@@ -172,7 +172,29 @@ immutable snapshot bytes.
   the constructor reads the state document there too), and every await inside the engine
   comes back to it, so engine state is only ever touched by that thread and needs no locks.
   The thread ends after 10 seconds with nothing to do and a new one starts on the next call,
-  so an engine a test drops keeps no thread alive.
+  so an engine a test drops keeps no thread alive. Since v0.2.1 each queued item runs under
+  its own small context (a `Turn`): a task completed while one item runs never runs another
+  item's continuations inline, it posts them, so the stack stays as deep as one item however
+  many files complete one after another (`Continuations_never_nest_on_the_engine_thread`; the
+  3,000-file first sync in `FirstSyncTests` reaches 20 frames, 49 before). When several units
+  stop at once after a failure, the failure thrown is the one that started it, not a
+  cancellation seen first.
+- **The view timer never recurses.** v0.2.0's timer called `PublishSoon` again when it fired;
+  a timer that fired a fraction of a millisecond early asked `Task.Delay` for under 1 ms,
+  which completes at once, and the two called each other until the stack overflowed (the
+  field crash: the agent died every minute or two during a first big download, with no line
+  in its log). The timer is a loop and always waits at least 1 ms
+  (`The_view_timer_always_really_waits`).
+- **The log says what passes did.** Every pass that moves files writes `pass: moving N of M
+  files (loop|action|whole)` when phase C starts and `pass: ended after N ms (...), D
+  downloaded, U uploaded, K kept copies, R refused` at its end (`failed` instead of `ended`
+  after a failure); a long pass writes `pass: still going after N s, ...` at most once a
+  minute. The agent writes "previous run ended unexpectedly" with the last such line when the
+  run before it never logged `stopped`.
+- **A view the same as the last one is not raised again** (its JSON compared): with thousands
+  of files a view message is about 380 bytes a file (1.1 MB for 3,000), and the page draws
+  every one it gets. Views are still built at most every 500 ms during a pass, and the page's
+  long lists draw only the rows in sight.
 - **File detail** never waits for a pass: it reads the server's files as last published
   (`publishedRemote`, replaced at the end of every read of the server and patched by
   `KnowLock`) and this computer's records between two steps of a pass.

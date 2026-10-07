@@ -8,7 +8,12 @@ namespace Armory.Agent.Engine;
 // on it) and the caller, the window's UI thread among them, never scans, hashes or waits on a
 // pass. The thread ends after a while with nothing to do and starts again on the next post, so an
 // engine that is dropped (a test's restart) never keeps a thread alive.
-internal sealed class EngineThread(Action<Exception>? unhandled, TimeSpan? idleExit = null) : SynchronizationContext
+//
+// Continuations never pile up on the stack: each queued item runs under its own small context
+// (Turn), so an await captures that item's turn, and a task that completes while a later item
+// runs posts its continuations to the queue instead of running them inline inside the later
+// item. However many files complete one after another, the stack stays as deep as one item.
+internal sealed class EngineThread(Action<Exception>? unhandled, TimeSpan? idleExit = null, int stackBytes = 0) : SynchronizationContext
 {
     private readonly TimeSpan IdleExit = idleExit ?? TimeSpan.FromSeconds(10);
     private readonly object gate = new();
@@ -16,7 +21,9 @@ internal sealed class EngineThread(Action<Exception>? unhandled, TimeSpan? idleE
     private Thread? thread;
 
     // True on the engine thread (and only there).
-    internal bool IsCurrent => Current == this;
+    internal bool IsCurrent => Current is Turn turn && ReferenceEquals(turn.Owner, this);
+    // Items run so far (tests read it).
+    internal long Turns { get; private set; }
     // Threads started so far (one at a time; a new one after the last went idle).
     internal int Started { get; private set; }
 
@@ -27,7 +34,7 @@ internal sealed class EngineThread(Action<Exception>? unhandled, TimeSpan? idleE
             queue.Enqueue((d, state));
             if (thread is null)
             {
-                thread = new Thread(Pump) { IsBackground = true, Name = "Armory engine" };
+                thread = new Thread(Pump, stackBytes) { IsBackground = true, Name = "Armory engine" };
                 Started++;
                 thread.Start();
             }
@@ -79,9 +86,17 @@ internal sealed class EngineThread(Action<Exception>? unhandled, TimeSpan? idleE
         catch (Exception e) { done.TrySetException(e); }
     }
 
+    // The context one queued item runs under. Posting through it is posting to the engine thread.
+    private sealed class Turn(EngineThread owner) : SynchronizationContext
+    {
+        internal EngineThread Owner { get; } = owner;
+        public override void Post(SendOrPostCallback d, object? state) => Owner.Post(d, state);
+        public override void Send(SendOrPostCallback d, object? state) => Owner.Send(d, state);
+        public override SynchronizationContext CreateCopy() => this;
+    }
+
     private void Pump()
     {
-        SetSynchronizationContext(this);
         while (true)
         {
             (SendOrPostCallback Callback, object? State) item;
@@ -97,8 +112,11 @@ internal sealed class EngineThread(Action<Exception>? unhandled, TimeSpan? idleE
                 }
                 item = queue.Dequeue();
             }
+            Turns++;
+            SetSynchronizationContext(new Turn(this));
             try { item.Callback(item.State); }
             catch (Exception error) { unhandled?.Invoke(error); }
+            finally { SetSynchronizationContext(null); }
         }
     }
 }

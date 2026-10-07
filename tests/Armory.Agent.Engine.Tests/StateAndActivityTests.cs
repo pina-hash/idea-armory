@@ -453,6 +453,33 @@ public sealed class StateAndActivityTests
         await waited;
     }
 
+    // v0.2.1: a task completed by one queued item never runs another item's continuations inline.
+    // 20,000 awaits, each completed by the one before it, on a 256 KB stack: every continuation is
+    // posted, so the stack stays as deep as one item (before, they nested until .NET's own guard).
+    [Fact]
+    public async Task Continuations_never_nest_on_the_engine_thread()
+    {
+        const int links = 20_000;
+        var engine = new EngineThread(null, stackBytes: 256 * 1024);
+        var deepest = 0;
+        var turnsBefore = engine.Turns;
+        var sources = Enumerable.Range(0, links).Select(_ => new TaskCompletionSource()).ToArray();
+        var chain = await engine.InvokeAsync(() =>
+        {
+            async Task Link(int i)
+            {
+                await sources[i].Task;
+                deepest = Math.Max(deepest, new System.Diagnostics.StackTrace().FrameCount);
+                if (i + 1 < links) sources[i + 1].SetResult();
+            }
+            return Task.FromResult(Task.WhenAll(Enumerable.Range(0, links).Select(Link).ToArray()));
+        });
+        engine.Enqueue(() => sources[0].SetResult());
+        await chain.WaitAsync(TimeSpan.FromSeconds(60));
+        Assert.True(deepest < 100, $"the stack reached {deepest} frames");
+        Assert.True(engine.Turns - turnsBefore >= links, $"only {engine.Turns - turnsBefore} items ran for {links} continuations");
+    }
+
     private sealed class Store : IEngineStateStore
     {
         private byte[]? bytes;

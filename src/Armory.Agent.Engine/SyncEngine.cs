@@ -31,6 +31,9 @@ public sealed record EngineOptions
     // computers behind one 25 MB/s school link fill it at 6 each.
     public int TransferConcurrency { get; init; } = DefaultTransferConcurrency;
     public const int DefaultTransferConcurrency = 6;
+    // The engine thread's stack (0: the platform's default). Tests make it small so that any
+    // depth that grows with the number of files shows up as a failure, never on a student's PC.
+    internal int EngineStackBytes { get; init; }
 }
 
 public sealed class EngineDependencies
@@ -126,7 +129,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
         recorder = new SaveRecorder(dependencies.Snapshots, journal);
         settings = new SettingsView(options.VaultRoot, true, "system");
         activity = new ActivityTracker(dependencies.Clock);
-        engineThread = new EngineThread(error => dependencies.Log?.Invoke("engine: " + error));
+        engineThread = new EngineThread(error => dependencies.Log?.Invoke("engine: " + error), stackBytes: options.EngineStackBytes);
         // Even the state document is read on the engine thread.
         engineThread.Send(_ =>
         {
@@ -324,6 +327,9 @@ public sealed partial class SyncEngine : IAsyncDisposable
         var failed = true;
         failing = false;
         passScope = scope;
+        passStarted = deps.Clock.GetTimestamp();
+        lastHeartbeat = passStarted;
+        passMoving = 0;
         try
         {
             syncing = true;
@@ -338,6 +344,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
         catch (Exception error) when (StopSaving(error)) { throw; }
         finally
         {
+            LogPass(failed, scope is not null);
             passScope = null;
             inPass = false;
             syncing = false;
@@ -477,6 +484,36 @@ public sealed partial class SyncEngine : IAsyncDisposable
         if (online == true) PruneDismissed();
         return Report(true);
     }
+
+    // The agent's log says when a pass moved files, how long it took and what it did, and
+    // during a long one at most once a minute that it is still going, so a log that ends
+    // abruptly says where (the field report of v0.2.0: a first sign-in died with no line at all).
+    private long passStarted, lastHeartbeat;
+    private int passMoving;
+    private static readonly TimeSpan HeartbeatEvery = TimeSpan.FromMinutes(1);
+
+    private void LogPassStart(int moving, int planned)
+    {
+        passMoving = moving;
+        if (moving > 0) deps.Log?.Invoke($"pass: moving {moving:N0} of {planned:N0} files ({PassKind()})");
+    }
+
+    private void Heartbeat()
+    {
+        if (deps.Log is null || deps.Clock.GetElapsedTime(lastHeartbeat) < HeartbeatEvery) return;
+        lastHeartbeat = deps.Clock.GetTimestamp();
+        deps.Log($"pass: still going after {deps.Clock.GetElapsedTime(passStarted).TotalSeconds:F0} s, {downloaded:N0} downloaded, {uploaded:N0} uploaded so far ({PassKind()})");
+    }
+
+    private void LogPass(bool failed, bool action)
+    {
+        var took = deps.Clock.GetElapsedTime(passStarted);
+        if (deps.Log is null || (!failed && passMoving == 0 && uploaded + downloaded + sideVersions + refused == 0 && took < TimeSpan.FromSeconds(10))) return;
+        deps.Log($"pass: {(failed ? "failed" : "ended")} after {took.TotalMilliseconds:F0} ms ({(action ? "action" : PassKind())}), {downloaded:N0} downloaded, {uploaded:N0} uploaded, " +
+            $"{sideVersions:N0} kept copies, {refused:N0} refused{(cutShort && loopPass ? ", the rest continues at once" : "")}");
+    }
+
+    private string PassKind() => passScope is not null ? "action" : loopPass ? "loop" : "whole";
 
     private SyncReport Report(bool signedIn)
     {
@@ -969,6 +1006,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
     {
         var run = passScope is { } scope ? units.Where(scope.Covers).ToList() : units;
         foreach (var unit in run) foreach (var planned in unit) ExpectTransfers(planned);
+        LogPassStart(run.Sum(u => u.Count(p => p.Plan.Actions.Any(a => a.Kind != SyncActionKind.None))), units.Sum(u => u.Count));
         var started = deps.Clock.GetTimestamp();
         var next = await RunConcurrentlyAsync(run, RunUnitAsync, notStarted: unit =>
         {
@@ -1012,10 +1050,14 @@ public sealed partial class SyncEngine : IAsyncDisposable
         if (online != true && notStarted is not null) for (var i = next; i < items.Count; i++) notStarted(items[i]);
         return next;
 
+        // The failure thrown is the one that started it: the others only stopped because of it
+        // (canceled), and may be seen first, since every continuation is its own queued item.
         void Ended(Task task)
         {
-            if (task.IsCompletedSuccessfully || fatal is not null) return;
-            fatal = ExceptionDispatchInfo.Capture(task.Exception?.InnerException ?? new OperationCanceledException(ct));
+            if (task.IsCompletedSuccessfully) return;
+            var error = task.Exception?.InnerException ?? new OperationCanceledException(ct);
+            if (fatal is not null && (error is OperationCanceledException || fatal.SourceException is not OperationCanceledException)) return;
+            fatal = ExceptionDispatchInfo.Capture(error);
             stop.Cancel();
         }
     }
@@ -1037,6 +1079,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
             // Anything else is not this file's: nothing is saved from the moment it is thrown.
             catch (Exception error) when (StopSaving(error)) { throw; }
             finally { activity.Drop(planned.Key); }
+            Heartbeat();
             MarkDirty();
             viewWanted = true;
             PublishSoon();
@@ -1289,6 +1332,8 @@ public sealed partial class SyncEngine : IAsyncDisposable
     internal static TimeSpan WaitBeforeNextView(TimeSpan sinceLast)
         => TimeSpan.FromMilliseconds(Math.Max(1, Math.Ceiling((ViewEvery - sinceLast).TotalMilliseconds)));
 
+    // A view the same as the last one raised is not raised again: with thousands of files the
+    // window's message is a megabyte or more, and the page draws it again every time it comes.
     private void PublishLocked()
     {
         viewWanted = false;
@@ -1296,8 +1341,13 @@ public sealed partial class SyncEngine : IAsyncDisposable
         ApplyDismissals();
         var next = BuildView();
         Volatile.Write(ref view, next);
+        var json = BridgeMessages.ViewMessage(next);
+        if (string.Equals(json, lastViewJson, StringComparison.Ordinal)) return;
+        lastViewJson = json;
         ViewChanged?.Invoke(next);
     }
+
+    private string? lastViewJson;
 
     // What is moving right now goes out on its own, at most four times a second, from a timer
     // that runs while a pass does (and once more after it, so the window sees it stop).
