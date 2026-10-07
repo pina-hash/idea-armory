@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.Json.Nodes;
 using Armory.Agent.Engine;
 using Armory.Agent.Engine.View;
 using Armory.Client;
@@ -36,10 +37,11 @@ internal sealed class AgentHost : IAsyncDisposable
     private bool engineFailureLogged;
     private bool disposed;
 
-    internal AgentHost(AgentPaths paths, AgentLog log, Uri site)
+    internal AgentHost(AgentPaths paths, AgentLog log, Uri site, AgentTelemetry telemetry)
     {
         this.paths = paths;
         this.log = log;
+        Telemetry = telemetry;
         settingsStore = new SettingsStore(paths.SettingsFile);
         settings = settingsStore.Load();
         effectiveTheme = Themes.Effective(settings.Theme, WindowsTheme.AppsUseLightTheme());
@@ -54,13 +56,15 @@ internal sealed class AgentHost : IAsyncDisposable
         // log). The upgrade cycle (tools/test-agent-install.ps1 -Kind Upgrade) reads it to prove
         // that a new version still uses the sign-in an older one saved.
         log.Info(Sessions.Current is { } saved ? "session loaded for " + saved.Email : "no saved session");
-        Api = new ArmoryApi(new PostgrestClient(restHttp, Sessions));
-        Blobs = new BlobClient(siteHttp, storageHttp, site, Sessions);
+        Api = new ArmoryApi(new PostgrestClient(restHttp, Sessions, telemetry.Recorder));
+        Blobs = new BlobClient(siteHttp, storageHttp, site, Sessions, telemetry.Recorder);
         Connector = new ConnectFlow(siteHttp, site, new DefaultBrowserLauncher(), Sessions);
         Sessions.SignedOut += () => { log.Info("signed out"); Wake(); };
         hintTimer = new System.Threading.Timer(_ => PollHints(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        telemetry.Attach(() => Sessions.Current, DescribeAsync, DescribeNow, Api, () => Blobs.ActiveTransfers > 0);
     }
 
+    internal AgentTelemetry Telemetry { get; }
     internal SessionManager Sessions { get; }
     internal ArmoryApi Api { get; }
     internal BlobClient Blobs { get; }
@@ -131,6 +135,48 @@ internal sealed class AgentHost : IAsyncDisposable
     // the window); a folder is copied whole. Copied in, never over anything already there.
     internal Task<ActionResult> AddFilesAsync(Guid project, string folder, IReadOnlyList<string> sources)
         => sources.Count == 0 ? Task.FromResult(new ActionResult(false, "")) : OnEngineAsync("add " + sources.Count + " files or folders", e => e.AddFilesAsync(project, folder, sources));
+
+    // "Report a problem" (docs/agent/TELEMETRY.md): the words and a fresh incident, saved here
+    // and sent when the site can take them. Never an error for a site that isn't ready.
+    internal async Task<ActionResult> ReportProblemAsync(string? kind, string? body)
+    {
+        try
+        {
+            var (ok, message) = await Telemetry.ReportProblemAsync(kind, body).ConfigureAwait(false);
+            return new ActionResult(ok, message);
+        }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            log.Error("report a problem failed", error);
+            return new ActionResult(false, "Armory couldn't save your report. Try again in a moment.");
+        }
+    }
+
+    // The engine's compact snapshot for an incident, with what the host knows (at once when the
+    // engine is not running).
+    private async Task<JsonNode?> DescribeAsync(CancellationToken ct)
+    {
+        var engine = Volatile.Read(ref runtime)?.Engine;
+        if (engine is null) return DescribeNow();
+        var described = await engine.DescribeAsync(ct).ConfigureAwait(false);
+        return WithHost(described);
+    }
+
+    private JsonObject DescribeNow() => WithHost(SyncEngine.DescribeView(View));
+
+    private JsonObject WithHost(JsonObject described)
+    {
+        string phase;
+        lock (gate) phase = connectPhase;
+        described["host"] = new JsonObject
+        {
+            ["runtimeProblem"] = runtimeProblem,
+            ["connectPhase"] = phase,
+            ["signedIn"] = Sessions.IsSignedIn,
+            ["transfersRunning"] = Blobs.ActiveTransfers,
+        };
+        return described;
+    }
 
     // A notice card's Done or OK, or a check-out question's key ("prompt:<path>:<when>").
     internal void DismissNotice(string key) => OnEngine("dismiss notice", e => e.DismissNotice(key));
@@ -319,7 +365,7 @@ internal sealed class AgentHost : IAsyncDisposable
             try
             {
                 // Opening the journal, snapshots and read-only intents touches the disk: off the UI thread.
-                created = await Task.Run(() => VaultRuntime.Create(target.VaultRoot, Sessions, Api, Blobs, log));
+                created = await Task.Run(() => VaultRuntime.Create(target.VaultRoot, Sessions, Api, Blobs, log, Telemetry.Recorder));
                 created.Engine.ViewChanged += OnEngineView;
                 created.Engine.ActivityChanged += OnEngineActivity;
                 ApplySettingsTo(created.Engine);
@@ -497,7 +543,8 @@ internal sealed class VaultRuntime
     internal WindowsSnapshotStore Snapshots { get; }
     internal SyncEngine Engine { get; }
 
-    internal static VaultRuntime Create(string vaultRoot, SessionManager sessions, ArmoryApi api, BlobClient blobs, AgentLog? log = null)
+    internal static VaultRuntime Create(string vaultRoot, SessionManager sessions, ArmoryApi api, BlobClient blobs, AgentLog? log = null,
+        Armory.Telemetry.FlightRecorder? recorder = null)
     {
         var disposables = new Stack<IDisposable>();
         try
@@ -522,6 +569,7 @@ internal sealed class VaultRuntime
                 ReleaseReader = null,
                 // The raw text of a sync problem; the window shows it in plain words.
                 Log = log is null ? null : log.Info,
+                Recorder = recorder,
             });
             return new VaultRuntime(files, journal, snapshots, engine);
         }

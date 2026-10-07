@@ -72,6 +72,31 @@ public sealed class AgentLog
         return UncleanEnd(lines);
     }
 
+    // The last lines of agent.log (an incident keeps 300). Already scrubbed when written.
+    public IReadOnlyList<string> Tail(int count)
+    {
+        var lines = ReadTail(file);
+        return lines.Count <= count ? lines : lines.Skip(lines.Count - count).ToList();
+    }
+
+    private static List<string> ReadTail(string target)
+    {
+        try
+        {
+            if (!File.Exists(target)) return [];
+            using var input = new FileStream(target, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            var tail = (int)Math.Min(input.Length, 256 * 1024);
+            input.Seek(-tail, SeekOrigin.End);
+            var buffer = new byte[tail];
+            input.ReadExactly(buffer);
+            var lines = Encoding.UTF8.GetString(buffer).Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+            // The first line of a cut read is only part of a line.
+            if (tail < input.Length && lines.Count > 0) lines.RemoveAt(0);
+            return lines;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return []; }
+    }
+
     internal static string? UncleanEnd(IReadOnlyList<string> lines)
     {
         static string Message(string line) => line.IndexOf(' ') is var space and > 0 ? line[(space + 1)..] : line;

@@ -44,23 +44,43 @@ internal static class Program
         }
 
         var log = new AgentLog(paths.LogFile, paths.CrashFile);
+        // The flight recorder and the incident files (docs/agent/TELEMETRY.md), before anything
+        // that could crash.
+        var telemetry = new AgentTelemetry(paths, log);
         // A run that died without a word (a stack overflow, a native crash, the power) says so
-        // in the next one, with the last thing it wrote about a pass.
-        if (log.PreviousRunEndedUnexpectedly() is { } lastWords) log.Info("previous run ended unexpectedly; its last line was: " + lastWords);
-        AppDomain.CurrentDomain.UnhandledException += (_, e) => log.Crash("unhandled exception", e.ExceptionObject);
+        // in the next one, with the last thing it wrote about a pass, and becomes a crash
+        // incident built from the last flight it left.
+        if (log.PreviousRunEndedUnexpectedly() is { } lastWords)
+        {
+            log.Info("previous run ended unexpectedly; its last line was: " + lastWords);
+            telemetry.PreviousRunEnded(lastWords);
+        }
+        else telemetry.LastFlight.Clear();
+        AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+        {
+            log.Crash("unhandled exception", e.ExceptionObject);
+            telemetry.CrashNow("unhandled exception", e.ExceptionObject);
+        };
         TaskScheduler.UnobservedTaskException += (_, e) =>
         {
             log.Crash("unobserved task", e.Exception);
+            telemetry.Recorder.Exception("unobserved task", e.Exception);
             e.SetObserved();
         };
         Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
-        Application.ThreadException += (_, e) => log.Crash("window thread", e.Exception);
+        Application.ThreadException += (_, e) =>
+        {
+            log.Crash("window thread", e.Exception);
+            // The window goes on, so the incident is written off this thread.
+            telemetry.Recorder.Exception("window thread", e.Exception, fatal: true);
+        };
         log.Info("started " + AgentPaths.Version);
 
         ApplicationConfiguration.Initialize();
-        var host = new AgentHost(paths, log, AgentPaths.Site());
+        var host = new AgentHost(paths, log, AgentPaths.Site(), telemetry);
         using (var tray = new TrayApp(host, paths, log, instance, command.Background))
             Application.Run(tray);
+        telemetry.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(5));
         log.Info("stopped");
         return 0;
     }
