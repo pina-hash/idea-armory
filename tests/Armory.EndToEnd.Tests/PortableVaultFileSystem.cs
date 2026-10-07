@@ -58,6 +58,9 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
     public List<string> DeletedFolders { get; } = [];
     public List<string> CopiedIn { get; } = [];
     public List<string> Launched { get; } = [];
+    // False stands for a platform without directory identity: Scan reports FolderMoves as null
+    // ("could not tell"), and the engine falls back to its own evidence.
+    public bool ReportsFolderMoves { get; set; } = true;
 
     public string Full(string relative) => Path.Combine(Root, relative.Replace('/', Path.DirectorySeparatorChar));
     public static VaultPath P(string relative) => VaultPath.TryCreate(relative, out var path, out var problem) ? path : throw new ArgumentException(problem);
@@ -153,7 +156,7 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
             moves = [.. studentFolderMoves];
             studentFolderMoves.Clear();
         }
-        return new(files.OrderBy(f => f.Path).ToArray(), markers, problems, null, folders, moves);
+        return new(files.OrderBy(f => f.Path).ToArray(), markers, problems, null, folders, ReportsFolderMoves ? moves : null);
     }
 
     public bool IsOpen(VaultPath path) { lock (gate) return open.Contains(path.Value); }

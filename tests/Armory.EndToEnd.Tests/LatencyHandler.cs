@@ -29,9 +29,11 @@ internal sealed class LatencyHandler(LatencyProfile profile, int sitePort, int r
 {
     private readonly object gate = new();
     private long linkFree;
-    private long storageRequests, siteRequests, rpcRequests, storageBytes;
+    private long storageRequests, storageGets, siteRequests, rpcRequests, storageBytes;
 
     public long StorageRequests => Interlocked.Read(ref storageRequests);
+    // Downloads from file storage (GET), the measure of "nothing was downloaded again".
+    public long StorageGets => Interlocked.Read(ref storageGets);
     public long SiteRequests => Interlocked.Read(ref siteRequests);
     public long RpcRequests => Interlocked.Read(ref rpcRequests);
     public long StorageBytes => Interlocked.Read(ref storageBytes);
@@ -42,6 +44,7 @@ internal sealed class LatencyHandler(LatencyProfile profile, int sitePort, int r
         if (string.Equals(uri.Host, FakeNetworkHandler.S3Host, StringComparison.OrdinalIgnoreCase))
         {
             Interlocked.Increment(ref storageRequests);
+            if (request.Method == HttpMethod.Get) Interlocked.Increment(ref storageGets);
             var sent = request.Content?.Headers.ContentLength ?? 0;
             await Task.Delay(profile.StorageRoundTrip + Body(sent), cancellationToken);
             var response = await base.SendAsync(request, cancellationToken);
