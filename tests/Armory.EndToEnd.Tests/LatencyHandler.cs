@@ -21,14 +21,34 @@ internal sealed record LatencyProfile(TimeSpan StorageRoundTrip, double StorageB
     public bool IsNone => this == None;
 }
 
+// The link storage bodies share: each body reserves its share of the link's rate, in order. A
+// computer has its own unless the world gives every computer one (a classroom behind one school
+// connection).
+internal sealed class NetworkLink
+{
+    private readonly object gate = new();
+    private long free;
+
+    // Seconds until a body of this many bytes, sent now, is through the link at this rate.
+    public double Reserve(long bytes, double bytesPerSecond)
+    {
+        lock (gate)
+        {
+            var now = Stopwatch.GetTimestamp();
+            var start = Math.Max(now, free);
+            free = start + (long)(bytes / bytesPerSecond * Stopwatch.Frequency);
+            return (double)(free - now) / Stopwatch.Frequency;
+        }
+    }
+}
+
 // Sits between the agent's HttpClient and FakeNetworkHandler. Requests are classified by where
 // they go: the fake S3 host is storage, the fake site's port is ideabosco.com, the fake
 // Supabase port is the database. A storage body pays its bytes over the per-connection rate
 // and reserves its share of the link.
-internal sealed class LatencyHandler(LatencyProfile profile, int sitePort, int rpcPort, HttpMessageHandler inner) : DelegatingHandler(inner)
+internal sealed class LatencyHandler(LatencyProfile profile, int sitePort, int rpcPort, HttpMessageHandler inner, NetworkLink? link = null) : DelegatingHandler(inner)
 {
-    private readonly object gate = new();
-    private long linkFree;
+    private readonly NetworkLink link = link ?? new NetworkLink();
     private long storageRequests, storageGets, siteRequests, rpcRequests, storageBytes;
 
     public long StorageRequests => Interlocked.Read(ref storageRequests);
@@ -40,6 +60,8 @@ internal sealed class LatencyHandler(LatencyProfile profile, int sitePort, int r
     // A test's file storage trouble: an answer for a request to storage instead of storage's own
     // (a refusal), or null to let it through.
     public Func<HttpRequestMessage, HttpResponseMessage?>? StorageFault { get; set; }
+    // A test's slow server call: extra time for a database call, by its path ("/rest/v1/rpc/...").
+    public Func<string, TimeSpan>? RpcDelay { get; set; }
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
@@ -65,7 +87,7 @@ internal sealed class LatencyHandler(LatencyProfile profile, int sitePort, int r
         else if (uri.Port == rpcPort)
         {
             Interlocked.Increment(ref rpcRequests);
-            await Task.Delay(profile.RpcRoundTrip, cancellationToken);
+            await Task.Delay(profile.RpcRoundTrip + (RpcDelay?.Invoke(uri.AbsolutePath) ?? TimeSpan.Zero), cancellationToken);
         }
         return await base.SendAsync(request, cancellationToken);
     }
@@ -75,17 +97,7 @@ internal sealed class LatencyHandler(LatencyProfile profile, int sitePort, int r
     {
         if (bytes <= 0 || profile.StorageBytesPerSecond <= 0) return TimeSpan.Zero;
         var own = bytes / profile.StorageBytesPerSecond;
-        double shared = 0;
-        if (profile.LinkBytesPerSecond > 0)
-        {
-            lock (gate)
-            {
-                var now = Stopwatch.GetTimestamp();
-                var start = Math.Max(now, linkFree);
-                linkFree = start + (long)(bytes / profile.LinkBytesPerSecond * Stopwatch.Frequency);
-                shared = (double)(linkFree - now) / Stopwatch.Frequency;
-            }
-        }
+        var shared = profile.LinkBytesPerSecond > 0 ? link.Reserve(bytes, profile.LinkBytesPerSecond) : 0;
         return TimeSpan.FromSeconds(Math.Max(own, shared));
     }
 }

@@ -13,9 +13,13 @@ namespace Armory.EndToEnd.Tests;
 // parts Maria already added to the project. Synced until a pass sends nothing, Alex sees at most
 // 3 notice cards (exactly one import summary and one card for the shared names), every other
 // file is in Armory with exactly one version, no check out is left, and every file in Armory is
-// read-only while the 100 that share a name stay writable. The SCAN line reports the scan times
-// of the portable test file system, which reads and hashes every file on every scan (the Windows
-// adapter hashes again only what changed), and the pass times.
+// read-only while the 100 that share a name stay writable. Quiet the whole time, not only at the
+// end: every view and every activity message of the import (QuietWatch) has at most 3 cards, of
+// those two kinds, nothing in My files, no waiting line (it stays online) and at most 8 files
+// listed as moving; after the uploads, the check ins of the adds say so ("Checking in 412 of
+// 4,900 files"). The SCAN line reports the scan times of the portable test file system, which
+// reads and hashes every file on every scan (the Windows adapter hashes again only what
+// changed), and the pass times.
 public sealed class ImportScaleTests(ITestOutputHelper output)
 {
     private const int Imported = 5_000, Existing = 100;
@@ -44,6 +48,7 @@ public sealed class ImportScaleTests(ITestOutputHelper output)
         }
         Assert.Equal(Imported / 50, shared.Count);
 
+        using var quiet = new QuietWatch(t.A, maxCards: 3, online: true, NoticeKinds.Import, NoticeKinds.NameShared);
         var scansBefore = t.A.Disk.ScanTimes.Count;
         var watch = Stopwatch.StartNew();
         var passes = 0;
@@ -66,7 +71,15 @@ public sealed class ImportScaleTests(ITestOutputHelper output)
 
         var cards = t.A.Engine.View.Notices;
         output.WriteLine(string.Create(CultureInfo.InvariantCulture,
-            $"SCAN files={Imported} scan_ms={firstScan.TotalMilliseconds:F0} rescan_ms={rescan.TotalMilliseconds:F0} first_pass_s={firstPass.TotalSeconds:F1} until_idle_s={untilIdle.TotalSeconds:F1} cards={cards.Count} passes={passes} state_saves={t.A.State.Saves}"));
+            $"SCAN files={Imported} scan_ms={firstScan.TotalMilliseconds:F0} rescan_ms={rescan.TotalMilliseconds:F0} first_pass_s={firstPass.TotalSeconds:F1} until_idle_s={untilIdle.TotalSeconds:F1} cards={cards.Count} passes={passes} state_saves={t.A.State.Saves} views={quiet.ViewsSeen} mid_pass_views={quiet.MidPassViews} activity_messages={quiet.ActivitiesSeen}"));
+        // Every view and activity message of the import was quiet, the ones in the middle of
+        // the first pass among them.
+        quiet.Check();
+        Assert.True(quiet.MidPassViews >= 10, $"only {quiet.MidPassViews} views were built while files moved");
+        // After the uploads, the check ins of 4,900 adds say so (never only "Checking for changes.").
+        output.WriteLine("ACTIVITY lines: " + string.Join(" | ", quiet.Lines));
+        Assert.Contains(quiet.Lines, l => l.StartsWith("Checking in # of # files", StringComparison.Ordinal));
+        Assert.Empty(t.A.Engine.View.MyFiles);
         Assert.InRange(cards.Count, 1, 3);
         var import = Assert.Single(cards, c => c.Kind == NoticeKinds.Import);
         Assert.Equal($"Added {Imported - shared.Count:N0} of {Imported:N0} files to Robot 2027 › Unzipped", import.Title);

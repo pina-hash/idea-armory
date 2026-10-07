@@ -164,7 +164,48 @@ public sealed class StateAndActivityTests
         block.ReserveIds();
         for (var i = 0; i < EngineState.IdBlock; i++) block.NextId("x");
         Assert.True(block.IdsRunOut);
+
+        // A block whose save fails (the state file locked, the disk full) is given back: no id
+        // comes from it, so none is handed out again after a restart. The engine reserves this
+        // way (SyncEngine.NextId).
+        var locked = new EngineState { DeviceId = Guid.NewGuid() };
+        var disk = new Store();
+        disk.Save(locked.Serialize());
+        var failures = 2;
+        void Save()
+        {
+            if (failures-- > 0) throw new IOException("The state file is locked.");
+            disk.Save(locked.Serialize());
+        }
+        Assert.Throws<IOException>(() => locked.ReserveIds(Save));
+        Assert.True(locked.IdsRunOut);
+        Assert.Throws<InvalidOperationException>(() => locked.NextId("save"));
+        Assert.Throws<IOException>(() => locked.ReserveIds(Save));
+        Assert.Throws<InvalidOperationException>(() => locked.NextId("save"));
+        Assert.Equal(0, EngineState.Load(disk).Sequence);
+        locked.ReserveIds(Save); // the third save goes through
+        var first = locked.NextId("save");
+        Assert.Equal($"{locked.DeviceId}:save:1", first);
+        var reloaded = EngineState.Load(disk);
+        Assert.Equal(EngineState.IdBlock, reloaded.Sequence);
+        reloaded.ReserveIds();
+        Assert.NotEqual(first, reloaded.NextId("save"));
     }
+
+    // The engine's units chain files whose names the server holds for one: its rule is
+    // lower(normalize(name, NFC)) in PostgreSQL, and the key is at least as coarse.
+    [Theory]
+    [InlineData("Plate.SLDPRT", "PLATE.sldprt")]
+    [InlineData("\u1E9Eolt.SLDPRT", "\u00DFolt.SLDPRT")] // capital and small sharp s
+    [InlineData("\u0130nsert.SLDPRT", "insert.SLDPRT")] // dotted capital I and i
+    [InlineData("Caf\u00E9.SLDPRT", "Cafe\u0301.SLDPRT")] // composed and decomposed
+    [InlineData("\u212Aey.SLDPRT", "key.SLDPRT")] // the Kelvin sign and k
+    public void Names_the_server_holds_for_one_share_a_unit_key(string one, string other)
+        => Assert.Equal(SyncEngine.NameKey(one), SyncEngine.NameKey(other));
+
+    [Fact]
+    public void Different_names_keep_different_unit_keys()
+        => Assert.NotEqual(SyncEngine.NameKey("Plate-1.SLDPRT"), SyncEngine.NameKey("Plate-2.SLDPRT"));
 
     [Fact]
     public void Completed_ids_keep_the_order_they_came_in_and_round_trip()
@@ -241,11 +282,25 @@ public sealed class StateAndActivityTests
         for (var i = 0; i < 12; i++) activity.Start(Directions.Download, $"Robot 2027/Gear-{i}.SLDPRT", 2 * Mb);
         Assert.Equal(ActivityTracker.ActiveShown, activity.Snapshot().Active.Count);
 
-        // A folder moving: its path with the window's separator; done, it is not shown.
+        // A folder moving: its path with the window's separator; done, it is not shown. Each
+        // move operation has its own count and target, never the files moved so far.
         activity.Moving(120, "Robot 2027/Gearbox");
         Assert.Equal("Moving 120 files to Robot 2027 › Gearbox", activity.Snapshot().Move!.Line);
-        activity.Moved(120);
+        activity.Moved();
         Assert.Null(activity.Snapshot().Move);
+        activity.Moving(3, "Robot 2027/Gears");
+        Assert.Equal("Moving 3 files to Robot 2027 › Gears", activity.Snapshot().Move!.Line);
+        activity.Moved();
+        Assert.Null(activity.Snapshot().Move);
+
+        // After the uploads, the locks a check in or an add lets go of count in the upload direction.
+        var checkIns = new ActivityTracker(clock);
+        for (var i = 0; i < 4900; i++) checkIns.Expect(ActivityTracker.CheckIn, $"Robot 2027/Part-{i}.SLDPRT", 0);
+        for (var i = 0; i < 412; i++) checkIns.Done(ActivityTracker.CheckIn, $"Robot 2027/Part-{i}.SLDPRT");
+        var checking = checkIns.Snapshot();
+        Assert.Equal("Checking in 412 of 4,900 files", checking.Upload!.Line);
+        Assert.Equal(checking.Upload.Line, checking.Line);
+        Assert.Equal((412, 4900), (checking.Upload.FilesDone, checking.Upload.FilesTotal));
 
         // Waiting is carried with every snapshot; the end of a pass clears what moved.
         activity.SetWaiting(new WaitingView(3, "3 files are waiting to upload. They upload when this computer is back online."));
@@ -279,6 +334,54 @@ public sealed class StateAndActivityTests
         early.Finish(early.Start(Directions.Download, "b", 10));
         clock.Advance(1);
         Assert.Null(early.Snapshot().Download!.SecondsLeft); // two files, but one second
+    }
+
+    // Time left is close to the truth as soon as it is shown. 600 files of 1 MB go up 6 at a
+    // time, each in 0.6 s (a steady 10 files and 10 MB a second), after 5 s of planning; the
+    // panel is read every 250 ms. From 3 s after the first file started until the last 2 s, the
+    // time left is within a quarter of the truth (and a second, for rounding up), and the speed
+    // is right.
+    [Fact]
+    public void Time_left_is_close_to_the_truth_from_three_seconds_on()
+    {
+        const long Mb = 1024 * 1024;
+        const int Files = 600, AtOnce = 6;
+        const double Each = 0.6, Step = 0.05;
+        var clock = new ManualClock();
+        var activity = new ActivityTracker(clock);
+        for (var i = 0; i < Files; i++) activity.Expect(Directions.Upload, $"f{i}", Mb);
+        clock.Advance(5); // the pass plans and starts uploading 5 s after it learned of the files
+        var start = clock.Now;
+        var moving = new List<(ActivityTracker.Transfer Transfer, double Started)>();
+        var next = 0;
+        var checkedTimes = 0;
+        for (var tick = 0; ; tick++)
+        {
+            var t = tick * Step;
+            foreach (var done in moving.Where(m => t - m.Started >= Each - 1e-9).ToList())
+            {
+                done.Transfer.Report(Mb);
+                activity.Finish(done.Transfer);
+                moving.Remove(done);
+            }
+            while (moving.Count < AtOnce && next < Files) moving.Add((activity.Start(Directions.Upload, $"f{next++}", Mb), t));
+            if (moving.Count == 0) break;
+            foreach (var (transfer, started) in moving) transfer.Report((long)(Mb * Math.Min(1, (t - started) / Each)));
+            if (tick % 5 == 0)
+            {
+                var view = activity.Snapshot().Upload!;
+                var truth = Files / 10.0 - t;
+                if (t >= 3 && truth >= 2)
+                {
+                    Assert.NotNull(view.SecondsLeft);
+                    Assert.True(Math.Abs(view.SecondsLeft!.Value - truth) <= 0.25 * truth + 1, $"at {t:F2} s: {view.SecondsLeft} s left, truly {truth:F1} s");
+                    Assert.InRange(view.BytesPerSecond, (long)(7.5 * Mb), (long)(12.5 * Mb));
+                    checkedTimes++;
+                }
+            }
+            clock.Now = start + (long)Math.Round((tick + 1) * Step * 1000);
+        }
+        Assert.True(checkedTimes > 200, $"checked {checkedTimes} times");
     }
 
     // The same sizes and times as the window's own (app.js bytes() and timeLeft()).

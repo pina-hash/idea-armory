@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net;
+using System.Text.Json.Nodes;
 using Armory.Agent.Engine.View;
 using Armory.TestSupport;
 using static Armory.EndToEnd.Tests.ScenarioTests;
@@ -62,43 +63,78 @@ public sealed class ConcurrencyTests
     }
 
     // A crash in one of several files moving at once: every other one stops at its next step,
-    // nothing of the crashed engine runs or saves after its pass threw, and the next engine over
-    // the same stores finishes every file with exactly one version.
+    // nothing of the crashed engine runs, applies an answer or serializes its state after the
+    // crash (the saves serialized before it finish, as they would in a real crash), and the next
+    // engine over the same stores finishes every file with exactly one version. With a slow disk
+    // (40 ms a save) a group commit is nearly always waiting when the crash comes, and answers of
+    // other files are on their way: none of that may reach the disk, so the document there never
+    // holds a step half done (a lock answered but still in flight, a file created but still in
+    // flight, a commit answered but still in flight), which no real crash could leave.
     [PostgresFact]
     public async Task A_crash_among_files_moving_at_once_stops_them_all_and_replays_to_one_version_each()
     {
-        await using var t = await TeamAsync();
-        var paths = Enumerable.Range(0, 12).Select(i => $"Robot 2027/Batch/Part-{i:D2}.SLDPRT").ToArray();
-        foreach (var path in paths) t.A.Write(path, "bytes of " + path);
-        var blobs = 0;
-        var crashed = false;
-        var after = new List<string>();
-        t.A.CrashPoint = point =>
+        foreach (var (point, k, delay) in new[] { ("after-blob", 4, 0), ("after-lock", 3, 40), ("after-lock", 6, 40), ("after-create", 5, 40), ("after-commit-rpc", 4, 40) })
         {
-            if (crashed) { after.Add(point); return; }
-            if (point == "after-blob" && ++blobs == 4)
+            var round = $"{point} #{k}, {delay} ms a save";
+            await using var t = await TeamAsync();
+            if (delay > 0) await t.A.SyncAsync();
+            var paths = Enumerable.Range(0, 12).Select(i => $"Robot 2027/Batch/Part-{i:D2}.SLDPRT").ToArray();
+            foreach (var path in paths) t.A.Write(path, "bytes of " + path);
+            t.A.State.Delay = TimeSpan.FromMilliseconds(delay);
+            var hits = 0;
+            var crashed = false;
+            var serializedAtCrash = -1;
+            var after = new ConcurrentQueue<string>();
+            t.A.CrashPoint = p =>
             {
-                crashed = true;
-                throw new SimulatedCrash(point);
-            }
-        };
-        t.A.Restart();
-        await Assert.ThrowsAsync<SimulatedCrash>(() => t.A.SyncAsync());
-        Assert.Empty(after); // no unit went past another step after the crash
-        var (saves, document) = (t.A.State.Saves, t.A.State.Load());
-        await Task.Delay(1000);
-        Assert.Equal(saves, t.A.State.Saves);
-        Assert.Equal(document, t.A.State.Load());
-        Assert.Empty(after);
+                if (crashed) { after.Enqueue(p); return; }
+                if (p == point && ++hits == k)
+                {
+                    crashed = true;
+                    serializedAtCrash = t.A.Engine.Serializations;
+                    throw new SimulatedCrash(p);
+                }
+            };
+            t.A.Restart();
+            await Assert.ThrowsAsync<SimulatedCrash>(() => t.A.SyncAsync());
+            Assert.True(after.IsEmpty, $"{round}: steps after the crash: {string.Join(", ", after)}"); // no unit went past another step
+            Assert.True(serializedAtCrash == t.A.Engine.Serializations, $"{round}: the state was serialized {t.A.Engine.Serializations - serializedAtCrash} more times after the crash");
+            var (saves, document) = (t.A.State.Saves, t.A.State.Load());
+            await Task.Delay(500);
+            Assert.Equal(saves, t.A.State.Saves);
+            Assert.Equal(document, t.A.State.Load());
+            Assert.True(after.IsEmpty, round);
+            var halfDone = HalfDone(document);
+            Assert.True(halfDone.Count == 0, $"{round}: steps half done on disk: {string.Join(", ", halfDone)}");
 
-        t.A.CrashPoint = null;
-        t.A.Restart();
-        await t.A.SyncTimesAsync(2);
-        foreach (var path in paths) Assert.Equal(1, await t.Versions(await t.FileId(Path.GetFileName(path))));
-        Assert.Equal(0, await t.World.CountAsync("select count(*) from armory_side_versions s join armory_files f on f.id=s.file_id where f.project_id=@p", ("p", t.Project)));
-        Assert.Equal(0, await t.World.CountAsync("select count(*) from armory_locks l join armory_files f on f.id=l.file_id where f.project_id=@p and l.broken_at is null", ("p", t.Project)));
-        Assert.All(paths, p => Assert.True(t.A.Disk.IsReadOnly(p)));
-        Assert.Empty(t.A.Disk.OpenWriteViolations);
+            t.A.CrashPoint = null;
+            t.A.State.Delay = TimeSpan.Zero;
+            t.A.Restart();
+            await t.A.SyncTimesAsync(2);
+            foreach (var path in paths) Assert.Equal(1, await t.Versions(await t.FileId(Path.GetFileName(path))));
+            Assert.Equal(0, await t.World.CountAsync("select count(*) from armory_side_versions s join armory_files f on f.id=s.file_id where f.project_id=@p", ("p", t.Project)));
+            Assert.Equal(0, await t.World.CountAsync("select count(*) from armory_locks l join armory_files f on f.id=l.file_id where f.project_id=@p and l.broken_at is null", ("p", t.Project)));
+            Assert.All(paths, p => Assert.True(t.A.Disk.IsReadOnly(p)));
+            Assert.Empty(t.A.Disk.OpenWriteViolations);
+        }
+    }
+
+    // New files' records in a saved document that hold an answer with their write still in
+    // flight: only a save made in the middle of a step (after its answer, before its record was
+    // cleared) can hold one.
+    private static List<string> HalfDone(byte[]? document)
+    {
+        List<string> found = [];
+        if (document is null) return found;
+        foreach (var (path, node) in JsonNode.Parse(document)!["files"]!.AsObject())
+        {
+            if (node?["inflight"] is not JsonObject flight) continue;
+            var kind = flight["kind"]?.GetValue<string>();
+            if (kind == "lock" && ((node["attempt"]?.GetValue<int>() ?? 0) > 0 || node["holder"] is JsonObject)) found.Add($"{path}: lock answered");
+            if (kind == "create" && node["fileId"] is JsonValue) found.Add($"{path}: created");
+            if (kind == "commit" && node["baseHash"]?.GetValue<string>() is { } hash && hash == flight["hash"]?.GetValue<string>()) found.Add($"{path}: committed");
+        }
+        return found;
     }
 
     // Saves before server writes are a group commit: units that are ready while the save before
@@ -191,6 +227,64 @@ public sealed class ConcurrencyTests
         await t.A.SyncAsync();
         Assert.Equal((projects + 1, changes + 1, files + 1), Reads(t));
         Assert.Equal("Checked out by Maria Lopez on student B lab PC", t.A.Row(Plate).Checkout.Label);
+    }
+
+    // Names the server holds for one (it compares lower(normalize(name, NFC))) are one unit here,
+    // whatever .NET's own casing says (it keeps the capital sharp s and the dotted capital I
+    // apart from their small letters): the first in path order gets the name and the other is one
+    // "shares a name" item, however fast the server answers.
+    [PostgresFact]
+    public async Task Names_the_server_holds_for_one_are_sent_one_after_the_other()
+    {
+        (string First, string Second)[] pairs = [("Robot 2027/A/\u1E9Eolt.SLDPRT", "Robot 2027/B/\u00DFolt.SLDPRT"), ("Robot 2027/C/\u0130nsert.SLDPRT", "Robot 2027/D/insert.SLDPRT")];
+        foreach (var rpc in new[] { 0, 30 })
+        {
+            await using var t = await TeamAsync(latency: new LatencyProfile(TimeSpan.Zero, 0, 0, TimeSpan.Zero, TimeSpan.FromMilliseconds(rpc)));
+            await t.A.SyncAsync();
+            foreach (var (first, second) in pairs)
+            {
+                t.A.Write(first, "first " + first);
+                t.A.Write(second, "second " + second);
+            }
+            await t.A.SyncAsync();
+            var live = await t.World.QueryAsync("select folder || '/' || name from armory_files where project_id=@p and current_version_id is not null and deleted_at is null",
+                r => "Robot 2027/" + r.GetString(0), ("p", t.Project));
+            Assert.Equal(pairs.Select(p => p.First).Order(StringComparer.Ordinal), live.Order(StringComparer.Ordinal));
+            var shared = t.A.Card(NoticeKinds.NameShared)!;
+            Assert.Equal(pairs.Select(p => p.Second).Order(StringComparer.Ordinal), shared.Items.Select(i => i.Path).Order(StringComparer.Ordinal));
+        }
+    }
+
+    // Moving reads as one line for as long as the move lasts: the window's rename of a folder
+    // (the team's answer included, here a slow one) is "Moving 3 files to Robot 2027 › Drivetrain
+    // › Gears" in the activity messages, and the team's rename made on the other computer is one
+    // operation with its own count and its one target, not the files moved so far.
+    [PostgresFact]
+    public async Task Moving_files_reads_as_one_line_while_the_move_lasts()
+    {
+        await using var t = await TeamAsync();
+        string[] files = ["Robot 2027/Drivetrain/Gearbox/Housing.SLDPRT", "Robot 2027/Drivetrain/Gearbox/Gear-14T.SLDPRT", "Robot 2027/Drivetrain/Gearbox/Gear-60T.SLDPRT"];
+        foreach (var path in files) t.A.Write(path, "bytes of " + path);
+        await t.A.SyncAsync();
+        await t.B.SyncAsync();
+        var seen = new ConcurrentQueue<ActivityView>();
+        t.A.Activities += seen.Enqueue;
+        t.A.Network.RpcDelay = path => path.EndsWith("/armory_rename_folder", StringComparison.Ordinal) ? TimeSpan.FromSeconds(1) : TimeSpan.Zero;
+        Assert.True((await t.A.Engine.RenameFolderAsync(t.Project, "Drivetrain/Gearbox", "Gears")).Ok);
+        const string Line = "Moving 3 files to Robot 2027 › Drivetrain › Gears";
+        Assert.Contains(seen, a => a.Move is { FilesTotal: 3, FilesDone: 0, Line: Line } && a.Line == Line);
+        Assert.Null(t.A.Engine.View.Activity.Move);
+
+        // The other computer moves its folder in one step; right after the move, before its
+        // records follow, the panel says what this operation moves.
+        ActivityView? during = null;
+        t.B.CrashPoint = point => { if (point == "after-team-folder-move") during = t.B.Engine.ActivityNow; };
+        t.B.Restart();
+        await t.B.SyncAsync();
+        Assert.Equal(Line, during?.Move?.Line);
+        Assert.Equal(3, during!.Move!.FilesTotal);
+        Assert.All(files, p => Assert.NotNull(t.B.Read(p.Replace("Gearbox", "Gears", StringComparison.Ordinal))));
+        Assert.Null(t.B.Engine.View.Activity.Move);
     }
 
     private static (long Projects, long Changes, long Files) Reads(Team t)

@@ -29,6 +29,9 @@ internal sealed class World : IAsyncDisposable
     public FakeS3 S3 { get; }
     // The network profile every Computer made after this is set uses (throughput measurements).
     public LatencyProfile Latency { get; set; } = LatencyProfile.None;
+    // One link every Computer made after this is set shares (a classroom behind one school
+    // connection); null gives each its own.
+    public NetworkLink? SharedLink { get; set; }
     public string Temp { get; } = Path.Combine(Path.GetTempPath(), "armory-e2e-" + Guid.NewGuid().ToString("N"));
 
     // Every world holds the heavy-run lock shared, so the server simulation (which takes it
@@ -153,7 +156,7 @@ internal sealed class Computer : IAsyncDisposable
         this.world = world;
         Name = name;
         Disk = new PortableVaultFileSystem(root) { IsPreserved = world.HashOnServer };
-        Network = new LatencyHandler(world.Latency, world.Site.BaseUri.Port, new Uri(world.Supabase.SupabaseUrl).Port, new FakeNetworkHandler(world.S3));
+        Network = new LatencyHandler(world.Latency, world.Site.BaseUri.Port, new Uri(world.Supabase.SupabaseUrl).Port, new FakeNetworkHandler(world.S3), world.SharedLink);
         network = new OfflineHandler(Network);
         http = new HttpClient(network);
     }
@@ -190,6 +193,11 @@ internal sealed class Computer : IAsyncDisposable
         Restart();
     }
 
+    // Every view and every activity message an engine of this computer raises, across restarts
+    // (views on the engine thread, activity from a timer thread), for tests that watch a whole run.
+    public event Action<AgentView>? Views;
+    public event Action<ActivityView>? Activities;
+
     public void Restart()
     {
         Sessions = new SessionManager(http, Secrets);
@@ -205,6 +213,8 @@ internal sealed class Computer : IAsyncDisposable
             Log = line => { lock (Logged) Logged.Add(line); },
         })
         { CrashPoint = CrashPoint };
+        Engine.ViewChanged += view => Views?.Invoke(view);
+        Engine.ActivityChanged += activity => Activities?.Invoke(activity);
         Engines++;
     }
 

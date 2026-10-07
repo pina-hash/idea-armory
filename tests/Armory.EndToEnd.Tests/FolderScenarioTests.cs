@@ -47,6 +47,10 @@ public sealed class FolderScenarioTests
         await t.A.SyncAsync();
         Assert.Empty(t.A.Engine.View.Notices);
 
+        // Quiet the whole time on Alex's computer, offline stretch included: every view and
+        // activity message has at most 3 cards (an import summary and the shared names), nothing
+        // in My files, and waiting only as the activity panel's one count.
+        using var quiet = new QuietWatch(t.A, maxCards: 3, online: false, NoticeKinds.Import, NoticeKinds.NameShared);
         List<string> unzipped = [];
         for (var i = 1; i <= 46; i++) unzipped.Add($"{Inner}/{(i % 3 == 0 ? "Sub/" : "")}Copy-{i:D2}.SLDPRT");
         for (var i = 1; i <= 14; i++) unzipped.Add($"{Inner}/Shared-{i:D2}.SLDPRT");
@@ -119,6 +123,7 @@ public sealed class FolderScenarioTests
         Assert.All(shared.Items, i => Assert.StartsWith($"{Pack}/Gearbox/Shared-", i.Path, StringComparison.Ordinal));
         Assert.Empty(t.A.Engine.View.MyFiles);
         Assert.Null(t.A.Engine.View.Activity.Waiting);
+        quiet.Check();
         NoViolations(t.A); NoViolations(t.B);
     }
 
