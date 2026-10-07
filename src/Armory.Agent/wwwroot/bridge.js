@@ -473,11 +473,18 @@
 		function words(n, one, many) {
 			return n + ' ' + (n === 1 ? one : many);
 		}
-		/** Keeps My files in step: my check outs, and the files that aren't in Armory. */
+		/** "Maria Lopez has ", "Maria Lopez and Sam Lee have ", the way the engine names who has the rest. */
+		function whoHas(names) {
+			if (names.length === 1) return names[0] + ' has ';
+			if (names.length === 2) return names[0] + ' and ' + names[1] + ' have ';
+			if (names.length === 3) return names[0] + ', ' + names[1] + ' and ' + names[2] + ' have ';
+			return names[0] + ', ' + names[1] + ' and ' + (names.length - 2) + ' others have ';
+		}
+		/** Keeps My files in step: the files this computer has checked out (addendum 7). */
 		function refreshMine() {
 			var mine = [];
 			eachRow(function (r, p) {
-				if (r.checkout.state === 'mine' || r.checkout.state === 'myOtherComputer' || r.status === 'notInArmory')
+				if (r.checkout.state === 'mine')
 					mine.push({ fileId: r.fileId, path: r.path, name: r.name, project: p.name, status: r.status, note: null, checkout: r.checkout });
 			});
 			view.myFiles = mine;
@@ -545,6 +552,8 @@
 							got++;
 						} else if (r.checkout.state === 'other') held[r.checkout.name] = (held[r.checkout.name] || 0) + 1;
 					});
+					// The check-out question was about this file: it is answered.
+					if (got && view.prompt && message.paths.indexOf(view.prompt.path) >= 0) view.prompt = null;
 					refreshMine();
 					postView();
 					var names = Object.keys(held);
@@ -557,7 +566,7 @@
 						result(
 							message,
 							got > 0,
-							'Checked out ' + got + ' of ' + words(rows.length, 'file', 'files') + '. ' + (names.length === 1 ? names[0] + ' has ' : 'Others have ') + heldCount + ' of them checked out.'
+							'Checked out ' + got + ' of ' + words(rows.length, 'file', 'files') + '. ' + whoHas(names) + heldCount + ' of them checked out.'
 						);
 					break;
 				case 'checkIn':
@@ -653,6 +662,8 @@
 					view.notices = view.notices.filter(function (n) {
 						return n.key !== message.key;
 					});
+					// The check-out question's Not now: that open asks no more.
+					if (view.prompt && view.prompt.key === message.key) view.prompt = null;
 					postView();
 					break;
 				case 'saveSettings':

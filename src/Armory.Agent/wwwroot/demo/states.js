@@ -203,14 +203,13 @@
 		});
 	}
 
-	/** My files: what I have checked out, and my files that aren't in Armory. */
+	/** My files: the files this computer has checked out, in every project (addendum 7). */
 	function myFilesOf(view, notes) {
 		var out = [];
 		view.projects.forEach(function (p) {
-			if (p.archived) return;
 			p.folders.forEach(function (f) {
 				f.files.forEach(function (r) {
-					if (r.checkout.state !== 'mine' && r.checkout.state !== 'myOtherComputer' && r.status !== 'notInArmory') return;
+					if (r.checkout.state !== 'mine') return;
 					out.push({
 						fileId: r.fileId,
 						path: r.path,
@@ -424,8 +423,8 @@
 			details: {
 				'f-gearbox': function (d) {
 					d.history.unshift(
-						{ id: 'f-gearbox-k2', kind: 'keptCopy', author: ME.name, at: ago(6 * MIN), bytes: 1490022, note: 'Saved while checked out', releaseNotChecked: true, isCurrent: false },
-						{ id: 'f-gearbox-k1', kind: 'keptCopy', author: ME.name, at: ago(28 * MIN), bytes: 1486610, note: 'Saved while checked out', releaseNotChecked: false, isCurrent: false }
+						{ id: 'f-gearbox-k2', kind: 'keptCopy', author: ME.name, at: ago(6 * MIN), bytes: 1490022, note: 'Saved while checked out', releaseNotChecked: true, isCurrent: false, routine: true },
+						{ id: 'f-gearbox-k1', kind: 'keptCopy', author: ME.name, at: ago(28 * MIN), bytes: 1486610, note: 'Saved while checked out', releaseNotChecked: false, isCurrent: false, routine: true }
 					);
 					return d;
 				}
@@ -725,10 +724,10 @@
 					'keptCopy',
 					'keptCopy',
 					'look',
-					'3 of your changes were kept as your own copies',
+					'Your changes to 3 files were kept as your own copies',
 					'Someone else checked these in first, so your changes were kept in each file\'s history. Nothing was lost. Ask your CAD lead which one to keep.',
 					3,
-					{ label: 'Show them', command: 'expand', paths: [] },
+					{ label: 'OK', command: 'dismissNotice', paths: [] },
 					[
 						item('f-plate-left', 'Robot 2027/Drivetrain/Plate-Left.SLDPRT', 'Maria Lopez checked in first.'),
 						item('f-wheel-hub', 'Robot 2027/Drivetrain/Wheel-Hub.SLDPRT', 'Alex Kim checked in first.'),
@@ -779,7 +778,8 @@
 				bytes: 618004,
 				note: 'Kept as your own copy: Maria Lopez checked in first',
 				releaseNotChecked: false,
-				isCurrent: false
+				isCurrent: false,
+				routine: false
 			});
 			d.history.splice(4, 0, {
 				id: 'f-plate-left-gone',
@@ -789,7 +789,8 @@
 				bytes: 0,
 				note: 'Removed from Robot 2027',
 				releaseNotChecked: false,
-				isCurrent: false
+				isCurrent: false,
+				routine: false
 			});
 			d.history[3].note = 'Added again, with its history';
 			return d;
@@ -811,7 +812,8 @@
 				bytes: Math.round(entry[6] * (1 - i * 0.04)),
 				note: i === steps.length - 1 ? 'Added to Armory' : 'Checked in',
 				releaseNotChecked: i === 0 && !!(row && row.releaseNotChecked),
-				isCurrent: i === 0
+				isCurrent: i === 0,
+				routine: false
 			};
 		});
 	}

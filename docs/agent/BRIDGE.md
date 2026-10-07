@@ -172,7 +172,8 @@ HistoryEntryView {
   id: string, kind: "version" | "keptCopy" | "removed",
   author: string, at: string, bytes: number,
   note: string,                     // e.g. "Checked in", "Kept as your own copy: Maria Lopez checked in first"
-  releaseNotChecked: boolean, isCurrent: boolean
+  releaseNotChecked: boolean, isCurrent: boolean,
+  routine: boolean                  // a kept copy that is the ordinary record of work ("Saved while checked out"): the neutral tone, never YOUR COPY
 }
 ```
 
@@ -213,12 +214,17 @@ Plate.SLDPRT.", "Close Plate.SLDPRT in SolidWorks first."). The actions are
 | `renameFile` | `path`, `newName`, `requestId` | Rename on a "shares a name" notice item, after the small dialog | renames one file in its folder: on this computer for a file Armory does not have, for everyone (`armory_move_file`) for one it has; refused while someone else has it checked out |
 | `addFiles` | `projectId`, `folder`, `requestId` | Add files | host shows a file picker, then copies the files in |
 | `dropFiles` | `projectId`, `folder`, `requestId` (+ the dropped files) | a drop on the open folder's list | host copies the dropped files in |
-| `dismissNotice` | `key` | a notice's Done or OK (`dismissNotice` action) | the host drops that notice card |
+| `dismissNotice` | `key` | a notice's Done or OK (`dismissNotice` action); the check-out question's Not now or OK (its `prompt.key`) | the host drops that notice card, or stops asking about that one open file |
 | `saveSettings` | `vaultRoot`, `startAtSignIn`, `theme` | a setting, Use (a folder of my own) | saves settings; host answers with `view` |
 | `chooseVaultRoot` | | Change, Choose another folder | host shows a folder picker, then answers with `view` |
 
-"Not now" on the check-out question sends nothing: the page hides that question until
-the host asks about another file.
+"Not now" (or OK, when someone else has the file) on the check-out question sends
+`dismissNotice {key: prompt.key}`: the host asks no more about that open of the file and
+moves on to the next file SolidWorks has open without a check out; the file asks again
+the next time it is opened. The page hides the question with that key at once. "Check out
+and reopen" sends `checkOut {paths: [prompt.path], open: true}`: the host checks the file
+out and opens it again, or says "Close Plate.SLDPRT in SolidWorks first, then open it
+again." while SolidWorks still has it open read-only.
 
 ## The demo
 

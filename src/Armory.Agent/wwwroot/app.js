@@ -767,17 +767,20 @@
 
 	/** SolidWorks opened a file this computer has not checked out: one slim card at the
 	 *  top of the column, never a window that takes focus. When someone else has it, it
-	 *  says who instead. */
+	 *  says who instead. One question per open: its key comes from the host, and Not now
+	 *  (or OK) sends it back with dismissNotice, so the host asks about the next open file. */
 	function promptHtml(v) {
 		var p = v.prompt;
-		if (!p || ui.promptGone === promptKey(p)) return '';
+		if (!p || ui.promptGone === p.key) return '';
 		var free = !!p.canCheckOut;
 		// The file's name never breaks at its hyphens ("Plate- / Left.SLDPRT").
 		var name = '<span class="fname">' + esc(p.name) + '</span>';
 		var title = free ? 'Check out ' + name + ' to edit it?' : name + ' is ' + esc(glue(lowerFirst(p.checkout.label))) + '.';
-		var words = free ? 'SolidWorks opened it read-only. Check it out, and your saves can go to the team.' : 'You can look, but you can\'t save changes.';
+		var words = free
+			? 'SolidWorks opened it read-only. Check it out, then close it in SolidWorks and open it again here to save changes.'
+			: 'You can look, but you can\'t save changes.';
 		var keys = free
-			? key({ action: 'promptCheckOut', key: 'prompt-checkout', cls: 'primary', glyph: 'checkout', word: 'Check out', path: p.path }) +
+			? key({ action: 'promptCheckOut', key: 'prompt-checkout', cls: 'primary', glyph: 'checkout', word: 'Check out and reopen', path: p.path }) +
 			  key({ action: 'promptLater', key: 'prompt-later', word: 'Not now' })
 			: key({ action: 'promptLater', key: 'prompt-later', word: 'OK' });
 		return (
@@ -789,10 +792,6 @@
 			'<div class="attn-actions">' + keys + '</div>' +
 			'</div></section>'
 		);
-	}
-
-	function promptKey(p) {
-		return p.path + '|' + (p.checkout ? p.checkout.state : '');
 	}
 
 	function lowerFirst(s) {
@@ -1061,7 +1060,7 @@
 		html += '<h2 class="section-label" id="mine-label"><span>My files</span>' + (files.length ? count(files.length, 'file', 'files') : '') + '</h2>';
 		if (!files.length) {
 			html += '<div class="empty-tile">' + icon('asm', 'empty-glyph') + '<div class="empty-words">';
-			html += '<p>Nothing checked out. Files you check out show up here, and so do your files that aren\'t in Armory yet.</p>';
+			html += '<p>Nothing checked out. Files you check out show up here.</p>';
 			html += '<p class="empty-where">Your team\'s files are in <span class="mono-plate">' + esc(v.vaultRoot) + '</span></p>';
 			html += '<button class="key" type="button" data-action="openVault" data-key="empty-vault">' + icon('folder') + '<span>Open Armory folder</span></button>';
 			html += '</div></div>';
@@ -1365,7 +1364,7 @@
 			case 'notOnThisComputer':
 				return { readout: 'Not here yet', tone: 'off', line: 'Not on this computer yet', meta: 'Armory is getting it. It shows up in the folder soon.' };
 			case 'keptCopy':
-				return { readout: 'Your copy kept', tone: 'look', line: 'Your changes were kept as your own copy', meta: 'Someone else checked it in first. Nothing was lost: your copy is marked in the history.' };
+				return { readout: 'Your copy kept', tone: 'look', line: 'Your changes were kept as your own copy', meta: 'Your change is kept in its history. Nothing was lost.' };
 			default:
 				return { readout: 'Available', tone: 'ok', line: 'Available', meta: 'Anyone can open it to look. Check it out to make changes.' };
 		}
@@ -1458,9 +1457,10 @@
 
 	/** A history entry: who and when is the title (what a student scans for). A kept copy
 	 *  is its own title and, when it is the student's, is marked YOUR COPY on a tinted
-	 *  row; a removal says so. The size is in the tooltip, not the line. */
+	 *  row; a routine one (saved while checked out) is the ordinary record of work and
+	 *  keeps the neutral tone. A removal says so. The size is in the tooltip, not the line. */
 	function historyEntry(e, me) {
-		var copy = e.kind === 'keptCopy';
+		var copy = e.kind === 'keptCopy' && !e.routine;
 		var removed = e.kind === 'removed';
 		var routine = e.kind === 'version' && /^(Checked in|Saved|Added to Armory)$/.test(e.note);
 		var when = '<time datetime="' + esc(e.at) + '" title="' + esc(fullTime(e.at)) + '">' + esc(agoWhole(e.at)) + '</time>';
@@ -2216,12 +2216,17 @@
 				askRenameFile(path, from);
 				break;
 			case 'promptCheckOut':
-				act('checkOut', { paths: [path], open: false });
-				ui.promptGone = promptKey(ui.view.prompt);
+				// Check out and reopen: the host checks it out, then opens it again once
+				// SolidWorks has closed it (it says so while SolidWorks still has it open).
+				act('checkOut', { paths: [path], open: true });
+				ui.promptGone = ui.view.prompt ? ui.view.prompt.key : null;
 				render();
 				break;
 			case 'promptLater':
-				ui.promptGone = promptKey(ui.view.prompt);
+				if (ui.view.prompt) {
+					bridge.send('dismissNotice', { key: ui.view.prompt.key });
+					ui.promptGone = ui.view.prompt.key;
+				}
 				render();
 				break;
 			case 'select':

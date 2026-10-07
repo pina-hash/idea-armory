@@ -1253,6 +1253,17 @@ tally.bridgeTypes = 0;
 		m = await click('[data-key="nt-act-import"]');
 		expect(m.type === 'dismissNotice' && m.key === 'import', 'the import summary\'s Done sent ' + JSON.stringify(m));
 
+		// The check-out question: Not now sends that open's key back (so the host asks about the
+		// next open file), and Check out and reopen asks for the file to be opened again.
+		const asked = demo.states.checkoutPrompt.view.prompt;
+		await host({ type: 'view', view: view('checkoutPrompt') });
+		m = await click('[data-key="prompt-later"]');
+		expect(m.type === 'dismissNotice' && m.key === asked.key, 'the question\'s Not now sent ' + JSON.stringify(m));
+		expect(!(await page.$('.prompt-card')), 'Not now left the question showing');
+		await host({ type: 'view', view: view('checkoutPrompt', { prompt: Object.assign({}, asked, { key: asked.key + ':again' }) }) });
+		m = await click('[data-key="prompt-checkout"]');
+		expect(m.type === 'checkOut' && m.open === true && m.paths.join() === asked.path, 'the question\'s Check out and reopen sent ' + JSON.stringify(m));
+
 		await click('[data-key="hdr-settings"]');
 		m = await click('[data-key="set-root"]');
 		expect(m.type === 'chooseVaultRoot', 'Change sent ' + JSON.stringify(m));
