@@ -182,17 +182,24 @@ runner first if the image lacks it):
   `https://github.com/pina-hash/idea-armory/releases/download/v0.1.0/` into `RUNNER_TEMP`
   (never `dist`, where the script picks the build under test) and each is checked against
   its `.sha256`. For each route: install 0.1.0 and wait until it runs and logs
-  `started 0.1.0`; plant the proof files in the vault, a `settings.json` with a non-default
-  theme, a sign-in in the exact `DpapiSecretStore` format (`ARMORY-DPAPI-1` and a newline,
-  then a CurrentUser DPAPI blob with the entropy `IDEA Armory secret store v1/armory-session`,
-  holding a session whose sign-in service answers nothing, so neither version can renew or
-  end it) and a stray file in the program's `wwwroot\`; then install this build over it
-  (`Install IDEA Armory.cmd /quiet`, which must say `Upgraded IDEA Armory 0.1.0 to <version>`,
-  or setup.exe `/VERYSILENT`). It passes only when this build runs (exe version, `--check`,
+  `started 0.1.0` and `vault runtime started at C:\IDEA\Armory`; plant the proof files in
+  the vault, a `settings.json` with a non-default theme, a sign-in in the exact
+  `DpapiSecretStore` format (`ARMORY-DPAPI-1` and a newline, then a CurrentUser DPAPI blob
+  with the entropy `IDEA Armory secret store v1/armory-session`, holding a session whose
+  sign-in service answers nothing, so neither version can renew or end it), a read-only
+  intent in the 0.1.0 format (`.armory\read-only.json`, `{"Proof/keep.txt":0}`) and a stray
+  file in the program's `wwwroot\`; then install this build over it (`Install IDEA
+  Armory.cmd /quiet`, which must say `Upgraded IDEA Armory 0.1.0 to <version>`, or setup.exe
+  `/VERYSILENT`). It passes only when this build runs (exe version, `--check`,
   `started <version>`, a new process still running 15 seconds later), the Apps entry shows
   the new version, the sign-in, `settings.json` and the proof files keep every byte, the
-  sign-in still decrypts for this Windows account, the vault keeps `.armory`, and the stray
-  page file is gone. Then it uninstalls and checks the proof files once more.
+  sign-in still decrypts for this Windows account, the new version's own log says
+  `session loaded for upgrade.test@example.com` (it read that sign-in itself) and
+  `vault runtime started at C:\IDEA\Armory` (it opened the old vault), the 0.1.0 intent did
+  not make `Proof\keep.txt` (a file the server does not have) read-only, and the stray page
+  file is gone. Then it uninstalls and checks the proof files once more. It does not sign in
+  to a real server: that the session still works there is shown by its tokens and device
+  being byte for byte what 0.1.0 saved.
 
 The `agent-dist` artifact holds the zip, the exe and their `.sha256` files; `agent-evidence`
 holds every step's output, the Inno logs, `package.txt`, and the agent and platform test
@@ -236,8 +243,9 @@ Turning it on needs:
    the SmartScreen warning.
 
 Until then, updating means running the new release's Install from the flash drive (or the
-new setup.exe) over the old one; settings, sign-in and the vault are kept, as the upgrade
-cycle above proves on every run. The window's page is replaced as a whole: setup.exe deletes
+new setup.exe) over the old one; the settings and the sign-in file keep every byte, the new
+version loads that sign-in and opens the old vault, as the upgrade cycle above checks on
+every run (it does not reach a real server). The window's page is replaced as a whole: setup.exe deletes
 `{app}\wwwroot` before copying (`[InstallDelete]`), and the flash drive swaps the whole
 program folder. The WebView2 profile in `%LOCALAPPDATA%\IDEA Armory\WebView2` survives an
 upgrade, so the page and its scripts load with `?v=<version>`, and the first start of a new

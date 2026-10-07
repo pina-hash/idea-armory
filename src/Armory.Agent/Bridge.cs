@@ -14,6 +14,7 @@ internal interface IBridgeWindow
     void Post(string json);
     string? ChooseFolder(string current);
     // Add files: the Windows file picker, several files at once. Null when the student cancels.
+    // Called once the bridge carries addFiles (the integration with the v2 engine).
     IReadOnlyList<string>? ChooseFiles(string title);
     void ShowProblem(string message);
 }

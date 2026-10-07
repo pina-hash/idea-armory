@@ -10,8 +10,10 @@
 #                theme and a sign-in in the exact DpapiSecretStore format, then install this
 #                build over it. This build must run, the Apps entry must show its version, the
 #                sign-in, the settings and the proof files must keep every byte, the sign-in
-#                must still decrypt for this Windows account, and no file of the old page
-#                (wwwroot) may survive. Then uninstall.
+#                must still decrypt for this Windows account and this build's log must say it
+#                loaded that session, its vault runtime must start on the old vault, a 0.1.0
+#                read-only intent must not make a file the server does not have read-only, and
+#                no file of the old page (wwwroot) may survive. Then uninstall.
 # Each cycle checks the exe, the start at sign-in value, the Apps entry, the Start menu
 # shortcut, IdeaArmory.exe --check, the running process and agent.log, and that uninstall
 # removes all of it while C:\IDEA\Armory\Proof\ keeps the same bytes.
@@ -62,6 +64,9 @@ $script:ProofHashes = @()
 $SettingsFile = Join-Path $DataDir 'settings.json'
 $SecretFile = Join-Path $DataDir 'secrets\armory-session.secret'
 $StalePage = Join-Path $Target 'wwwroot\stale-page-file.js'
+$SessionEmail = 'upgrade.test@example.com'
+$VaultStarted = 'vault runtime started at ' + $Vault
+$OldManifest = Join-Path $Vault '.armory\read-only.json'
 $script:Kept = [ordered]@{}
 $script:SessionJson = $null
 
@@ -354,7 +359,7 @@ $SecretEntropy = [Text.Encoding]::UTF8.GetBytes('IDEA Armory secret store v1/arm
 function Get-TestSession {
     if (-not $script:SessionJson) {
         $script:SessionJson = '{"SupabaseUrl":"http://127.0.0.1:9","AnonKey":"upgrade-test-anon-key","AccessToken":"upgrade-test-access-token",' +
-            '"RefreshToken":"upgrade-test-refresh-token","ExpiresAt":"2099-01-01T00:00:00+00:00","Email":"upgrade.test@example.com",' +
+            '"RefreshToken":"upgrade-test-refresh-token","ExpiresAt":"2099-01-01T00:00:00+00:00","Email":"' + $SessionEmail + '",' +
             '"DeviceId":"' + [guid]::NewGuid().ToString() + '","DeviceName":"' + $env:COMPUTERNAME + '"}'
     }
     return $script:SessionJson
@@ -369,10 +374,23 @@ function Read-SignIn {
     if ($null -eq $plain) { return $null }
     return [Text.Encoding]::UTF8.GetString($plain)
 }
+# The log text written since the last "started <version>" line, or $null before that line.
+function Get-LogSince([string]$version) {
+    $text = Read-AgentLog
+    $at = $text.LastIndexOf('started ' + $version)
+    if ($at -lt 0) { return $null }
+    return $text.Substring($at)
+}
 function Save-UpgradeState {
     Initialize-Dpapi
-    $private = Join-Path $Vault '.armory'
-    if (-not (Test-Path -LiteralPath $private)) { Fail ('The old version did not create ' + $private) }
+    # Earlier cycles may have made .armory already: the old version's own log line is the proof
+    # that it opened this vault.
+    if (-not (Wait-Until { [string](Get-LogSince $From) -match [regex]::Escape($VaultStarted) } 60)) { Fail ('IDEA Armory ' + $From + ' did not log "' + $VaultStarted + '"') }
+    Note ('agent.log: ' + $From + ' logged "' + $VaultStarted + '"')
+    # A read-only intent in the 0.1.0 format ({"<path>": n}, 0 = Free, which 0.1.0 left
+    # writable) for a file the server does not have: 0.2.0 must never apply it.
+    [IO.File]::WriteAllText($OldManifest, '{"Proof/keep.txt":0}', [Text.UTF8Encoding]::new($false))
+    (Get-Item -LiteralPath $ProofFiles[0]).IsReadOnly = $false
     [IO.File]::WriteAllText($SettingsFile, '{"vaultRoot":"C:\\IDEA\\Armory","startAtSignIn":true,"theme":"spaceWhite"}', [Text.UTF8Encoding]::new($false))
     $blob = [ArmoryUpgradeDpapi]::Protect([Text.Encoding]::UTF8.GetBytes((Get-TestSession)), $SecretEntropy)
     if ($null -eq $blob) { Fail 'Windows could not protect the test sign-in' }
@@ -385,7 +403,7 @@ function Save-UpgradeState {
     [IO.File]::WriteAllText($StalePage, '// a page file only the old version shipped', [Text.UTF8Encoding]::new($false))
     $script:Kept = [ordered]@{}
     foreach ($file in @($SettingsFile, $SecretFile)) { $script:Kept[$file] = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash }
-    Note ('planted settings.json (theme spaceWhite), the sign-in ' + $SecretFile + ' and ' + $StalePage)
+    Note ('planted settings.json (theme spaceWhite), the sign-in ' + $SecretFile + ', a 0.1.0 read-only intent ' + $OldManifest + ' and ' + $StalePage)
     foreach ($file in $script:Kept.Keys) { Note ('    ' + $file + ' SHA-256 ' + $script:Kept[$file]) }
 }
 function Assert-UpgradeKept {
@@ -397,7 +415,15 @@ function Assert-UpgradeKept {
     Note ('settings.json and the sign-in kept every byte: ' + (@($script:Kept.Keys) -join ', '))
     if ((Read-SignIn) -cne (Get-TestSession)) { Fail 'The sign-in no longer decrypts for this Windows account' }
     Note 'the sign-in still decrypts for this Windows account and holds the same session'
-    if (-not (Test-Path -LiteralPath (Join-Path $Vault '.armory'))) { Fail 'The vault lost its .armory folder' }
+    # The new version itself, not only this script, read that sign-in, and opened the old vault.
+    $loaded = 'session loaded for ' + $SessionEmail
+    $since = [string](Get-LogSince $Version)
+    if (-not $since.Contains($loaded)) { Fail ('IDEA Armory ' + $Version + ' did not load the kept sign-in: no "' + $loaded + '" after "started ' + $Version + '" in agent.log') }
+    Note ('agent.log: ' + $Version + ' logged "' + $loaded + '"')
+    if (-not (Wait-Until { [string](Get-LogSince $Version) -match [regex]::Escape($VaultStarted) } 60)) { Fail ('IDEA Armory ' + $Version + ' did not start its vault runtime on the old vault: no "' + $VaultStarted + '"') }
+    Note ('agent.log: ' + $Version + ' logged "' + $VaultStarted + '"')
+    if ((Get-Item -LiteralPath $ProofFiles[0]).IsReadOnly) { Fail ('A 0.1.0 read-only intent made ' + $ProofFiles[0] + ', a file the server does not have, read-only') }
+    Note ('the 0.1.0 read-only intent was not applied: ' + $ProofFiles[0] + ' is still writable')
     if (Test-Path -LiteralPath $StalePage) { Fail ('A file of the old page survived the upgrade: ' + $StalePage) }
     Note 'no file of the old page survived (wwwroot)'
 }

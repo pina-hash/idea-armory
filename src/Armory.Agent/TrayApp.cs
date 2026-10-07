@@ -115,10 +115,13 @@ internal sealed class TrayApp : ApplicationContext
         if (!ReferenceEquals(notify.Icon, icon)) notify.Icon = icon;
     }
 
-    // Decision D13, called by the host when SolidWorks opened a file this computer has not
-    // checked out (its ~$ marker appeared). While the window shows, its own prompt card asks;
-    // while it is hidden, one quiet balloon per opened file, and clicking it opens the window
-    // on that card. checkedOutBy is "Maria Lopez on LAB-PC-07" when someone else has it.
+    // Decision D13, for when SolidWorks opened a file this computer has not checked out (its ~$
+    // marker appeared). While the window shows, its own prompt card asks; while it is hidden,
+    // one quiet balloon per opened file, and clicking it opens the window on that card.
+    // checkedOutBy is "Maria Lopez on LAB-PC-07" when someone else has it. Nothing calls this
+    // or KeepCheckOutPromptsFor yet: the integration with the v2 engine calls them when
+    // AgentView.prompt changes (and with the files still open), as it routes addFiles to
+    // ChooseFiles and dropFiles to the engine's AddFilesAsync.
     internal void OfferCheckOut(string path, string name, string? checkedOutBy) => Post(() =>
     {
         if (quitting) return;
