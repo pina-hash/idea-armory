@@ -283,3 +283,5 @@ Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.FolderSafetyTests|A_folder_of_new_fi
 Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.FolderSafetyTests|An_unzip_seen_over_several_passes_is_one_import
 Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.FolderSafetyTests|A_folder_renamed_here_and_by_the_team_at_once_follows_the_team
 Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.FolderSafetyTests|A_file_removed_while_it_is_open_here_says_so
+# E3: the engine thread, files moved several at once, state saved in groups and in pieces, activity, and the 5,000-file import
+Armory.Client.Tests|Armory.Client.Tests.ClientTests|A_storage_refusal_or_timeout_fails_one_transfer_and_a_dead_connection_is_offline

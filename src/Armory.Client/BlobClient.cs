@@ -13,6 +13,10 @@ public sealed class BlobRefusedException(int status, string message) : ArmoryCli
 {
     public int Status { get; } = status;
 }
+// One file's transfer did not go through this time (file storage refused it, it took too long,
+// or the bytes were cut off), while the connection itself works. Only that file waits for the
+// next try; a real connection failure is ArmoryOfflineException.
+public sealed class StorageTransferException(string message, Exception? inner = null) : ArmoryClientException(message, inner);
 
 // Contract section 2: ideabosco.com mints a 15-minute URL for one content-addressed object;
 // the bytes go straight between this computer and storage.
@@ -35,7 +39,7 @@ public sealed class BlobClient(HttpClient siteHttp, HttpClient storageHttp, Uri 
             HttpResponseMessage response;
             try { response = await siteHttp.SendAsync(request, ct); }
             catch (HttpRequestException error) { throw new ArmoryOfflineException("ideabosco.com could not be reached.", error); }
-            catch (TaskCanceledException error) when (!ct.IsCancellationRequested) { throw new ArmoryOfflineException("ideabosco.com took too long to answer.", error); }
+            catch (TaskCanceledException error) when (!ct.IsCancellationRequested) { throw new StorageTransferException("ideabosco.com took too long to answer.", error); }
             using (response)
             {
                 if (response.StatusCode == HttpStatusCode.Unauthorized && attempt == 0)
@@ -72,7 +76,7 @@ public sealed class BlobClient(HttpClient siteHttp, HttpClient storageHttp, Uri 
         foreach (var header in url.Headers)
             if (!request.Headers.TryAddWithoutValidation(header.Key, header.Value)) request.Content.Headers.TryAddWithoutValidation(header.Key, header.Value);
         using var response = await SendStorageAsync(request, ct);
-        if (!response.IsSuccessStatusCode) throw new ArmoryOfflineException($"File storage refused the upload ({(int)response.StatusCode}).");
+        if (!response.IsSuccessStatusCode) throw new StorageTransferException($"File storage refused the upload ({(int)response.StatusCode}).");
         return true;
     }
 
@@ -86,7 +90,7 @@ public sealed class BlobClient(HttpClient siteHttp, HttpClient storageHttp, Uri 
         using var request = new HttpRequestMessage(HttpMethod.Get, url.Url);
         foreach (var header in url.Headers) request.Headers.TryAddWithoutValidation(header.Key, header.Value);
         using var response = await SendStorageAsync(request, ct, HttpCompletionOption.ResponseHeadersRead);
-        if (!response.IsSuccessStatusCode) throw new ArmoryOfflineException($"File storage refused the download ({(int)response.StatusCode}).");
+        if (!response.IsSuccessStatusCode) throw new StorageTransferException($"File storage refused the download ({(int)response.StatusCode}).");
         using var sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         try
         {
@@ -101,7 +105,8 @@ public sealed class BlobClient(HttpClient siteHttp, HttpClient storageHttp, Uri 
                 await destination.WriteAsync(buffer.AsMemory(0, read), ct);
             }
         }
-        catch (HttpRequestException error) { throw new ArmoryOfflineException("The download was cut off.", error); }
+        catch (HttpRequestException error) { throw new StorageTransferException("The download was cut off.", error); }
+        catch (HttpIOException error) { throw new StorageTransferException("The download was cut off.", error); }
         var actual = Convert.ToHexStringLower(sha.GetHashAndReset());
         if (!CryptographicOperations.FixedTimeEquals(Encoding.ASCII.GetBytes(actual), Encoding.ASCII.GetBytes(hash.ToLowerInvariant())))
             throw new HashMismatchException("Downloaded bytes do not match their content-addressed key.");
@@ -111,7 +116,7 @@ public sealed class BlobClient(HttpClient siteHttp, HttpClient storageHttp, Uri 
     {
         try { return await storageHttp.SendAsync(request, option, ct); }
         catch (HttpRequestException error) { throw new ArmoryOfflineException("File storage could not be reached.", error); }
-        catch (TaskCanceledException error) when (!ct.IsCancellationRequested) { throw new ArmoryOfflineException("File storage took too long to answer.", error); }
+        catch (TaskCanceledException error) when (!ct.IsCancellationRequested) { throw new StorageTransferException("File storage took too long to answer.", error); }
     }
 
     private sealed record Answer(string? Url, Dictionary<string, string>? Headers, string? ExpiresAt, bool Exists);

@@ -238,4 +238,57 @@ public sealed partial class ClientTests
             AssertRunningTotal(down.Values, bytes.Length);
         }
     }
+
+    // File storage trouble is one file's problem: a refusal (any answer that is not a success)
+    // or no answer in time fails that transfer alone (StorageTransferException), and the engine
+    // carries on with the rest; only a connection that cannot be made is "offline".
+    [PostgresFact]
+    public async Task A_storage_refusal_or_timeout_fails_one_transfer_and_a_dead_connection_is_offline()
+    {
+        await using var env = await Env.StartAsync();
+        var (_, mentor, _, _) = env.SignedIn("pina@ideabosco.test", admin: true);
+        var project = await mentor.CreateProjectAsync("Robot", null, Guid.NewGuid());
+        await mentor.AddMemberAsync(project, "alex.kim@students.test", MemberRole.Student, Guid.NewGuid());
+        var (sessions, alex, _, _) = env.SignedIn("alex.kim@students.test");
+        var trouble = new StorageTrouble(new FakeNetworkHandler(env.S3));
+        using var storage = new HttpClient(trouble);
+        var blobs = new BlobClient(env.Http, storage, env.Site.BaseUri, sessions);
+        var bytes = RandomNumberGenerator.GetBytes(10_000);
+        var hash = Hash(bytes);
+        Task<bool> Upload() => blobs.UploadAsync(project, hash, bytes.Length, () => new MemoryStream(bytes));
+
+        trouble.Answer = _ => new HttpResponseMessage(HttpStatusCode.InternalServerError);
+        Assert.Contains("refused the upload (500)", (await Assert.ThrowsAsync<StorageTransferException>(Upload)).Message);
+        trouble.Answer = _ => throw new TaskCanceledException("no answer in time");
+        Assert.Contains("took too long", (await Assert.ThrowsAsync<StorageTransferException>(Upload)).Message);
+        trouble.Answer = _ => throw new HttpRequestException("no route to storage");
+        await Assert.ThrowsAsync<ArmoryOfflineException>(Upload);
+        trouble.Answer = null;
+        Assert.True(await Upload());
+
+        var device = await alex.RegisterDeviceAsync("laptop", Guid.NewGuid());
+        var file = await alex.CreateFileAsync(project, "", "Gearbox.SLDASM", device, Guid.NewGuid());
+        await alex.AcquireLockAsync(file, device, Guid.NewGuid());
+        await alex.CommitVersionWithReleaseAsync(file, null, ContentObjectKey.FromHash(hash), hash, bytes.Length, device, Guid.NewGuid(), null);
+        Task Download() => blobs.DownloadAsync(project, hash, bytes.Length, new MemoryStream());
+        trouble.Answer = _ => new HttpResponseMessage(HttpStatusCode.NotFound);
+        Assert.Contains("refused the download (404)", (await Assert.ThrowsAsync<StorageTransferException>(Download)).Message);
+        trouble.Answer = _ => throw new TaskCanceledException("no answer in time");
+        await Assert.ThrowsAsync<StorageTransferException>(Download);
+        trouble.Answer = _ => throw new HttpRequestException("no route to storage");
+        await Assert.ThrowsAsync<ArmoryOfflineException>(Download);
+        trouble.Answer = null;
+        await Download();
+        // A refusal is a client problem like any other: ArmoryClientException, never offline.
+        Assert.False(typeof(ArmoryOfflineException).IsAssignableFrom(typeof(StorageTransferException)));
+        Assert.True(typeof(ArmoryClientException).IsAssignableFrom(typeof(StorageTransferException)));
+    }
+
+    // Storage that answers (or fails) as the test says, else as the fake storage does.
+    private sealed class StorageTrouble(HttpMessageHandler inner) : DelegatingHandler(inner)
+    {
+        public Func<HttpRequestMessage, HttpResponseMessage>? Answer { get; set; }
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            => Answer is { } answer && request.RequestUri!.Host == FakeNetworkHandler.S3Host ? Task.FromResult(answer(request)) : base.SendAsync(request, cancellationToken);
+    }
 }
