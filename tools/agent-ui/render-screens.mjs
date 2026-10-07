@@ -54,6 +54,7 @@ const where = (s) => {
 	if (p.dialog) bits.push('dialog `' + p.dialog + '`');
 	if (p.drag) bits.push('files held over the list');
 	if (p.at) bits.push('scrolled to the team files');
+	if (p.result) bits.push('an action\'s answer at the foot');
 	return bits.join(', ');
 };
 

@@ -19,8 +19,12 @@
  * state can be drawn without a click:
  *   project=<projectId>  folder=<folder path in the project; empty for its top>
  *   select=<name>,<name> (files in that folder)  expand=<notice key>
- *   dialog=newFolder|renameFolder|deleteFolder|takeBack  drag=1 (files held over the list)
+ *   dialog=newFolder|renameFolder|deleteFolder|checkOutAll|takeBack|renameFile
+ *     (renameFile asks about the first file in the open notice list)
+ *   drag=1 (files held over the list)
  *   at=browser (Home scrolled so the team's files are in view)
+ *   result=<words> (the demo answers as if an action had just come back with these words;
+ *     resultOk=0 makes it a refusal)
  * Nothing here touches the network.
  */
 (function () {
@@ -144,7 +148,7 @@
 	/**
 	 * The quiet question when SolidWorks opens a file this computer has not checked out.
 	 * @typedef {object} PromptView
-	 * @property {string} key            one per open ("prompt:<path>:<when it opened>"); dismissNotice with it hides this one only
+	 * @property {string} key            one per open ("prompt:<path>:<when SolidWorks opened it>"); Not now sends it back in dismissNotice, which hides this one only
 	 * @property {string | null} fileId
 	 * @property {string} path
 	 * @property {string} name
@@ -227,7 +231,7 @@
 	 * @property {string} note
 	 * @property {boolean} releaseNotChecked
 	 * @property {boolean} isCurrent
-	 * @property {boolean} routine     a kept copy that is the ordinary record of work (saved while checked out): the neutral tone
+	 * @property {boolean} routine        a kept copy that is the ordinary record of work (saved while checked out, an earlier save): the neutral tone
 	 */
 
 	/**
@@ -259,10 +263,10 @@
 	 *   checkOut: { paths, open }             (files or folders, vault-relative)
 	 *   checkIn: { paths }    undoCheckOut: { paths }    takeBack: { fileId }
 	 *   createFolder: { projectId, parent, name }    renameFolder: { projectId, folder, newName }
-	 *   deleteFolder: { projectId, folder }   renameFile: { path, newName }
+	 *   deleteFolder: { projectId, folder }   renameFile: { path, newName }   (one file, in its folder)
 	 *   addFiles: { projectId, folder }
 	 *   dropFiles: { projectId, folder }      (sent with the dropped File objects)
-	 *   dismissNotice: { key }
+	 *   dismissNotice: { key }               (a notice card's key, or the check-out question's)
 	 *   saveSettings: { vaultRoot, startAtSignIn, theme }
 	 * @typedef {'ready' | 'connect' | 'cancelConnect' | 'signOut' | 'pause' | 'resume'
 	 *   | 'openVault' | 'openFile' | 'launchFile' | 'showInFolder' | 'checkOut' | 'checkIn'
@@ -280,7 +284,7 @@
 	 * @property {string | null} folder    a folder path in that project
 	 * @property {string[]} select         file names in that folder
 	 * @property {string | null} expand    a notice key
-	 * @property {string | null} dialog    newFolder, renameFolder, deleteFolder or takeBack
+	 * @property {string | null} dialog    newFolder, renameFolder, deleteFolder, checkOutAll, takeBack or renameFile
 	 * @property {boolean} drag
 	 * @property {string | null} at        a part of Home to scroll into view: browser
 	 */
@@ -480,14 +484,22 @@
 			if (names.length === 3) return names[0] + ', ' + names[1] + ' and ' + names[2] + ' have ';
 			return names[0] + ', ' + names[1] + ' and ' + (names.length - 2) + ' others have ';
 		}
-		/** Keeps My files in step: the files this computer has checked out (addendum 7). */
+		/** Keeps My files in step: the files this computer has checked out, in any project
+		 *  (an archived one too, so they can always be checked in). */
 		function refreshMine() {
 			var mine = [];
 			eachRow(function (r, p) {
-				if (r.checkout.state === 'mine')
-					mine.push({ fileId: r.fileId, path: r.path, name: r.name, project: p.name, status: r.status, note: null, checkout: r.checkout });
+				if (r.checkout.state === 'mine') mine.push({ fileId: r.fileId, path: r.path, name: r.name, project: p.name, status: r.status, note: null, checkout: r.checkout });
 			});
 			view.myFiles = mine;
+		}
+		/** The question about a file SolidWorks opened goes once that file is checked out here. */
+		function settlePrompt() {
+			if (!view.prompt) return;
+			var asked = view.prompt.path;
+			eachRow(function (r) {
+				if (r.path === asked && r.checkout.state === 'mine') view.prompt = null;
+			});
 		}
 
 		/** Answers one page message the way the engine would. */
@@ -497,6 +509,8 @@
 			switch (message.type) {
 				case 'ready':
 					postView();
+					// A state drawn with an action's answer at the window's foot.
+					if (params.get('result')) deliver({ type: 'actionResult', requestId: 'r0', ok: params.get('resultOk') !== '0', message: params.get('result') });
 					break;
 				case 'connect':
 					clearTimers();
@@ -546,21 +560,25 @@
 					rows = rowsFor(message.paths);
 					var got = 0;
 					var held = {};
+					var wasOpen = !!view.prompt && rows.length === 1 && rows[0].path === view.prompt.path;
 					rows.forEach(function (r) {
 						if (r.checkout.state === 'available' && r.fileId) {
 							r.checkout = demo.checkoutMine();
 							got++;
 						} else if (r.checkout.state === 'other') held[r.checkout.name] = (held[r.checkout.name] || 0) + 1;
 					});
-					// The check-out question was about this file: it is answered.
-					if (got && view.prompt && message.paths.indexOf(view.prompt.path) >= 0) view.prompt = null;
 					refreshMine();
+					settlePrompt();
 					postView();
 					var names = Object.keys(held);
 					var heldCount = names.reduce(function (n, k) {
 						return n + held[k];
 					}, 0);
-					if (rows.length === 1 && got === 1) result(message, true, 'Checked out ' + rows[0].name + '.');
+					// Open: the engine opens it, except while SolidWorks still has it open (the
+					// question's case), when it asks for it to be closed first.
+					if (rows.length === 1 && got === 1 && message.open && wasOpen)
+						result(message, true, 'Checked out ' + rows[0].name + '. Close ' + rows[0].name + ' in SolidWorks first, then open it again.');
+					else if (rows.length === 1 && got === 1) result(message, true, 'Checked out ' + rows[0].name + '.');
 					else if (!heldCount) result(message, got > 0, got ? 'Checked out ' + words(got, 'file', 'files') + '.' : 'Those files are already checked out by you.');
 					else
 						result(
@@ -639,30 +657,47 @@
 					result(message, true, 'Deleted ' + message.folder.split('/').pop() + ' and the ' + words(gone, 'file', 'files') + ' in it. Their history is kept.');
 					break;
 				case 'renameFile':
-					// A file that shares a name is renamed here; it then has its own name to be added under.
-					var renamedFrom = message.path.split('/').pop();
+					var renamed = null;
+					eachRow(function (r) {
+						if (r.path === message.path) renamed = r;
+					});
+					if (!renamed) {
+						result(message, false, 'That file is not in your Armory folder.');
+						break;
+					}
+					var oldName = renamed.name;
+					renamed.name = message.newName;
+					renamed.path = renamed.path.split('/').slice(0, -1).concat([message.newName]).join('/');
+					if (!renamed.fileId) {
+						// Its own name now: Armory adds it, checked in, like any new file.
+						renamed.fileId = 'f-new-' + message.newName.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+						renamed.status = 'synced';
+						renamed.updatedBy = demo.me;
+						renamed.updatedAt = new Date(Date.parse(demo.now)).toISOString();
+					}
+					// The notice about shared names loses that file, and goes with its last one.
 					view.notices = view.notices
 						.map(function (n) {
 							var left = n.items.filter(function (it) {
 								return it.path !== message.path;
 							});
 							if (left.length === n.items.length) return n;
-							var copy = clone(n);
-							copy.items = left;
-							copy.count = Math.max(0, n.count - 1);
-							return copy;
+							var count = n.count - 1;
+							var out = JSON.parse(JSON.stringify(n));
+							out.items = left;
+							out.count = count;
+							if (n.kind === 'nameShared') out.title = count === 1 ? '1 file shares a name with another file in this project' : count + ' files share a name with other files in this project';
+							return count > 0 ? out : null;
 						})
-						.filter(function (n) {
-							return n.count > 0;
-						});
+						.filter(Boolean);
 					postView();
-					result(message, true, 'Renamed ' + renamedFrom + ' to ' + message.newName + '.');
+					result(message, true, 'Renamed ' + oldName + ' to ' + message.newName + '.');
 					break;
 				case 'dismissNotice':
 					view.notices = view.notices.filter(function (n) {
 						return n.key !== message.key;
 					});
-					// The check-out question's Not now: that open asks no more.
+					// Not now on the check-out question: that one question goes.
 					if (view.prompt && view.prompt.key === message.key) view.prompt = null;
 					postView();
 					break;

@@ -114,9 +114,20 @@
 		return out;
 	}
 	var BIG = generated(5000, 'CopyDesignTemp', 'f-cdt');
-	var IMPORTED = generated(42, 'CopyDesignTemp', 'f-imp');
+	// An unzip of 5,000 files: 4,987 were added, 13 share a name with a file the project has.
+	var IMPORTED = generated(4987, 'CopyDesignTemp', 'f-imp');
+	// A new arm on its way to this computer: 1,276 files, with four of the team's files
+	// that changed, make the 1,280 being downloaded.
+	var ARM = generated(1276, 'Arm', 'f-arm');
+	// The shooter: 14 files, for checking out a whole folder.
+	var SHOOTER = [
+		'Shooter.SLDASM', 'Flywheel.SLDPRT', 'Flywheel-Shaft.SLDPRT', 'Hood.SLDPRT', 'Hood-Arc.SLDPRT', 'Side-Plate-Left.SLDPRT', 'Side-Plate-Right.SLDPRT',
+		'Feeder-Roller.SLDPRT', 'Belt-Pulley-24T.SLDPRT', 'Belt-Pulley-36T.SLDPRT', 'Standoff-2in.SLDPRT', 'Motor-Plate.SLDPRT', 'Bearing-Block.SLDPRT', 'Shooter.SLDDRW'
+	].map(function (name, i) {
+		return ['f-sh-' + pad4(i + 1), 'proj-robot-2027', 'Shooter', name, i % 2 ? SAM : ALEX, 2 * DAY + i * 30, 90000 + i * 41000];
+	});
 	var EXTRA = {};
-	BIG.concat(IMPORTED).forEach(function (e) {
+	BIG.concat(IMPORTED, ARM, SHOOTER).forEach(function (e) {
 		EXTRA[e[0]] = e;
 	});
 
@@ -156,7 +167,8 @@
 	 * Projects and folders as the server and this computer see them. `opts`:
 	 *   files       extra catalog entries (a Pack and Go folder)
 	 *   folders     extra folder paths, by project id
-	 *   local       files in a folder that aren't in Armory: [projectId, folder, name]
+	 *   local       files in a folder that aren't in Armory: [projectId, folder, name, status]
+	 *               (status notInArmory, the default, or waiting for a new one not sent yet)
 	 *   archived    include the archived Robot 2026
 	 *   lead        this account is a mentor in Robot 2027 (may take back)
 	 */
@@ -189,7 +201,7 @@
 								fileId: null,
 								name: l[2],
 								path: p.name + '/' + (folder ? folder + '/' : '') + l[2],
-								status: 'notInArmory',
+								status: l[3] || 'notInArmory',
 								checkout: available(),
 								changed: false,
 								releaseNotChecked: false,
@@ -203,7 +215,9 @@
 		});
 	}
 
-	/** My files: the files this computer has checked out, in every project (addendum 7). */
+	/** My files: the files this computer has checked out, in every project (an archived one
+	 *  too, so they can always be checked in). Files that aren't in Armory are never here:
+	 *  the notices and the folder's own rows say what became of them. */
 	function myFilesOf(view, notes) {
 		var out = [];
 		view.projects.forEach(function (p) {
@@ -266,7 +280,7 @@
 	];
 	function sharedNameItems(folder, n) {
 		return SHARED_NAMES.slice(0, n).map(function (s) {
-			return item(null, 'Robot 2027/' + folder + '/' + s[0], 'Robot 2027 already has ' + s[0] + ' in ' + s[1] + '.');
+			return item(null, 'Robot 2027/' + folder + '/' + s[0], 'The other one is in Robot 2027 \u203a ' + s[1].split('/').join(' \u203a ') + '.');
 		});
 	}
 	function nameShared(folder, n) {
@@ -280,6 +294,14 @@
 			{ label: 'Show them', command: 'expand', paths: [] },
 			sharedNameItems(folder, n)
 		);
+	}
+
+	/** The question when SolidWorks opens a file this computer hasn't checked out. Its key
+	 *  is one per open: the path and when SolidWorks opened it. */
+	function promptFor(fileId, minutesAgo, checkout, canCheckOut) {
+		var e = catalogEntry(fileId);
+		var path = pathOf(e);
+		return { key: 'prompt:' + path + ':' + ago(minutesAgo), fileId: fileId, path: path, name: e[3], checkout: checkout, canCheckOut: canCheckOut };
 	}
 
 	/* ------------------------------------------------------------- Views */
@@ -327,8 +349,9 @@
 	function pausedSync(pending) {
 		return {
 			state: 'paused',
-			line: 'Paused. Nothing is uploaded or downloaded until you resume.',
-			detail: pending ? (pending === 1 ? '1 file is waiting to upload.' : pending + ' files are waiting to upload.') : null,
+			line: 'Paused. Nothing uploads or downloads until you resume.',
+			// How many wait is Right now's to say (activity.waiting), once.
+			detail: null,
 			pendingCount: pending
 		};
 	}
@@ -343,10 +366,14 @@
 
 	var MARIA_HAS_PLATE = { checkout: other(MARIA, 25 * MIN), updatedAt: ago(1 * HOUR) };
 
+	// What is moving: 1,280 files coming down (412 here already), three going up (one
+	// done), and a folder's files moving. Every number on the screen agrees with these.
+	var UPLOAD_DONE = 1 * MB; // the one file already uploaded
 	var TRANSFERS = {
 		line: 'Downloading 412 of 1,280 files, 2.1 GB left, about 3 min',
 		download: direction(412, 1280, Math.round(1.4 * GB), Math.round(3.5 * GB), Math.round(12.6 * MB), 170, 'Downloading 412 of 1,280 files, 2.1 GB left, about 3 min'),
-		upload: direction(3, 9, Math.round(30 * MB), Math.round(78 * MB), Math.round(2.4 * MB), 20, 'Uploading 3 of 9 files, 48 MB left, about 20 sec'),
+		// One file of three done: too soon to say how long (secondsLeft is null).
+		upload: direction(1, 3, UPLOAD_DONE + 1210000 + 120000, UPLOAD_DONE + 1482113 + 951300, 225000, null, 'Uploading 1 of 3 files, 1.1 MB left'),
 		move: direction(45, 120, 0, 0, 0, null, 'Moving 120 files to Gearbox'),
 		waiting: null,
 		active: [
@@ -358,6 +385,28 @@
 			active('f-dt-drawing', 'upload', 120000, 951300)
 		]
 	};
+
+	/** The view while files move: the arm's first 412 files are here, the rest and four of
+	 *  the team's changed files are on their way, and two of mine are going up. */
+	function transferringView() {
+		var changes = {
+			'f-gearbox': { checkout: mine(35 * MIN), status: 'uploading', changed: true },
+			'f-dt-drawing': { checkout: mine(50 * MIN), status: 'uploading', changed: true },
+			'f-elevator-asm': { status: 'downloading' },
+			'f-stage-tube': { status: 'downloading' },
+			'f-carriage': { status: 'downloading' },
+			'f-intake-asm': { checkout: other(ALEX, 40 * MIN), status: 'downloading' }
+		};
+		ARM.slice(412).forEach(function (e) {
+			changes[e[0]] = { status: 'notOnThisComputer' };
+		});
+		return signedIn({
+			sync: { state: 'syncing', line: TRANSFERS.line, detail: 'You can keep working.', pendingCount: 2 },
+			activity: TRANSFERS,
+			changes: shared(changes),
+			opts: { files: ARM, folders: { 'proj-robot-2027': ['Arm'] } }
+		});
+	}
 
 	var states = {
 		signedOut: {
@@ -440,20 +489,17 @@
 		},
 
 		transferring: {
-			label: 'Uploading, downloading and moving at once, each file with its own bar',
-			screens: ['home'],
-			view: signedIn({
-				sync: { state: 'syncing', line: 'Downloading 412 of 1,280 files, 2.1 GB left, about 3 min', detail: 'You can keep working.', pendingCount: 6 },
-				activity: TRANSFERS,
-				changes: shared({
-					'f-gearbox': { checkout: mine(35 * MIN), status: 'uploading', changed: true },
-					'f-dt-drawing': { checkout: mine(50 * MIN), status: 'uploading', changed: true },
-					'f-elevator-asm': { status: 'downloading' },
-					'f-stage-tube': { status: 'downloading' },
-					'f-carriage': { status: 'downloading' },
-					'f-hex-bearing': { status: 'notOnThisComputer' }
-				})
-			})
+			label: 'Uploading, downloading and moving at once, each file with its own bar (detail: a file downloading)',
+			screens: ['home', 'detail'],
+			detailFileId: 'f-elevator-asm',
+			view: transferringView()
+		},
+
+		notHereYet: {
+			label: 'A file that is not on this computer yet, while the rest come down',
+			screens: ['detail'],
+			detailFileId: 'f-arm-0900',
+			view: transferringView()
 		},
 
 		offlineWaiting: {
@@ -469,11 +515,12 @@
 					waiting: { count: 3, line: '3 files are waiting to upload. They upload when this computer is back online.' },
 					active: []
 				},
+				// Three waiting: two of my check outs with saves, and a new file not sent yet.
 				changes: shared({
 					'f-gearbox': { checkout: mine(50 * MIN), status: 'waiting', changed: true },
 					'f-plate-right': { checkout: mine(30 * MIN), status: 'waiting', changed: true }
 				}),
-				opts: { local: [['proj-robot-2027', 'Intake', 'Intake-Gearbox.SLDASM']] }
+				opts: { local: [['proj-robot-2027', 'Intake', 'Intake-Gearbox.SLDASM', 'waiting']] }
 			})
 		},
 
@@ -490,7 +537,10 @@
 					waiting: { count: 2, line: '2 files are waiting to upload. They upload when you resume.' },
 					active: []
 				},
-				changes: shared({ 'f-gearbox': { checkout: mine(50 * MIN), status: 'waiting', changed: true } })
+				changes: shared({
+					'f-gearbox': { checkout: mine(50 * MIN), status: 'waiting', changed: true },
+					'f-plate-right': { checkout: mine(30 * MIN), status: 'waiting', changed: true }
+				})
 			})
 		},
 
@@ -519,11 +569,11 @@
 						'import',
 						'import',
 						'info',
-						'Added 4,987 of 5,000 files to Robot 2027 > CopyDesignTemp',
+						'Added 4,987 of 5,000 files to Robot 2027 \u203a CopyDesignTemp',
 						'12 of them were brought back with their history. 13 need you: they share a name with other files in this project.',
 						5000,
 						{ label: 'Done', command: 'dismissNotice', paths: [] },
-						sharedNameItems('CopyDesignTemp', 13)
+						[]
 					),
 					nameShared('CopyDesignTemp', 13)
 				],
@@ -544,14 +594,7 @@
 			params: { folder: 'Drivetrain' },
 			view: signedIn({
 				sync: SYNCED,
-				prompt: {
-					key: 'prompt:Robot 2027/Drivetrain/Plate-Left.SLDPRT:' + ago(2 * MIN),
-					fileId: 'f-plate-left',
-					path: 'Robot 2027/Drivetrain/Plate-Left.SLDPRT',
-					name: 'Plate-Left.SLDPRT',
-					checkout: available(),
-					canCheckOut: true
-				},
+				prompt: promptFor('f-plate-left', 2, available(), true),
 				changes: shared({})
 			})
 		},
@@ -562,14 +605,7 @@
 			params: { folder: 'Drivetrain' },
 			view: signedIn({
 				sync: SYNCED,
-				prompt: {
-					key: 'prompt:Robot 2027/Drivetrain/Plate-Left.SLDPRT:' + ago(2 * MIN),
-					fileId: 'f-plate-left',
-					path: 'Robot 2027/Drivetrain/Plate-Left.SLDPRT',
-					name: 'Plate-Left.SLDPRT',
-					checkout: other(MARIA, 25 * MIN),
-					canCheckOut: false
-				},
+				prompt: promptFor('f-plate-left', 2, other(MARIA, 25 * MIN), false),
 				changes: shared({ 'f-plate-left': MARIA_HAS_PLATE })
 			})
 		},
@@ -642,10 +678,10 @@
 		},
 
 		archivedProject: {
-			label: 'An archived project: listed, no longer kept up to date',
+			label: 'An archived project: listed, no longer kept up to date; my check out in it stays in My files',
 			screens: ['home'],
-			params: { project: 'proj-robot-2026', at: 'browser' },
-			view: signedIn({ sync: SYNCED, changes: shared({}), opts: { archived: true } })
+			params: { project: 'proj-robot-2026' },
+			view: signedIn({ sync: SYNCED, changes: shared({ 'f-chassis-rail': { checkout: mine(41 * DAY) } }), opts: { archived: true } })
 		},
 
 		selection: {
@@ -697,6 +733,99 @@
 			detailFileId: 'f-plate-left',
 			params: { dialog: 'takeBack' },
 			view: signedIn({ sync: SYNCED, changes: shared({ 'f-plate-left': MARIA_HAS_PLATE }), opts: { lead: true } })
+		},
+
+		renameFile: {
+			label: 'Renaming a file that shares a name, from its notice, in the app',
+			screens: ['home'],
+			params: { expand: 'nameShared', dialog: 'renameFile' },
+			view: groupedView()
+		},
+
+		checkOutAll: {
+			label: 'Check out all asks first: how many files, and that nobody else can save them',
+			screens: ['home'],
+			params: { folder: 'Intake', dialog: 'checkOutAll', at: 'browser' },
+			view: signedIn({ sync: SYNCED, changes: shared({}) })
+		},
+
+		partialCheckOut: {
+			label: 'A folder checked out, two of its files held by someone else: the answer at the foot',
+			screens: ['home'],
+			params: { folder: 'Shooter', at: 'browser', result: 'Checked out 12 of 14 files. Maria Lopez has 2 of them checked out.' },
+			view: (function () {
+				var changes = {};
+				SHOOTER.forEach(function (e) {
+					changes[e[0]] = { checkout: e[3] === 'Hood.SLDPRT' || e[3] === 'Hood-Arc.SLDPRT' ? other(MARIA, 3 * HOUR) : mine(0) };
+				});
+				return signedIn({ sync: SYNCED, changes: shared(changes), opts: { files: SHOOTER, folders: { 'proj-robot-2027': ['Shooter'] } } });
+			})()
+		},
+
+		myOtherComputer: {
+			label: 'A file checked out on my other computer: amber, and how to get it here',
+			screens: ['home', 'detail'],
+			detailFileId: 'f-wheel-hub',
+			params: { folder: 'Drivetrain', at: 'browser' },
+			view: signedIn({ sync: SYNCED, changes: shared({ 'f-wheel-hub': { checkout: myOther(2 * HOUR) } }) })
+		},
+
+		emptyFolder: {
+			label: 'An empty folder',
+			screens: ['home'],
+			params: { folder: 'Intake/Rollers', at: 'browser' },
+			view: signedIn({ sync: SYNCED, changes: shared({}), opts: { folders: { 'proj-robot-2027': ['Intake/Rollers'] } } })
+		},
+
+		moreNotices: {
+			label: 'The other notices: a file taken back, files Armory can\'t read, a check in that left two out',
+			screens: ['home'],
+			view: signedIn({
+				sync: { state: 'attention', line: 'Everything else is saved. A few files need you.', detail: 'Last checked just now.', pendingCount: 0 },
+				notices: [
+					notice(
+						'takenBack',
+						'takenBack',
+						'look',
+						'Mr. Pina took back Plate-Left.SLDPRT',
+						'Your changes that weren\'t checked in are kept in its history, so nothing was lost. Check it out again to keep working on it.',
+						1,
+						null,
+						[item('f-plate-left', 'Robot 2027/Drivetrain/Plate-Left.SLDPRT', null)]
+					),
+					notice(
+						'checkInPartial',
+						'checkInPartial',
+						'look',
+						"2 files weren't checked in",
+						'They are still open in SolidWorks. Close them there, then check them in.',
+						2,
+						{ label: 'Check them in', command: 'checkIn', paths: ['Robot 2027/Drivetrain/Gearbox.SLDASM', 'Robot 2027/Elevator/Carriage-Plate.SLDPRT'] },
+						[
+							item('f-gearbox', 'Robot 2027/Drivetrain/Gearbox.SLDASM', 'Open in SolidWorks.'),
+							item('f-carriage', 'Robot 2027/Elevator/Carriage-Plate.SLDPRT', 'Open in SolidWorks.')
+						]
+					),
+					notice(
+						'cantRead',
+						'cantRead',
+						'bad',
+						"Armory can't read 2 files",
+						'Another program is holding them, so Armory can\'t see your changes. Close that program, and Armory tries again by itself.',
+						2,
+						null,
+						[
+							item('f-motor', 'Robot 2027/COTS/Motor-Mount.SLDPRT', 'Another program has it open.'),
+							item('f-collar', 'Robot 2027/COTS/Shaft-Collar.SLDPRT', 'Another program has it open.')
+						]
+					)
+				],
+				changes: shared({
+					'f-plate-left': { status: 'keptCopy', updatedBy: PINA.name, updatedAt: ago(10 * MIN) },
+					'f-gearbox': { checkout: mine(35 * MIN), changed: true, status: 'changed' },
+					'f-carriage': { checkout: mine(3 * HOUR), changed: true, status: 'changed' }
+				})
+			})
 		},
 
 		bigProject: {
@@ -754,7 +883,7 @@
 					'A newer Gearbox.SLDASM is waiting',
 					'Close Gearbox.SLDASM in SolidWorks to get it. Your copy stays as it is until then.',
 					1,
-					{ label: 'Open it', command: 'launchFile', paths: ['Robot 2027/Drivetrain/Gearbox.SLDASM'] },
+					null,
 					[item('f-gearbox', 'Robot 2027/Drivetrain/Gearbox.SLDASM', null)]
 				)
 			],
@@ -763,7 +892,14 @@
 				'f-wheel-hub': { status: 'keptCopy' },
 				'f-bracket': { status: 'keptCopy' },
 				'f-gearbox': { checkout: available(), status: 'newerWaiting', updatedBy: MARIA.name, updatedAt: ago(4 * MIN) }
-			})
+			}),
+			// The 14 files from the unzip that share a name are in their folder, not in Armory.
+			opts: {
+				folders: { 'proj-robot-2027': ['CopyDesignTemp'] },
+				local: SHARED_NAMES.map(function (s) {
+					return ['proj-robot-2027', 'CopyDesignTemp', s[0]];
+				})
+			}
 		});
 	}
 
@@ -776,7 +912,7 @@
 				author: ME.name,
 				at: ago(55 * MIN),
 				bytes: 618004,
-				note: 'Kept as your own copy: Maria Lopez checked in first',
+				note: 'Kept as ' + ME.name + '\'s own copy: someone else checked in first',
 				releaseNotChecked: false,
 				isCurrent: false,
 				routine: false
@@ -862,6 +998,8 @@
 			return mine(0);
 		},
 		checkoutAvailable: available,
+		/** The signed-in student's name, for a file the demo adds. */
+		me: ME.name,
 		/** Where a demo "Change" folder picker lands. */
 		pickedVaultRoot: 'D:\\School\\Armory'
 	};

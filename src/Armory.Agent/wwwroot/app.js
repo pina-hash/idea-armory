@@ -69,13 +69,15 @@
 	/** A notice's tone on the page's scale: news that is not a problem reads green. */
 	var NOTICE_TONE = { info: 'ok', look: 'look', bad: 'bad' };
 
-	/** Status chips. A file that is just up to date has none; its line says enough. */
+	/** Status chips. A file that is just up to date has none; its line says enough. A file
+	 *  waiting to upload has none either: how many wait is said once, in Right now (a
+	 *  changed one still says Changed). */
 	var STATUS = {
 		synced: null,
 		changed: { chip: 'Changed', tone: 'look' },
 		uploading: { chip: 'Uploading', tone: 'ok' },
 		downloading: { chip: 'Downloading', tone: 'ok' },
-		waiting: { chip: 'Waiting to upload', tone: 'look' },
+		waiting: null,
 		newerWaiting: { chip: 'Newer version waiting', tone: 'look' },
 		keptCopy: { chip: 'Your copy kept', tone: 'look' },
 		notInArmory: { chip: 'Not in Armory', tone: 'off' },
@@ -118,6 +120,9 @@
 
 	/** Characters Windows never allows in a folder name. */
 	var BAD_NAME = /[\\/:*?"<>|]/;
+
+	/** A file nobody has checked out. */
+	var AVAILABLE = { state: 'available', label: 'Available', name: null, email: null, device: null, since: null };
 
 	/* ----------------------------------------------------------- Helpers */
 
@@ -271,10 +276,17 @@
 	/** The signed-in student's name, as the view knows it. */
 	function myName(v) {
 		var mine = (v.myFiles || []).filter(function (f) {
-			return f.checkout && f.checkout.state === 'mine' && f.checkout.name;
+			return checkoutOf(f).state === 'mine' && f.checkout.name;
 		})[0];
 		if (mine) return mine.checkout.name;
 		return v && v.account ? nameFromEmail(v.account.email) : '';
+	}
+
+	/** A row's check out, never missing: a row without one reads as Available, so a view
+	 *  that leaves it out still draws (and the contract test says what is missing). */
+	function checkoutOf(r) {
+		var c = r && r.checkout;
+		return c && c.state ? c : AVAILABLE;
 	}
 
 	function kindOf(name) {
@@ -296,14 +308,21 @@
 	}
 
 	/** Who has it checked out, always shown: their initials in a disc and the engine's
-	 *  own words ("Checked out by Maria Lopez on LAB-PC-07", green when it is you, amber
-	 *  when it is someone else), or plain "Available" with no chip. */
+	 *  own words ("Checked out by Maria Lopez on LAB-PC-07"), green when it is you here and
+	 *  amber when it is someone else or your other computer, or plain "Available" with no
+	 *  chip. When the line is short of room the computer's name gives way first (it ends in
+	 *  an ellipsis), then the person's; the whole label is in the tooltip. */
 	function checkoutMark(c) {
-		if (!c || c.state === 'available') return '<span class="row-avail">' + esc((c && c.label) || 'Available') + '</span>';
-		var tone = c.state === 'other' ? 'look' : 'ok';
+		c = c || AVAILABLE;
+		if (c.state === 'available') return '<span class="row-avail">' + esc(c.label || 'Available') + '</span>';
+		var tone = c.state === 'mine' ? 'ok' : 'look';
+		var label = String(c.label || '');
+		var tail = c.device ? ' on ' + c.device : '';
+		var head = tail && label.slice(-tail.length) === tail ? label.slice(0, -tail.length) : label;
+		if (head === label) tail = '';
 		return (
-			'<span class="chip who" data-tone="' + tone + '"><span class="avatar" aria-hidden="true">' + esc(initials(c.name)) + '</span>' +
-			'<span class="who-word">' + esc(c.label) + '</span></span>'
+			'<span class="chip who" data-tone="' + tone + '" title="' + esc(label) + '"><span class="avatar" aria-hidden="true">' + esc(initials(c.name)) + '</span>' +
+			'<span class="who-word"><span class="who-head">' + esc(head) + '</span>' + (tail ? '<span class="who-tail">' + esc(tail) + '</span>' : '') + '</span></span>'
 		);
 	}
 
@@ -364,6 +383,7 @@
 	function buildIndex(v) {
 		var byId = {};
 		var byPath = {};
+		var named = {}; // "<project folder>\n<lowercased name>" -> a file in Armory with that name
 		var projects = {};
 		(v.projects || []).forEach(function (p) {
 			var folders = {};
@@ -376,6 +396,8 @@
 					if (r.fileId) byId[r.fileId] = hit;
 					byPath[r.path] = hit;
 					if (!root) root = r.path.split('/')[0];
+					var nameKey = r.path.split('/')[0] + '\n' + String(r.name).toLowerCase();
+					if (r.fileId && !named[nameKey]) named[nameKey] = hit;
 				});
 			});
 			if (!folders['']) folders[''] = { path: '', name: p.name, fileCount: 0, files: [] };
@@ -407,7 +429,7 @@
 			});
 			projects[p.id] = { project: p, folders: folders, children: kids, under: under, subfolders: subfolders, root: root || p.name };
 		});
-		return { byId: byId, byPath: byPath, projects: projects };
+		return { byId: byId, byPath: byPath, byName: named, projects: projects };
 	}
 
 	/** After a rename sent from here lands, the open folder is the renamed one. */
@@ -688,14 +710,18 @@
 			if (tone === 'bad' && (v.notices || []).every(function (n) { return n.tone === 'bad'; })) readout = "Can't upload";
 		}
 		var line = (v.activity && v.activity.line) || v.sync.line;
-		var detail = v.sync.detail || (v.sync.pendingCount > 0 ? plural(v.sync.pendingCount, 'file is', 'files are') + ' waiting to upload.' : null);
+		// How many files wait is said once: by Right now when it shows them, else here.
+		var waitingShown = !!(v.activity && v.activity.waiting);
+		var detail = v.sync.detail || (v.sync.pendingCount > 0 && !waitingShown ? plural(v.sync.pendingCount, 'file is', 'files are') + ' waiting to upload.' : null);
 		var k = '';
 		if (v.sync.state === 'paused')
-			k = '<button class="key primary status-key" type="button" data-action="resume" data-key="sync-toggle">' + icon('play') + '<span class="key-word">Resume sending</span></button>';
+			k =
+				'<button class="key primary status-key" type="button" data-action="resume" data-key="sync-toggle" title="Start uploading and downloading files again">' +
+				icon('play') + '<span class="key-word">Resume</span></button>';
 		else if (v.sync.state !== 'offline')
 			k =
 				'<button class="key status-key" type="button" data-action="pause" data-key="sync-toggle" title="Stop uploading and downloading files for now">' +
-				icon('pause') + '<span class="key-word">Pause sending</span></button>';
+				icon('pause') + '<span class="key-word">Pause</span></button>';
 		return (
 			'<section class="group top status-group' + (k ? '' : ' no-key') + '" aria-labelledby="status-label">' +
 			'<h2 class="section-label" id="status-label">Status</h2>' +
@@ -767,20 +793,23 @@
 
 	/** SolidWorks opened a file this computer has not checked out: one slim card at the
 	 *  top of the column, never a window that takes focus. When someone else has it, it
-	 *  says who instead. One question per open: its key comes from the host, and Not now
-	 *  (or OK) sends it back with dismissNotice, so the host asks about the next open file. */
+	 *  says who instead. SolidWorks keeps a file it opened read-only that way until it is
+	 *  opened again, so the card says so, and its key checks the file out and opens it
+	 *  again from here (the host asks for it to be closed in SolidWorks first). One
+	 *  question per open: its key comes from the host, and Not now (or OK) sends it back
+	 *  with dismissNotice, so the host asks about the next open file. */
 	function promptHtml(v) {
 		var p = v.prompt;
-		if (!p || ui.promptGone === p.key) return '';
+		if (!p || ui.promptGone === promptKey(p)) return '';
 		var free = !!p.canCheckOut;
 		// The file's name never breaks at its hyphens ("Plate- / Left.SLDPRT").
 		var name = '<span class="fname">' + esc(p.name) + '</span>';
-		var title = free ? 'Check out ' + name + ' to edit it?' : name + ' is ' + esc(glue(lowerFirst(p.checkout.label))) + '.';
+		var title = free ? 'Check out ' + name + ' to edit it?' : name + ' is ' + esc(glue(lowerFirst(checkoutOf(p).label))) + '.';
 		var words = free
 			? 'SolidWorks opened it read-only. Check it out, then close it in SolidWorks and open it again here to save changes.'
 			: 'You can look, but you can\'t save changes.';
 		var keys = free
-			? key({ action: 'promptCheckOut', key: 'prompt-checkout', cls: 'primary', glyph: 'checkout', word: 'Check out and reopen', path: p.path }) +
+			? key({ action: 'promptCheckOut', key: 'prompt-checkout', cls: 'primary', glyph: 'checkout', word: 'Check out and reopen', path: p.path, title: 'Check out ' + p.name + ', then open it again here' }) +
 			  key({ action: 'promptLater', key: 'prompt-later', word: 'Not now' })
 			: key({ action: 'promptLater', key: 'prompt-later', word: 'OK' });
 		return (
@@ -792,6 +821,12 @@
 			'<div class="attn-actions">' + keys + '</div>' +
 			'</div></section>'
 		);
+	}
+
+	/** The question's own key, one per open of the file (PromptView.key): Not now hides
+	 *  that one question, and the next open of the file asks again. */
+	function promptKey(p) {
+		return p ? p.key || p.path + '|' + checkoutOf(p).state : null;
 	}
 
 	function lowerFirst(s) {
@@ -830,11 +865,11 @@
 		if (!d) return '';
 		var w = DIRECTION[name];
 		var pct = d.bytesTotal > 0 ? (d.bytesDone / d.bytesTotal) * 100 : d.filesTotal > 0 ? (d.filesDone / d.filesTotal) * 100 : 0;
+		// Bytes, speed and time left when there are bytes to count; else (a move) the
+		// engine's own line as it wrote it, never picked apart.
 		var meta;
 		if (d.bytesTotal > 0) meta = metaLine([bytes(d.bytesTotal - d.bytesDone) + ' left', d.bytesPerSecond > 0 ? bytes(d.bytesPerSecond) + '/s' : '', timeLeft(d.secondsLeft)]);
-		else meta = String(d.line || '').replace(/^\S+ [\d,]+ files? /, '').replace(/^./, function (c) {
-			return c.toUpperCase();
-		});
+		else meta = d.line || '';
 		return (
 			'<div class="act-dir" data-direction="' + name + '" title="' + esc(d.line || '') + '">' +
 			'<p class="act-head label">' + icon(w.glyph) + '<span class="act-word">' + esc(w.word) + '</span></p>' +
@@ -933,27 +968,31 @@
 
 	function noticeCard(n, i) {
 		var id = 'nt-' + i;
-		var open = !!ui.expanded[n.key];
-		var hasItems = n.items && n.items.length;
+		var items = n.items || [];
+		// A list is for two files or more: one file is named in the card and gets its own
+		// key, never a list of one.
+		var hasItems = items.length > 1;
+		var open = hasItems && !!ui.expanded[n.key];
 		var keys = '';
 		var a = n.action;
-		if (a && a.command === 'expand') {
-			if (hasItems)
-				keys += '<button class="key" type="button" data-action="expand" data-notice="' + esc(n.key) + '" data-key="nt-expand-' + esc(n.key) + '" aria-expanded="' + open + '" aria-controls="' + id + '-items">' + icon(open ? 'chev-down' : 'chev-right') + '<span>' + esc(open ? 'Hide them' : a.label) + '</span></button>';
-		} else {
-			if (a) keys += '<button class="key" type="button" data-action="notice" data-notice="' + esc(n.key) + '" data-key="nt-act-' + esc(n.key) + '" aria-describedby="' + id + '-t">' + esc(a.label) + '</button>';
-			if (hasItems)
-				keys +=
-					'<button class="key" type="button" data-action="expand" data-notice="' + esc(n.key) + '" data-key="nt-expand-' + esc(n.key) + '" aria-expanded="' + open + '" aria-controls="' + id + '-items">' +
-					icon(open ? 'chev-down' : 'chev-right') + '<span>' + esc(open ? 'Hide the files' : n.items.length === 1 ? 'Show the file' : 'Show the ' + plural(n.items.length, 'file', 'files')) + '</span></button>';
-		}
+		var expandKey = function (word) {
+			return (
+				'<button class="key" type="button" data-action="expand" data-notice="' + esc(n.key) + '" data-key="nt-expand-' + esc(n.key) + '" aria-expanded="' + open + '" aria-controls="' + id + '-items">' +
+				icon(open ? 'chev-down' : 'chev-right') + '<span>' + esc(word) + '</span></button>'
+			);
+		};
+		if (a && a.command !== 'expand')
+			keys += '<button class="key" type="button" data-action="notice" data-notice="' + esc(n.key) + '" data-key="nt-act-' + esc(n.key) + '" aria-describedby="' + id + '-t">' + esc(a.label) + '</button>';
+		if (hasItems) keys += expandKey(open ? (a && a.command === 'expand' ? 'Hide them' : 'Hide the files') : a && a.command === 'expand' ? a.label : 'Show the ' + plural(items.length, 'file', 'files'));
+		else if (items.length === 1 && items[0].fileId && (!a || a.command === 'expand'))
+			keys += '<button class="key" type="button" data-action="openFile" data-file-id="' + esc(items[0].fileId) + '" data-key="nt-file-' + esc(n.key) + '" aria-describedby="' + id + '-t">' + icon('chev-right') + '<span>See the file</span></button>';
 		var list = '';
-		if (hasItems && open) {
+		if (open) {
 			list += '<div class="notice-well list-well" id="' + id + '-items" data-scroll-own="true">' + registerList({
 				id: 'vl-' + id,
 				cls: 'items',
 				label: n.title,
-				items: n.items.map(function (it) {
+				items: items.map(function (it) {
 					return { kind: 'item', notice: n.key, noticeKind: n.kind, item: it };
 				}),
 				key: function (x) {
@@ -964,7 +1003,7 @@
 					return document.getElementById(id + '-items');
 				}
 			}) + '</div>';
-			if (n.count > n.items.length) list += '<p class="notice-more">' + esc('Showing ' + num(n.items.length) + ' of ' + num(n.count) + '.') + '</p>';
+			if (n.count > items.length) list += '<p class="notice-more">' + esc('Showing ' + num(items.length) + ' of ' + num(n.count) + '.') + '</p>';
 		}
 		return (
 			'<li class="attn-card panel" data-tone="' + (NOTICE_TONE[n.tone] || 'look') + '" data-kind="' + esc(n.kind) + '">' +
@@ -978,25 +1017,41 @@
 		);
 	}
 
+	/** The project's file in Armory with the same name as a file that isn't in Armory
+	 *  (the one it shares its name with), or null. */
+	function namesake(it) {
+		var hit = ui.index.byName[String(it.path).split('/')[0] + '\n' + String(it.name).toLowerCase()];
+		return hit && hit.row.path !== it.path ? hit : null;
+	}
+
+	/** A notice's file. Its row opens the file's page in the app. A file Armory doesn't
+	 *  have because the project already has its name opens the page of the file that has
+	 *  it, and carries Rename, so the student gives it a name of its own right here (never
+	 *  in File Explorer). */
 	function itemRow(x, i, active) {
 		var it = x.item;
 		var k = 'ni:' + x.notice + ':' + (it.fileId || it.path);
-		// A file that shares a name can be renamed right here, then it is added by itself.
+		var other = it.fileId ? null : namesake(it);
 		var extra =
-			x.noticeKind === 'nameShared'
+			x.noticeKind === 'nameShared' && !it.fileId
 				? '<button class="key row-key" type="button" data-rove="rename" data-action="askRenameFile" data-path="' + esc(it.path) + '" data-key="rename-' + esc(k) + '"' +
-				  ' aria-label="Rename ' + esc(it.name) + '" title="Rename ' + esc(it.name) + '">' + icon('rename') + '<span class="key-word">Rename</span></button>'
-				: '';
+				  ' aria-label="Rename ' + esc(it.name) + '" title="Give ' + esc(it.name) + ' a name of its own">' + icon('rename') + '<span class="key-word">Rename</span></button>'
+				: null;
+		var hit = it.fileId
+			? { action: 'openFile', fileId: it.fileId }
+			: other
+				? { action: 'openFile', fileId: other.row.fileId, hint: 'See the ' + other.row.name + ' in ' + whereIs(other.row.path).replace(/\u00a0/g, ' ') }
+				: { action: 'showInFolder', path: it.path, hint: 'Show in folder' };
 		return rowHtml({
 			i: i,
 			vkey: k,
 			active: active,
-			hit: it.fileId ? { action: 'openFile', fileId: it.fileId } : { action: 'showInFolder', path: it.path, hint: 'Show in folder' },
+			hit: hit,
 			k: k,
 			name: it.name,
 			line: '<span class="row-meta">' + esc(it.detail || whereIs(it.path)) + '</span>',
 			extra: extra,
-			go: it.fileId ? 'chev-right' : 'folder-go'
+			go: it.fileId || other ? 'chev-right' : 'folder-go'
 		});
 	}
 
@@ -1023,7 +1078,7 @@
 		html +=
 			icon(o.glyph || kindOf(o.name), 'row-icon') +
 			'<span class="row-body">' +
-			'<span class="row-name" id="n-' + esc(o.k) + '">' + esc(o.name) + '</span>' +
+			'<span class="row-name" id="n-' + esc(o.k) + '">' + nameHtml(o.name, o.glyph === 'folder') + '</span>' +
 			'<span class="row-line">' + (o.line || '') + '</span>' +
 			'</span>' +
 			(o.extra ? '<span class="row-extra">' + o.extra.replace(/data-rove="(\w+)"/g, 'data-rove="$1" tabindex="' + t + '"') + '</span>' : '') +
@@ -1032,35 +1087,70 @@
 		return html;
 	}
 
-	/** The line under a file's name: its state (if it has one worth a chip), who has it
-	 *  checked out, always, and who checked it in last. */
+	/** A file's name that keeps its extension in sight: when the row is short of room the
+	 *  middle gives way ("Sub-Assembly-00....SLDASM"), so a part and an assembly never
+	 *  look the same. The words are the whole name, for every reader. */
+	function nameHtml(name, folder) {
+		name = String(name || '');
+		var dot = name.lastIndexOf('.');
+		if (folder || dot <= 0 || name.length - dot > 8) return esc(name);
+		return '<span class="nm-base">' + esc(name.slice(0, dot)) + '</span><span class="nm-ext">' + esc(name.slice(dot)) + '</span>';
+	}
+
+	/** The line under a file's name: who has it checked out, always and first; its state
+	 *  when it has one worth a chip; what kind of file it is; who checked it in last. A
+	 *  file that isn't in Armory can't be checked out yet, so it says that instead: a new
+	 *  file that uploads by itself says so in plain words, one Armory can't take wears a
+	 *  gray chip (the notice says why). */
 	function fileLine(r) {
 		var meta = r.updatedBy ? metaLine(['Checked in by ' + r.updatedBy, r.updatedAt ? agoWhole(r.updatedAt) : '']) : '';
-		return (
-			kindChip(r.name) +
-			statusChip(r.status, r.changed) +
-			// A file that isn't in Armory can't be checked out yet: its chip says so.
-			(r.fileId ? checkoutMark(r.checkout) : '') +
-			(meta ? '<span class="row-meta">' + esc(meta) + '</span>' : '')
-		);
+		var first;
+		if (r.fileId) first = checkoutMark(checkoutOf(r)) + statusChip(r.status, r.changed);
+		else if (r.status === 'notInArmory') first = statusChip(r.status, false);
+		else first = '<span class="row-avail">' + esc(r.status === 'uploading' ? 'New, uploading now' : 'New, not uploaded yet') + '</span>';
+		return first + kindChip(r.name) + (meta ? '<span class="row-meta">' + esc(meta) + '</span>' : '');
 	}
 
 	function openKey(path, name, k) {
 		return (
 			'<button class="key row-key" type="button" data-rove="open" data-action="launch" data-path="' + esc(path) + '" data-key="open-' + esc(k) + '"' +
-			' aria-label="Open ' + esc(name) + '" title="Open ' + esc(name) + '">' + icon('open') + '<span class="key-word">Open</span></button>'
+			' aria-label="Open ' + esc(name) + '" title="Open ' + esc(name) + ' to look at it">' + icon('open') + '<span class="key-word">Open</span></button>'
 		);
+	}
+
+	/** A file row's one state key, beside Open: Check out while nobody has it, Check in
+	 *  while I have it here. Someone else's file has none: its line says who has it. */
+	function stateKey(r, k) {
+		if (!r.fileId) return '';
+		var c = checkoutOf(r);
+		if (c.state === 'available')
+			return (
+				'<button class="key row-key state-key" type="button" data-rove="state" data-action="checkOut" data-path="' + esc(r.path) + '" data-key="state-' + esc(k) + '"' +
+				' aria-label="Check out ' + esc(r.name) + '" title="Check out ' + esc(r.name) + ' to make changes">' + icon('checkout') + '<span class="key-word">Check out</span></button>'
+			);
+		if (c.state === 'mine')
+			return (
+				'<button class="key row-key state-key" type="button" data-rove="state" data-action="checkIn" data-path="' + esc(r.path) + '" data-key="state-' + esc(k) + '"' +
+				' aria-label="Check in ' + esc(r.name) + '" title="Check in ' + esc(r.name) + ' to share your changes">' + icon('checkin') + '<span class="key-word">Check in</span></button>'
+			);
+		return '';
 	}
 
 	/* ---- My files ---- */
 
+	/*
+	 * My files: the files this computer has checked out, in every project (an archived one
+	 * too, so they can always be checked in), one row each with its Open and Check in.
+	 * Files that aren't in Armory are never a row each here (an unzip can make thousands):
+	 * the notices say what became of them, and each sits in its folder in Team files.
+	 */
 	function myFilesHtml(v) {
 		var files = v.myFiles || [];
 		var html = '<section class="group top" aria-labelledby="mine-label">';
 		html += '<h2 class="section-label" id="mine-label"><span>My files</span>' + (files.length ? count(files.length, 'file', 'files') : '') + '</h2>';
 		if (!files.length) {
 			html += '<div class="empty-tile">' + icon('asm', 'empty-glyph') + '<div class="empty-words">';
-			html += '<p>Nothing checked out. Files you check out show up here.</p>';
+			html += '<p>Nothing checked out. Files you check out show up here, each with its Check in.</p>';
 			html += '<p class="empty-where">Your team\'s files are in <span class="mono-plate">' + esc(v.vaultRoot) + '</span></p>';
 			html += '<button class="key" type="button" data-action="openVault" data-key="empty-vault">' + icon('folder') + '<span>Open Armory folder</span></button>';
 			html += '</div></div>';
@@ -1086,11 +1176,12 @@
 		var k = 'mine:' + (f.fileId || f.path);
 		var found = findRow(f.fileId);
 		var r = found ? found.row : { name: f.name, status: f.status, changed: false, checkout: f.checkout, updatedBy: null };
-		var extra = openKey(f.path, f.name, k);
-		if (f.checkout && f.checkout.state === 'mine')
+		var extra = '';
+		if (checkoutOf(f).state === 'mine')
 			extra +=
-				'<button class="key row-key" type="button" data-rove="in" data-action="checkIn" data-path="' + esc(f.path) + '" data-key="in-' + esc(k) + '"' +
-				' aria-label="Check in ' + esc(f.name) + '" title="Check in ' + esc(f.name) + '">' + icon('checkin') + '<span class="key-word">Check in</span></button>';
+				'<button class="key row-key state-key" type="button" data-rove="in" data-action="checkIn" data-path="' + esc(f.path) + '" data-key="in-' + esc(k) + '"' +
+				' aria-label="Check in ' + esc(f.name) + '" title="Check in ' + esc(f.name) + ' to share your changes">' + icon('checkin') + '<span class="key-word">Check in</span></button>';
+		extra += openKey(f.path, f.name, k);
 		return rowHtml({
 			i: i,
 			vkey: k,
@@ -1098,7 +1189,7 @@
 			hit: f.fileId ? { action: 'openFile', fileId: f.fileId } : { action: 'showInFolder', path: f.path, hint: 'Show in folder' },
 			k: k,
 			name: f.name,
-			line: kindChip(f.name) + statusChip(f.status, r.changed) + (f.fileId ? checkoutMark(f.checkout) : '') + '<span class="row-meta">' + esc(whereIs(f.path)) + '</span>',
+			line: checkoutMark(checkoutOf(f)) + statusChip(f.status, r.changed) + kindChip(f.name) + '<span class="row-meta">' + esc(whereIs(f.path)) + '</span>',
 			extra: extra,
 			go: f.fileId ? 'chev-right' : 'folder-go'
 		});
@@ -1131,17 +1222,28 @@
 		html += '</div>';
 		var p = place.project;
 		if (p.archived) {
+			// Check outs are kept when a project is archived (D8): say how many are mine and
+			// where to check them in (My files lists them).
+			var held = rowsUnder(place.pi, '').filter(function (r) {
+				return checkoutOf(r).state === 'mine';
+			}).length;
 			html +=
 				'<div class="panel archived-note" id="project-panel" role="tabpanel" aria-labelledby="tab-' + esc(p.id) + '">' + icon('archive', 'archived-glyph') +
 				'<div><p class="archived-line">Archived. It no longer updates.</p>' +
-				'<p class="group-help">' + esc(p.name) + '\'s folder stays on this computer just as it is. A teacher can bring the project back on ideabosco.com.</p></div></div>';
+				'<p class="group-help">' + esc(p.name) + '\'s folder stays on this computer just as it is. A teacher can bring the project back on ideabosco.com.</p>' +
+				(held
+					? '<p class="group-help archived-held">' + esc(glue('You still have ' + plural(held, 'file', 'files') + ' checked out in it. Check ' + (held === 1 ? 'it' : 'them') + ' in from My files.')) + '</p>'
+					: '') +
+				'</div></div>';
 			return html + '</section>';
 		}
 		var pi = place.pi;
 		var folder = place.folder;
 		html += '<div class="list-well project-card browser" id="project-panel" role="tabpanel" aria-labelledby="tab-' + esc(p.id) + '" data-drop="true">';
-		html += '<div class="drop-cue" aria-hidden="true"><span class="drop-word">' + icon('addfile') + '<span>' + esc('Drop to add to ' + crumbWords(p, folder)) + '</span></span></div>';
 		html += '<div class="browser-head">' + crumbsHtml(p, pi, folder) + folderKeysHtml(p, pi, folder) + '</div>';
+		// The cue lies over the list only, so where you are and the folder's keys stay in sight.
+		html += '<div class="browser-body">';
+		html += '<div class="drop-cue" aria-hidden="true"><span class="drop-word">' + icon('addfile') + '<span>' + esc('Drop to add to ' + crumbWords(p, folder)) + '</span></span></div>';
 		var items = browserItems(pi, folder);
 		if (!items.length) html += '<p class="group-help browser-empty">This folder is empty. Add files, or drag them here from File Explorer.</p>';
 		else
@@ -1155,7 +1257,7 @@
 				row: browserRow,
 				scrollEl: homeScroller
 			});
-		html += '</div>';
+		html += '</div></div>';
 		return html + '</section>';
 	}
 
@@ -1183,16 +1285,18 @@
 	}
 
 	/** The open folder's keys. The project's own top folder can't be renamed or deleted
-	 *  here (project names are changed on ideabosco.com). */
+	 *  here (project names are changed on ideabosco.com). Check out all and Check in all
+	 *  take the folders inside too, and Check out all asks first, with the count. */
 	function folderKeysHtml(p, pi, folder) {
 		var rows = rowsUnder(pi, folder);
 		var canOut = rows.some(function (r) {
-			return r.fileId && r.checkout.state === 'available';
+			return r.fileId && checkoutOf(r).state === 'available';
 		});
 		var canIn = rows.some(function (r) {
-			return r.checkout.state === 'mine';
+			return checkoutOf(r).state === 'mine';
 		});
 		var name = folder ? folder.split('/').pop() : p.name;
+		var inside = (pi.children[folder] || []).length ? ' and the folders in it' : '';
 		var html = '<div class="folder-keys" role="group" aria-label="' + esc('Folder ' + name) + '">';
 		html += key({ action: 'askNewFolder', key: 'fk-new', cls: 'tool', glyph: 'newfolder', word: 'New folder', title: 'Make a folder in ' + name });
 		html += key({ action: 'addFiles', key: 'fk-add', cls: 'tool', glyph: 'addfile', word: 'Add files', title: 'Copy files from this computer into ' + name });
@@ -1200,8 +1304,8 @@
 			html += key({ action: 'askRenameFolder', key: 'fk-rename', cls: 'tool', glyph: 'rename', word: 'Rename folder', title: 'Rename ' + name });
 			html += key({ action: 'askDeleteFolder', key: 'fk-delete', cls: 'tool', glyph: 'trash', word: 'Delete folder', title: 'Delete ' + name });
 		}
-		html += key({ action: 'folderCheckOut', key: 'fk-out', cls: 'tool', glyph: 'checkout', word: 'Check out all', title: 'Check out every file in ' + name, disabled: !canOut });
-		html += key({ action: 'folderCheckIn', key: 'fk-in', cls: 'tool', glyph: 'checkin', word: 'Check in all', title: 'Check in every file you have checked out in ' + name, disabled: !canIn });
+		html += key({ action: 'askCheckOutAll', key: 'fk-out', cls: 'tool keep-word', glyph: 'checkout', word: 'Check out all', title: 'Check out every file in ' + name + inside, disabled: !canOut });
+		html += key({ action: 'folderCheckIn', key: 'fk-in', cls: 'tool keep-word', glyph: 'checkin', word: 'Check in all', title: 'Check in every file you have checked out in ' + name + inside, disabled: !canIn });
 		return html + '</div>';
 	}
 
@@ -1241,8 +1345,10 @@
 		var r = x.row;
 		var k = r.fileId || 'local:' + r.path;
 		var picked = !!ui.selected[r.path];
+		// The pick key always draws its box, empty or ticked, so it reads as a checkbox.
 		var selectKey = r.fileId
-			? '<button class="key sel-key" type="button" role="checkbox" data-rove="sel" aria-checked="' + picked + '" data-action="select" data-path="' + esc(r.path) + '" data-key="sel-' + esc(k) + '" aria-label="Select ' + esc(r.name) + '">' + icon('check') + '</button>'
+			? '<button class="key sel-key" type="button" role="checkbox" data-rove="sel" aria-checked="' + picked + '" data-action="select" data-path="' + esc(r.path) + '" data-key="sel-' + esc(k) + '" aria-label="Select ' + esc(r.name) + '">' +
+			  '<span class="sel-box" aria-hidden="true">' + icon('check') + '</span></button>'
 			: null;
 		return rowHtml({
 			i: i,
@@ -1253,7 +1359,8 @@
 			k: k,
 			name: r.name,
 			line: fileLine(r),
-			extra: openKey(r.path, r.name, k),
+			// The state key first, so Open keeps one column down the list.
+			extra: stateKey(r, k) + openKey(r.path, r.name, k),
 			go: r.fileId ? 'chev-right' : 'folder-go'
 		});
 	}
@@ -1276,7 +1383,7 @@
 		if (!picked.length) return '';
 		var any = function (state) {
 			return picked.some(function (h) {
-				return h.row.checkout.state === state;
+				return checkoutOf(h.row).state === state;
 			});
 		};
 		var lead = picked.some(function (h) {
@@ -1441,7 +1548,8 @@
 		if (c.state !== 'available') {
 			var isMe = c.state === 'mine' || c.state === 'myOtherComputer';
 			html +=
-				'<span class="avatar big" data-tone="' + (isMe ? 'ok' : 'look') + '" aria-hidden="true">' + esc(initials(c.name)) + '</span>' +
+				// Green only when it is checked out here; my other computer reads amber, as on its row.
+				'<span class="avatar big" data-tone="' + (c.state === 'mine' ? 'ok' : 'look') + '" aria-hidden="true">' + esc(initials(c.name)) + '</span>' +
 				'<div class="who-words"><p class="who-name">' + esc(isMe ? c.name + ' (you)' : c.name) + '</p>' +
 				'<p class="who-where">' + esc(metaLine([c.device, c.since ? 'for ' + lasting(c.since) : ''])) + '</p>' +
 				// Someone else's school email, so the student knows how to ask them.
@@ -1457,12 +1565,17 @@
 
 	/** A history entry: who and when is the title (what a student scans for). A kept copy
 	 *  is its own title and, when it is the student's, is marked YOUR COPY on a tinted
-	 *  row; a routine one (saved while checked out) is the ordinary record of work and
-	 *  keeps the neutral tone. A removal says so. The size is in the tooltip, not the line. */
+	 *  row; a routine one (HistoryEntryView.routine: saved while checked out, an earlier
+	 *  save) is the ordinary record of work and keeps the neutral tone. A removal says so.
+	 *  The size is in the tooltip, not the line. */
 	function historyEntry(e, me) {
-		var copy = e.kind === 'keptCopy' && !e.routine;
+		// A save made while checked out is kept as a copy too, but it is the ordinary thing
+		// (each save is backed up until the check in), so it reads like any other save. The
+		// engine says which kept copies are routine; the page never guesses from the note.
+		var saved = e.kind === 'keptCopy' && e.routine === true;
+		var copy = e.kind === 'keptCopy' && !saved;
 		var removed = e.kind === 'removed';
-		var routine = e.kind === 'version' && /^(Checked in|Saved|Added to Armory)$/.test(e.note);
+		var routine = saved || (e.kind === 'version' && /^(Checked in|Saved|Added to Armory)$/.test(e.note));
 		var when = '<time datetime="' + esc(e.at) + '" title="' + esc(fullTime(e.at)) + '">' + esc(agoWhole(e.at)) + '</time>';
 		var mine = copy && me && (e.author.toLowerCase() === me.toLowerCase() || firstName(e.author).toLowerCase() === firstName(me).toLowerCase());
 		var chips = '';
@@ -1556,7 +1669,10 @@
 		var field = ask.querySelector('input');
 		if (field) {
 			field.focus();
-			field.select();
+			// A file's new name usually keeps its kind: only the part before the dot is picked.
+			var dot = kind === 'renameFile' ? field.value.lastIndexOf('.') : -1;
+			if (dot > 0) field.setSelectionRange(0, dot);
+			else field.select();
 		} else (ask.querySelector('[data-ask-first]') || ask).focus();
 	}
 
@@ -1566,7 +1682,24 @@
 		var field = '';
 		var ok;
 		var danger = false;
-		if (kind === 'newFolder') {
+		// A question whose answer locks the team out of files, or removes something, starts
+		// on Cancel, so Enter never does it by accident.
+		var cancelFirst = false;
+		if (kind === 'checkOutAll') {
+			title = 'Check out all';
+			var them = c.count === 1 ? 'it' : 'them';
+			body =
+				'Check out ' + plural(c.count, 'file', 'files') + ' in ' + c.name + (c.inside ? ' and its folders' : '') + '? ' +
+				'Nobody else can save ' + them + ' until you check ' + them + ' in.' +
+				(c.held ? ' ' + plural(c.held, 'other file is', 'other files are') + ' checked out by someone else, and ' + (c.held === 1 ? 'stays' : 'stay') + ' with them.' : '');
+			ok = 'Check out ' + plural(c.count, 'file', 'files');
+			cancelFirst = true;
+		} else if (kind === 'renameFile') {
+			title = 'Rename file';
+			body = 'Rename ' + c.name + ' in ' + c.where + '. A project keeps one file per name, so pick a name no other file in ' + c.project + ' has.';
+			field = fieldHtml('New name', c.name);
+			ok = 'Rename';
+		} else if (kind === 'newFolder') {
 			title = 'New folder';
 			body = 'Make a folder in ' + c.where + '. Everyone on the team sees it.';
 			field = fieldHtml('Folder name', '');
@@ -1574,11 +1707,6 @@
 		} else if (kind === 'renameFolder') {
 			title = 'Rename folder';
 			body = 'Rename ' + c.name + ' in ' + c.parentWhere + '. Everyone on the team sees the new name, and its files keep their history.';
-			field = fieldHtml('New name', c.name);
-			ok = 'Rename';
-		} else if (kind === 'renameFile') {
-			title = 'Rename file';
-			body = 'Rename ' + c.name + ' in ' + c.where + '. A project keeps one file per name, so pick a name no other file in the project has.';
 			field = fieldHtml('New name', c.name);
 			ok = 'Rename';
 		} else if (kind === 'deleteFolder') {
@@ -1602,9 +1730,8 @@
 			'<p class="ask-words" id="ask-words">' + esc(glue(body)) + '</p>' +
 			field +
 			'<div class="ask-keys">' +
-			// A question that removes something starts on Cancel, so Enter never deletes.
-			'<button class="key' + (danger ? ' danger' : ' primary') + '" type="button" data-action="askOk" data-key="ask-ok">' + esc(ok) + '</button>' +
-			'<button class="key" type="button" data-action="askCancel" data-key="ask-cancel"' + (field ? '' : ' data-ask-first="true"') + '>Cancel</button>' +
+			'<button class="key' + (danger ? ' danger' : cancelFirst ? '' : ' primary') + '" type="button" data-action="askOk" data-key="ask-ok">' + esc(glue(ok)) + '</button>' +
+			'<button class="key" type="button" data-action="askCancel" data-key="ask-cancel"' + (field || !(danger || cancelFirst) ? '' : ' data-ask-first="true"') + '>Cancel</button>' +
 			'</div></div>'
 		);
 	}
@@ -1617,13 +1744,24 @@
 		);
 	}
 
-	/** Why a folder or file name won't do, in plain words, or null when it will. */
+	/** Why a file's new name won't do, in plain words, or null when it will. */
+	function fileNameProblem(name, c) {
+		if (!name) return 'Type a name for the file.';
+		if (BAD_NAME.test(name)) return 'A file name can\'t use any of these: \\ / : * ? " < > |';
+		if (/^\.+$/.test(name) || /[. ]$/.test(name)) return 'A file name can\'t end with a dot or a space.';
+		if (name === c.name) return 'That is already its name.';
+		var ext = c.name.lastIndexOf('.') > 0 ? c.name.slice(c.name.lastIndexOf('.')).toLowerCase() : '';
+		if (ext && name.slice(-ext.length).toLowerCase() !== ext) return 'Keep ' + c.name.slice(c.name.lastIndexOf('.')) + ' at the end, so SolidWorks can still open it.';
+		if (c.taken[name.toLowerCase()] && name.toLowerCase() !== c.name.toLowerCase()) return c.project + ' already has a file named ' + name + '.';
+		return null;
+	}
+
+	/** Why a folder name won't do, in plain words, or null when it will. */
 	function nameProblem(name, c) {
-		var what = c.kind === 'renameFile' ? 'file' : 'folder';
-		if (!name) return 'Type a name for the ' + what + '.';
-		if (BAD_NAME.test(name)) return 'A ' + what + ' name can\'t use any of these: \\ / : * ? " < > |';
-		if (/^\.+$/.test(name) || /[. ]$/.test(name)) return 'A ' + what + ' name can\'t end with a dot or a space.';
-		if ((c.kind === 'renameFolder' || c.kind === 'renameFile') && name === c.name) return 'That is already its name.';
+		if (!name) return 'Type a name for the folder.';
+		if (BAD_NAME.test(name)) return 'A folder name can\'t use any of these: \\ / : * ? " < > |';
+		if (/^\.+$/.test(name) || /[. ]$/.test(name)) return 'A folder name can\'t end with a dot or a space.';
+		if (c.kind === 'renameFolder' && name === c.name) return 'That is already its name.';
 		var taken = (c.siblings || []).some(function (s) {
 			return s.toLowerCase() === name.toLowerCase() && !(c.kind === 'renameFolder' && s.toLowerCase() === c.name.toLowerCase());
 		});
@@ -1635,7 +1773,18 @@
 		var a = ui.ask;
 		if (!a) return;
 		var c = a.ctx;
-		if (a.kind === 'newFolder' || a.kind === 'renameFolder' || a.kind === 'renameFile') {
+		if (a.kind === 'renameFile') {
+			var fileInput = ask.querySelector('#ask-name');
+			var newName = fileInput.value.trim();
+			var wrong = fileNameProblem(newName, c);
+			if (wrong) {
+				ask.querySelector('#ask-error').textContent = wrong;
+				fileInput.setAttribute('aria-invalid', 'true');
+				fileInput.focus();
+				return;
+			}
+			act('renameFile', { path: c.path, newName: newName });
+		} else if (a.kind === 'newFolder' || a.kind === 'renameFolder') {
 			var input = ask.querySelector('#ask-name');
 			var name = input.value.trim();
 			var problem = nameProblem(name, { kind: a.kind, name: c.name, siblings: c.siblings, where: c.where, parentWhere: c.parentWhere });
@@ -1645,14 +1794,14 @@
 				input.focus();
 				return;
 			}
-			if (a.kind === 'renameFile') act('renameFile', { path: c.path, newName: name });
-			else if (a.kind === 'newFolder') act('createFolder', { projectId: c.projectId, parent: c.folder, name: name });
+			if (a.kind === 'newFolder') act('createFolder', { projectId: c.projectId, parent: c.folder, name: name });
 			else {
 				act('renameFolder', { projectId: c.projectId, folder: c.folder, newName: name });
 				// When the host's next view has the new name, the browser goes with it.
 				ui.follow = { projectId: c.projectId, from: c.folder, to: c.folder.split('/').slice(0, -1).concat([name]).join('/') };
 			}
-		} else if (a.kind === 'deleteFolder') act('deleteFolder', { projectId: c.projectId, folder: c.folder });
+		} else if (a.kind === 'checkOutAll') act('checkOut', { paths: [c.path], open: false });
+		else if (a.kind === 'deleteFolder') act('deleteFolder', { projectId: c.projectId, folder: c.folder });
 		else
 			c.fileIds.forEach(function (id) {
 				act('takeBack', { fileId: id });
@@ -1671,14 +1820,25 @@
 				return place.pi.folders[f].name;
 			});
 		};
+		var rows = rowsUnder(place.pi, folder);
 		return {
 			projectId: p.id,
 			project: p.name,
 			folder: folder,
+			path: folderPathOf(place.pi, folder),
 			name: folder ? folder.split('/').pop() : p.name,
 			where: crumbWords(p, folder),
 			parentWhere: crumbWords(p, parent),
+			inside: (place.pi.children[folder] || []).length > 0,
 			files: place.pi.under[folder] || 0,
+			// For Check out all: the files nobody has, and those someone else has.
+			count: rows.filter(function (r) {
+				return r.fileId && checkoutOf(r).state === 'available';
+			}).length,
+			held: rows.filter(function (r) {
+				var st = checkoutOf(r).state;
+				return r.fileId && (st === 'other' || st === 'myOtherComputer');
+			}).length,
 			siblingsHere: names(folder),
 			siblingsParent: names(parent)
 		};
@@ -1686,26 +1846,41 @@
 
 	function askFolder(kind, from) {
 		var c = folderContext();
-		if (kind !== 'newFolder' && !c.folder) return;
+		if (kind === 'checkOutAll' && !c.count) return;
+		if (kind !== 'newFolder' && kind !== 'checkOutAll' && !c.folder) return;
 		c.siblings = kind === 'newFolder' ? c.siblingsHere : c.siblingsParent;
 		openAsk(kind, c, from);
 	}
 
-	/** Rename one file (a file that shares a name with another in its project). */
+	/** Rename one file (a notice's file that shares its name): where it is, and every name
+	 *  the project already uses, so a name that is taken is refused before anything is sent. */
 	function askRenameFile(path, from) {
+		var root = String(path).split('/')[0];
+		var project = null;
+		var taken = {};
+		Object.keys(ui.index.projects).forEach(function (id) {
+			var pi = ui.index.projects[id];
+			if (pi.root !== root) return;
+			project = pi.project;
+			rowsUnder(pi, '').forEach(function (r) {
+				if (r.path !== path) taken[String(r.name).toLowerCase()] = true;
+			});
+		});
 		var parts = String(path).split('/');
-		openAsk('renameFile', { path: path, name: parts[parts.length - 1], where: parts.slice(0, -1).join(' \u203a '), siblings: [] }, from);
+		var name = parts.pop();
+		openAsk('renameFile', { path: path, name: name, where: parts.join(' \u203a '), project: project ? project.name : root, taken: taken }, from);
 	}
 
 	/** Take back one file, or the picked files someone else has. */
 	function askTakeBack(hits, from) {
 		hits = hits.filter(function (h) {
-			return h && h.row.checkout.state !== 'available' && h.row.checkout.state !== 'mine';
+			var st = h ? checkoutOf(h.row).state : 'available';
+			return st !== 'available' && st !== 'mine';
 		});
 		if (!hits.length) return;
 		var people = {};
 		hits.forEach(function (h) {
-			people[h.row.checkout.name] = true;
+			people[checkoutOf(h.row).name || 'someone'] = true;
 		});
 		var names = Object.keys(people);
 		openAsk(
@@ -2212,21 +2387,17 @@
 			case 'askTakeBack':
 				askTakeBack([findRow(el.getAttribute('data-file-id'))], from);
 				break;
-			case 'askRenameFile':
-				askRenameFile(path, from);
-				break;
 			case 'promptCheckOut':
-				// Check out and reopen: the host checks it out, then opens it again once
-				// SolidWorks has closed it (it says so while SolidWorks still has it open).
+				// Check out and reopen: the host checks it out, then opens it again here once
+				// SolidWorks has closed it (until then it says to close it first).
 				act('checkOut', { paths: [path], open: true });
-				ui.promptGone = ui.view.prompt ? ui.view.prompt.key : null;
+				ui.promptGone = promptKey(ui.view.prompt);
 				render();
 				break;
 			case 'promptLater':
-				if (ui.view.prompt) {
-					bridge.send('dismissNotice', { key: ui.view.prompt.key });
-					ui.promptGone = ui.view.prompt.key;
-				}
+				// Not now: this one question goes; the next time SolidWorks opens the file, it asks again.
+				if (ui.view.prompt) bridge.send('dismissNotice', { key: promptKey(ui.view.prompt) });
+				ui.promptGone = promptKey(ui.view.prompt);
 				render();
 				break;
 			case 'select':
@@ -2267,12 +2438,15 @@
 				var place = browserPlace();
 				act('addFiles', { projectId: place.project.id, folder: place.folder });
 				break;
-			case 'folderCheckOut':
+			case 'askCheckOutAll':
+				askFolder('checkOutAll', from);
+				break;
+			case 'askRenameFile':
+				askRenameFile(path, from);
+				break;
 			case 'folderCheckIn':
 				var here = browserPlace();
-				var target = [folderPathOf(here.pi, here.folder)];
-				if (action === 'folderCheckOut') act('checkOut', { paths: target, open: false });
-				else act('checkIn', { paths: target });
+				act('checkIn', { paths: [folderPathOf(here.pi, here.folder)] });
 				break;
 			case 'askOk':
 				askOk();
@@ -2462,7 +2636,17 @@
 	function routeDialog(r) {
 		if (!r || !r.dialog) return;
 		if (r.dialog === 'takeBack' && ui.detail) askTakeBack([findRow(ui.detail.fileId)], 'd-takeback');
-		else if (r.dialog === 'newFolder' || r.dialog === 'renameFolder' || r.dialog === 'deleteFolder') askFolder(r.dialog, null);
+		else if (r.dialog === 'newFolder' || r.dialog === 'renameFolder' || r.dialog === 'deleteFolder' || r.dialog === 'checkOutAll') askFolder(r.dialog, null);
+		else if (r.dialog === 'renameFile') {
+			// The first file in the open notice list that Armory doesn't have yet.
+			var n = (ui.view.notices || []).filter(function (x) {
+				return x.key === r.expand;
+			})[0];
+			var first = n ? (n.items || []).filter(function (it) {
+				return !it.fileId;
+			})[0] : null;
+			if (first) askRenameFile(first.path, 'rename-ni:' + n.key + ':' + first.path);
+		}
 	}
 
 	bridge.onMessage(function (message) {
@@ -2471,6 +2655,8 @@
 			ui.view = message.view;
 			if (!ui.view.activity) ui.view.activity = { line: null, upload: null, download: null, move: null, waiting: null, active: [] };
 			ui.index = buildIndex(ui.view);
+			// Not now lasts for that one question; a new one (another open) asks again.
+			if (ui.promptGone && promptKey(ui.view.prompt) !== ui.promptGone) ui.promptGone = null;
 			followRename();
 			// Picked files that are gone from the view are let go.
 			Object.keys(ui.selected).forEach(function (p) {

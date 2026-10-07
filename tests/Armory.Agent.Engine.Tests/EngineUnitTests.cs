@@ -196,8 +196,9 @@ public sealed class EngineUnitTests
             Assert.True(notice.TryGetProperty(name, out _), name);
         Assert.False(notice.TryGetProperty("type", out _)); // data objects use kind, never type
         var prompt = v.GetProperty("prompt");
-        foreach (var name in new[] { "key", "fileId", "path", "name", "checkout", "canCheckOut" })
-            Assert.True(prompt.TryGetProperty(name, out _), name);
+        Assert.Equal(["key", "fileId", "path", "name", "checkout", "canCheckOut"], prompt.EnumerateObject().Select(p => p.Name).ToArray());
+        Assert.Equal("other", prompt.GetProperty("checkout").GetProperty("state").GetString());
+        Assert.False(prompt.GetProperty("canCheckOut").GetBoolean());
         Assert.Equal("Checked out by you", v.GetProperty("myFiles")[0].GetProperty("checkout").GetProperty("label").GetString());
         Assert.Equal(3, v.GetProperty("activity").GetProperty("waiting").GetProperty("count").GetInt32());
         Assert.True(v.GetProperty("settings").GetProperty("startAtSignIn").GetBoolean());
@@ -236,6 +237,14 @@ public sealed class EngineUnitTests
         Assert.Equal("actionResult", r.RootElement.GetProperty("type").GetString());
         Assert.Equal("r3", r.RootElement.GetProperty("requestId").GetString());
         Assert.True(r.RootElement.GetProperty("ok").GetBoolean());
+
+        // The check-out question carries its own key (one per open), which Not now sends
+        // back in dismissNotice; the page reads these names.
+        var asked = new PromptView("prompt:Robot/Plate.SLDPRT:2026-10-01T22:28:00.000Z", "f", "Robot/Plate.SLDPRT", "Plate.SLDPRT",
+            new CheckoutView(CheckoutStates.Available, "Available", null, null, null, null), true);
+        using var q = JsonDocument.Parse(JsonSerializer.Serialize(asked, BridgeMessages.Json));
+        Assert.Equal(["key", "fileId", "path", "name", "checkout", "canCheckOut"], q.RootElement.EnumerateObject().Select(p => p.Name).ToArray());
+        Assert.Equal("available", q.RootElement.GetProperty("checkout").GetProperty("state").GetString());
     }
 
     private sealed class MemoryState(byte[]? initial = null) : IEngineStateStore

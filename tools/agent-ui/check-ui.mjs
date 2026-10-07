@@ -33,9 +33,16 @@
 //               folder and a crumb back out; picking files (Shift for a range) and Check
 //               out checks them out, says so in the quiet result line, and Escape lets go;
 //               the 5,000-file folder keeps fewer than 150 rows drawn and reaches its last
-//               file by scrolling and by the End key; the Settings sheet, Pause (Resume is
-//               the green primary, and nothing to pause while offline), Connect and the
-//               one-click folder of your own do what they say.
+//               file by scrolling and by the End key; each file row offers Check out or
+//               Check in beside Open (Open in one column) and its pick key draws an empty
+//               box; Check out all asks first, with the count, starting on Cancel; My
+//               files lists only my check outs and "waiting to upload" is said once; an
+//               unzip is one summary that lists no file twice and agrees with the ring; a
+//               file that shares a name is renamed in the app (a taken name and a lost
+//               extension refused); the check-out question says to reopen the file and its
+//               key checks out and reopens; the Settings sheet, Pause (Resume is the green
+//               primary, and nothing to pause while offline), Connect and the one-click
+//               folder of your own do what they say.
 //   logo        the IDEA gear turns (idea-gear-spin, 24s, linear, infinite) when motion is
 //               allowed, holds still when the student asks for reduced motion, and is
 //               fully painted in both.
@@ -46,10 +53,16 @@
 //               exactly the fields BRIDGE.md gives it (an action's requestId included; a
 //               drop goes with its files through postMessageWithAdditionalObjects). An
 //               'activity' message keeps focus and scroll and patches only the panel and
-//               the status line; an 'actionResult' shows its words in the quiet line; a
+//               the status line; Not now on the check-out question sends that question's
+//               key and hides only it; a kept copy's tone follows HistoryEntryView.routine,
+//               never its note; an 'actionResult' shows its words in the quiet line; a
 //               view that arrives while the folder dialog is open keeps the typed name. In
 //               a plain browser the theme comes from ?theme= (idea, spaceWhite or
 //               space-white) or prefers-color-scheme.
+//   shapes      every demo view and file detail has exactly the fields bridge.js documents
+//               for each record, and only the words its unions allow (AgentViewContractTests
+//               holds the host's C# records to the same typedefs, so the demo can't invent a
+//               field the host never sends). A planted extra and missing field are caught.
 //   em dash     no U+2014 anywhere in wwwroot (or in these tools, BRIDGE.md, the design
 //               review, both screens indexes and docs/overnight).
 //
@@ -150,6 +163,84 @@ for (const file of walkFiles(WWWROOT).filter((f) => /\.(html|css|js|mjs|json|svg
 			problem('offline', path.relative(ROOT, file) + ':' + (i + 1), what);
 		}
 	});
+}
+
+/* ------------------------------------------------------- Demo shapes */
+
+// Every check below runs on the demo's views, so they must be the views the host sends:
+// exactly the fields bridge.js documents for each record (a "@typedef {object} Name" with
+// its "@property {Type} field" lines), and only the words a union typedef allows.
+// AgentViewContractTests holds the host's C# records to the same typedefs.
+function readTypedefs(text) {
+	const objects = {};
+	const unions = {};
+	for (const block of text.matchAll(/\/\*\*([\s\S]*?)\*\//g)) {
+		const body = block[1];
+		const name = body.match(/@typedef\s*\{object\}\s*(\w+)/);
+		if (name) objects[name[1]] = [...body.matchAll(/@property\s*\{([^}]*)\}\s*(\w+)/g)].map((m) => ({ field: m[2], type: m[1].trim() }));
+		for (const u of body.matchAll(/@typedef\s*\{([^{}]*?)\}\s*(\w+)/g)) {
+			const flat = u[1].replace(/\n\s*\*/g, ' ');
+			const words = [...flat.matchAll(/'([^']*)'/g)].map((m) => m[1]);
+			if (words.length && !flat.replace(/'[^']*'/g, '').replace(/[|\s]/g, '')) unions[u[2]] = words;
+		}
+	}
+	return { objects, unions };
+}
+const TYPES = readTypedefs(fs.readFileSync(path.join(WWWROOT, 'bridge.js'), 'utf8'));
+function shapeProblems(value, type, at, out) {
+	const def = TYPES.objects[type];
+	if (!def) return out.push(`${at}: bridge.js documents no ${type}`), out;
+	if (!value || typeof value !== 'object' || Array.isArray(value)) return out.push(`${at}: not an object (${type})`), out;
+	const want = def.map((d) => d.field).sort();
+	const have = Object.keys(value).sort();
+	if (want.join() !== have.join()) out.push(`${at} (${type}) has {${have.join(', ')}}, bridge.js documents {${want.join(', ')}}`);
+	for (const d of def) {
+		const v = value[d.field];
+		if (v === undefined) continue; // said above
+		const nullable = /\bnull\b/.test(d.type);
+		if (v === null) {
+			if (!nullable) out.push(`${at}.${d.field} is null, bridge.js says ${d.type}`);
+			continue;
+		}
+		const bare = d.type.replace(/\|\s*null/, '').trim();
+		if (TYPES.unions[bare] && !TYPES.unions[bare].includes(v)) out.push(`${at}.${d.field} is '${v}', not one of ${bare}`);
+		const inner = bare.match(/^(\w+View)(\[\])?$/);
+		if (!inner) continue;
+		if (!inner[2]) shapeProblems(v, inner[1], `${at}.${d.field}`, out);
+		else if (!Array.isArray(v)) out.push(`${at}.${d.field} is not a list`);
+		else v.forEach((x, i) => shapeProblems(x, inner[1], `${at}.${d.field}[${i}]`, out));
+	}
+	return out;
+}
+tally.shapes = 0;
+tally.shapeFailures = 0;
+{
+	const demo = demoStates();
+	const clone = (x) => JSON.parse(JSON.stringify(x));
+	for (const [name, st] of Object.entries(demo.states)) {
+		const found = shapeProblems(clone(st.view), 'AgentView', name + '.view', []);
+		if (st.screens.includes('detail')) {
+			const v = st.view;
+			let id = st.detailFileId;
+			for (const p of v.projects) for (const f of p.folders) for (const r of f.files) if (!id && r.fileId) id = r.fileId;
+			shapeProblems(clone(demo.detailFor(name, id, v)), 'FileDetailView', name + '.detail', found);
+		}
+		tally.shapes++;
+		for (const f of found.slice(0, 5)) {
+			tally.shapeFailures++;
+			problem('shape', 'demo ' + name, f);
+		}
+		if (found.length > 5) problem('shape', 'demo ' + name, `... and ${found.length - 5} more`);
+	}
+	// Planted: a row with a field the host never sends and one the host does, left out,
+	// and a status word FileStatus doesn't have.
+	const planted = clone(demo.states.synced.view);
+	const row = planted.projects[0].folders[0].files[0];
+	row.holder = null;
+	delete row.changed;
+	row.status = 'editingByMe';
+	tally.shapesPlanted = shapeProblems(planted, 'AgentView', 'planted', []).length;
+	if (tally.shapesPlanted < 2) problem('shape', 'planted', `the shape check found ${tally.shapesPlanted} of 2 planted problems`);
 }
 
 /* ------------------------------------------------------ In-page probes */
@@ -890,6 +981,110 @@ for (const size of SIZES) {
 		const tabbable = await page.$$eval('#vl-browser [data-rove]:not([tabindex="-1"])', (k) => new Set(k.map((x) => x.closest('li').getAttribute('data-i'))).size);
 		expect(tabbable === 1, `${tabbable} rows are in the Tab order, not one`);
 	});
+	await flow('a row checks out and checks in', size, 'checkedOutByOther', async (page, expect) => {
+		const keys = await page.$$eval('#vl-browser .vrow:not(.folder-item)', (rows) =>
+			rows.map((r) => [r.querySelector('.row-name').textContent, [...r.querySelectorAll('.row-extra .key')].map((k) => k.getAttribute('aria-label')).join('|')])
+		);
+		const of = (n) => (keys.find((k) => k[0] === n) || [n, 'no row'])[1];
+		expect(of('Wheel-Hub.SLDPRT') === 'Check out Wheel-Hub.SLDPRT|Open Wheel-Hub.SLDPRT', `an available row offers ${of('Wheel-Hub.SLDPRT')}`);
+		expect(of('Gearbox.SLDASM') === 'Check in Gearbox.SLDASM|Open Gearbox.SLDASM', `my row offers ${of('Gearbox.SLDASM')}`);
+		expect(of('Plate-Left.SLDPRT') === 'Open Plate-Left.SLDPRT', `Maria's row offers ${of('Plate-Left.SLDPRT')}`);
+		const opens = await page.$$eval('#vl-browser .vrow:not(.folder-item) [data-rove="open"]', (k) => [...new Set(k.map((x) => Math.round(x.getBoundingClientRect().left)))]);
+		expect(opens.length === 1, `Open is not one column down the list (left edges ${opens.join(', ')})`);
+		// The pick key draws its empty box before anything is picked.
+		const box = await page.$eval('[data-key="sel-f-wheel-hub"] .sel-box', (el) => {
+			const cs = getComputedStyle(el);
+			return [cs.borderTopStyle, parseFloat(cs.borderTopWidth), Math.round(el.getBoundingClientRect().width)].join(' ');
+		});
+		expect(box === 'solid 2 20', `the empty pick box is "${box}"`);
+		await page.click('[data-key="state-f-wheel-hub"]');
+		await settle(page);
+		expect((await text(page, '#result-word')) === 'Checked out Wheel-Hub.SLDPRT.', `Check out said "${await text(page, '#result-word')}"`);
+		expect(/Checked out by you$/.test(await text(page, 'li.row:has([data-key="row-f-wheel-hub"]) .chip.who')), 'Wheel-Hub does not say I have it');
+		expect((await page.getAttribute('[data-key="state-f-wheel-hub"]', 'aria-label')) === 'Check in Wheel-Hub.SLDPRT', 'the row key did not turn into Check in');
+		await page.click('[data-key="state-f-wheel-hub"]');
+		await settle(page);
+		expect((await text(page, '#result-word')) === 'Checked in Wheel-Hub.SLDPRT.', `Check in said "${await text(page, '#result-word')}"`);
+	});
+	await flow('check out all asks first', size, 'synced', async (page, expect) => {
+		await page.click('[data-key="fk-out"]');
+		await settle(page);
+		expect(await page.evaluate(() => document.getElementById('ask').open), 'Check out all did not ask');
+		const words = (await text(page, '#ask-words')).replace(/\u00a0/g, ' ');
+		expect(
+			words === 'Check out 16 files in Robot 2027 and its folders? Nobody else can save them until you check them in. 1 other file is checked out by someone else, and stays with them.',
+			`Check out all asks "${words}"`
+		);
+		const f = await page.evaluate(() => document.activeElement.getAttribute('data-key'));
+		expect(f === 'ask-cancel', `the question starts on ${f}, not Cancel`);
+		expect(!(await page.$eval('[data-key="ask-ok"]', (b) => b.classList.contains('primary'))), 'Check out all is the primary key');
+		await page.keyboard.press('Enter');
+		await settle(page);
+		expect(!(await page.evaluate(() => document.getElementById('ask').open)), 'Enter on Cancel did not close the question');
+		expect((await page.getAttribute('#result', 'data-on')) !== 'true', 'Cancel checked files out');
+		await page.click('[data-key="fk-out"]');
+		await settle(page);
+		await page.click('[data-key="ask-ok"]');
+		await settle(page);
+		expect(/^Checked out 16 of 18 files\. Alex Kim has 1 of them checked out\.$/.test(await text(page, '#result-word')), `the answer says "${await text(page, '#result-word')}"`);
+	});
+	await flow('My files is my check outs; waiting is said once', size, 'offlineWaiting', async (page, expect) => {
+		const names = (await page.$$eval('#vl-mine .row-name', (r) => r.map((x) => x.textContent))).sort();
+		expect(names.join() === 'Gearbox.SLDASM,Plate-Right.SLDPRT', `My files lists ${names.join(', ')}`);
+		const said = (await page.evaluate(() => document.body.innerText)).match(/waiting to upload/gi) || [];
+		expect(said.length === 1, `"waiting to upload" is said ${said.length} times`);
+	});
+	await flow('one import summary, no file listed twice', size, 'importSummary', async (page, expect) => {
+		const mine = await page.$$eval('#vl-mine .row-name', (r) => r.map((x) => x.textContent));
+		expect(mine.join() === 'Gearbox.SLDASM', `My files lists ${mine.join(', ')}`);
+		const cards = await page.$$eval('.attn-card', (c) => c.map((x) => x.getAttribute('data-kind')));
+		expect(cards.join() === 'import,nameShared', `the cards are ${cards.join(', ')}`);
+		expect(!(await page.$('[data-key="nt-expand-import"]')), 'the import summary lists the files the name card lists');
+		const title = (await text(page, '.attn-card[data-kind="import"] .attn-title')).replace(/\u00a0/g, ' ');
+		expect(title === 'Added 4,987 of 5,000 files to Robot 2027 \u203a CopyDesignTemp', `the summary says "${title}"`);
+		const ring = (await text(page, '.gauge-words')).replace(/\u00a0/g, ' ');
+		expect(ring === 'All 5,010 team files are up to date on LAB-PC-14.', `the ring says "${ring}"`);
+	});
+	await flow('rename a file that shares a name, in the app', size, 'groupedNotices', async (page, expect) => {
+		await page.click('[data-key="nt-expand-nameShared"]');
+		await settle(page);
+		const item = 'ni:nameShared:Robot 2027/CopyDesignTemp/Bracket.SLDPRT';
+		const hint = await page.getAttribute(`[data-key="row-${item}"]`, 'title');
+		expect(hint === 'See the Bracket.SLDPRT in Robot 2027 \u203a Intake', `the row goes to "${hint}"`);
+		await page.click(`[data-key="rename-${item}"]`);
+		await settle(page);
+		expect(await page.evaluate(() => document.getElementById('ask').open), 'Rename did not ask');
+		const picked = await page.evaluate(() => {
+			const f = document.getElementById('ask-name');
+			return f.value.slice(f.selectionStart, f.selectionEnd);
+		});
+		expect(picked === 'Bracket', `the field picks "${picked}", not the name before its .SLDPRT`);
+		await page.fill('#ask-name', 'Plate-Left.SLDPRT');
+		await page.click('[data-key="ask-ok"]');
+		await settle(page);
+		expect(/already has a file named Plate-Left\.SLDPRT/.test(await text(page, '#ask-error')), `a taken name was not refused: "${await text(page, '#ask-error')}"`);
+		await page.fill('#ask-name', 'Bracket-Intake');
+		await page.click('[data-key="ask-ok"]');
+		await settle(page);
+		expect(/Keep \.SLDPRT at the end/.test(await text(page, '#ask-error')), `a lost .SLDPRT was not refused: "${await text(page, '#ask-error')}"`);
+		await page.fill('#ask-name', 'Bracket-Intake.SLDPRT');
+		await page.keyboard.press('Enter');
+		await settle(page);
+		expect(!(await page.evaluate(() => document.getElementById('ask').open)), 'Enter did not rename');
+		expect((await text(page, '#result-word')) === 'Renamed Bracket.SLDPRT to Bracket-Intake.SLDPRT.', `the answer says "${await text(page, '#result-word')}"`);
+		const title = (await text(page, '.attn-card[data-kind="nameShared"] .attn-title')).replace(/\u00a0/g, ' ');
+		expect(title === '13 files share a name with other files in this project', `the card now says "${title}"`);
+	});
+	await flow('the check-out question', size, 'checkoutPrompt', async (page, expect) => {
+		const words = (await text(page, '.prompt-card .attn-detail')).replace(/\u00a0/g, ' ');
+		expect(words === 'SolidWorks opened it read-only. Check it out, then close it in SolidWorks and open it again here to save changes.', `the question says "${words}"`);
+		const keys = await page.$$eval('.prompt-card button', (b) => b.map((x) => x.textContent.trim()));
+		expect(keys.join('|') === 'Check out and reopen|Not now', `the question offers ${keys.join(', ')}`);
+		await page.click('[data-key="prompt-checkout"]');
+		await settle(page);
+		expect(!(await page.$('.prompt-card')), 'the question stayed after Check out and reopen');
+		expect(/^Checked out Plate-Left\.SLDPRT\. Close Plate-Left\.SLDPRT in SolidWorks first/.test(await text(page, '#result-word')), `the answer says "${await text(page, '#result-word')}"`);
+	});
 	await flow('settings sheet', size, 'synced', async (page, expect) => {
 		await page.click('[data-key="hdr-settings"]');
 		await settle(page);
@@ -1126,10 +1321,19 @@ tally.bridgeTypes = 0;
 		m = await click('[data-key="sel-undo"]');
 		expect(m.type === 'undoCheckOut' && m.paths.join() === GEARBOX, 'Undo check out sent ' + JSON.stringify(m));
 		await click('[data-key="sel-clear"]');
+		// Check out all asks first, with the count, and sends nothing until the answer.
 		m = await click('[data-key="fk-out"]');
-		expect(m.type === 'checkOut' && m.paths.join() === 'Robot 2027/Drivetrain', 'Check out all sent ' + JSON.stringify(m));
+		expect(!m.type && (await page.evaluate(() => document.getElementById('ask').open)), 'Check out all did not ask first: ' + JSON.stringify(m));
+		expect(/^Check out \d+ files in Drivetrain and its folders\?/.test((await page.textContent('#ask-words')).replace(/\u00a0/g, ' ')), 'Check out all asked: ' + (await page.textContent('#ask-words')));
+		m = await click('[data-key="ask-ok"]');
+		expect(m.type === 'checkOut' && m.paths.join() === 'Robot 2027/Drivetrain' && m.open === false, 'Check out all sent ' + JSON.stringify(m));
 		m = await click('[data-key="fk-in"]');
 		expect(m.type === 'checkIn' && m.paths.join() === 'Robot 2027/Drivetrain', 'Check in all sent ' + JSON.stringify(m));
+		// Each row's one state key: Check out when nobody has it, Check in when I have it.
+		m = await click('[data-key="state-f-wheel-hub"]');
+		expect(m.type === 'checkOut' && m.paths.join() === HUB && m.open === false, 'a row\'s Check out sent ' + JSON.stringify(m));
+		m = await click('[data-key="state-f-gearbox"]');
+		expect(m.type === 'checkIn' && m.paths.join() === GEARBOX, 'a row\'s Check in sent ' + JSON.stringify(m));
 
 		// The folder dialog: a host view while typing keeps the typed name.
 		await click('[data-key="fk-new"]');
@@ -1215,6 +1419,20 @@ tally.bridgeTypes = 0;
 		expect((await page.getAttribute('body', 'data-screen')) === 'detail', 'a row did not move the view to detail');
 		await host({ type: 'fileDetail', detail: demo.detailFor('synced', 'f-wheel-hub') });
 		expect((await page.$$('.history-list > li')).length === 5, 'fileDetail did not render its history');
+		// A kept copy's tone comes from HistoryEntryView.routine, never from its note: a routine
+		// one (saved while checked out, an earlier save) reads as a plain save; any other is marked.
+		const toned = demo.detailFor('synced', 'f-wheel-hub');
+		const older = toned.history[1];
+		toned.history.splice(
+			1,
+			0,
+			Object.assign({}, older, { id: 'k-news', kind: 'keptCopy', note: 'Saved while checked out', routine: false, isCurrent: false }),
+			Object.assign({}, older, { id: 'k-routine', kind: 'keptCopy', note: 'An earlier save, kept', routine: true, isCurrent: false })
+		);
+		await host({ type: 'fileDetail', detail: toned });
+		const tones = await page.$$eval('.history-list > li', (li) => li.map((x) => x.getAttribute('data-copy') === 'true'));
+		expect(tones.length === 7 && tones[1] === true && tones[2] === false, 'a kept copy\'s tone did not follow routine: ' + JSON.stringify(tones));
+		await host({ type: 'fileDetail', detail: demo.detailFor('synced', 'f-wheel-hub') });
 		m = await click('[data-key="d-checkout"]');
 		expect(m.type === 'checkOut' && m.paths.join() === HUB && m.open === false, 'detail Check out sent ' + JSON.stringify(m));
 		m = await click('[data-key="d-checkout-open"]');
@@ -1240,29 +1458,35 @@ tally.bridgeTypes = 0;
 		expect(m.type === 'takeBack' && m.fileId === 'f-plate-left', 'Take back sent ' + JSON.stringify(m));
 		await click('[data-key="back"]');
 
-		// A file that shares a name is renamed from its notice item, after the small dialog.
-		await host({ type: 'view', view: view('groupedNotices') });
-		await click('[data-key="nt-expand-nameShared"]');
-		await click('[data-key="rename-ni:nameShared:Robot 2027/CopyDesignTemp/Bracket.SLDPRT"]');
-		await page.fill('#ask-name', 'Bracket-Pack.SLDPRT');
-		m = await click('[data-key="ask-ok"]');
-		expect(m.type === 'renameFile' && m.path === 'Robot 2027/CopyDesignTemp/Bracket.SLDPRT' && m.newName === 'Bracket-Pack.SLDPRT', 'a shared name\'s Rename sent ' + JSON.stringify(m));
-
 		// A notice's action.
 		await host({ type: 'view', view: view('importSummary') });
 		m = await click('[data-key="nt-act-import"]');
 		expect(m.type === 'dismissNotice' && m.key === 'import', 'the import summary\'s Done sent ' + JSON.stringify(m));
 
-		// The check-out question: Not now sends that open's key back (so the host asks about the
-		// next open file), and Check out and reopen asks for the file to be opened again.
-		const asked = demo.states.checkoutPrompt.view.prompt;
-		await host({ type: 'view', view: view('checkoutPrompt') });
+		// A file that shares a name is renamed from its notice, in the app.
+		await host({ type: 'view', view: view('groupedNotices') });
+		await click('[data-key="nt-expand-nameShared"]');
+		const SHARED = 'Robot 2027/CopyDesignTemp/Bracket.SLDPRT';
+		await click(`[data-key="rename-ni:nameShared:${SHARED}"]`);
+		await page.fill('#ask-name', 'Bracket-Intake.SLDPRT');
+		m = await click('[data-key="ask-ok"]');
+		expect(m.type === 'renameFile' && m.path === SHARED && m.newName === 'Bracket-Intake.SLDPRT', 'Rename sent ' + JSON.stringify(m));
+
+		// The check-out question: Not now sends its own key back and hides that one question;
+		// the same question stays hidden, the next open of the file asks again.
+		const asked = view('checkoutPrompt');
+		await host({ type: 'view', view: asked });
 		m = await click('[data-key="prompt-later"]');
-		expect(m.type === 'dismissNotice' && m.key === asked.key, 'the question\'s Not now sent ' + JSON.stringify(m));
-		expect(!(await page.$('.prompt-card')), 'Not now left the question showing');
-		await host({ type: 'view', view: view('checkoutPrompt', { prompt: Object.assign({}, asked, { key: asked.key + ':again' }) }) });
+		expect(m.type === 'dismissNotice' && m.key === asked.prompt.key, 'Not now sent ' + JSON.stringify(m));
+		expect(!(await page.$('.prompt-card')), 'Not now left the question up');
+		await host({ type: 'view', view: view('checkoutPrompt') });
+		expect(!(await page.$('.prompt-card')), 'the question Not now answered came back');
+		const reopened = view('checkoutPrompt');
+		reopened.prompt.key = 'prompt:' + reopened.prompt.path + ':2026-10-01T22:45:00.000Z';
+		await host({ type: 'view', view: reopened });
+		expect(!!(await page.$('.prompt-card')), 'opening the file again did not ask again');
 		m = await click('[data-key="prompt-checkout"]');
-		expect(m.type === 'checkOut' && m.open === true && m.paths.join() === asked.path, 'the question\'s Check out and reopen sent ' + JSON.stringify(m));
+		expect(m.type === 'checkOut' && m.open === true && m.paths.join() === reopened.prompt.path, 'Check out and reopen sent ' + JSON.stringify(m));
 
 		await click('[data-key="hdr-settings"]');
 		m = await click('[data-key="set-root"]');
@@ -1274,8 +1498,12 @@ tally.bridgeTypes = 0;
 		await page.keyboard.press('Escape');
 		m = await click('[data-key="signout"]');
 		expect(m.type === 'signOut', 'Sign out sent ' + JSON.stringify(m));
+		// How many files wait is said once: by Right now when it says so, else by the status.
+		await host({ type: 'view', view: view('offlineWaiting') });
+		expect(!(await page.$('.status-group .sync-detail')), 'the status repeats the waiting files Right now already counts');
 		const quiet = view('offlineWaiting');
 		quiet.sync.detail = null;
+		quiet.activity.waiting = null;
 		await host({ type: 'view', view: quiet });
 		const pending = ((await page.textContent('.status-group .sync-detail').catch(() => '')) || '').replace(/\s+/g, ' ').trim();
 		expect(pending === '3 files are waiting to upload.', `with no detail sentence, pendingCount 3 read "${pending}"`);
@@ -1352,7 +1580,7 @@ console.log(
 		`grids=${tally.grids} rowGrids=${tally.rowGrids} plantedGridLayersFound=${tally.gridControl ?? 0}/3 rowDecoration=${tally.rowDecoration} ` +
 		`chipsLikeButtons=${tally.chipsLikeButtons} overflow=${tally.overflow} hairlines=${tally.hairlines} hairlineMin=${fmt(tally.hairlineMin)} ` +
 		`hairlineUnder3=${tally.hairlineUnder3} tabStops=${tally.tabStops} focusMissed=${tally.focusMissed} ringMin=${fmt(tally.ringMin)} ` +
-		`ringFailures=${tally.ringFailures} jargon=${tally.jargon} offline=${tally.offline} plantedOfflineFound=${tally.offlinePlanted}/5 flows=${tally.flows} flowFailures=${tally.flowFailures} logo=${tally.logo} logoFailures=${tally.logoFailures} plantedLogoFound=${tally.logoPlanted}/1 bridgeTypes=${tally.bridgeTypes}/${Object.keys(CONTRACT).length} bridgeFailures=${tally.bridgeFailures} plantedDefectsCaught=${tally.controlsCaught}/${tally.controlsPlanted} emDash=${tally.emDash} files=${scanned.length}`
+		`ringFailures=${tally.ringFailures} jargon=${tally.jargon} offline=${tally.offline} plantedOfflineFound=${tally.offlinePlanted}/5 flows=${tally.flows} flowFailures=${tally.flowFailures} logo=${tally.logo} logoFailures=${tally.logoFailures} plantedLogoFound=${tally.logoPlanted}/1 bridgeTypes=${tally.bridgeTypes}/${Object.keys(CONTRACT).length} bridgeFailures=${tally.bridgeFailures} plantedDefectsCaught=${tally.controlsCaught}/${tally.controlsPlanted} shapes=${tally.shapes} shapeFailures=${tally.shapeFailures} plantedShapesFound=${Math.min(tally.shapesPlanted, 2)}/2 emDash=${tally.emDash} files=${scanned.length}`
 );
 console.log(problems.length ? `CHECK-UI FAIL problems=${problems.length}` : 'CHECK-UI PASS');
 process.exit(problems.length ? 1 : 0);
