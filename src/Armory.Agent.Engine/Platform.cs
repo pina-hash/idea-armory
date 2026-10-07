@@ -89,6 +89,9 @@ public interface IVaultFileSystem
     // stops the others.
     void ApplyLockAttributes(IReadOnlyList<(VaultPath Path, LockOwnership Ownership)> attributes);
     void EnsureFolder(string vaultRelativeFolder);
+    // Whether the folder is on disk right now (not as the last scan saw it). A download checks it
+    // just before writing, so a folder the student moved since the scan is never made again.
+    bool FolderExists(string vaultRelativeFolder) => true;
     // A writable scratch file on the vault's volume for staging a download.
     Stream CreateStaging(out string stagingName);
     void DeleteStaging(string stagingName);

@@ -429,6 +429,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
         {
             lastOnline = deps.Clock.GetUtcNow();
             KeepCheckedOut();
+            AdoptMyLocks();
             // A write a crash left in flight is sent again; the projects it wrote to are read again.
             if (await ResumeInflightAsync(ct) && online == true) online = await RefreshStaleAsync(ct);
             // A folder renamed or removed here: one server call each, after any file write a
@@ -639,6 +640,8 @@ public sealed partial class SyncEngine : IAsyncDisposable
         {
             refreshing = false;
             PublishRemote();
+            // What was just read shows within half a second, not only after the next file moves.
+            viewWanted = true;
             if (inPass) PublishSoon();
         }
     }

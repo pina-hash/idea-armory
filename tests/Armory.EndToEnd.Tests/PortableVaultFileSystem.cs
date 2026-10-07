@@ -358,6 +358,7 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
     }
 
     public void EnsureFolder(string vaultRelativeFolder) => Directory.CreateDirectory(Full(vaultRelativeFolder));
+    public bool FolderExists(string vaultRelativeFolder) => Directory.Exists(Full(vaultRelativeFolder));
     public Stream CreateStaging(out string stagingName)
     {
         stagingName = ".armory/staging/" + Guid.NewGuid().ToString("N") + ".download";

@@ -105,6 +105,7 @@ public sealed partial class SyncEngine
         var current = remote.Current!;
         // Recheck right before writing: the plan was made a moment ago.
         if (IsOpenNow(path)) { st.NewerWaiting = true; st.NewerAuthor = current.Author; return false; }
+        if (FolderMovedAway(path)) return false;
         // The read-only rule is set on the staged copy, so the new bytes are never writable here
         // unless this computer has the file checked out.
         var ownership = DesiredOwnership(st, OwnershipOf(remote.Lock), path);
@@ -118,6 +119,7 @@ public sealed partial class SyncEngine
             staging.Position = 0;
             Checkpoint("before-replace", ct);
             if (IsOpenNow(path)) { st.NewerWaiting = true; st.NewerAuthor = current.Author; return false; }
+            if (FolderMovedAway(path)) return false;
             var outcome = fs.Replace(path, input.LocalHash, staging, readOnly);
             if (!outcome.Succeeded)
             {
@@ -147,6 +149,19 @@ public sealed partial class SyncEngine
         MarkDirty();
         Checkpoint("after-download", ct);
         return true;
+    }
+
+    // The file's folder was on disk at this pass's scan and is gone now: the student renamed,
+    // moved or removed it while files were on their way. Nothing is written there (the write
+    // would make the old folder again, and the next pass would take the files in it for files
+    // moved back, for the whole team); the next pass sees the move and downloads the file where
+    // its folder is now. A folder that was never here (new for the team) is made as before.
+    private bool FolderMovedAway(VaultPath path)
+    {
+        var folder = Parent(path.Value);
+        for (var f = folder; f is not null; f = Parent(f))
+            if (localFolders.Contains(f)) return !fs.FolderExists(f);
+        return false;
     }
 
     private async Task<bool> UploadAsync(FileState st, ProjectState project, VaultPath path, SyncInput input, SyncAction action, CancellationToken ct)
@@ -875,6 +890,12 @@ public sealed partial class SyncEngine
                 who is null ? $"It can't be renamed right now, so Armory put it back. Try again later."
                     : $"A file can be renamed only while nobody else has it checked out. Try again after it's checked in.",
                 who is null ? "It was put back where it was." : $"{who} has it checked out.", who is null ? null : CheckedOutReason);
+        }
+        else if (!local.ContainsKey(to.Value))
+        {
+            // The file is not at the new path any more (moved again, or gone): nothing is left to
+            // put back from there, so no move waits for it. The next pass finds where it is now.
+            // (Waiting here kept the file out of every plan, and a check in of it waiting forever.)
         }
         else
         {

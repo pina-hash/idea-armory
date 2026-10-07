@@ -404,6 +404,13 @@ public sealed class WindowsVaultFileSystem : IVaultFileSystem, IDisposable
         Directory.CreateDirectory(absolute!);
     }
 
+    public bool FolderExists(string vaultRelativeFolder)
+    {
+        var folder = (vaultRelativeFolder ?? string.Empty).Trim('/', '\\');
+        if (folder.Length == 0) return Directory.Exists(paths.Root);
+        return paths.TryResolve(folder, out var absolute, out _) && Directory.Exists(absolute);
+    }
+
     public Stream CreateStaging(out string stagingName)
     {
         stagingName = Guid.NewGuid().ToString("N") + StagingExtension;

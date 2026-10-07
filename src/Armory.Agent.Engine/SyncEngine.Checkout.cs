@@ -641,19 +641,50 @@ public sealed partial class SyncEngine
     }
 
     // Files this computer has checked out under the paths (a file, or every file in a folder):
-    // by the server's lock table, or offline by the ownership it last knew.
+    // by the server's lock table, or offline by the ownership it last knew. A file is found by
+    // where its record is here or where the server has it (the window shows the server's path),
+    // and a lock with no record here gets one first (AdoptMyLocks), so Check in and Undo always
+    // work on what the window shows as checked out by you.
     private List<(FileState State, VaultPath Path)> MyCheckOuts(IReadOnlyList<string> paths)
     {
+        AdoptMyLocks();
         List<(FileState, VaultPath)> mine = [];
         foreach (var st in state.Files.Values.OrderBy(f => f.Path, StringComparer.OrdinalIgnoreCase))
         {
-            if (st.FileId is not { } id || !Under(st.Path, paths) || !VaultPath.TryCreate(st.Path, out var path, out _, options.VaultRoot)) continue;
-            var held = remoteById.TryGetValue(id, out var remote)
+            if (st.FileId is not { } id || !VaultPath.TryCreate(st.Path, out var path, out _, options.VaultRoot)) continue;
+            var known = remoteById.TryGetValue(id, out var remote);
+            if (!Under(st.Path, paths) && !(known && Under(remote.Path.Value, paths))) continue;
+            var held = known
                 ? !remote.File.Deleted && OwnershipOf(remote.File.Lock) == LockOwnership.ThisDevice
                 : KnownOwnership(st) == LockOwnership.ThisDevice || st.AutoCheckIn;
             if (held) mine.Add((st, path));
         }
         return mine;
+    }
+
+    // Every lock this computer holds on the server (under its current or a former device id) is
+    // one of its check outs, downloaded or not: a lock with no record here (its record lost to a
+    // folder change, a check out answered after it was given up, an older version's bug) gets a
+    // record at the server's path, so the window shows it as checked out by you with a working
+    // Check in and Undo. Run after every read of the server and before every check in or undo.
+    private void AdoptMyLocks()
+    {
+        foreach (var (id, (file, project, path)) in remoteById.ToArray())
+        {
+            if (file.Deleted || file.Current is null || file.Lock is not { IsLive: true } held || OwnershipOf(held) != LockOwnership.ThisDevice) continue;
+            if (state.FirstWithFileId(id) is not null || !project.Usable) continue;
+            if (state.Files.TryGetValue(path.Value, out var occupant))
+            {
+                // Another record is at that path (a file of this computer's not in Armory): it is
+                // never taken over; the lock waits until that record moves.
+                deps.Log?.Invoke($"check out: the lock on {path} has no record here, and {occupant.Path} is another file's");
+                continue;
+            }
+            var st = FileFor(project, path.Value);
+            st.FileId = id;
+            st.Holder = Known(held);
+            deps.Log?.Invoke($"check out: the lock on {path} had no record here; it is shown as checked out by you");
+        }
     }
 
     private static bool Under(string path, IReadOnlyList<string> paths)

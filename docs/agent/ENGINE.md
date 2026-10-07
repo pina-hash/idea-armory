@@ -375,6 +375,32 @@ on the next pass, through the crash points every write already has (`before-lock
   ("changed without a check out") and the checked-in version comes back, never a shared
   version nobody checked in.
 
+### Every lock this computer holds is its check out (v0.2.1)
+
+The field report: a mentor added a part; a student checked it out before it had downloaded
+to his computer while he was reorganizing folders, and afterwards nobody could check it in.
+What the end-to-end reproduction (`StuckCheckOutTests.Checked_out_before_it_downloaded_while_its_folder_moved`)
+found, and what changed:
+
+- **A download never makes a moved folder again.** Files planned before the student renamed
+  their folder in Explorer were written to the old path, which made the old folder again;
+  the next pass took those files for files the student had moved back, and sent them back to
+  the old folder for the whole team (each under a lock taken for the move). A download now
+  checks, just before writing, that the nearest folder the scan saw is still on disk
+  (`FolderMovedAway`, `IVaultFileSystem.FolderExists`); if not, the file waits for the next
+  pass, which downloads it where its folder is now.
+- **A lock with no record here gets one** (`AdoptMyLocks`, after every read of the server and
+  before every check in or undo): any live lock held by this device or a former device id is
+  given a record at the server's path, so the row says "Checked out by you", My files lists
+  it, and Check in and Undo work, downloaded or not (an undo of a file that never came down
+  only lets the lock go).
+- **Check in and Undo find a file by the server's path too** (the window shows the server's
+  path), not only by where its record is here.
+- **A local move whose file is gone from the new path stops waiting.** It kept the file out of
+  every plan, and a check in of it waited forever.
+- A check out that can't bring the copy up to date answers so and takes no lock (D18), as
+  before; the test holds that too.
+
 ## Folders and projects (C2 to C6, D8, D16, D17; v2-design.md 4.3)
 
 The server keeps files, not folders: a file's folder is a string, matched exactly (case

@@ -225,6 +225,10 @@ internal sealed class Computer : IAsyncDisposable
     }
 
     public Task<SyncReport> SyncAsync() => Engine.SyncOnceAsync();
+    // This computer's own server calls (its session and device), for tests that make the server
+    // hold something this computer's records don't know of.
+    public ArmoryApi Api => new(new PostgrestClient(http, Sessions));
+    public Guid DeviceId => Sessions.Current!.DeviceId;
     public async Task SyncTimesAsync(int times) { for (var i = 0; i < times; i++) await SyncAsync(); }
 
     // The window's actions, as a student clicks them (v2 check out).
