@@ -24,6 +24,7 @@ var engine = new SyncEngine(new EngineOptions { VaultRoot = @"C:\IDEA\Armory" },
     State = stateStore,               // IEngineStateStore (FileStateStore)
     Sessions = sessions, Api = api, Blobs = blobs,
     ReleaseReader = null,             // no standalone saved-release reader exists yet
+    Log = log.Info,                   // the raw text of each problem, once; the window gets plain words
 });
 engine.ViewChanged += view => bridge.Post(BridgeMessages.ViewMessage(view));
 engine.Start();                       // background loop on the contract's schedule
@@ -60,7 +61,17 @@ file (D13).
    `SaveRecorder.Recover` re-journals any capture a crash left unjournaled.
 3. **Refresh.** `armory_my_projects`, then per project `armory_list_changes(cursor)` (the
    cursor is persisted after processing) and `armory_project_files`. A `lock_broken` change
-   naming this computer records the obligation to keep its bytes.
+   naming this computer records the obligation to keep its bytes; a `file_revived` change
+   records when the file was revived (File detail marks the version that followed). Every
+   tracked file's live check out is remembered in its state (`FileState.Holder`), so the
+   window says who has it while offline, even after a restart. A check out that this
+   computer itself takes or lets go of is known at once (`KnowLock`), never only at the next
+   read of the server: a connection that drops right after a release or an acquire never
+   leaves the read-only rule or the window acting on the lock as it was.
+   A check out asked for a file this computer already holds keeps it checked out
+   (`KeepCheckedOut`): a check in or an undo still waiting, an open add's automatic check in
+   and a lock held only for a move give way to it. This runs only once the server was read,
+   so a check out refused offline cancels nothing.
 4. **Finish what a crash interrupted.** Each file's state may hold one in-flight server
    write (create, lock, commit, side version, release, tombstone, move), persisted before
    the call with its operation id and arguments. It is re-sent with the same id, so the
@@ -77,12 +88,16 @@ file (D13).
    plans only add journal intents (never a lock intent for a shared file). Online plans run
    in order; any failure stops that file until the next pass.
 7. **Finish requests.** Read the server again if the plans wrote, then: a check in, an
-   undo, a closed add and a lock taken only for a move or a removal let their lock go once
-   the file is clean (read-only first, then the release); an asked-for check out takes its
-   lock (see Check out). Read the server again if anything was written.
+   undo and a closed add let their lock go once the file is clean, and a lock taken only for
+   a move or a removal as soon as that is done, whatever is on disk; always read-only first,
+   then the release, and a read-only bit that can't be set keeps the lock until a later pass
+   can set it. An asked-for check out keeps any lock this computer holds and otherwise takes
+   its own (see Check out). Read the server again if anything was written.
 8. **The read-only rule** (D4), every pass, offline too, from the ownership this computer
-   last knew: every file the server has a live version of is read-only unless this computer
-   has it checked out; a file it is letting go of is read-only already. Files the server does
+   last knew (its own lock changes of the pass included; offline since the start, the
+   ownership it last applied, and none known means nobody's): every file the server has a
+   live version of is read-only unless this computer has it checked out; a file it is
+   letting go of is read-only already. Files the server does
    not have (not added yet, a refused name, a release-gate draft, too large) are never
    touched. A bit the scan finds cleared is set again. One batch per pass
    (`ApplyLockAttributes`, one manifest write); a download sets the bit on the staged copy
@@ -112,9 +127,15 @@ on the next pass, through the crash points every write already has (`before-lock
   server has no live version. Taking the lock makes the file writable at once; "Check out
   and open" then opens it, unless SolidWorks still has it open ("Close Plate.SLDPRT in
   SolidWorks first"). A folder is every live file under it: "Checked out 12 of 14 files.
-  Maria Lopez has 2 of them checked out." A check out that could not finish is dropped, not
-  left to happen later by surprise; checking out a file that is being checked in or undone
-  keeps it checked out.
+  Maria Lopez has 2 of them checked out." The rest name where they are: up to three people
+  ("Maria Lopez and Sam Lee have 3 of them checked out.") and my other computer ("1 is
+  checked out on your other computer, LAB-PC-07."). A file SolidWorks has open read-only
+  while it is checked out (not "and open") answers "Close it in SolidWorks and open it again
+  to save changes." A check out that could not finish is dropped, not left to happen later
+  by surprise; checking out a file that is being checked in or undone, added while open or
+  held for a rename keeps it checked out (only once the server was read: offline, the check
+  out is refused and the check in or undo still waits). A lock taken just before the
+  connection dropped is a check out all the same, and the answer says so.
 - **Check in** (`Request = CheckIn`): Core uploads the bytes on disk if they changed (a commit
   on the base, under this computer's lock); then the file is made read-only; then the lock is
   released. Offline, the request waits and finishes when the computer is back online. Bytes
@@ -139,10 +160,18 @@ on the next pass, through the crash points every write already has (`before-lock
   copy ("changed without a check out"), never the shared version, and the shared version
   comes back once the file is closed: one grouped notice.
 - **Take back** (`armory_break_lock`, for a mentor or CAD lead): the operation id derives from
-  that one check out, so asking twice takes it back once. The holder's computer keeps what was
-  not checked in (`lockBroken`) and shows one notice.
+  that one check out and the computer asking, so asking twice here takes it back once and a
+  second mentor or CAD lead never reuses another caller's id. It is asked once and never
+  resumed after a crash (no in-flight record): the mentor asks again, and the same id
+  answers from the server's receipt. Asked from an older view after someone else took it
+  back, it answers "Plate.SLDPRT isn't checked out any more." The holder's computer keeps
+  what was not checked in (`lockBroken`) and shows one notice.
 - **Moves and removals** take the lock only for themselves (`FileState.TransientLock`) and let
-  it go once done; a removed file's lock is always let go.
+  it go as soon as the move or the removal is done, whatever is on disk; a removed file's
+  lock is always let go. Core plans a file under such a lock as nobody's
+  (`LockOwnership.Free`), so bytes saved without a check out before a rename are one kept copy
+  ("changed without a check out") and the checked-in version comes back, never a shared
+  version nobody checked in.
 
 ## Rules added after review
 
@@ -172,16 +201,24 @@ on the next pass, through the crash points every write already has (`before-lock
 - After a reconnect (a new device id), the old id's check outs are still this computer's;
   writes under them use the holding id.
 - An in-flight release or deletion is dropped on restart and planned again from fresh state.
+- A file is not renamed from the window while a write for it is being sent (its add, a
+  save): "Armory is still adding Gear.SLDPRT. Try again in a moment." The write, sent again
+  under the old name, would otherwise undo the rename.
+- A problem reaches the window as one plain sentence (no journal, vault or lock), under
+  `cantRead` for this computer's disk and `cantSend` for what the server refused; the raw
+  text goes only to the log (`EngineDependencies.Log`), once per problem.
 
 ## Upgrade from 0.1.0 (D15)
 
-`EngineState` is schema 2. Loading schema 1 forgets every applied ownership (0.1.0 left a
-file nobody held writable), so the first pass applies the v2 rule to every file; keeps every
-lock this computer holds, which is now a check out ("Checked out by you"); sets each
-project's local folder to its name; and completes the journal intent of a lock a 0.1.0
-marker took. `EngineUnitTests` loads a state.json the 0.1.0 engine wrote
+`EngineState` is schema 2. Loading schema 1 keeps the ownership 0.1.0 last applied as this
+computer's last knowledge of who holds each file: the v2 rule reads it (Free and someone
+else are read-only now, this computer stays writable), and the first pass, online or
+offline, sets the bit on every file whose bit differs (0.1.0 left a file nobody held
+writable). It keeps every lock this computer holds, which is now a check out ("Checked out
+by you"); sets each project's local folder to its name; and completes the journal intent of
+a lock a 0.1.0 marker took. `EngineUnitTests` loads a state.json the 0.1.0 engine wrote
 (`tests/Armory.Agent.Engine.Tests/Fixtures/state-0.1.0.json`); `UpgradeTests` runs the first
-0.2.0 pass over a 0.1.0 vault.
+0.2.0 pass over a 0.1.0 vault, online and offline.
 
 ## The view (v2-design.md 4.4 to 4.6)
 
@@ -192,9 +229,19 @@ back). "SolidWorks year not checked" is never a notice, only a tag on File detai
 to upload is activity, never rows. My files are the files this computer has checked out, in
 any project. Every row says who has it checked out ("Checked out by you", "Checked out by
 Maria Lopez on LAB-PC-07", "Checked out by you on LAB-PC-07" for my other computer,
-"Available"). History entries are `version` ("Added to Armory", "Checked in", "Added again,
-with its history"), `keptCopy` ("Saved while checked out", "Kept when the check out was
-undone", "Changed without a check out, kept as Alex Kim's own copy", ...) and `removed`.
+"Available"). Offline since the start, the team's files are listed as this computer last
+knew them (`FileState.Holder`, its base and its saves), each with its file id, label and
+status, and "waiting" only for saves not on the server yet. A dismissed card stays
+dismissed: the items the window last showed are hidden, whenever the dismissal arrives, and
+items that are gone are forgotten only at the end of a whole online pass, never while a view
+is built. Kept copies are one item per file (the newest), the card has OK, and it counts
+toward "A few files need you" only while a checked-in version still waits for its file to
+close or someone else's check in overtook it. History entries are `version` ("Added to
+Armory", "Checked in", "Added again, with its history", from the `file_revived` changes,
+since the server keeps no removal row once a file is revived), `keptCopy` ("Saved while
+checked out", "Kept when the check out was undone", "Changed without a check out, kept as
+Alex Kim's own copy", ...; `routine` for saves kept while checked out and earlier saves) and
+`removed`.
 The activity panel's directions and speed come with stage E3; offline and paused, its
 waiting line already counts the files waiting to upload. Folder, project and import work
 (renamed and deleted folders, project renames and archiving, the import summary) is stage E2.
@@ -206,9 +253,10 @@ durable value and the step: a Core journal entry id for `create` (`revive` and t
 file's id for a revival), `lock#attempt`, `commit#parent#attempt`, `side`, `tomb#attempt`;
 a check out's lock from its request id; every answer to a lock or commit spends the
 attempt. A release uses the lock's holder and acquisition time, a take back the check out it
-ends, and a move a persisted id. The in-flight record is written before the call; a crash at
-any point replays the same id and the server returns its receipt, so a save becomes exactly
-one version.
+ends and the computer asking, and a move a persisted id. The in-flight record is written
+before every write the engine resumes (all but a take back, which the mentor asks again);
+a crash at any point replays the same id and the server returns its receipt, so a save
+becomes exactly one version.
 
 ## Schedule (contract section 4)
 

@@ -43,8 +43,13 @@ internal sealed class EngineState
     // was put back. Shown for a while, then dropped.
     public List<RememberedNotice> Remembered { get; set; } = [];
     // Notice cards the student dismissed: the card's key and the items it showed then. Those
-    // items stay hidden; a new item brings the card back with only the new ones.
+    // items stay hidden; a new item brings the card back with only the new ones. Pruned only at
+    // the end of a whole online pass, when every notice of that pass is known.
     public Dictionary<string, HashSet<string>> Dismissed { get; set; } = new(StringComparer.Ordinal);
+    // When each file was revived (contract C4, change file_revived), from the change feed. The
+    // server drops a revived file's removal from its history, so File detail marks the first
+    // version after a revival from these.
+    public Dictionary<Guid, List<DateTimeOffset>> Revivals { get; set; } = [];
 
     internal bool IsMine(Guid device) => device == DeviceId || FormerDevices.Contains(device);
 
@@ -61,22 +66,24 @@ internal sealed class EngineState
         state.Files = new(state.Files, StringComparer.OrdinalIgnoreCase);
         state.Completed = new(state.Completed, StringComparer.Ordinal);
         state.Dismissed = new(state.Dismissed, StringComparer.Ordinal);
+        state.Revivals ??= [];
         state.Migrate();
         return state;
     }
 
     // 0.1.0 (schema 1) to v2 (decision D15). 0.1.0 made a file read-only only while someone
-    // else held its lock, and recorded the ownership it applied; v2 makes every file the server
-    // has read-only unless this computer has it checked out, so every applied ownership is
-    // forgotten and the first pass applies the v2 rule to every file. A lock this computer holds
-    // is kept: it is now a check out ("Checked out by you"), never released by itself. A
-    // project's local folder is its name. Roles are kept in the server's words.
+    // else held its lock, and recorded the ownership it applied. That ownership is kept as this
+    // computer's last knowledge of who holds each file: the v2 rule reads it (Free and someone
+    // else are read-only now, ThisDevice stays writable), and the first pass, online or offline,
+    // applies the v2 rule to every file whose bit on disk differs from it (0.1.0 left Free
+    // files writable). A lock this computer holds is kept: it is now a check out ("Checked out
+    // by you"), never released by itself. A project's local folder is its name. Roles are kept
+    // in the server's words.
     internal void Migrate()
     {
         if (Schema >= CurrentSchema) return;
         foreach (var file in Files.Values)
         {
-            file.AppliedOwnership = null;
             if (file.MarkerEntry is { } marker) Completed.Add(marker);
             file.MarkerEntry = null;
         }
@@ -144,6 +151,9 @@ internal sealed class FileState
     // The ownership the read-only rule was last applied from: this computer's last knowledge
     // of who holds the file, used again while offline.
     public LockOwnership? AppliedOwnership { get; set; }
+    // The file's live check out as this computer last knew it (from the server, or from its own
+    // check out and let go), so the window still says who has it while offline.
+    public KnownLock? Holder { get; set; }
     public List<SideRecord> Sides { get; set; } = [];
     public Inflight? Inflight { get; set; }
     // Consecutive scans that did not find a file this computer had: a deletion is planned
@@ -170,6 +180,7 @@ internal sealed class FileState
     public void SetBase(Revision? revision) { BaseId = revision?.Id; BaseHash = revision?.Hash; }
 }
 
+internal sealed record KnownLock(string Email, Guid Device, string? DeviceName, DateTimeOffset Since);
 internal sealed record RememberedNotice(string Kind, Guid? FileId, string Path, string Title, string Detail, DateTimeOffset At);
 internal sealed record SideRecord(Guid VersionId, string Hash, string Reason, DateTimeOffset At);
 

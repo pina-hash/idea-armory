@@ -56,9 +56,12 @@ public sealed class EngineUnitTests
             Path = "Robot/Plate.SLDPRT", BaseId = "v1", BaseHash = "h", Inflight = new Inflight("commit", Guid.NewGuid(), "e1", Hash: "h"),
             CheckOut = "d:checkout:7", Request = Armory.Core.CheckoutRequest.Undo, AutoCheckIn = true, TransientLock = true,
             AppliedOwnership = Armory.Core.LockOwnership.ThisDevice,
+            Holder = new KnownLock("maria.lopez@b.c", Guid.NewGuid(), "LAB-PC-07", DateTimeOffset.UnixEpoch),
         };
         state.Completed.Add("e0");
         state.Dismissed["keptCopy"] = new(StringComparer.Ordinal) { "kept:1" };
+        var revived = Guid.NewGuid();
+        state.Revivals[revived] = [DateTimeOffset.UnixEpoch];
         store.Save(state.Serialize());
         var loaded = EngineState.Load(store);
         Assert.Equal(EngineState.CurrentSchema, loaded.Schema);
@@ -70,8 +73,10 @@ public sealed class EngineUnitTests
         Assert.True(file.AutoCheckIn);
         Assert.True(file.TransientLock);
         Assert.Equal(Armory.Core.LockOwnership.ThisDevice, file.AppliedOwnership); // a schema 2 state keeps what it applied
+        Assert.Equal(("maria.lopez@b.c", "LAB-PC-07"), (file.Holder!.Email, file.Holder.DeviceName)); // who has it, for the window while offline
         Assert.Contains("e0", loaded.Completed);
         Assert.Contains("kept:1", loaded.Dismissed["keptCopy"]);
+        Assert.Equal([DateTimeOffset.UnixEpoch], loaded.Revivals[revived]);
         Assert.Equal(state.DeviceId, loaded.DeviceId);
         Assert.Equal(("Robot", "cad_lead", true, true), (loaded.Projects[project].Folder, loaded.Projects[project].Role, loaded.Projects[project].Archived, loaded.Projects[project].CanTakeBack));
 
@@ -79,12 +84,15 @@ public sealed class EngineUnitTests
         var migrated = EngineState.Load(new MemoryState(File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "Fixtures", "state-0.1.0.json"))));
         Assert.Equal(2, migrated.Schema);
         Assert.Equal(2, migrated.Files.Count);
-        Assert.All(migrated.Files.Values, f => Assert.Null(f.AppliedOwnership));
+        // What 0.1.0 last knew of who holds each file stays, so the v2 rule holds offline too.
+        Assert.Equal(Armory.Core.LockOwnership.ThisDevice, migrated.Files["Robot 2027/Drivetrain/Bracket.SLDPRT"].AppliedOwnership);
+        Assert.Equal(Armory.Core.LockOwnership.Free, migrated.Files["Robot 2027/Drivetrain/Plate.SLDPRT"].AppliedOwnership);
     }
 
     // Decision D15 on a state.json the 0.1.0 engine (b18791d) wrote: Alex added Plate and
     // Bracket, opened Bracket in SolidWorks (its ~$ marker took the lock, as 0.1.0 did) and saved
-    // it offline. Everything it knew is kept; only the read-only bookkeeping starts over.
+    // it offline. Everything it knew is kept, the ownership it last applied too: the v2 rule reads
+    // it as who holds each file, so it applies even when the first 0.2.0 start is offline.
     [Fact]
     public void A_0_1_0_state_loads_as_schema_2_and_keeps_the_vault()
     {
@@ -110,10 +118,13 @@ public sealed class EngineUnitTests
         Assert.Equal("69f99a99aab601b8cb2e0d72212a1a6740c12deeb4a14f2aaf834366f3886c6f", plate.BaseHash);
         Assert.Equal(["b5428ca9-a0f6-4efb-9de6-64f0b6a535f9:save:1", "b5428ca9-a0f6-4efb-9de6-64f0b6a535f9:save:2"],
             state.Completed.Where(c => c.Contains(":save:", StringComparison.Ordinal)).Order(StringComparer.Ordinal));
-        // The ownership 0.1.0 applied (Free was writable then) is forgotten, so the first pass
-        // applies the v2 rule to every file. The lock is not touched here: on the server it is
-        // still this computer's, now a check out. The marker's lock intent is done with.
-        Assert.All(state.Files.Values, f => Assert.Null(f.AppliedOwnership));
+        // The ownership 0.1.0 applied is kept as this computer's last knowledge of who holds each
+        // file: Plate is nobody's (read-only under v2, though 0.1.0 left it writable, so the first
+        // pass sets the bit), Bracket is this computer's (a check out now, writable). The lock is
+        // not touched here: on the server it is still this computer's. The marker's lock intent
+        // is done with.
+        Assert.Equal(Armory.Core.LockOwnership.ThisDevice, bracket.AppliedOwnership);
+        Assert.Equal(Armory.Core.LockOwnership.Free, plate.AppliedOwnership);
         Assert.Null(bracket.MarkerEntry);
         Assert.Contains("b5428ca9-a0f6-4efb-9de6-64f0b6a535f9:open:3", state.Completed);
         Assert.Equal(Armory.Core.CheckoutRequest.None, bracket.Request);
@@ -122,7 +133,6 @@ public sealed class EngineUnitTests
         var again = Encoding.UTF8.GetString(state.Serialize());
         Assert.Contains("\"schema\":2", again, StringComparison.Ordinal);
         Assert.DoesNotContain("markerEntry", again, StringComparison.Ordinal);
-        Assert.DoesNotContain("appliedOwnership", again, StringComparison.Ordinal);
         Assert.Contains("\"folder\":\"Robot 2027\"", again, StringComparison.Ordinal);
     }
 
@@ -192,11 +202,12 @@ public sealed class EngineUnitTests
         Assert.Equal(3, v.GetProperty("activity").GetProperty("waiting").GetProperty("count").GetInt32());
         Assert.True(v.GetProperty("settings").GetProperty("startAtSignIn").GetBoolean());
         var detail = new FileDetailView("f", "Plate.SLDPRT", "Robot/Plate.SLDPRT", "Robot", "", FileStatuses.Synced, available, true, false,
-            [new HistoryEntryView("h", HistoryKinds.KeptCopy, "Alex Kim", "2026-10-06T10:00:00.0000000+00:00", 12, "Saved while checked out", false, false)]);
+            [new HistoryEntryView("h", HistoryKinds.KeptCopy, "Alex Kim", "2026-10-06T10:00:00.0000000+00:00", 12, "Saved while checked out", false, false, true)]);
         using var d = JsonDocument.Parse(BridgeMessages.DetailMessage(detail));
         var dv = d.RootElement.GetProperty("detail");
         Assert.True(dv.GetProperty("releaseNotChecked").GetBoolean()); // the tag lives on the detail
         Assert.Equal("keptCopy", dv.GetProperty("history")[0].GetProperty("kind").GetString());
+        Assert.True(dv.GetProperty("history")[0].GetProperty("routine").GetBoolean()); // saved while checked out: the neutral tone
         Assert.False(dv.GetProperty("canTakeBack").GetBoolean());
 
         // The two v2 host messages (docs/agent/BRIDGE.md): what is moving right now, and the

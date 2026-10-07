@@ -172,6 +172,8 @@ internal sealed class Computer : IAsyncDisposable
     public SessionManager Sessions { get; private set; } = null!;
     public bool Offline { get => network.Offline; set => network.Offline = value; }
     public int Engines { get; private set; }
+    // What the engine wrote to its log: the raw text of each problem.
+    public List<string> Logged { get; } = [];
 
     public async Task ConnectAsync(string email)
     {
@@ -194,6 +196,7 @@ internal sealed class Computer : IAsyncDisposable
         {
             Files = Disk, Journal = Journal, Snapshots = Snapshots, State = State, Sessions = Sessions, Api = api,
             Blobs = new BlobClient(http, http, world.Site.BaseUri, Sessions), ReleaseReader = ReleaseReader, Clock = Clock,
+            Log = line => { lock (Logged) Logged.Add(line); },
         })
         { CrashPoint = CrashPoint };
         Engines++;

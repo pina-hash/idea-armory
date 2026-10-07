@@ -36,11 +36,11 @@ public sealed partial class SyncEngine
                 if (file.Deleted || file.Current is null || !Under(path.Value, paths)) continue;
                 var st = state.Files.Values.FirstOrDefault(f => f.FileId == file.Id) ?? FileFor(project, path.Value);
                 st.FileId ??= file.Id;
+                // Checking out again a file this computer is checking in or undoing, added while
+                // open, or holds only for a move keeps it checked out. That is decided inside the
+                // pass once the server was read (KeepCheckedOut), so a check out refused offline
+                // never cancels a check in or an undo still waiting.
                 st.CheckOut ??= state.NextId("checkout");
-                // Checking out again a file this computer is checking in or undoing, or added
-                // while open, keeps it checked out.
-                st.Request = CheckoutRequest.None;
-                st.AutoCheckIn = false;
                 targets.Add((st, path));
             }
             if (targets.Count == 0)
@@ -64,13 +64,15 @@ public sealed partial class SyncEngine
             }
             Save();
             PublishLocked();
-            if (!wasOnline) return Offline("Files can be checked out once this computer is back online.");
-            return CheckOutAnswer(targets, open);
+            // A lock taken before the connection dropped is a check out all the same.
+            if (!wasOnline && !targets.Any(t => checkOutResults.GetValueOrDefault(t.State) is CheckOutOutcome.Done or CheckOutOutcome.AlreadyMine))
+                return Offline("Files can be checked out once this computer is back online.");
+            return CheckOutAnswer(targets, open, wasOnline);
         }
         finally { passGate.Release(); }
     }
 
-    private ActionResult CheckOutAnswer(List<(FileState State, VaultPath Path)> targets, bool open)
+    private ActionResult CheckOutAnswer(List<(FileState State, VaultPath Path)> targets, bool open, bool wasOnline)
     {
         var outcomes = targets.Select(t => (t.State, t.Path, Outcome: checkOutResults.GetValueOrDefault(t.State))).ToList();
         var mine = outcomes.Where(o => o.Outcome is CheckOutOutcome.Done or CheckOutOutcome.AlreadyMine).ToList();
@@ -94,14 +96,11 @@ public sealed partial class SyncEngine
         else
         {
             message = mine.Count == targets.Count ? $"Checked out {Count(targets.Count, "file", "files")}." : $"Checked out {mine.Count:N0} of {Count(targets.Count, "file", "files")}.";
-            var held = outcomes.Where(o => o.Outcome == CheckOutOutcome.Held).Select(o => HolderName(o.State)).ToList();
-            if (held.Count > 0)
-            {
-                var people = held.Distinct(StringComparer.Ordinal).ToList();
-                message += people.Count == 1 ? $" {people[0]} {(people[0] == "You" ? "have" : "has")} {held.Count:N0} of them checked out." : $" Others have {held.Count:N0} of them checked out.";
-            }
+            message += HeldBy(outcomes.Where(o => o.Outcome == CheckOutOutcome.Held).Select(o => o.State).ToList());
             var rest = outcomes.Count(o => o.Outcome is not (CheckOutOutcome.Done or CheckOutOutcome.AlreadyMine or CheckOutOutcome.Held));
-            if (rest > 0) message += $" {Count(rest, "file needs", "files need")} you first: open {(rest == 1 ? "it" : "them")} here to see why.";
+            if (rest > 0)
+                message += wasOnline ? $" {Count(rest, "file needs", "files need")} you first: open {(rest == 1 ? "it" : "them")} here to see why."
+                    : $" The {(rest == 1 ? "other one" : "others")} can be checked out once this computer is back online.";
         }
         if (open && mine.Count == 1)
         {
@@ -113,7 +112,57 @@ public sealed partial class SyncEngine
                 if (!launched.Succeeded) message += " " + launched.Problem;
             }
         }
+        else if (!open)
+        {
+            // SolidWorks opened these read-only before they were checked out: it saves them only
+            // once they are opened again.
+            var reopen = outcomes.Where(o => o.Outcome == CheckOutOutcome.Done && IsOpenNow(o.Path)).Select(o => o.Path).ToList();
+            if (reopen.Count == 1 && targets.Count == 1) message += " Close it in SolidWorks and open it again to save changes.";
+            else if (reopen.Count == 1) message += $" Close {reopen[0].Name} in SolidWorks and open it again to save changes.";
+            else if (reopen.Count > 1) message += $" Close {Count(reopen.Count, "file", "files")} in SolidWorks and open them again to save changes.";
+        }
         return new(mine.Count > 0, message);
+    }
+
+    // Who has the files a check out could not take, in one sentence per kind of holder:
+    // " Maria Lopez and Sam Lee have 3 of them checked out." " 1 is checked out on your other
+    // computer, LAB-PC-07."
+    private string HeldBy(List<FileState> held)
+    {
+        if (held.Count == 0) return "";
+        var people = new List<string>();
+        var otherComputers = new List<string>();
+        var byPeople = 0;
+        foreach (var st in held)
+        {
+            if (st.FileId is { } id && remoteById.TryGetValue(id, out var remote) && remote.File.Lock is { IsLive: true } lck && OwnershipOf(lck) == LockOwnership.MyOtherDevice)
+            {
+                otherComputers.Add(lck.HolderDeviceName ?? "another computer");
+                continue;
+            }
+            byPeople++;
+            people.Add(HolderName(st));
+        }
+        var text = "";
+        if (byPeople > 0)
+        {
+            var names = people.GroupBy(n => n, StringComparer.Ordinal).OrderByDescending(g => g.Count()).ThenBy(g => g.Key, StringComparer.Ordinal).Select(g => g.Key).ToList();
+            var who = names.Count switch
+            {
+                1 => names[0],
+                2 => $"{names[0]} and {names[1]}",
+                3 => $"{names[0]}, {names[1]} and {names[2]}",
+                _ => $"{names[0]}, {names[1]} and {names.Count - 2:N0} others",
+            };
+            text += $" {who} {(names.Count == 1 ? "has" : "have")} {byPeople:N0} of them checked out.";
+        }
+        if (otherComputers.Count > 0)
+        {
+            var devices = otherComputers.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            var where = devices.Count == 1 ? $"your other computer, {devices[0]}" : "your other computers, " + string.Join(" and ", devices);
+            text += $" {otherComputers.Count:N0} {(otherComputers.Count == 1 ? "is" : "are")} checked out on {where}.";
+        }
+        return text;
     }
 
     // Check in: commit what is on disk if it changed, make it read-only, then let the lock go.
@@ -176,7 +225,7 @@ public sealed partial class SyncEngine
             {
                 ReleaseOutcome.Released when undo => kept ? $"Undid the check out of {path.Name}. Your changes are kept as your own copy." : $"Undid the check out of {path.Name}.",
                 ReleaseOutcome.Released => $"Checked in {path.Name}.",
-                ReleaseOutcome.TakenBack => $"{path.Name} was taken back before it was {(undo ? "undone" : "checked in")}. Your changes are kept in its history.",
+                ReleaseOutcome.TakenBack => $"{path.Name} was taken back before {(undo ? "the check out was undone" : "it was checked in")}. Your changes are kept in its history.",
                 ReleaseOutcome.Refused => $"{path.Name} can't be checked in. {st.Refusal} It stays checked out by you.",
                 _ when online != true => $"You're offline. {path.Name} is {(undo ? "put back" : "checked in")} as soon as this computer is back online.",
                 _ => $"Armory couldn't finish {(undo ? "undoing" : "checking in")} {path.Name} yet. It tries again by itself.",
@@ -209,12 +258,24 @@ public sealed partial class SyncEngine
             if (!remote.Project.CanTakeBack) return new(false, "Only a mentor or CAD lead can take back a file.");
             if (remote.File.Lock is not { IsLive: true } held) return new(false, $"{name} isn't checked out.");
             if (OwnershipOf(held) == LockOwnership.ThisDevice) return new(false, $"You have {name} checked out. Check it in or undo the check out instead.");
-            // The operation id belongs to this one check out, so asking twice takes it back once.
-            var operation = OperationIds.Derive("take back", fileId.ToString(), held.HolderDeviceId.ToString(), held.AcquiredAt.UtcTicks.ToString(CultureInfo.InvariantCulture));
+            // The operation id belongs to this one check out and this computer, so asking twice
+            // here takes it back once, and a second mentor asking from an older view never reuses
+            // another caller's id. It is asked once, never resumed after a crash: the mentor asks
+            // again, and the same id answers from the server's receipt.
+            var operation = OperationIds.Derive("take back", fileId.ToString(), held.HolderDeviceId.ToString(), held.AcquiredAt.UtcTicks.ToString(CultureInfo.InvariantCulture),
+                state.DeviceId.ToString()!);
             bool broke;
             try { broke = await deps.Api.BreakLockAsync(fileId, state.DeviceId!.Value, operation, cancellationToken); }
             catch (ArmoryOfflineException) { online = false; return Offline("A file can be taken back once this computer is back online."); }
             catch (ArmoryRpcException error) when (error.IsForbidden) { return new(false, "Only a mentor or CAD lead can take back a file."); }
+            catch (ArmoryRpcException)
+            {
+                // The server would not take it back as asked (someone else already did, or the
+                // check out changed): read it again, and say what is true now.
+                await PassLockedAsync(cancellationToken);
+                return new(false, $"{name} isn't checked out any more.");
+            }
+            if (broke) KnowLock(fileId, null);
             await PassLockedAsync(cancellationToken);
             var from = OwnershipOf(held) == LockOwnership.MyOtherDevice ? "your other computer, " + (held.HolderDeviceName ?? "another computer") : DisplayName(held.HolderEmail);
             return broke ? new(true, $"Took back {name} from {from}. Anything not checked in is kept in its history.") : new(false, $"{name} isn't checked out any more.");
@@ -253,12 +314,21 @@ public sealed partial class SyncEngine
             if (!caseOnly && (state.Files.ContainsKey(to.Value) || local.ContainsKey(to.Value) || remoteByPath.ContainsKey(to.Value) || Exists(to)))
                 return new(false, $"Something named {to.Name} is already in that folder.");
             if (IsOpenNow(from)) return new(false, $"Close {from.Name} in SolidWorks first.");
+            // A write being sent for it (its add, a save) finishes first, or the rename could be
+            // undone by that write when it is sent again under the old name.
+            if (st?.Inflight is not null)
+                return new(false, st.FileId is null ? $"Armory is still adding {from.Name}. Try again in a moment." : $"Armory is still sending {from.Name}. Try again in a moment.");
             if (st?.FileId is not { } fileId)
             {
                 // Not in Armory: only this computer has it, so it is renamed here.
                 if (!local.TryGetValue(from.Value, out var file)) return new(false, $"{from.Name} isn't on this computer.");
                 var moved = fs.Move(from, to, file.Hash);
-                if (!moved.Succeeded) return new(false, moved.Problem ?? $"Armory couldn't rename {from.Name}.");
+                if (!moved.Succeeded)
+                {
+                    deps.Log?.Invoke($"rename: {from}: {moved.Problem}");
+                    return new(false, moved.Problem?.StartsWith("Something named", StringComparison.Ordinal) == true ? moved.Problem
+                        : $"Armory couldn't rename {from.Name}. Close any program that might be using it, then try again.");
+                }
                 local.Remove(from.Value);
                 local[to.Value] = file with { Path = to };
                 if (st is not null)
@@ -293,16 +363,19 @@ public sealed partial class SyncEngine
         Publish();
     }
 
+    // The student dismissed the card as the window last showed it: those items are hidden, even
+    // when this moment of a pass has not rebuilt them yet. Items that arrived since are news and
+    // stay.
     private void ApplyDismissals()
     {
         var any = false;
         while (pendingDismissals.TryDequeue(out var key))
         {
             if (key.StartsWith(PromptPrefix, StringComparison.Ordinal)) { dismissedPrompts.Add(key); continue; }
-            var group = RawNotices(state.Files.Values.ToArray()).FirstOrDefault(g => g.Key == key);
-            if (group is null) continue;
+            var shown = shownNoticeItems.GetValueOrDefault(key) ?? RawNotices(state.Files.Values.ToArray()).FirstOrDefault(g => g.Key == key)?.Items.Select(i => i.Id).ToArray();
+            if (shown is null) continue;
             if (!state.Dismissed.TryGetValue(key, out var hidden)) state.Dismissed[key] = hidden = new(StringComparer.Ordinal);
-            foreach (var item in group.Items) hidden.Add(item.Id);
+            foreach (var id in shown) hidden.Add(id);
             any = true;
         }
         if (any) Save();
@@ -320,12 +393,18 @@ public sealed partial class SyncEngine
             if (online != true) return;
             try
             {
-                await FinishReleaseAsync(st, ct);
-                if (st.CheckOut is not null) await FinishCheckOutAsync(st, ct);
+                // An asked-for check out keeps whatever lock this computer holds (KeepCheckedOut);
+                // a check in or undo waiting on a lock it no longer holds is over.
+                if (st.CheckOut is null) await FinishReleaseAsync(st, ct);
+                else
+                {
+                    if (st.FileId is { } id && remoteById.TryGetValue(id, out var remote) && OwnershipOf(remote.File.Lock) != LockOwnership.ThisDevice) LetGoDone(st);
+                    await FinishCheckOutAsync(st, ct);
+                }
             }
             catch (ArmoryOfflineException) { online = false; return; }
             catch (Exception error) when (error is ArmoryClientException or IOException or UnauthorizedAccessException)
-            { problems.Add($"{st.Path}: {error.Message}"); }
+            { FileProblem(st.Path, error); }
         }
     }
 
@@ -356,10 +435,15 @@ public sealed partial class SyncEngine
             return;
         }
         local.TryGetValue(st.Path, out var file);
-        var clean = remote.File.Deleted ? file is null : file?.Hash == st.BaseHash && st.Entries.Count == 0;
+        // A lock taken only for a move or a removal is let go as soon as that is done, whatever
+        // is on disk: Core planned the file as nobody's, so bytes saved meanwhile are kept as a
+        // kept copy and never wait on this lock.
+        var transientOnly = st.TransientLock && st.Request == CheckoutRequest.None && !st.AutoCheckIn;
+        var clean = transientOnly || (remote.File.Deleted ? file is null : file?.Hash == st.BaseHash && st.Entries.Count == 0);
         if (!clean) return;
-        // Read-only before the lock goes, so the file is never writable without a check out.
-        if (file is not null) SetAttribute(path, st, LockOwnership.Free);
+        // Read-only before the lock goes, so the file is never writable without a check out. A
+        // bit that can't be set now keeps the lock until a later pass can set it.
+        if (file is not null && !remote.File.Deleted && !SetAttribute(path, st, LockOwnership.Free)) return;
         var flight = new Inflight("release", OperationIds.Derive("release", held.HolderDeviceId.ToString(), id.ToString(), held.AcquiredAt.UtcTicks.ToString(CultureInfo.InvariantCulture)),
             null, st.ProjectId, id, Device: held.HolderDeviceId);
         if (!await SendAsync(st, flight, ct)) return;
@@ -380,6 +464,10 @@ public sealed partial class SyncEngine
         var ownership = OwnershipOf(remote.File.Lock);
         if (ownership == LockOwnership.ThisDevice)
         {
+            // Now an explicit check out, never let go by itself (a lock taken for a move this
+            // pass included).
+            if (st.TransientLock) checkOutResults[st] = CheckOutOutcome.Done;
+            LetGoDone(st);
             SetAttribute(path, st, LockOwnership.ThisDevice);
             Answer(st, checkOutResults.GetValueOrDefault(st) == CheckOutOutcome.Done ? CheckOutOutcome.Done : CheckOutOutcome.AlreadyMine);
             return;
@@ -427,6 +515,31 @@ public sealed partial class SyncEngine
         Save();
     }
 
+    // Nothing is waiting to let go of this file's lock any more.
+    private static void LetGoDone(FileState st)
+    {
+        st.Request = CheckoutRequest.None; st.AutoCheckIn = false; st.TransientLock = false;
+    }
+
+    // A check out asked for a file this computer already holds keeps it checked out: a check in
+    // or an undo still waiting, an open add's automatic check in and a lock held only for a move
+    // or a removal all give way to it. Run only once this pass has read the server, so a check
+    // out refused offline cancels nothing.
+    private void KeepCheckedOut()
+    {
+        var any = false;
+        foreach (var st in state.Files.Values)
+        {
+            if (st.CheckOut is null || st.FileId is not { } id || !remoteById.TryGetValue(id, out var remote) || remote.File.Deleted) continue;
+            if (OwnershipOf(remote.File.Lock) != LockOwnership.ThisDevice || (st.Request == CheckoutRequest.None && !st.AutoCheckIn && !st.TransientLock)) continue;
+            // A lock held only for a move becomes the check out the student asked for.
+            if (st.TransientLock) checkOutResults[st] = CheckOutOutcome.Done;
+            LetGoDone(st);
+            any = true;
+        }
+        if (any) Save();
+    }
+
     // ---- Helpers ---------------------------------------------------------------------------
 
     private ActionResult? Unready()
@@ -460,7 +573,7 @@ public sealed partial class SyncEngine
             if (st.FileId is not { } id || !Under(st.Path, paths) || !VaultPath.TryCreate(st.Path, out var path, out _, options.VaultRoot)) continue;
             var held = remoteById.TryGetValue(id, out var remote)
                 ? !remote.File.Deleted && OwnershipOf(remote.File.Lock) == LockOwnership.ThisDevice
-                : st.AppliedOwnership == LockOwnership.ThisDevice || st.AutoCheckIn;
+                : KnownOwnership(st) == LockOwnership.ThisDevice || st.AutoCheckIn;
             if (held) mine.Add((st, path));
         }
         return mine;
@@ -481,11 +594,18 @@ public sealed partial class SyncEngine
     }
 
     private string HolderName(FileState st)
-        => st.FileId is { } id && remoteById.TryGetValue(id, out var remote) && remote.File.Lock is { IsLive: true } held
-            ? OwnershipOf(held) == LockOwnership.MyOtherDevice ? "You" : DisplayName(held.HolderEmail) : "Someone else";
+        => st.FileId is { } id && remoteById.TryGetValue(id, out var remote) && remote.File.Lock is { IsLive: true } held ? DisplayName(held.HolderEmail) : "Someone else";
 
     // "Maria Lopez on LAB-PC-07".
     private static string Who(RemoteLock held) => $"{DisplayName(held.HolderEmail)} on {held.HolderDeviceName ?? "another computer"}";
+
+    // Who has the file checked out as this computer last knew it, for when it can't ask the server.
+    private LockOwnership KnownOwnership(FileState st)
+    {
+        if (st.Holder is not { } held) return st.AppliedOwnership == LockOwnership.ThisDevice ? LockOwnership.ThisDevice : LockOwnership.Free;
+        if (!string.Equals(held.Email, state.Email, StringComparison.OrdinalIgnoreCase)) return LockOwnership.OtherPerson;
+        return state.IsMine(held.Device) ? LockOwnership.ThisDevice : LockOwnership.MyOtherDevice;
+    }
 
     private static string Count(int n, string one, string many) => n == 1 ? $"1 {one}" : $"{n:N0} {many}";
 

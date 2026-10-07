@@ -28,6 +28,9 @@ public sealed class EngineDependencies
     public required BlobClient Blobs { get; init; }
     public ISavedReleaseReader? ReleaseReader { get; init; }
     public TimeProvider Clock { get; init; } = TimeProvider.System;
+    // Where the raw text of a problem goes (the agent's log). The window only ever shows a
+    // plain sentence for it.
+    public Action<string>? Log { get; init; }
 }
 
 public sealed record SyncReport(bool SignedIn, bool Online, int Uploaded, int Downloaded, int SideVersions, int Refused, IReadOnlyList<string> Problems);
@@ -194,17 +197,25 @@ public sealed partial class SyncEngine : IAsyncDisposable
         {
             // Re-journal any capture a crash left unjournaled, once per start.
             try { recorder.Recover(); recovered = true; }
-            catch (Exception error) when (error is IOException or InvalidDataException) { problems.Add("The save journal needs attention: " + error.Message); }
+            catch (Exception error) when (error is IOException or InvalidDataException)
+            {
+                Problem(NoticeKinds.CantRead, null, "Armory couldn't read its safe copies of your saves on this computer. Your files are untouched, and Armory tries again when it starts.",
+                    "The save journal needs attention: " + error.Message);
+            }
         }
 
         local.Clear(); markerDocuments.Clear(); localFolders.Clear();
         VaultScan scan;
         try { scan = fs.Scan(); }
-        catch (IOException error) { problems.Add(error.Message); return Report(true); }
+        catch (IOException error)
+        {
+            Problem(NoticeKinds.CantRead, null, "Armory can't look through your Armory folder right now. It tries again by itself.", error.Message);
+            return Report(true);
+        }
         foreach (var file in scan.Files) local[file.Path.Value] = file;
         if (scan.Folders is { } folders) localFolders.AddRange(folders);
         ReadMarkers(scan);
-        problems.AddRange(scan.Problems);
+        foreach (var problem in scan.Problems) ScanProblem(problem);
 
         // Saves are captured before any network step, so nothing on the server side can stop
         // this computer from keeping every save.
@@ -216,6 +227,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
         if (online == true)
         {
             lastOnline = deps.Clock.GetUtcNow();
+            KeepCheckedOut();
             if (await ResumeInflightAsync(ct) && online == true) online = await RefreshAsync(ct);
         }
         if (online == true)
@@ -238,7 +250,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
             try { await PlanAndExecuteAsync(path, online == true, ct); }
             catch (ArmoryOfflineException) { online = false; }
             catch (Exception error) when (error is ArmoryClientException or Armory.Storage.HashMismatchException or IOException or UnauthorizedAccessException or InvalidDataException)
-            { problems.Add($"{path}: {error.Message}"); }
+            { FileProblem(path, error); }
             Save();
             PublishIfPending();
         }
@@ -258,10 +270,25 @@ public sealed partial class SyncEngine : IAsyncDisposable
         }
         // The read-only rule holds offline too, from the last ownership this computer knew.
         ApplyReadOnly();
+        // Every notice of this pass is known now, so dismissed items that are gone are forgotten.
+        if (online == true) PruneDismissed();
         return Report(true);
     }
 
-    private SyncReport Report(bool signedIn) => new(signedIn, online == true, uploaded, downloaded, sideVersions, refused, problems.ToArray());
+    private SyncReport Report(bool signedIn)
+    {
+        LogNewProblems();
+        return new(signedIn, online == true, uploaded, downloaded, sideVersions, refused, problems.ToArray());
+    }
+
+    // The raw text of each problem goes to the log once, when it first appears.
+    private HashSet<string> loggedProblems = new(StringComparer.Ordinal);
+    private void LogNewProblems()
+    {
+        if (deps.Log is { } log)
+            foreach (var problem in problems.Where(p => !loggedProblems.Contains(p))) log("sync: " + problem);
+        loggedProblems = new(problems, StringComparer.Ordinal);
+    }
 
     // ---- Refresh -------------------------------------------------------------------
 
@@ -290,7 +317,8 @@ public sealed partial class SyncEngine : IAsyncDisposable
                 Notice(NoticeKinds.CantSend, null, project.Name, $"{project.Name} can't be a folder name on Windows, so its files stay off this computer. A lead must rename the project on ideabosco.com.");
                 continue;
             }
-            try { fs.EnsureFolder(ps.Folder); } catch (IOException error) { problems.Add(error.Message); }
+            try { fs.EnsureFolder(ps.Folder); }
+            catch (IOException error) { Problem(NoticeKinds.CantRead, ps.Folder, $"Armory couldn't make the folder for {project.Name} on this computer. It tries again by itself.", error.Message); }
         }
         try
         {
@@ -302,6 +330,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
                     if (change.Kind == "lock_broken" && change.Payload["former_device_id"]?.GetValue<string>() is { } former &&
                         Guid.TryParse(former, out var device) && state.IsMine(device))
                         foreach (var st in state.Files.Values.Where(f => f.FileId == change.EntityId)) st.BreakNotice = true;
+                    if (change.Kind == "file_revived") RecordRevival(change.EntityId, change.CreatedAt);
                     ps.Cursor = Math.Max(ps.Cursor, change.Cursor);
                 }
                 if (changes.Count > 0) lastActivity = deps.Clock.GetUtcNow();
@@ -309,6 +338,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
                 remoteProjects[ps.Id] = files;
                 foreach (var file in files) Know(ps, file);
             }
+            RememberHolders();
             Save();
             return true;
         }
@@ -329,6 +359,35 @@ public sealed partial class SyncEngine : IAsyncDisposable
         if (remoteById.TryGetValue(file.Id, out var old)) remoteByPath.Remove(old.Path.Value);
         remoteByPath[path.Value] = (file, ps);
         remoteById[file.Id] = (file, ps, path);
+    }
+
+    // Every tracked file's check out as the server has it now, kept so the window still says who
+    // has it while this computer is offline (even after a restart).
+    private void RememberHolders()
+    {
+        foreach (var st in state.Files.Values)
+            if (st.FileId is { } id && remoteById.TryGetValue(id, out var remote)) st.Holder = Known(remote.File.Lock);
+    }
+
+    private static KnownLock? Known(RemoteLock? held) => held is { IsLive: true } ? new(held.HolderEmail, held.HolderDeviceId, held.HolderDeviceName, held.AcquiredAt) : null;
+
+    // This computer took or let go of a file's lock: what it knows of the server says so at once,
+    // so the read-only rule and the window never act on the lock as it was before, even when the
+    // connection drops before the server is read again.
+    private void KnowLock(Guid fileId, RemoteLock? held)
+    {
+        foreach (var st in state.Files.Values.Where(f => f.FileId == fileId)) st.Holder = Known(held);
+        if (!remoteById.TryGetValue(fileId, out var known)) return;
+        var file = known.File with { Lock = held };
+        remoteById[fileId] = (file, known.Project, known.Path);
+        if (remoteByPath.TryGetValue(known.Path.Value, out var byPath) && byPath.File.Id == fileId) remoteByPath[known.Path.Value] = (file, known.Project);
+        if (remoteProjects.TryGetValue(known.Project.Id, out var files)) remoteProjects[known.Project.Id] = files.Select(f => f.Id == fileId ? file : f).ToArray();
+    }
+
+    private void RecordRevival(Guid fileId, DateTimeOffset at)
+    {
+        if (!state.Revivals.TryGetValue(fileId, out var times)) state.Revivals[fileId] = times = [];
+        if (!times.Contains(at)) times.Add(at);
     }
 
     private static string RoleName(MemberRole role) => role switch
@@ -384,8 +443,10 @@ public sealed partial class SyncEngine : IAsyncDisposable
                 lastActivity = deps.Clock.GetUtcNow();
                 Save();
             }
-            catch (IOException error) { problems.Add($"{file.Path}: {error.Message}"); }
-            catch (UnauthorizedAccessException error) { problems.Add($"{file.Path}: {error.Message}"); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                Problem(NoticeKinds.CantRead, file.Path.Value, "Armory couldn't read it to keep your save. Close any program that might be using it. Armory tries again by itself.", error.Message);
+            }
         }
     }
 
@@ -451,6 +512,10 @@ public sealed partial class SyncEngine : IAsyncDisposable
 
         var remoteRevision = RevisionOf(remote.File);
         var ownership = OwnershipOf(remote.File?.Lock);
+        // A lock taken only for a move or a removal is not a check out: Core plans the file as
+        // nobody's, so bytes saved without a check out are kept as a kept copy and the shared
+        // version is put back, never shared at a check in nobody asked for.
+        if (ownership == LockOwnership.ThisDevice && st.TransientLock) ownership = LockOwnership.Free;
         var localHash = localFile?.Hash;
         var open = IsOpenNow(path);
         SolidWorksRelease? saved = null;
@@ -591,6 +656,57 @@ public sealed partial class SyncEngine : IAsyncDisposable
     // A pass's own notice about one file or folder; the view groups them by kind into cards.
     private void Notice(string kind, Guid? fileId, string path, string detail, string? title = null)
         => notes.Add(new Note(kind, fileId, path, detail, title));
+
+    // A problem with one file (path) or with this computer (no path): the window gets a plain
+    // sentence as one notice item, and only the log gets the raw text.
+    private void Problem(string kind, string? path, string plain, string raw, string? title = null)
+    {
+        problems.Add(string.IsNullOrEmpty(path) ? raw : $"{path}: {raw}");
+        notes.Add(new Note(kind, null, path ?? "", plain, title));
+    }
+
+    // A failure while planning or carrying out one file's plan, in the window's words: the
+    // server's refusals are things Armory can't send, the disk's are things it can't read.
+    private void FileProblem(string path, Exception error)
+    {
+        var name = NameOf(path);
+        switch (error)
+        {
+            case Armory.Storage.HashMismatchException:
+                Problem(NoticeKinds.CantSend, path, "What arrived didn't match the team's version. Armory tries again by itself.", error.Message, $"Armory couldn't download {name}");
+                break;
+            case ArmoryClientException:
+                Problem(NoticeKinds.CantSend, path, "The server didn't accept it this time. Armory tries again by itself.", error.Message, $"Armory couldn't finish a change to {name}");
+                break;
+            case InvalidDataException:
+                Problem(NoticeKinds.CantRead, path, "Armory couldn't read its safe copy of a save of it. It tries again by itself.", error.Message);
+                break;
+            default:
+                Problem(NoticeKinds.CantRead, path, "Armory couldn't read or change it. Close any program that might be using it. Armory tries again by itself.", error.Message);
+                break;
+        }
+    }
+
+    // A problem the scan met, "path: what went wrong" or a sentence about the folder, in plain words.
+    private void ScanProblem(string raw)
+    {
+        var colon = raw.IndexOf(": ", StringComparison.Ordinal);
+        var path = colon > 0 && VaultPath.TryCreate(raw[..colon], out var where, out _) ? where.Value : null;
+        var what = path is null ? raw : raw[(colon + 2)..];
+        string plain;
+        if (what.Contains("exceeds", StringComparison.OrdinalIgnoreCase) || what.Contains("too long", StringComparison.OrdinalIgnoreCase))
+            plain = "Its path is too long for Windows. Give it, or a folder it is in, a shorter name.";
+        else if (what.Contains("reserved", StringComparison.OrdinalIgnoreCase) || what.Contains("control character", StringComparison.OrdinalIgnoreCase) ||
+                 what.Contains("end with a dot", StringComparison.OrdinalIgnoreCase) || what.Contains("surrogate", StringComparison.OrdinalIgnoreCase))
+            plain = "Its name can't be used on Windows. Rename it so Armory can keep it.";
+        else if (raw.StartsWith("Reparse point", StringComparison.OrdinalIgnoreCase))
+            plain = "A shortcut to another place is in your Armory folder. Armory leaves it alone.";
+        else if (what.Contains("read-only", StringComparison.OrdinalIgnoreCase))
+            plain = "Armory couldn't make it read-only or writable yet. Close any program that might be using it. Armory tries again by itself.";
+        else plain = path is null ? "Armory can't read part of your Armory folder. It tries again by itself."
+            : "Armory can't read it. Close any program that might be using it. Armory tries again by itself.";
+        Problem(NoticeKinds.CantRead, path, plain, raw);
+    }
 
     private void Save() => deps.State.Save(state.Serialize());
 

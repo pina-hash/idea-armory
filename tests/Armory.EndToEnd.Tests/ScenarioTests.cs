@@ -132,9 +132,9 @@ public sealed class ScenarioTests
         await t.B.SyncAsync();
         Assert.Equal(2, await t.Versions(file)); // advanced exactly once
         Assert.Equal(Hash("Alex offline edit"), await t.CurrentHash(file));
+        // Exactly Maria's edit, kept as her copy, and Alex's one save kept while he had it checked out.
         var sides = await t.SideAuthors(file);
-        Assert.Equal([Maria + "|changed without a check out"], sides.Where(s => s.StartsWith(Maria, StringComparison.Ordinal)));
-        Assert.All(sides, s => Assert.Contains(s, new[] { Maria + "|changed without a check out", Alex + "|saved while checked out" }));
+        Assert.Equal([Alex + "|saved while checked out", Maria + "|changed without a check out"], sides.Order(StringComparer.Ordinal));
         Assert.Equal(1, await t.World.CountAsync("select count(*) from armory_side_versions where file_id=@f and content_sha256=@h", ("f", file), ("h", Hash("Maria offline edit"))));
         Assert.True(t.World.S3.Objects.ContainsKey(Armory.Storage.ContentObjectKey.FromHash(Hash("Maria offline edit"))));
         Assert.Equal("Alex offline edit", t.B.Text(Plate));

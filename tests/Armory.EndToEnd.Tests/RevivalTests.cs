@@ -54,8 +54,13 @@ public sealed class RevivalTests
         Assert.Equal(removed, (await t.World.QueryAsync("select v.parent_version_id from armory_files f join armory_versions v on v.id=f.current_version_id where f.id=@f", r => r.GetGuid(0), ("f", file))).Single());
         Assert.Equal(0, await t.World.CountAsync("select count(*) from armory_locks where file_id=@f and broken_at is null", ("f", file)));
 
+        // Its history says it was added again: the server keeps no removal row once a file is
+        // revived, so this comes from the change feed.
+        Assert.Equal(["Added again, with its history", "Added to Armory"], (await t.B.Engine.GetFileDetailAsync(file))!.History.Select(h => h.Note));
+
         // A, which removed it, receives B's part in its new folder, and the old path stays gone.
         await t.A.SyncTimesAsync(2);
+        Assert.Equal(["Added again, with its history", "Added to Armory"], (await t.A.Engine.GetFileDetailAsync(file))!.History.Select(h => h.Note));
         Assert.Equal("brand new plate from B", t.A.Text(Intake));
         Assert.Null(t.A.Read(Plate));
         Assert.Equal(2, await t.Versions(file));

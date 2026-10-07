@@ -227,6 +227,7 @@
 	 * @property {string} note
 	 * @property {boolean} releaseNotChecked
 	 * @property {boolean} isCurrent
+	 * @property {boolean} routine     a kept copy that is the ordinary record of work (saved while checked out): the neutral tone
 	 */
 
 	/**

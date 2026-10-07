@@ -77,11 +77,20 @@ public sealed partial class SyncEngine
     private sealed record RawItem(string Id, Guid? FileId, string Path, string? Detail, string? Title = null, string? Flavor = null);
     private sealed record RawGroup(string Key, string Kind, List<RawItem> Items);
 
+    // The items each card showed when the view was last built: a dismissal hides exactly those.
+    private Dictionary<string, string[]> shownNoticeItems = new(StringComparer.Ordinal);
+
     private IReadOnlyList<NoticeGroupView> Notices(FileState[] files)
-        => RawNotices(files).OrderBy(g => Array.IndexOf(NoticeOrder, g.Kind)).Select(Group).ToArray();
+    {
+        var groups = RawNotices(files);
+        shownNoticeItems = groups.ToDictionary(g => g.Key, g => g.Items.Select(i => i.Id).ToArray(), StringComparer.Ordinal);
+        return groups.OrderBy(g => Array.IndexOf(NoticeOrder, g.Kind)).Select(Group).ToArray();
+    }
 
     // Every notice item there is now, one group per kind, without the ones the student dismissed.
-    private List<RawGroup> RawNotices(FileState[] files)
+    // Building a view never forgets a dismissal: a view built while a pass is still gathering its
+    // notices (or right after a start) would otherwise forget the ones it hasn't gathered yet.
+    private List<RawGroup> RawNotices(FileState[] files, bool keepDismissed = false)
     {
         var now = deps.Clock.GetUtcNow();
         var groups = new Dictionary<string, RawGroup>(StringComparer.Ordinal);
@@ -90,18 +99,12 @@ public sealed partial class SyncEngine
             if (!groups.TryGetValue(kind, out var group)) groups[kind] = group = new RawGroup(kind, kind, []);
             if (!group.Items.Any(i => i.Id == item.Id)) group.Items.Add(item);
         }
+        // A pass's notes, its problems among them (in plain words; the raw text goes to the log).
         foreach (var n in notes)
-            Add(n.Kind, new RawItem($"{n.Kind}:{n.Path}:{n.Title}", n.FileId, n.Path, n.Detail, n.Title,
+            Add(n.Kind, new RawItem($"{n.Kind}:{n.Path}:{n.Title}" + (n.Path.Length == 0 ? ":" + n.Detail : ""), n.FileId, n.Path, n.Detail, n.Title,
                 n.Title == StaleMarkerTitle ? "stale" : n.Title?.Contains("renamed", StringComparison.Ordinal) == true ? "rename" : null));
         foreach (var n in state.Remembered.Where(n => now - n.At < TimeSpan.FromMinutes(30)))
             Add(n.Kind, new RawItem($"{n.Kind}:{n.Path}:{n.At.UtcTicks}", n.FileId, n.Path, n.Detail, n.Title));
-        foreach (var problem in problems)
-        {
-            // "path: what went wrong", or a sentence about this computer.
-            var colon = problem.IndexOf(": ", StringComparison.Ordinal);
-            var path = colon > 0 && VaultPath.TryCreate(problem[..colon], out var where, out _) ? where.Value : "";
-            Add(NoticeKinds.CantRead, new RawItem("read:" + problem, null, path, path.Length > 0 ? problem[(colon + 2)..] : problem));
-        }
         foreach (var st in files.OrderBy(f => f.Path, StringComparer.OrdinalIgnoreCase))
         {
             var name = NameOf(st.Path);
@@ -119,38 +122,44 @@ public sealed partial class SyncEngine
                 Add(NoticeKinds.NewerWaiting, new RawItem($"newer:{st.Path}:{remote?.Current?.Id}", st.FileId, st.Path,
                     $"Close {name} in SolidWorks to get it. Your copy stays as it is until then.",
                     st.NewerAuthor is { } author ? $"A newer {name} from {DisplayName(author)} is waiting" : null));
-            if (st.BreakNotice)
+            // One item per file: the newest take back, and the newest kept copy.
+            var recent = st.Sides.Where(s => now - s.At < KeptCopiesShownFor).ToList();
+            if (recent.LastOrDefault(s => s.Reason == LockBrokenReason) is { } taken && !st.BreakNotice)
+                Add(NoticeKinds.TakenBack, new RawItem($"taken:{taken.VersionId}", st.FileId, st.Path,
+                    "A mentor or CAD lead took it back. Your changes that weren't checked in are kept in its history."));
+            else if (st.BreakNotice)
                 Add(NoticeKinds.TakenBack, new RawItem($"taken:{st.Path}", st.FileId, st.Path,
                     "A mentor or CAD lead took it back. Armory is keeping your changes that weren't checked in in its history, so nothing is lost."));
-            foreach (var side in st.Sides.Where(s => now - s.At < KeptCopiesShownFor))
+            if (recent.LastOrDefault(s => s.Reason is ChangedWithoutCheckOutReason or ConflictReason) is { } kept)
             {
-                switch (side.Reason)
-                {
-                    case LockBrokenReason:
-                        Add(NoticeKinds.TakenBack, new RawItem($"taken:{side.VersionId}", st.FileId, st.Path,
-                            "A mentor or CAD lead took it back. Your changes that weren't checked in are kept in its history."));
-                        break;
-                    case ChangedWithoutCheckOutReason:
-                        Add(NoticeKinds.KeptCopy, new RawItem($"kept:{side.VersionId}", st.FileId, st.Path,
-                            putBack && side.Hash == file!.Hash ? $"Saved without a check out. The checked-in version comes back when you close {name}."
-                                : "Saved without a check out, so the checked-in version was put back. Your change is in its history.", Flavor: "forced"));
-                        break;
-                    case ConflictReason:
-                        Add(NoticeKinds.KeptCopy, new RawItem($"kept:{side.VersionId}", st.FileId, st.Path,
-                            "Someone else checked it in first. Your change is in its history.", Flavor: "conflict"));
-                        break;
-                }
+                if (kept.Reason == ConflictReason)
+                    Add(NoticeKinds.KeptCopy, new RawItem($"kept:{kept.VersionId}", st.FileId, st.Path,
+                        "Someone else checked it in first. Your change is in its history.", Flavor: "conflict"));
+                else if (putBack && kept.Hash == file!.Hash)
+                    Add(NoticeKinds.KeptCopy, new RawItem($"kept:{kept.VersionId}", st.FileId, st.Path,
+                        $"Saved without a check out. The checked-in version comes back when you close {name}.", Flavor: "waiting"));
+                else
+                    Add(NoticeKinds.KeptCopy, new RawItem($"kept:{kept.VersionId}", st.FileId, st.Path,
+                        "Saved without a check out, so the checked-in version was put back. Your change is in its history.", Flavor: "forced"));
             }
         }
         foreach (var group in groups.Values)
-        {
-            if (!state.Dismissed.TryGetValue(group.Key, out var hidden)) continue;
-            // An item that is gone may come back later as news; forget it.
-            hidden.IntersectWith(group.Items.Select(i => i.Id));
-            group.Items.RemoveAll(i => hidden.Contains(i.Id));
-        }
-        foreach (var gone in state.Dismissed.Keys.Where(k => !groups.ContainsKey(k)).ToArray()) state.Dismissed.Remove(gone);
+            if (!keepDismissed && state.Dismissed.TryGetValue(group.Key, out var hidden)) group.Items.RemoveAll(i => hidden.Contains(i.Id));
         return groups.Values.Where(g => g.Items.Count > 0).ToList();
+    }
+
+    // At the end of a whole online pass every notice is known: a dismissed item that is gone is
+    // forgotten (it may come back later as news), and so is a card with nothing left.
+    private void PruneDismissed()
+    {
+        if (state.Dismissed.Count == 0) return;
+        var now = RawNotices(state.Files.Values.ToArray(), keepDismissed: true).ToDictionary(g => g.Key, g => g.Items.Select(i => i.Id).ToHashSet(StringComparer.Ordinal), StringComparer.Ordinal);
+        foreach (var (key, hidden) in state.Dismissed.ToArray())
+        {
+            if (now.TryGetValue(key, out var items)) hidden.IntersectWith(items);
+            if (!now.ContainsKey(key) || hidden.Count == 0) state.Dismissed.Remove(key);
+        }
+        Save();
     }
 
     private static NoticeGroupView Group(RawGroup g)
@@ -166,7 +175,7 @@ public sealed partial class SyncEngine
                 n == 1 ? "1 file shares a name with another file in this project" : $"{n:N0} files share a name with other files in this project",
                 "A project keeps one file per name, because SolidWorks finds parts by name. Rename these to add them.", expand),
             NoticeKinds.CantSend => (NoticeTones.Bad,
-                n == 1 ? $"{name} can't be uploaded" : $"{n:N0} files can't be uploaded",
+                n == 1 ? first.Title ?? $"{name} can't be uploaded" : $"{n:N0} files can't be uploaded",
                 n == 1 ? first.Detail ?? "" : items.All(i => i.Flavor == GateKind)
                     ? "They were saved in a SolidWorks year the project can't take. Each one says what to do, then it uploads by itself."
                     : "Each one says why. They stay on this computer, and everything else keeps uploading.", (NoticeActionView?)null),
@@ -180,12 +189,15 @@ public sealed partial class SyncEngine
                 n == 1 ? first.Title ?? $"A newer {name} is waiting" : $"Newer versions of {n:N0} files are waiting",
                 n == 1 ? first.Detail ?? "" : "Close them in SolidWorks to get them. Your copies stay as they are until then.",
                 n == 1 && first.FileId is not null && first.Flavor != "rename" ? new NoticeActionView("Open it", BridgeMessages.LaunchFile, [first.Path]) : null),
-            NoticeKinds.KeptCopy => (NoticeTones.Look,
-                n == 1 ? $"Your change to {name} was kept as your own copy" : $"{n:N0} of your changes were kept as your own copies",
+            // Only a kept copy still waiting for its file to close, or one someone else's check in
+            // overtook, needs the student; one whose checked-in version is back is news.
+            NoticeKinds.KeptCopy => (items.Any(i => i.Flavor is "conflict" or "waiting") ? NoticeTones.Look : NoticeTones.Info,
+                n == 1 ? $"Your change to {name} was kept as your own copy" : $"Your changes to {n:N0} files were kept as your own copies",
                 n == 1 ? first.Detail ?? ""
                     : items.All(i => i.Flavor == "forced") ? "They were saved without a check out, so the checked-in versions were put back. Nothing was lost: each change is in its file's history."
+                    : items.All(i => i.Flavor is "forced" or "waiting") ? "They were saved without a check out. The checked-in versions come back as you close them. Nothing was lost: each change is in its file's history."
                     : items.All(i => i.Flavor == "conflict") ? "Someone else checked these in first, so your changes were kept in each file's history. Nothing was lost. Ask your CAD lead which one to keep."
-                    : "Nothing was lost: each change is in its file's history.", n == 1 ? null : expand),
+                    : "Nothing was lost: each change is in its file's history.", new NoticeActionView("OK", BridgeMessages.DismissNotice, [])),
             NoticeKinds.TakenBack => (NoticeTones.Look,
                 n == 1 ? $"{name} was taken back" : $"{n:N0} of your files were taken back",
                 n == 1 ? first.Detail ?? "" : "A mentor or CAD lead took them back. Your changes that weren't checked in are kept in their history, so nothing was lost.",
@@ -210,13 +222,21 @@ public sealed partial class SyncEngine
         foreach (var (document, firstSeen) in markerFirstSeen.OrderByDescending(m => m.Value).ThenBy(m => m.Key, StringComparer.OrdinalIgnoreCase))
         {
             if (!markerDocuments.Contains(document) || !state.Files.TryGetValue(document, out var st) || st.FileId is not { } id) continue;
-            if (!remoteById.TryGetValue(id, out var remote) || remote.File.Deleted || remote.File.Current is null) continue;
-            var ownership = OwnershipOf(remote.File.Lock);
+            LockOwnership ownership;
+            CheckoutView checkout;
+            if (remoteById.TryGetValue(id, out var remote))
+            {
+                if (remote.File.Deleted || remote.File.Current is null) continue;
+                ownership = OwnershipOf(remote.File.Lock);
+                checkout = CheckoutOf(remote.File.Lock);
+            }
+            else if (st.BaseHash is not null) (ownership, checkout) = (KnownOwnership(st), KnownCheckout(st)); // offline: as last known
+            else continue;
             if (ownership == LockOwnership.ThisDevice) continue;
             open.Add(document);
             var key = PromptKey(document, firstSeen);
             if (prompt is not null || dismissedPrompts.Contains(key)) continue;
-            prompt = new PromptView(key, id.ToString(), document, NameOf(document), CheckoutOf(remote.File.Lock), ownership == LockOwnership.Free);
+            prompt = new PromptView(key, id.ToString(), document, NameOf(document), checkout, ownership == LockOwnership.Free);
         }
         Volatile.Write(ref openWithoutCheckOut, open.ToArray());
         return prompt;
@@ -233,22 +253,24 @@ public sealed partial class SyncEngine
             if (st.FileId is not { } id) continue;
             CheckoutView checkout;
             RemoteFile? remote = null;
+            local.TryGetValue(st.Path, out var file);
+            string status;
             if (remoteById.TryGetValue(id, out var known))
             {
                 remote = known.File;
                 if (remote.Deleted || OwnershipOf(remote.Lock) != LockOwnership.ThisDevice) continue;
                 checkout = CheckoutOf(remote.Lock);
+                status = StatusOf(st, remote, file, LockOwnership.ThisDevice);
             }
-            else if (st.AppliedOwnership == LockOwnership.ThisDevice && st.BaseHash is not null)
-                checkout = new CheckoutView(CheckoutStates.Mine, "Checked out by you", state.Email is { } email ? DisplayName(email) : null, state.Email,
-                    deps.Sessions.Current?.DeviceName, null);
+            // Offline since the start: the check outs this computer last knew it had.
+            else if (st.BaseHash is not null && (KnownOwnership(st) == LockOwnership.ThisDevice || st.AutoCheckIn))
+                (checkout, status) = (KnownCheckout(st), KnownStatus(st, file, LockOwnership.ThisDevice));
             else continue;
-            local.TryGetValue(st.Path, out var file);
             var note = st.Request == CheckoutRequest.CheckIn ? (online == true ? "Checking in." : "Checks in when this computer is back online.")
                 : st.Request == CheckoutRequest.Undo ? (online == true ? "Undoing the check out." : "The check out is undone when this computer is back online.")
                 : st.AutoCheckIn ? "You added it while it was open. It is checked in by itself when you close it."
                 : null;
-            mine.Add(new MyFileView(id.ToString(), st.Path, NameOf(st.Path), ProjectName(st), StatusOf(st, remote, file, LockOwnership.ThisDevice), note, checkout));
+            mine.Add(new MyFileView(id.ToString(), st.Path, NameOf(st.Path), ProjectName(st), status, note, checkout));
         }
         return mine;
     }
@@ -260,6 +282,19 @@ public sealed partial class SyncEngine
         {
             var folders = new Dictionary<string, List<FileRowView>>(StringComparer.OrdinalIgnoreCase) { [""] = [] };
             var shown = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            // Not read from the server since this start (offline): the team's files as this
+            // computer last knew them, each with its label and status, never "waiting" by default.
+            if (!remoteProjects.ContainsKey(project.Id))
+                foreach (var st in state.Files.Values.Where(f => f.ProjectId == project.Id && f.FileId is not null && f.BaseId?.StartsWith("tombstone:", StringComparison.Ordinal) != true))
+                {
+                    if (!VaultPath.TryCreate(st.Path, out var known, out _, options.VaultRoot) || ProjectOf(known)?.Id != project.Id) continue;
+                    local.TryGetValue(st.Path, out var file);
+                    if (file is null && st.BaseHash is null) continue; // never here, and nothing known of it
+                    var ownership = KnownOwnership(st);
+                    Add(Split(known).Folder, new FileRowView(st.FileId.ToString(), known.Name, known.Value, KnownStatus(st, file, ownership), KnownCheckout(st),
+                        file is not null && file.Hash != st.BaseHash, st.ReleaseNotChecked, null, null));
+                    shown.Add(known.Value);
+                }
             foreach (var remote in remoteProjects.GetValueOrDefault(project.Id) ?? [])
             {
                 if (remote.Deleted || !remoteById.TryGetValue(remote.Id, out var known)) continue;
@@ -315,6 +350,37 @@ public sealed partial class SyncEngine
         return FileStatuses.Synced;
     }
 
+    // A file's status from what this computer last knew of the server (offline since the start):
+    // the same words as StatusOf, and "waiting" only for saves that have not reached the server.
+    private string KnownStatus(FileState st, LocalFile? file, LockOwnership ownership)
+    {
+        if (st.Inflight is { Kind: "create" or "commit" or "side" or "archive" }) return FileStatuses.Waiting;
+        if (st.NewerWaiting) return file is not null && st.Preserved == file.Hash ? FileStatuses.KeptCopy : FileStatuses.NewerWaiting;
+        if (file is null) return FileStatuses.NotOnThisComputer;
+        if (file.Hash != st.BaseHash) return ownership != LockOwnership.ThisDevice && st.Preserved == file.Hash ? FileStatuses.KeptCopy : FileStatuses.Changed;
+        if (st.Entries.Count > 0) return FileStatuses.Waiting;
+        return FileStatuses.Synced;
+    }
+
+    // Who has it checked out as this computer last knew, in the words every row shows.
+    private CheckoutView KnownCheckout(FileState st)
+    {
+        var ownership = KnownOwnership(st);
+        if (st.Holder is not { } held)
+            return ownership == LockOwnership.ThisDevice
+                ? new(CheckoutStates.Mine, "Checked out by you", state.Email is { } email ? DisplayName(email) : null, state.Email, deps.Sessions.Current?.DeviceName, null)
+                : Available;
+        var name = DisplayName(held.Email);
+        var device = held.DeviceName ?? "another computer";
+        var since = held.Since.ToString("O", CultureInfo.InvariantCulture);
+        return ownership switch
+        {
+            LockOwnership.ThisDevice => new(CheckoutStates.Mine, "Checked out by you", name, held.Email, held.DeviceName ?? deps.Sessions.Current?.DeviceName, since),
+            LockOwnership.MyOtherDevice => new(CheckoutStates.MyOtherComputer, $"Checked out by you on {device}", name, held.Email, device, since),
+            _ => new(CheckoutStates.Other, $"Checked out by {name} on {device}", name, held.Email, device, since),
+        };
+    }
+
     private static readonly CheckoutView Available = new(CheckoutStates.Available, "Available", null, null, null, null);
 
     // Who has the file checked out, in the words every row shows.
@@ -351,11 +417,16 @@ public sealed partial class SyncEngine
         local.TryGetValue(remote.Path.Value, out var file);
         var currentId = remote.File.Current?.Id;
         var ordered = history.OrderBy(h => h.CreatedAt).ThenBy(h => h.Id).ToArray();
+        // The server drops a revived file's removal from its history (0232 deletes the tombstone
+        // row), so a revival is known from the change feed: the first version after it is the
+        // file added again.
+        var revivals = new Queue<DateTimeOffset>((state.Revivals.GetValueOrDefault(fileId) ?? []).Order());
         var versionNotes = new Dictionary<Guid, string>();
         var firstVersion = true;
         var afterRemoval = false;
         foreach (var h in ordered)
         {
+            while (revivals.TryPeek(out var revived) && revived <= h.CreatedAt) { revivals.Dequeue(); afterRemoval = !firstVersion; }
             if (h.Kind == "tombstone") { afterRemoval = true; continue; }
             if (h.Kind != "version") continue;
             versionNotes[h.Id] = firstVersion ? "Added to Armory" : afterRemoval ? "Added again, with its history" : "Checked in";
@@ -366,7 +437,9 @@ public sealed partial class SyncEngine
             h.Kind == "side_version" ? HistoryKinds.KeptCopy : h.Kind == "tombstone" ? HistoryKinds.Removed : HistoryKinds.Version,
             DisplayName(h.Author), h.CreatedAt.ToString("O", CultureInfo.InvariantCulture), h.Bytes,
             h.Kind == "tombstone" ? $"Removed from {remote.Project.Name}" : versionNotes.GetValueOrDefault(h.Id) ?? KeptCopyNote(h),
-            h.ReleaseChecked == false, h.Id == currentId)).ToArray();
+            h.ReleaseChecked == false, h.Id == currentId,
+            // Saves kept while checked out (and earlier saves) are the ordinary record of work, not news.
+            h.Kind == "side_version" && h.Reason is SavedWhileCheckedOutReason or EarlierSaveReason)).ToArray();
         return new FileDetailView(fileId.ToString(), remote.File.Name, remote.Path.Value, remote.Project.Name, remote.File.Folder,
             StatusOf(st, remote.File, file, OwnershipOf(remote.File.Lock)), CheckoutOf(remote.File.Lock), remote.File.Current?.ReleaseChecked == false,
             remote.Project.CanTakeBack, entries);

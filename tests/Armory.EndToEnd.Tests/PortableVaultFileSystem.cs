@@ -307,8 +307,13 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
         return ReplaceOutcome.Done;
     }
 
+    // A file whose read-only bit can't be changed now (another program holds it), the way
+    // Windows refuses: ApplyLockAttribute throws, and a batch carries on with the others.
+    public Func<string, bool>? RefuseAttribute { get; set; }
+
     public void ApplyLockAttribute(VaultPath path, LockOwnership ownership)
     {
+        if (RefuseAttribute?.Invoke(path.Value) == true) throw new IOException($"{path.Value}: the read-only attribute can't be changed now (test).");
         lock (gate)
         {
             Attributes[path.Value] = ownership;
@@ -322,7 +327,11 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
     public void ApplyLockAttributes(IReadOnlyList<(VaultPath Path, LockOwnership Ownership)> attributes)
     {
         lock (gate) AttributeBatches++;
-        foreach (var (path, ownership) in attributes) ApplyLockAttribute(path, ownership);
+        foreach (var (path, ownership) in attributes)
+        {
+            try { ApplyLockAttribute(path, ownership); }
+            catch (IOException) { } // retried when the next scan finds the bit as it was
+        }
     }
 
     public void EnsureFolder(string vaultRelativeFolder) => Directory.CreateDirectory(Full(vaultRelativeFolder));

@@ -174,6 +174,7 @@ public sealed class CheckOutTests
         t.A.Engine.DismissNotice(newest.Key);
         await t.A.SyncAsync();
         Assert.Equal(Plate, t.A.Engine.View.Prompt!.Path);
+
         // Check out and reopen while SolidWorks still has it open: checked out, not opened.
         var answer = await t.A.CheckOutAndOpenAsync(Plate);
         Assert.True(answer.Ok);
@@ -187,6 +188,12 @@ public sealed class CheckOutTests
         await t.A.SyncAsync();
         Assert.Equal(Bracket, t.A.Engine.View.Prompt!.Path); // opened again: asks again
         Assert.NotEqual(newest.Key, t.A.Engine.View.Prompt!.Key);
+        // Checked out from the window (not "and reopen") while SolidWorks has it open read-only:
+        // the answer says how to save, since SolidWorks writes to it only once it is opened again.
+        var outBracket = await t.A.CheckOutAsync(Bracket);
+        Assert.True(outBracket.Ok);
+        Assert.Equal("Checked out Bracket.SLDPRT. Close it in SolidWorks and open it again to save changes.", outBracket.Message);
+        Assert.Null(t.A.Engine.View.Prompt);
     }
 
     // Open launches the file's own program and refuses programs and scripts (D14).
@@ -271,5 +278,327 @@ public sealed class CheckOutTests
         Assert.Equal(0, await t.LiveLocks(file));
         Assert.Empty(t.A.Engine.View.MyFiles);
         Assert.Equal(0, await t.Sides(file));
+    }
+
+    // The connection drops right after a lock was let go (a check in, an undo, a closed add):
+    // the file is read-only all the same, offline, after more offline passes and after a restart,
+    // so nobody edits a file the team sees as available. And right after a lock was taken, the
+    // file is checked out and writable, and the answer says so.
+    [PostgresFact]
+    public async Task A_file_let_go_just_before_the_connection_drops_is_read_only()
+    {
+        await using var t = await TeamAsync();
+        t.A.Write(Plate, "v1");
+        await t.A.SyncAsync();
+        var file = await t.FileId("Plate.SLDPRT");
+        void CutAt(string point) => t.A.Engine.CrashPoint = p => { if (p == point) t.A.Offline = true; };
+
+        // Check in.
+        Assert.True((await t.A.CheckOutAsync(Plate)).Ok);
+        t.A.Save(Plate, "v2");
+        CutAt("after-release");
+        Assert.Equal("Checked in Plate.SLDPRT.", (await t.A.CheckInAsync(Plate)).Message);
+        Assert.Equal((0L, 2L), (await t.LiveLocks(file), await t.Versions(file)));
+        Assert.True(t.A.Disk.IsReadOnly(Plate));
+        Assert.Empty(t.A.Engine.View.MyFiles);
+        Assert.Equal("Available", t.A.Row(Plate).Checkout.Label);
+        await t.A.SyncTimesAsync(2);
+        Assert.True(t.A.Disk.IsReadOnly(Plate));
+        Assert.Throws<IOException>(() => t.A.Save(Plate, "v3 without a check out"));
+        t.A.Restart();
+        await t.A.SyncAsync();
+        Assert.True(t.A.Disk.IsReadOnly(Plate));
+        Assert.Empty(t.A.Engine.View.MyFiles);
+
+        // Undo check out.
+        t.A.Offline = false;
+        Assert.True((await t.A.CheckOutAsync(Plate)).Ok);
+        CutAt("after-release");
+        Assert.Equal("Undid the check out of Plate.SLDPRT.", (await t.A.UndoCheckOutAsync(Plate)).Message);
+        Assert.Equal(0, await t.LiveLocks(file));
+        Assert.True(t.A.Disk.IsReadOnly(Plate));
+        await t.A.SyncAsync();
+        Assert.True(t.A.Disk.IsReadOnly(Plate));
+
+        // A closed add, checked in by its own pass.
+        t.A.Offline = false;
+        t.A.Engine.CrashPoint = null;
+        const string Gear = "Robot 2027/Drivetrain/Gear.SLDPRT";
+        t.A.Write(Gear, "gear");
+        CutAt("after-release");
+        await t.A.SyncAsync();
+        var gear = await t.FileId("Gear.SLDPRT");
+        Assert.Equal((0L, 1L), (await t.LiveLocks(gear), await t.Versions(gear)));
+        Assert.True(t.A.Disk.IsReadOnly(Gear));
+        await t.A.SyncAsync();
+        Assert.True(t.A.Disk.IsReadOnly(Gear));
+
+        // The other way: the lock was taken, then the connection dropped.
+        t.A.Offline = false;
+        CutAt("after-lock");
+        var taken = await t.A.CheckOutAsync(Plate);
+        Assert.True(taken.Ok);
+        Assert.Equal("Checked out Plate.SLDPRT.", taken.Message);
+        Assert.Equal(1, await t.LiveLocks(file));
+        Assert.False(t.A.Disk.IsReadOnly(Plate));
+        Assert.Equal("Checked out by you", Assert.Single(t.A.Engine.View.MyFiles).Checkout.Label);
+        await t.A.SyncAsync();
+        Assert.False(t.A.Disk.IsReadOnly(Plate));
+        t.A.Save(Plate, "v3 while checked out");
+        t.A.Engine.CrashPoint = null;
+        t.A.Offline = false;
+        Assert.True((await t.A.CheckInAsync(Plate)).Ok);
+        Assert.Equal(Hash("v3 while checked out"), await t.CurrentHash(file));
+        Assert.True(t.A.Disk.IsReadOnly(Plate));
+        NoViolations(t.A);
+    }
+
+    // A rename takes the lock only for itself. Bytes saved without a check out before it (the
+    // read-only bit cleared by hand) are kept as a kept copy, never shared, the checked-in
+    // version comes back, and the lock is let go: the file is not left checked out to anyone.
+    [PostgresFact]
+    public async Task A_rename_of_a_file_saved_without_a_check_out_never_shares_those_bytes()
+    {
+        await using var t = await TeamAsync();
+        t.A.Write(Plate, "v1");
+        await t.A.SyncAsync();
+        await t.B.SyncAsync();
+        var file = await t.FileId("Plate.SLDPRT");
+        const string Left = "Robot 2027/Drivetrain/Plate-Left.SLDPRT";
+        t.A.ForceWrite(Plate, "Alex without a check out");
+        var renamed = await t.A.Engine.RenameFileAsync(Plate, "Plate-Left.SLDPRT");
+        Assert.True(renamed.Ok);
+        Assert.Equal("Renamed Plate.SLDPRT to Plate-Left.SLDPRT.", renamed.Message);
+        await t.A.SyncTimesAsync(2);
+        Assert.Equal(0, await t.LiveLocks(file));
+        Assert.Equal([Alex + "|changed without a check out"], await t.SideAuthors(file));
+        Assert.Equal(1, await t.World.CountAsync("select count(*) from armory_side_versions where file_id=@f and content_sha256=@h", ("f", file), ("h", Hash("Alex without a check out"))));
+        Assert.Equal((1L, Hash("v1")), (await t.Versions(file), await t.CurrentHash(file)));
+        Assert.Equal("v1", t.A.Text(Left));
+        Assert.True(t.A.Disk.IsReadOnly(Left));
+        Assert.Empty(t.A.Engine.View.MyFiles);
+        Assert.Equal("Available", t.A.Row(Left).Checkout.Label);
+        // Maria can check it out; checking it in shares only her bytes.
+        await t.B.SyncAsync();
+        Assert.True((await t.B.CheckOutAsync(Left)).Ok);
+        t.B.Save(Left, "v2 by Maria");
+        Assert.True((await t.B.CheckInAsync(Left)).Ok);
+        Assert.Equal((2L, Hash("v2 by Maria")), (await t.Versions(file), await t.CurrentHash(file)));
+        NoViolations(t.A, t.B);
+    }
+
+    // A check out while a rename's lock is still held (its release cut off by the connection)
+    // makes that lock the check out: the file stays checked out, writable, in My files.
+    [PostgresFact]
+    public async Task Checking_out_a_file_held_for_a_rename_keeps_it_checked_out()
+    {
+        await using var t = await TeamAsync();
+        t.A.Write(Plate, "v1");
+        t.A.Write(Bracket, "bracket");
+        await t.A.SyncAsync();
+        var plate = await t.FileId("Plate.SLDPRT");
+        var bracket = await t.FileId("Bracket.SLDPRT");
+        foreach (var (from, to, id, restart) in new[] { (Plate, "Plate-Left.SLDPRT", plate, false), (Bracket, "Bracket-Left.SLDPRT", bracket, true) })
+        {
+            t.A.Engine.CrashPoint = p => { if (p == "before-release") t.A.Offline = true; };
+            Assert.True((await t.A.Engine.RenameFileAsync(from, to)).Ok);
+            Assert.Equal(1, await t.LiveLocks(id)); // the rename's lock, not let go yet
+            var path = from[..(from.LastIndexOf('/') + 1)] + to;
+            Assert.True(t.A.Disk.IsReadOnly(path));
+            if (restart) t.A.Restart();
+            t.A.Engine.CrashPoint = null;
+            t.A.Offline = false;
+            var answer = await t.A.CheckOutAsync(path);
+            Assert.True(answer.Ok);
+            Assert.Equal($"Checked out {to}.", answer.Message);
+            Assert.Equal(1, await t.LiveLocks(id));
+            Assert.False(t.A.Disk.IsReadOnly(path));
+            Assert.Contains(t.A.Engine.View.MyFiles, f => f.Path == path && f.Checkout.Label == "Checked out by you");
+            await t.A.SyncTimesAsync(2);
+            Assert.Equal(1, await t.LiveLocks(id)); // a check out now: never let go by itself
+            Assert.False(t.A.Disk.IsReadOnly(path));
+        }
+        NoViolations(t.A);
+    }
+
+    // Read-only first, then the lock goes (addendum 6): at the moment of every release the file
+    // is already read-only, for a check in, an undo and a closed add. A bit that can't be set
+    // keeps the lock until a later pass can set it.
+    [PostgresFact]
+    public async Task A_file_is_read_only_before_its_lock_is_let_go()
+    {
+        await using var t = await TeamAsync();
+        var seen = new List<(string Path, bool ReadOnly)>();
+        string? watching = null;
+        void Watch(string path)
+        {
+            watching = path;
+            t.A.Engine.CrashPoint = p => { if (p == "before-release") seen.Add((watching!, t.A.Disk.IsReadOnly(watching!))); };
+        }
+        t.A.Write(Plate, "v1");
+        await t.A.SyncAsync();
+        var file = await t.FileId("Plate.SLDPRT");
+        // Check in.
+        Assert.True((await t.A.CheckOutAsync(Plate)).Ok);
+        t.A.Save(Plate, "v2");
+        Watch(Plate);
+        Assert.True((await t.A.CheckInAsync(Plate)).Ok);
+        // Undo, with nothing changed (no download puts the bytes back read-only first).
+        Assert.True((await t.A.CheckOutAsync(Plate)).Ok);
+        Assert.True((await t.A.UndoCheckOutAsync(Plate)).Ok);
+        // A closed add.
+        const string Gear = "Robot 2027/Drivetrain/Gear.SLDPRT";
+        t.A.Write(Gear, "gear");
+        Watch(Gear);
+        await t.A.SyncAsync();
+        Assert.Equal([(Plate, true), (Plate, true), (Gear, true)], seen);
+        Assert.Equal(0, await t.LiveLocks(file));
+
+        // The bit can't be set (say, another program holds the file): the check in commits, and
+        // the lock stays with the file writable, until the bit can be set.
+        t.A.Engine.CrashPoint = null;
+        Assert.True((await t.A.CheckOutAsync(Plate)).Ok);
+        t.A.Save(Plate, "v3");
+        t.A.Disk.RefuseAttribute = path => path == Plate;
+        var answer = await t.A.CheckInAsync(Plate);
+        Assert.Equal("Armory couldn't finish checking in Plate.SLDPRT yet. It tries again by itself.", answer.Message);
+        Assert.Equal(Hash("v3"), await t.CurrentHash(file));
+        Assert.Equal(1, await t.LiveLocks(file));
+        Assert.False(t.A.Disk.IsReadOnly(Plate));
+        // In plain words in the window; the raw text only in the log.
+        var problem = Assert.Single(t.A.NoticeItems, n => n.Card.Kind == NoticeKinds.CantRead && n.Item.Path == Plate);
+        Assert.Equal("Armory couldn't make it read-only or writable yet. Close any program that might be using it. Armory tries again by itself.", problem.Item.Detail);
+        Assert.Contains(t.A.Logged, line => line.Contains("can't be changed now (test)", StringComparison.Ordinal));
+        t.A.Disk.RefuseAttribute = null;
+        await t.A.SyncAsync();
+        Assert.Equal(0, await t.LiveLocks(file));
+        Assert.True(t.A.Disk.IsReadOnly(Plate));
+        NoViolations(t.A);
+    }
+
+    // A check out that can't happen (offline) cancels nothing: a check in asked for earlier
+    // still finishes once the computer is back online.
+    [PostgresFact]
+    public async Task A_check_out_refused_offline_keeps_a_check_in_that_is_waiting()
+    {
+        await using var t = await TeamAsync();
+        t.A.Write(Plate, "v1");
+        await t.A.SyncAsync();
+        var file = await t.FileId("Plate.SLDPRT");
+        Assert.True((await t.A.CheckOutAsync(Plate)).Ok);
+        t.A.Save(Plate, "v2");
+        t.A.Offline = true;
+        Assert.Equal("You're offline. Plate.SLDPRT is checked in as soon as this computer is back online.", (await t.A.CheckInAsync(Plate)).Message);
+        var refused = await t.A.CheckOutAsync("Robot 2027");
+        Assert.False(refused.Ok);
+        Assert.Equal("You're offline. Files can be checked out once this computer is back online.", refused.Message);
+        Assert.Equal("Checks in when this computer is back online.", Assert.Single(t.A.Engine.View.MyFiles).Note);
+        t.A.Offline = false;
+        await t.A.SyncTimesAsync(2);
+        Assert.Equal((2L, 0L), (await t.Versions(file), await t.LiveLocks(file)));
+        Assert.Equal(Hash("v2"), await t.CurrentHash(file));
+        Assert.True(t.A.Disk.IsReadOnly(Plate));
+        Assert.Empty(t.A.Engine.View.MyFiles);
+        // Online, checking out a file whose check in is still waiting keeps it checked out.
+        Assert.True((await t.A.CheckOutAsync(Plate)).Ok);
+        t.A.Save(Plate, "v3");
+        t.A.Offline = true;
+        Assert.True((await t.A.CheckInAsync(Plate)).Ok);
+        t.A.Offline = false;
+        var kept = await t.A.CheckOutAsync(Plate);
+        Assert.Equal("Plate.SLDPRT is already checked out by you.", kept.Message);
+        await t.A.SyncAsync();
+        Assert.Equal((2L, 1L), (await t.Versions(file), await t.LiveLocks(file)));
+        Assert.False(t.A.Disk.IsReadOnly(Plate));
+        NoViolations(t.A);
+    }
+
+    // A second mentor or CAD lead taking back from an older view is told the truth, never an error.
+    [PostgresFact]
+    public async Task A_take_back_from_an_older_view_says_it_is_not_checked_out_any_more()
+    {
+        await using var t = await TeamAsync();
+        const string Sam = "sam.lee@students.test";
+        await t.Mentor.Api.AddMemberAsync(t.Project, Sam, Armory.Client.MemberRole.CadLead, Guid.NewGuid());
+        var mentor = await t.World.ComputerAsync("mentor laptop", Mentor);
+        var lead = await t.World.ComputerAsync("CAD lead PC", Sam);
+        t.A.Write(Plate, "v1");
+        await t.A.SyncAsync();
+        var file = await t.FileId("Plate.SLDPRT");
+        Assert.True((await t.A.CheckOutAsync(Plate)).Ok);
+        await mentor.SyncAsync();
+        await lead.SyncAsync();
+        Assert.True((await mentor.TakeBackAsync(file)).Ok);
+        var late = await lead.TakeBackAsync(file);
+        Assert.False(late.Ok);
+        Assert.Equal("Plate.SLDPRT isn't checked out any more.", late.Message);
+        Assert.Equal(0, await t.LiveLocks(file));
+    }
+
+    // A file whose add is still being sent is not renamed under it: the add would be sent again
+    // under the old name and undo the rename.
+    [PostgresFact]
+    public async Task A_file_being_added_is_renamed_once_it_is_in_Armory()
+    {
+        await using var t = await TeamAsync();
+        const string Gear = "Robot 2027/Drivetrain/Gear.SLDPRT";
+        t.A.Write(Gear, "gear");
+        t.A.Engine.CrashPoint = p => { if (p == "before-create") t.A.Offline = true; };
+        await t.A.SyncAsync();
+        t.A.Engine.CrashPoint = null;
+        var refused = await t.A.Engine.RenameFileAsync(Gear, "Gear2.SLDPRT");
+        Assert.False(refused.Ok);
+        Assert.Equal("Armory is still adding Gear.SLDPRT. Try again in a moment.", refused.Message);
+        t.A.Offline = false;
+        await t.A.SyncAsync();
+        Assert.True((await t.A.Engine.RenameFileAsync(Gear, "Gear2.SLDPRT")).Ok);
+        await t.A.SyncAsync();
+        var file = await t.FileId("Gear2.SLDPRT");
+        Assert.Equal("gear", t.A.Text("Robot 2027/Drivetrain/Gear2.SLDPRT"));
+        Assert.Null(t.A.Read(Gear));
+        Assert.Equal(1, await t.World.CountAsync("select count(*) from armory_files where project_id=@p", ("p", t.Project)));
+        Assert.Equal(0, await t.LiveLocks(file));
+    }
+
+    // The rest of a folder check out names where it is: my other computer, or the people who
+    // have it (up to three by name).
+    [PostgresFact]
+    public async Task A_folder_check_out_names_my_other_computer()
+    {
+        await using var t = await TeamAsync(secondDeviceForAlex: true);
+        t.A.Write(Plate, "plate");
+        t.A.Write(Bracket, "bracket");
+        await t.A.SyncAsync();
+        await t.B.SyncAsync();
+        Assert.True((await t.A.CheckOutAsync(Bracket)).Ok);
+        var partial = await t.B.CheckOutAsync("Robot 2027/Drivetrain");
+        Assert.True(partial.Ok);
+        Assert.Equal("Checked out 1 of 2 files. 1 is checked out on your other computer, student A laptop.", partial.Message);
+    }
+
+    // A check in still waiting when a mentor took the file back is over; checking the file out
+    // again is a new check out that is never checked in by itself.
+    [PostgresFact]
+    public async Task A_check_out_after_a_take_back_is_never_checked_in_by_itself()
+    {
+        await using var t = await TeamAsync();
+        t.A.Write(Plate, "v1");
+        await t.A.SyncAsync();
+        var file = await t.FileId("Plate.SLDPRT");
+        Assert.True((await t.A.CheckOutAsync(Plate)).Ok);
+        t.A.Save(Plate, "v2 on the bus");
+        t.A.Offline = true;
+        Assert.True((await t.A.CheckInAsync(Plate)).Ok); // waits for the connection
+        Assert.True(await t.Mentor.Api.BreakLockAsync(file, t.Mentor.Device, Guid.NewGuid()));
+        t.A.Offline = false;
+        var again = await t.A.CheckOutAsync(Plate);
+        Assert.True(again.Ok);
+        Assert.Equal("Checked out Plate.SLDPRT.", again.Message);
+        await t.A.SyncTimesAsync(2);
+        Assert.Equal((1L, 1L), (await t.Versions(file), await t.LiveLocks(file)));
+        Assert.Contains(Alex + "|lock broken", await t.SideAuthors(file)); // the bytes the check in would have shared are kept
+        Assert.False(t.A.Disk.IsReadOnly(Plate));
+        Assert.Equal("Checked out by you", Assert.Single(t.A.Engine.View.MyFiles).Checkout.Label);
+        NoViolations(t.A);
     }
 }

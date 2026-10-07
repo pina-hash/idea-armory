@@ -34,7 +34,9 @@ public sealed record FileRowView(string? FileId, string Name, string Path, strin
 public sealed record SettingsView(string VaultRoot, bool StartAtSignIn, string Theme);
 public sealed record FileDetailView(string FileId, string Name, string Path, string Project, string Folder, string Status, CheckoutView Checkout,
     bool ReleaseNotChecked, bool CanTakeBack, IReadOnlyList<HistoryEntryView> History);
-public sealed record HistoryEntryView(string Id, string Kind, string Author, string At, long Bytes, string Note, bool ReleaseNotChecked, bool IsCurrent);
+// Routine: a kept copy that is the ordinary record of work (saved while checked out, an earlier
+// save), shown in the neutral tone, never as news.
+public sealed record HistoryEntryView(string Id, string Kind, string Author, string At, long Bytes, string Note, bool ReleaseNotChecked, bool IsCurrent, bool Routine);
 // Who has a file checked out. Label is always set: "Checked out by you", "Checked out by Maria
 // Lopez on LAB-PC-07", "Checked out by you on LAB-PC-07" (my other computer) or "Available".
 public sealed record CheckoutView(string State, string Label, string? Name, string? Email, string? Device, string? Since);

@@ -14,7 +14,9 @@ namespace Armory.EndToEnd.Tests;
 // deletions and simultaneous edits, with v2 check out: students check files out (sometimes
 // "Check out and open"), save only what is writable (SolidWorks cannot save over a read-only
 // file), check in, undo, and now and then clear the read-only attribute and save anyway.
-// Crashes land inside passes and inside check outs, check ins and undos. ARMORY_E2E_SEED=<n>
+// Crashes land inside passes and inside check outs, check ins and undos, and the connection drops
+// inside them too, right after a lock was taken or let go (the pass carries on offline).
+// ARMORY_E2E_SEED=<n>
 // reproduces one seed; ARMORY_E2E_SEEDS=<count> changes the count (default 200);
 // ARMORY_E2E_TRACE=1 prints every step to standard error.
 public sealed class SeededRunTests(ITestOutputHelper output)
@@ -36,7 +38,8 @@ public sealed class SeededRunTests(ITestOutputHelper output)
             catch (Exception error) { failures.Add((seed, error)); }
         });
         output.WriteLine($"E2E_SEEDS count={count} first={first} elapsed={watch.Elapsed.TotalSeconds:F1}s failures={failures.Count}");
-        output.WriteLine("E2E_CRASH_POINTS " + string.Join(',', SeededRun.Reached.Keys.Order(StringComparer.Ordinal)));
+        output.WriteLine("E2E_CRASH_POINTS " + string.Join(',', SeededRun.Reached.Keys.Where(k => !k.StartsWith("cut:", StringComparison.Ordinal)).Order(StringComparer.Ordinal)));
+        output.WriteLine("E2E_CUT_POINTS " + string.Join(',', SeededRun.Reached.Keys.Where(k => k.StartsWith("cut:", StringComparison.Ordinal)).Select(k => k[4..]).Order(StringComparer.Ordinal)));
         // The schedule must actually land crashes inside uploads, side versions, downloads and
         // lock changes; otherwise the crash oracle would be vacuous.
         if (failures.IsEmpty && specific is null && count >= 200)
@@ -44,6 +47,10 @@ public sealed class SeededRunTests(ITestOutputHelper output)
             var missed = new[] { "after-capture", "before-commit", "after-blob", "after-commit-rpc", "after-commit", "before-side", "after-side",
                 "before-Download", "after-download", "before-lock", "after-lock", "before-release", "after-release" }.Where(p => !SeededRun.Reached.ContainsKey(p)).ToArray();
             Assert.True(missed.Length == 0, "no seed crashed at " + string.Join(", ", missed));
+            // The connection must drop right after a lock was taken and right after one was let
+            // go, or the oracle on files this computer let go of would be vacuous there.
+            var uncut = new[] { "after-lock", "after-release" }.Where(p => !SeededRun.Reached.ContainsKey("cut:" + p)).ToArray();
+            Assert.True(uncut.Length == 0, "no seed lost the connection at " + string.Join(", ", uncut));
         }
         if (!failures.IsEmpty)
         {
@@ -71,6 +78,9 @@ internal sealed class SeededRun(World world, Person mentor, int seed)
     internal static readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> Reached = new(StringComparer.Ordinal);
     private const int Steps = 40;
     private readonly ScheduleRandom random = new(seed);
+    // Where the connection drops inside an action: a stream of its own, so the schedule of
+    // steps and crashes is the one every seed always had.
+    private readonly ScheduleRandom cuts = new(seed * 31 + 7);
     private readonly string project = $"Seed {seed:D4}";
     private readonly Dictionary<string, (Computer Saver, byte[] Bytes)> everSaved = new(StringComparer.Ordinal);
     // Bytes saved by a computer that did not have the file checked out (the read-only attribute
@@ -165,30 +175,72 @@ internal sealed class SeededRun(World world, Person mentor, int seed)
 
     private async Task CheckOutAsync(Computer computer, string path, bool open)
     {
-        var result = await computer.Engine.CheckOutAsync([path], open);
+        var (result, cut) = await MaybeCutAsync(computer, "after-lock", () => computer.Engine.CheckOutAsync([path], open));
         Trace($"  check out {computer.Name} {path}: {result.Ok} {result.Message}");
         if (result.Ok) asked.Remove((computer, path));
+        // Taken just before the connection dropped: it is checked out here, and writable.
+        if (cut && result.Ok && computer.Read(path) is not null)
+        {
+            if (await HolderAsync(path) != computer.Sessions.Current!.DeviceId)
+                throw new InvalidOperationException($"{computer.Name}: the check out of {path} answered \"{result.Message}\" without a lock (step {step})");
+            if (computer.Disk.IsReadOnly(path))
+                throw new InvalidOperationException($"{computer.Name}: {path} is read-only though its lock was just taken here (step {step})");
+        }
+        if (cut) await ReconnectAsync(computer);
         if (result.Ok && open && computer.Read(path) is not null) computer.Open(path); // SolidWorks opens it
     }
 
     private async Task CheckInAsync(Computer computer, string path)
     {
         asked.Add((computer, path));
-        var result = await computer.Engine.CheckInAsync([path]);
+        var (result, cut) = await MaybeCutAsync(computer, "after-release", () => computer.Engine.CheckInAsync([path]));
         Trace($"  check in {computer.Name} {path}: {result.Ok} {result.Message}");
+        if (cut) await ReconnectAsync(computer);
     }
 
     private async Task UndoAsync(Computer computer, string path)
     {
         asked.Add((computer, path));
-        var result = await computer.Engine.UndoCheckOutAsync([path]);
+        var (result, cut) = await MaybeCutAsync(computer, "after-release", () => computer.Engine.UndoCheckOutAsync([path]));
         Trace($"  undo {computer.Name} {path}: {result.Ok} {result.Message}");
+        if (cut) await ReconnectAsync(computer);
+    }
+
+    // Now and then the connection drops inside an action, right after the lock was taken or let
+    // go (the pass carries on offline, in the same process). True when it dropped.
+    private async Task<(Armory.Agent.Engine.View.ActionResult Result, bool Cut)> MaybeCutAsync(Computer computer, string point,
+        Func<Task<Armory.Agent.Engine.View.ActionResult>> action)
+    {
+        // Never inside a crash being staged (its own crash point stays), never while offline.
+        if (computer.Offline || computer.CrashPoint is not null || cuts.Next(3) != 0) return (await action(), false);
+        var fired = false;
+        computer.Engine.CrashPoint = p =>
+        {
+            if (fired || p != point) return;
+            fired = true;
+            Reached["cut:" + p] = true;
+            Trace($"  connection lost {computer.Name} at {p}");
+            computer.Offline = true;
+        };
+        try { return (await action(), fired); }
+        finally { computer.Engine.CrashPoint = null; }
+    }
+
+    // After a dropped connection: what this computer let go of is read-only now, and after one
+    // more pass offline; then the connection comes back.
+    private async Task ReconnectAsync(Computer computer)
+    {
+        await CheckLetGoAsync(computer);
+        await computer.SyncAsync();
+        await CheckLetGoAsync(computer);
+        computer.Offline = false;
     }
 
     private async Task SyncAsync(Computer computer)
     {
         var report = await computer.SyncAsync();
         if (report.Online) await CheckReadOnlyAsync(computer);
+        await CheckLetGoAsync(computer);
     }
 
     private async Task<Guid?> HolderAsync(string path)
@@ -219,6 +271,29 @@ internal sealed class SeededRun(World world, Person mentor, int seed)
             if (!held) asked.Remove((computer, path));
             else if (!asked.Contains((computer, path)) && computer.Disk.IsReadOnly(path))
                 throw new InvalidOperationException($"{computer.Name}: {path} is checked out here but read-only (step {step})");
+        }
+    }
+
+    // After any pass, online or offline: a file the server has live, whose newest lock change is
+    // this computer letting it go, is read-only here. This computer knows it let the file go even
+    // when the connection dropped right after, so no offline pass may leave it writable (a file
+    // the team sees as available, edited here without a check out).
+    private async Task CheckLetGoAsync(Computer computer)
+    {
+        var device = computer.Sessions.Current!.DeviceId.ToString();
+        var changes = await world.QueryAsync("select kind, entity_id, coalesce(payload->>'device_id', '') from armory_change_feed where project_id=@p and kind in ('lock_acquired', 'lock_released', 'lock_broken', 'file_revived') order by cursor",
+            r => (Kind: r.GetString(0), File: r.GetGuid(1), Device: r.GetString(2)), ("p", projectId));
+        var last = new Dictionary<Guid, (string Kind, string Device)>();
+        foreach (var change in changes) last[change.File] = (change.Kind, change.Device);
+        var live = await world.QueryAsync("select id, name from armory_files where project_id=@p and deleted_at is null and current_version_id is not null",
+            r => (Id: r.GetGuid(0), Name: r.GetString(1)), ("p", projectId));
+        foreach (var (id, name) in live)
+        {
+            if (!last.TryGetValue(id, out var change) || change.Kind != "lock_released" || change.Device != device) continue;
+            var path = paths.FirstOrDefault(p => p.EndsWith("/" + name, StringComparison.Ordinal));
+            if (path is null || computer.Read(path) is null) continue;
+            if (!computer.Disk.IsReadOnly(path))
+                throw new InvalidOperationException($"{computer.Name}: {path} is writable after this computer let it go (step {step})");
         }
     }
 

@@ -50,7 +50,12 @@ public sealed partial class SyncEngine
             case SyncActionKind.MoveLocalToRecovery:
                 if (IsOpenNow(path)) { st.NewerWaiting = true; return false; }
                 var moved = fs.MoveToRecovery(path, input.LocalHash!);
-                if (!moved.Succeeded) { problems.Add($"{path}: {moved.Problem}"); return false; }
+                if (!moved.Succeeded)
+                {
+                    Problem(NoticeKinds.CantRead, path.Value, "It was removed from the project, and Armory couldn't move your copy aside yet. Close any program that might be using it. Armory tries again by itself.",
+                        moved.Problem ?? "MoveToRecovery refused");
+                    return false;
+                }
                 local.Remove(path.Value);
                 st.SetBase(input.Remote);
                 st.Preserved = null;
@@ -109,7 +114,12 @@ public sealed partial class SyncEngine
             CrashPoint?.Invoke("before-replace");
             if (IsOpenNow(path)) { st.NewerWaiting = true; st.NewerAuthor = current.Author; return false; }
             var outcome = fs.Replace(path, input.LocalHash, staging, readOnly);
-            if (!outcome.Succeeded) { problems.Add($"{path}: {outcome.Problem}"); return false; }
+            if (!outcome.Succeeded)
+            {
+                Problem(NoticeKinds.CantRead, path.Value, "Armory couldn't put the team's newest version in place yet. Close any program that might be using it. Armory tries again by itself.",
+                    outcome.Problem ?? "Replace refused");
+                return false;
+            }
         }
         finally
         {
@@ -199,7 +209,9 @@ public sealed partial class SyncEngine
             journal.Append(new JournalEntry(st.DeleteEntry, IntentKind.Tombstone, path.Value, null, null, state.Email!));
             Save();
         }
-        if (input.Lock != LockOwnership.ThisDevice)
+        // Core is told a lock held only for a removal is nobody's; it is still held here.
+        var holds = st.FileId is { } held && remoteById.TryGetValue(held, out var record) && OwnershipOf(record.File.Lock) == LockOwnership.ThisDevice;
+        if (!holds)
         {
             // A lock taken only for the removal, let go once it is done.
             st.TransientLock = true;
@@ -243,8 +255,10 @@ public sealed partial class SyncEngine
             Save();
             if (snapshot.Hash == hash) return snapshot;
         }
-        catch (IOException error) { problems.Add($"{path}: {error.Message}"); }
-        catch (UnauthorizedAccessException error) { problems.Add($"{path}: {error.Message}"); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            Problem(NoticeKinds.CantRead, path.Value, "Armory couldn't read it to upload it. Close any program that might be using it. Armory tries again by itself.", error.Message);
+        }
         return null; // the file changed since the scan; the next pass plans again
     }
 
@@ -282,8 +296,10 @@ public sealed partial class SyncEngine
         if (st.FileId is not { } id || !state.Projects.TryGetValue(projectId, out var project)) return;
         RemoteVersion? current = null;
         var changes = await deps.Api.ListChangesAsync(project.Id, project.Cursor, ct);
-        if (changes.Any(c => c.Kind == "file_revived" && c.EntityId == id))
+        var revival = changes.FirstOrDefault(c => c.Kind == "file_revived" && c.EntityId == id);
+        if (revival is not null)
         {
+            RecordRevival(id, revival.CreatedAt);
             var files = await deps.Api.ProjectFilesAsync(project.Id, ct);
             if (files.FirstOrDefault(f => f.Id == id) is { } revived)
             {
@@ -330,8 +346,13 @@ public sealed partial class SyncEngine
         {
             st.Inflight = null;
             if (flight.Kind == "create" && error is ArmoryRpcException { IsNameTaken: true } taken) result = AdoptOrRefuseName(st, flight, taken);
-            else if (flight.Kind is "lock" or "release" or "move") { problems.Add($"{st.Path}: {error.Message}"); result = false; }
-            else { st.Refusal = PlainRefusal(error); st.RefusalKind = RefusedKind; refused++; result = false; }
+            else if (flight.Kind is "lock" or "release" or "move")
+            {
+                Problem(NoticeKinds.CantSend, st.Path, flight.Kind == "move" ? "The server didn't accept the rename, so it keeps its name for now."
+                    : "The server didn't accept it this time. Armory tries again by itself.", error.Message, $"Armory couldn't finish a change to {NameOf(st.Path)}");
+                result = false;
+            }
+            else { st.Refusal = PlainRefusal(error, state.Projects.GetValueOrDefault(st.ProjectId)); st.RefusalKind = RefusedKind; refused++; result = false; }
             Save();
             return result;
         }
@@ -341,11 +362,19 @@ public sealed partial class SyncEngine
         return result;
     }
 
-    private static string PlainRefusal(Exception error) => error switch
+    // A refusal in the window's words. The server's own message is for the log only: it can
+    // name things a student never sees (a vault, a lock, an RPC).
+    private static string PlainRefusal(Exception error, ProjectState? project) => error switch
     {
         BlobRefusedException { Status: 403 } => "Armory wouldn't take this file: you may no longer be in this project. Ask your CAD lead.",
         BlobRefusedException => "Armory wouldn't take this file. It stays on this computer.",
-        ArmoryRpcException rpc => rpc.Message,
+        ArmoryRpcException { IsForbidden: true } => "Armory wouldn't take this file: you may no longer be in this project. Ask your CAD lead.",
+        ArmoryRpcException rpc when rpc.Message.Contains("SolidWorks", StringComparison.Ordinal) && project is not null =>
+            $"It was saved in a SolidWorks year {project.Name} can't take. In SolidWorks, use Save As and pick {project.PinnedRelease}, then it uploads by itself.",
+        ArmoryRpcException rpc when rpc.Message.Contains("SolidWorks", StringComparison.Ordinal) =>
+            "It was saved in a SolidWorks year this project can't take. It stays on this computer.",
+        ArmoryRpcException { IsInvalidInput: true } => "Armory can't take it under this name. Rename it, then it uploads by itself.",
+        ArmoryRpcException => "The server didn't take it this time. It stays on this computer, and Armory tries again by itself.",
         _ => "This save couldn't be read back from this computer's safe copy. It stays on this computer.",
     };
 
@@ -363,10 +392,12 @@ public sealed partial class SyncEngine
                 // Every answer spends the attempt: a later acquire is a new intent.
                 var held = await deps.Api.AcquireLockAsync(f.FileId!.Value, device, f.Operation, ct);
                 st.Attempt++;
+                if (held) KnowLock(f.FileId.Value, new RemoteLock(state.Email!, device, deps.Sessions.Current?.DeviceName, deps.Clock.GetUtcNow(), null, null, null, null));
                 return held;
             }
             case "release":
                 await deps.Api.ReleaseLockAsync(f.FileId!.Value, device, f.Operation, ct);
+                KnowLock(f.FileId.Value, null);
                 return true;
             case "tombstone":
                 if (await deps.Api.TombstoneAsync(f.FileId!.Value, Parse(f.ParentId), device, f.Operation, ct))
@@ -507,7 +538,7 @@ public sealed partial class SyncEngine
                 if (Reconciler.IsSolidWorks(path))
                 {
                     try { saved = await ReadReleaseFromSnapshotAsync(entry.SnapshotId!, ct); }
-                    catch (Exception error) when (error is IOException or InvalidDataException) { problems.Add($"{st.Path}: {error.Message}"); continue; }
+                    catch (Exception error) when (error is IOException or InvalidDataException) { EarlierSaveProblem(st.Path, error); continue; }
                     var gate = SolidWorksVersionGate.Decide(saved, new SolidWorksRelease(project.PinnedRelease), project.Enforce ? ReleaseGateMode.Enforce : ReleaseGateMode.Warn);
                     if (!gate.Allowed)
                     {
@@ -528,10 +559,13 @@ public sealed partial class SyncEngine
                     if (!await SendAsync(st, flight, ct)) break;
                 }
                 catch (ArmoryOfflineException) { online = false; return; }
-                catch (Exception error) when (error is InvalidOperationException or IOException or InvalidDataException) { problems.Add($"{st.Path}: {error.Message}"); break; }
+                catch (Exception error) when (error is InvalidOperationException or IOException or InvalidDataException) { EarlierSaveProblem(st.Path, error); break; }
             }
         }
     }
+
+    private void EarlierSaveProblem(string path, Exception error)
+        => Problem(NoticeKinds.CantRead, path, "Armory couldn't read an earlier save of it from this computer's safe copy. It tries again by itself.", error.Message);
 
     private async Task<SolidWorksRelease?> ReadReleaseFromSnapshotAsync(string snapshotId, CancellationToken ct)
     {
@@ -564,7 +598,12 @@ public sealed partial class SyncEngine
                     continue;
                 }
                 var outcome = fs.Move(from, remote.Path, file.Hash);
-                if (!outcome.Succeeded) { problems.Add($"{from}: {outcome.Problem}"); continue; }
+                if (!outcome.Succeeded)
+                {
+                    Problem(NoticeKinds.CantRead, from.Value, $"It was renamed to {remote.Path.Name} for the team, and Armory couldn't rename it here yet. Close any program that might be using it. Armory tries again by itself.",
+                        outcome.Problem ?? "Move refused");
+                    continue;
+                }
                 local.Remove(st.Path);
                 local[remote.Path.Value] = file with { Path = remote.Path };
             }
@@ -733,7 +772,9 @@ public sealed partial class SyncEngine
     // Decision D4: a file the server has is read-only on disk unless this computer has it
     // checked out (CheckoutRules.IsReadOnlyOnDisk). Applied every pass, offline too (from the
     // ownership this computer last knew), and again whenever the scan finds the bit cleared.
-    // Files the server does not have (not added yet, refused, drafts) are never touched.
+    // Files the server does not have (not added yet, refused, drafts) are never touched. What
+    // this computer knows of the server includes its own lock changes of this pass (KnowLock),
+    // so a check in whose connection dropped right after the lock went is read-only all the same.
     private void ApplyReadOnly()
     {
         List<(VaultPath Path, LockOwnership Ownership)> batch = [];
@@ -747,7 +788,10 @@ public sealed partial class SyncEngine
                 if (remote.File.Deleted || remote.File.Current is null) continue;
                 ownership = OwnershipOf(remote.File.Lock);
             }
-            else if (st.AppliedOwnership is { } known && st.BaseHash is not null) ownership = known;
+            // Offline with nothing read from the server since the start: a file with a live base
+            // is the server's, ruled by the ownership last applied; with none applied (a crash
+            // before the rule ran), by the check out last known, and with none known, nobody's.
+            else if (st.BaseHash is not null) ownership = st.AppliedOwnership ?? KnownOwnership(st);
             else continue;
             var desired = DesiredOwnership(st, ownership, file.Path);
             if (st.AppliedOwnership == desired && file.ReadOnly == CheckoutRules.IsReadOnlyOnDisk(desired)) continue;
@@ -764,22 +808,29 @@ public sealed partial class SyncEngine
                 local[batch[i].Path.Value] = local[batch[i].Path.Value] with { ReadOnly = CheckoutRules.IsReadOnlyOnDisk(batch[i].Ownership) };
             }
         }
-        catch (IOException error) { problems.Add(error.Message); }
-        catch (UnauthorizedAccessException error) { problems.Add(error.Message); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            Problem(NoticeKinds.CantRead, null, "Armory couldn't set which files can be saved on this computer. It tries again by itself.", error.Message);
+        }
         Save();
     }
 
     // One file's read-only bit, now (a check out makes it writable; a check in read-only).
-    private void SetAttribute(VaultPath path, FileState st, LockOwnership ownership)
+    // False when the bit could not be set: a lock is then never let go over a writable file.
+    private bool SetAttribute(VaultPath path, FileState st, LockOwnership ownership)
     {
-        if (!local.TryGetValue(path.Value, out var file)) return;
+        if (!local.TryGetValue(path.Value, out var file)) return true;
         try
         {
             fs.ApplyLockAttribute(path, ownership);
             st.AppliedOwnership = ownership;
             local[path.Value] = file with { ReadOnly = CheckoutRules.IsReadOnlyOnDisk(ownership) };
+            return true;
         }
-        catch (IOException error) { problems.Add($"{path}: {error.Message}"); }
-        catch (UnauthorizedAccessException error) { problems.Add($"{path}: {error.Message}"); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            Problem(NoticeKinds.CantRead, path.Value, "Armory couldn't make it read-only or writable yet. Close any program that might be using it. Armory tries again by itself.", error.Message);
+            return false;
+        }
     }
 }

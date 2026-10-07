@@ -313,7 +313,7 @@ internal sealed class AgentHost : IAsyncDisposable
             try
             {
                 // Opening the journal, snapshots and read-only intents touches the disk: off the UI thread.
-                created = await Task.Run(() => VaultRuntime.Create(target.VaultRoot, Sessions, Api, Blobs));
+                created = await Task.Run(() => VaultRuntime.Create(target.VaultRoot, Sessions, Api, Blobs, log));
                 created.Engine.ViewChanged += OnEngineView;
                 ApplySettingsTo(created.Engine);
                 lock (gate) { if (connectPhase != "idle") created.Engine.SetConnectState(connectPhase, connectMessage); }
@@ -487,7 +487,7 @@ internal sealed class VaultRuntime
     internal WindowsSnapshotStore Snapshots { get; }
     internal SyncEngine Engine { get; }
 
-    internal static VaultRuntime Create(string vaultRoot, SessionManager sessions, ArmoryApi api, BlobClient blobs)
+    internal static VaultRuntime Create(string vaultRoot, SessionManager sessions, ArmoryApi api, BlobClient blobs, AgentLog? log = null)
     {
         var disposables = new Stack<IDisposable>();
         try
@@ -510,6 +510,8 @@ internal sealed class VaultRuntime
                 Blobs = blobs,
                 // No standalone saved-release reader exists yet (docs/platform/audit.md).
                 ReleaseReader = null,
+                // The raw text of a sync problem; the window shows it in plain words.
+                Log = log is null ? null : log.Info,
             });
             return new VaultRuntime(files, journal, snapshots, engine);
         }
