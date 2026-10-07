@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Armory.Agent.Engine.View;
 using Armory.Client;
 using Armory.Core;
@@ -67,7 +68,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
     // Pass-scoped data.
     private readonly Dictionary<string, LocalFile> local = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> markerDocuments = new(StringComparer.OrdinalIgnoreCase);
-    private readonly List<string> localFolders = [];
+    private readonly HashSet<string> localFolders = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<Guid, IReadOnlyList<RemoteFile>> remoteProjects = [];
     private readonly Dictionary<string, (RemoteFile File, ProjectState Project)> remoteByPath = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<Guid, (RemoteFile File, ProjectState Project, VaultPath Path)> remoteById = [];
@@ -180,6 +181,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
         uploaded = downloaded = sideVersions = refused = 0;
         wrote = false;
         state.Remembered.RemoveAll(n => deps.Clock.GetUtcNow() - n.At > TimeSpan.FromMinutes(30));
+        state.Imports.RemoveAll(i => deps.Clock.GetUtcNow() - i.At > ImportShownFor);
         var session = deps.Sessions.Current;
         if (session is null) return Report(false);
         if (state.Email is not null && !string.Equals(state.Email, session.Email, StringComparison.OrdinalIgnoreCase)) return Report(true);
@@ -204,7 +206,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
             }
         }
 
-        local.Clear(); markerDocuments.Clear(); localFolders.Clear();
+        local.Clear(); markerDocuments.Clear(); localFolders.Clear(); createdThisPass.Clear();
         VaultScan scan;
         try { scan = fs.Scan(); }
         catch (IOException error)
@@ -213,9 +215,15 @@ public sealed partial class SyncEngine : IAsyncDisposable
             return Report(true);
         }
         foreach (var file in scan.Files) local[file.Path.Value] = file;
-        if (scan.Folders is { } folders) localFolders.AddRange(folders);
+        folderScan = scan.Folders is not null;
+        if (scan.Folders is { } folders) localFolders.UnionWith(folders);
         ReadMarkers(scan);
         foreach (var problem in scan.Problems) ScanProblem(problem);
+        // Folder changes on this disk come before anything is captured: a renamed folder's
+        // files keep their records (never captured again as new files at the new path), and a
+        // project folder renamed or removed in Explorer is put back before anything could take
+        // its files for removed ones (SyncEngine.Folders.cs).
+        DetectFolderChanges(scan);
 
         // Saves are captured before any network step, so nothing on the server side can stop
         // this computer from keeping every save.
@@ -229,19 +237,27 @@ public sealed partial class SyncEngine : IAsyncDisposable
             lastOnline = deps.Clock.GetUtcNow();
             KeepCheckedOut();
             if (await ResumeInflightAsync(ct) && online == true) online = await RefreshAsync(ct);
+            // A folder renamed or removed here: one server call each, after any file write a
+            // crash left in flight (which lands in the folder as it was).
+            if (online == true && await SendFolderOpsAsync(ct) && online == true) online = await RefreshAsync(ct);
         }
         if (online == true)
         {
-            if (ApplyRemoteMoves()) online = await RefreshAsync(ct);
+            // The team's folder renames move here in one step each; anything else moves file by file.
+            var folderMoved = ApplyRemoteFolderMoves();
+            if (ApplyRemoteMoves() | folderMoved) online = await RefreshAsync(ct);
             AdoptIdenticalBases();
             Capture(session, notify: true); // projects learned this pass
         }
+        DetectImports();
         var entries = AttachEntries();
         if (online == true)
         {
             DetectLocalMoves(scan);
             await ExecutePendingMovesAsync(ct);
             await ArchiveSupersededAsync(entries, ct);
+            // A known folder gone for a second scan: one removal for the team.
+            if (online == true && await RemoveMissingFoldersAsync(ct) && online == true) online = await RefreshAsync(ct);
         }
 
         lastLoopError = null;
@@ -268,6 +284,8 @@ public sealed partial class SyncEngine : IAsyncDisposable
                 if (wrote && online == true) online = await RefreshAsync(ct);
             }
         }
+        // Known folders with nothing left in them go, on every computer (decision D17).
+        if (online == true) TidyFolders();
         // The read-only rule holds offline too, from the last ownership this computer knew.
         ApplyReadOnly();
         // Every notice of this pass is known now, so dismissed items that are gone are forgotten.
@@ -305,8 +323,6 @@ public sealed partial class SyncEngine : IAsyncDisposable
         {
             if (!state.Projects.TryGetValue(project.Id, out var ps)) state.Projects[project.Id] = ps = new ProjectState { Id = project.Id };
             ps.Name = project.Name;
-            // Stage E2 keeps the folder where it is and moves it when the project is renamed.
-            ps.Folder = project.Name;
             ps.PinnedRelease = project.PinnedRelease;
             ps.Enforce = project.ReleaseGate == ProjectReleaseGate.Enforce;
             ps.Role = RoleName(project.Role);
@@ -317,23 +333,53 @@ public sealed partial class SyncEngine : IAsyncDisposable
                 Notice(NoticeKinds.CantSend, null, project.Name, $"{project.Name} can't be a folder name on Windows, so its files stay off this computer. A lead must rename the project on ideabosco.com.");
                 continue;
             }
-            try { fs.EnsureFolder(ps.Folder); }
+            if (ps.Folder.Length == 0)
+            {
+                // New to this computer: its folder is its name, unless another project's folder
+                // still has that name (its rename waits for a file to close).
+                if (state.Projects.Values.Any(p => !ReferenceEquals(p, ps) && p.Usable && string.Equals(p.Folder, project.Name, StringComparison.OrdinalIgnoreCase)))
+                {
+                    ps.Usable = false;
+                    continue;
+                }
+                ps.Folder = project.Name;
+            }
+            // Archived (decision D8): skipped silently, its folder and files left as they are.
+            if (ps.Archived) continue;
+            // Renamed on the site (contract C2): the folder moves in place, once nothing in it is open.
+            if (!string.Equals(ps.Folder, ps.Name, StringComparison.Ordinal) && ps.PutBackFrom is null && !heldProjects.Contains(ps.Id)) MoveProjectFolder(ps);
+            // Removed on this disk: made again, its files downloaded (decision D16).
+            if (restoreProjects.Contains(ps.Id)) { RestoreProjectFolder(ps); continue; }
+            // Made only when it is not there and not waiting to be put back: never a second
+            // folder beside one a student renamed.
+            if (ps.PutBackFrom is not null || heldProjects.Contains(ps.Id) || FolderOnDisk(ps.Folder)) continue;
+            try { fs.EnsureFolder(ps.Folder); localFolders.Add(ps.Folder); }
             catch (IOException error) { Problem(NoticeKinds.CantRead, ps.Folder, $"Armory couldn't make the folder for {project.Name} on this computer. It tries again by itself.", error.Message); }
         }
         try
         {
             foreach (var ps in state.Projects.Values.Where(p => p.Usable))
             {
-                var changes = await deps.Api.ListChangesAsync(ps.Id, ps.Cursor, ct);
-                foreach (var change in changes)
+                // An archived project is not read, unless this computer still has check outs
+                // there to check in (addendum 7); its change cursor stays for when it is restored.
+                if (ps.Archived && !state.Files.Values.Any(f => f.ProjectId == ps.Id && MineToFinish(f))) continue;
+                if (!ps.Archived)
                 {
-                    if (change.Kind == "lock_broken" && change.Payload["former_device_id"]?.GetValue<string>() is { } former &&
-                        Guid.TryParse(former, out var device) && state.IsMine(device))
-                        foreach (var st in state.Files.Values.Where(f => f.FileId == change.EntityId)) st.BreakNotice = true;
-                    if (change.Kind == "file_revived") RecordRevival(change.EntityId, change.CreatedAt);
-                    ps.Cursor = Math.Max(ps.Cursor, change.Cursor);
+                    var changes = await deps.Api.ListChangesAsync(ps.Id, ps.Cursor, ct);
+                    foreach (var change in changes)
+                    {
+                        if (change.Kind == "lock_broken" && change.Payload["former_device_id"]?.GetValue<string>() is { } former &&
+                            Guid.TryParse(former, out var device) && state.IsMine(device))
+                            foreach (var st in state.Files.Values.Where(f => f.FileId == change.EntityId)) st.BreakNotice = true;
+                        if (change.Kind == "file_revived") RecordRevival(change.EntityId, change.CreatedAt);
+                        // Another computer renamed a folder: moved here in one step (ApplyRemoteFolderMoves).
+                        if (change.Kind == "folder_renamed" && Text(change.Payload, "from") is { } from && Text(change.Payload, "to") is { } to &&
+                            !(Guid.TryParse(Text(change.Payload, "device_id"), out var by) && state.IsMine(by)))
+                            state.RemoteFolderRenames.Add(new RemoteFolderRename(ps.Id, from, to));
+                        ps.Cursor = Math.Max(ps.Cursor, change.Cursor);
+                    }
+                    if (changes.Count > 0) lastActivity = deps.Clock.GetUtcNow();
                 }
-                if (changes.Count > 0) lastActivity = deps.Clock.GetUtcNow();
                 var files = await deps.Api.ProjectFilesAsync(ps.Id, ct);
                 remoteProjects[ps.Id] = files;
                 foreach (var file in files) Know(ps, file);
@@ -344,6 +390,8 @@ public sealed partial class SyncEngine : IAsyncDisposable
         }
         catch (ArmoryOfflineException) { Save(); return false; }
     }
+
+    private static string? Text(JsonObject payload, string name) => payload[name] is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
 
     // Records one server file under its local path.
     private void Know(ProjectState ps, RemoteFile file)
@@ -427,10 +475,16 @@ public sealed partial class SyncEngine : IAsyncDisposable
             var project = ProjectOf(file.Path);
             if (project is null)
             {
-                if (notify) Notice(NoticeKinds.CantSend, null, file.Path.Value, "It is outside every project. Move it into one of your project folders so Armory can keep it.");
+                // A project folder renamed in Explorer is put back, not a pile of files outside projects.
+                if (notify && !HeldForCapture(file.Path.Value)) Notice(NoticeKinds.CantSend, null, file.Path.Value, "It is outside every project. Move it into one of your project folders so Armory can keep it.");
                 continue;
             }
-            var st = FileFor(project, file.Path.Value);
+            if (HeldForCapture(file.Path.Value)) continue; // a folder on its way back where it was
+            var known = state.Files.TryGetValue(file.Path.Value, out var existing);
+            // Archived (decision D8): only this computer's own check outs there are kept up.
+            if (project.Archived && !MineToFinish(existing)) continue;
+            if (!known) createdThisPass.Add(file.Path.Value);
+            var st = known ? existing! : FileFor(project, file.Path.Value);
             if (file.Hash == st.BaseHash || file.Hash == st.LastCaptured) continue;
             var id = state.NextId("save");
             Save(); // the id is spent before it is used, so it is never reused
@@ -482,8 +536,13 @@ public sealed partial class SyncEngine : IAsyncDisposable
         if (!VaultPath.TryCreate(key, out var path, out _, options.VaultRoot)) return;
         var project = ProjectOf(path);
         if (project is null || !project.Usable) return;
+        // A folder being renamed or removed here, a project folder gone or waiting to be put
+        // back, a known folder gone from the scan: nothing under it is planned file by file.
+        if (Held(key)) return;
         local.TryGetValue(key, out var localFile);
         state.Files.TryGetValue(key, out var st);
+        // Archived (decision D8): only this computer's own check outs there are finished.
+        if (project.Archived && !MineToFinish(st)) return;
         // A file this computer already tracks is planned against its own server record
         // (found by id, wherever it now lives); a server path whose file another state owns
         // is that file's pending move, not a new file.

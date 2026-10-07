@@ -56,6 +56,8 @@ public sealed partial class SyncEngine
     private bool Unsent(FileState st)
     {
         if (st.Refusal is not null) return false;
+        // An archived project's files wait for nothing (decision D8), unless they are mine to finish.
+        if (state.Projects.GetValueOrDefault(st.ProjectId) is { Archived: true } && !MineToFinish(st)) return false;
         if (st.Inflight is { Kind: "create" or "commit" or "side" or "archive" } || st.Entries.Count > 0) return true;
         return local.TryGetValue(st.Path, out var file) && file.Hash != st.BaseHash && file.Hash != st.Preserved;
     }
@@ -74,7 +76,7 @@ public sealed partial class SyncEngine
 
     // ---- Notices -------------------------------------------------------------------------
 
-    private sealed record RawItem(string Id, Guid? FileId, string Path, string? Detail, string? Title = null, string? Flavor = null);
+    private sealed record RawItem(string Id, Guid? FileId, string Path, string? Detail, string? Title = null, string? Flavor = null, (int Added, int Total)? Tally = null);
     private sealed record RawGroup(string Key, string Kind, List<RawItem> Items);
 
     // The items each card showed when the view was last built: a dismissal hides exactly those.
@@ -96,15 +98,31 @@ public sealed partial class SyncEngine
         var groups = new Dictionary<string, RawGroup>(StringComparer.Ordinal);
         void Add(string kind, RawItem item)
         {
-            if (!groups.TryGetValue(kind, out var group)) groups[kind] = group = new RawGroup(kind, kind, []);
+            // One card per kind, however many files: 14 files that share a name are one card
+            // with 14 items, and a Pack and Go is one import summary.
+            var key = kind; // MUTATION: notices are grouped by kind
+            if (!groups.TryGetValue(key, out var group)) groups[key] = group = new RawGroup(key, kind, []);
             if (!group.Items.Any(i => i.Id == item.Id)) group.Items.Add(item);
         }
         // A pass's notes, its problems among them (in plain words; the raw text goes to the log).
         foreach (var n in notes)
             Add(n.Kind, new RawItem($"{n.Kind}:{n.Path}:{n.Title}" + (n.Path.Length == 0 ? ":" + n.Detail : ""), n.FileId, n.Path, n.Detail, n.Title,
-                n.Title == StaleMarkerTitle ? "stale" : n.Title?.Contains("renamed", StringComparison.Ordinal) == true ? "rename" : null));
+                n.Title == StaleMarkerTitle ? "stale" : n.Title?.Contains("renamed", StringComparison.Ordinal) == true || n.Title?.EndsWith(" was moved", StringComparison.Ordinal) == true ? "rename" : null));
         foreach (var n in state.Remembered.Where(n => now - n.At < TimeSpan.FromMinutes(30)))
             Add(n.Kind, new RawItem($"{n.Kind}:{n.Path}:{n.At.UtcTicks}", n.FileId, n.Path, n.Detail, n.Title));
+        // One summary per bulk add (an unzip, a paste, a Pack and Go, Add files).
+        foreach (var import in state.Imports.Where(i => now - i.At < ImportShownFor))
+        {
+            var (added, shared, waiting, other, total) = ImportTally(import);
+            if (total == 0) continue;
+            var detail = new List<string>();
+            if (shared > 0) detail.Add($"{Count(shared, "file needs", "files need")} you: {(shared == 1 ? "it shares a name with another file" : "they share a name with other files")} in this project.");
+            if (waiting > 0) detail.Add($"{Count(waiting, "file is", "files are")} {(online == false ? "waiting to upload" : "still uploading")}.");
+            if (other > 0) detail.Add($"{Count(other, "file", "files")} can't be uploaded. Each one says why.");
+            if (detail.Count == 0) detail.Add("They're all in Armory now.");
+            Add(NoticeKinds.Import, new RawItem($"import:{import.Id}", null, import.Folder, string.Join(' ', detail),
+                $"Added {added:N0} of {total:N0} files to {Where(import.Folder)}", Tally: (added, total)));
+        }
         foreach (var st in files.OrderBy(f => f.Path, StringComparer.OrdinalIgnoreCase))
         {
             var name = NameOf(st.Path);
@@ -204,7 +222,16 @@ public sealed partial class SyncEngine
                 new NoticeActionView("OK", BridgeMessages.DismissNotice, [])),
             NoticeKinds.FolderPutBack => (NoticeTones.Look,
                 n == 1 ? first.Title ?? $"{name} was put back where it was" : $"{n:N0} renames were put back",
-                n == 1 ? first.Detail ?? "" : "Someone else has these files checked out, so they can't be renamed now. Try again after they're checked in.", null),
+                n == 1 ? first.Detail ?? "" : "Someone else has files in them checked out, so they can't be renamed or deleted now. Try again after they're checked in.", null),
+            NoticeKinds.Import => (NoticeTones.Info,
+                n == 1 ? first.Title ?? $"Added files to {name}" : $"Added {items.Sum(i => i.Tally?.Added ?? 0):N0} of {items.Sum(i => i.Tally?.Total ?? 0):N0} files to {n:N0} folders",
+                n == 1 ? first.Detail ?? "" : "Each folder says what came in.", new NoticeActionView("Done", BridgeMessages.DismissNotice, [])),
+            NoticeKinds.ProjectPutBack => (NoticeTones.Info,
+                n == 1 ? first.Title ?? $"The {name} folder was put back" : $"{n:N0} project folders were put back",
+                n == 1 ? first.Detail ?? "" : ProjectNamesWords, new NoticeActionView("OK", BridgeMessages.DismissNotice, [])),
+            NoticeKinds.ProjectRenaming => (NoticeTones.Info,
+                n == 1 ? first.Title ?? $"{name} is being renamed" : $"{n:N0} projects are being renamed",
+                n == 1 ? first.Detail ?? "" : "A mentor renamed them on ideabosco.com. Armory renames their folders on this computer as soon as nothing in them is open.", null),
             _ => (NoticeTones.Info, first.Title ?? name, first.Detail ?? "", null),
         };
         return new NoticeGroupView(g.Key, g.Kind, tone, title, detail, n, action,

@@ -136,6 +136,53 @@ public sealed class EngineUnitTests
         Assert.Contains("\"folder\":\"Robot 2027\"", again, StringComparison.Ordinal);
     }
 
+    // Stage E2's records survive a restart, names compared as Windows compares them, and a
+    // 0.1.0 state has none of them (its first online pass learns its folders).
+    [Fact]
+    public void Folder_work_and_imports_round_trip_and_a_0_1_0_state_has_none()
+    {
+        var store = new MemoryState();
+        var state = new EngineState { Email = "a@b.c", DeviceId = Guid.NewGuid() };
+        var project = Guid.NewGuid();
+        state.Projects[project] = new ProjectState { Id = project, Name = "Robot 2028", Folder = "Robot 2027", PutBackFrom = "Robot old" };
+        state.KnownFolders.Add("Robot 2027/Gearbox");
+        state.AbsentFolders["Robot 2027/Gearbox"] = 1;
+        var op = new PendingFolderOp("rename", Guid.NewGuid(), project, "Robot 2027/Pack/CopyDesignTemp", "Robot 2027/Pack/Gearbox");
+        var putBack = new PendingFolderOp("putBack", Guid.NewGuid(), project, "Robot 2027/Gears", "Robot 2027/Gears 2", "Gears was put back: Maria Lopez has 1 of its files checked out");
+        state.FolderOps.AddRange([op, putBack]);
+        state.RemoteFolderRenames.Add(new RemoteFolderRename(project, "Intake", "Intake v2"));
+        state.Imports.Add(new ImportRecord(Guid.NewGuid(), project, "Robot 2027/Pack", ["Robot 2027/Pack/Copy-01.SLDPRT"], DateTimeOffset.UnixEpoch));
+        store.Save(state.Serialize());
+        var loaded = EngineState.Load(store);
+        Assert.Contains("ROBOT 2027/GEARBOX", loaded.KnownFolders);
+        Assert.Equal(1, loaded.AbsentFolders["robot 2027/gearbox"]);
+        Assert.Equal([op, putBack], loaded.FolderOps);
+        Assert.Equal(new RemoteFolderRename(project, "Intake", "Intake v2"), Assert.Single(loaded.RemoteFolderRenames));
+        var import = Assert.Single(loaded.Imports);
+        Assert.Equal(("Robot 2027/Pack", "Robot 2027/Pack/Copy-01.SLDPRT"), (import.Folder, Assert.Single(import.Paths)));
+        Assert.Equal(("Robot 2028", "Robot 2027", "Robot old"), (loaded.Projects[project].Name, loaded.Projects[project].Folder, loaded.Projects[project].PutBackFrom));
+
+        var migrated = EngineState.Load(new MemoryState(File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "Fixtures", "state-0.1.0.json"))));
+        Assert.Empty(migrated.KnownFolders);
+        Assert.Empty(migrated.FolderOps);
+        Assert.Empty(migrated.Imports);
+        Assert.Null(Assert.Single(migrated.Projects.Values).PutBackFrom);
+    }
+
+    // A folder renamed on the server, seen from one file's two paths: the deepest folders that
+    // differ. A renamed file, another project, or the project's top folder is not a folder rename.
+    [Theory]
+    [InlineData("R/Pack/CopyDesignTemp/a.SLDPRT", "R/Pack/Gearbox/a.SLDPRT", "R/Pack/CopyDesignTemp", "R/Pack/Gearbox")]
+    [InlineData("R/Pack/CopyDesignTemp/Sub/a.SLDPRT", "R/Pack/Gearbox/Sub/a.SLDPRT", "R/Pack/CopyDesignTemp", "R/Pack/Gearbox")]
+    [InlineData("R/Intake/a.SLDPRT", "R/Archive/Intake v2/a.SLDPRT", "R/Intake", "R/Archive/Intake v2")]
+    [InlineData("R/gear/a.SLDPRT", "R/Gear/a.SLDPRT", "R/gear", "R/Gear")]
+    [InlineData("R/Pack/a.SLDPRT", "R/Pack/b.SLDPRT", null, null)]
+    [InlineData("R/a.SLDPRT", "R/Sub/a.SLDPRT", null, null)]
+    [InlineData("R/Sub/a.SLDPRT", "R/a.SLDPRT", null, null)]
+    [InlineData("R/Sub/a.SLDPRT", "S/Sub/a.SLDPRT", null, null)]
+    public void A_folder_change_is_the_deepest_folders_that_differ(string from, string to, string? folderFrom, string? folderTo)
+        => Assert.Equal(folderFrom is null ? null : (folderFrom, folderTo!), SyncEngine.PrefixChange(from, to));
+
     [Fact]
     public void File_state_store_replaces_atomically_and_leaves_no_pending_file()
     {

@@ -50,6 +50,21 @@ internal sealed class EngineState
     // server drops a revived file's removal from its history, so File detail marks the first
     // version after a revival from these.
     public Dictionary<Guid, List<DateTimeOffset>> Revivals { get; set; } = [];
+    // Folders inside a project (vault-relative, "Robot 2027/Drivetrain/Gearbox") that held files
+    // the server has, on this computer. Only these are removed when nothing is left in them
+    // (decision D17), and only these, gone from the disk, can be a deleted folder: a folder a
+    // student made stays.
+    public HashSet<string> KnownFolders { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    // Consecutive scans that did not find a known folder: a folder removal is sent only after
+    // two, like a file's.
+    public Dictionary<string, int> AbsentFolders { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    // Folder renames and removals made on this disk, each sent as one server call with its
+    // operation id (durable before the call), and refused renames waiting to be put back.
+    public List<PendingFolderOp> FolderOps { get; set; } = [];
+    // Folder renames the server announced (folder_renamed), not yet moved here in one step.
+    public List<RemoteFolderRename> RemoteFolderRenames { get; set; } = [];
+    // Bulk adds (an unzip, a paste, a Pack and Go, Add files): one import summary each.
+    public List<ImportRecord> Imports { get; set; } = [];
 
     internal bool IsMine(Guid device) => device == DeviceId || FormerDevices.Contains(device);
 
@@ -67,6 +82,11 @@ internal sealed class EngineState
         state.Completed = new(state.Completed, StringComparer.Ordinal);
         state.Dismissed = new(state.Dismissed, StringComparer.Ordinal);
         state.Revivals ??= [];
+        state.KnownFolders = new(state.KnownFolders ?? [], StringComparer.OrdinalIgnoreCase);
+        state.AbsentFolders = new(state.AbsentFolders ?? [], StringComparer.OrdinalIgnoreCase);
+        state.FolderOps ??= [];
+        state.RemoteFolderRenames ??= [];
+        state.Imports ??= [];
         state.Migrate();
         return state;
     }
@@ -100,10 +120,14 @@ internal sealed class ProjectState
 {
     public Guid Id { get; set; }
     public string Name { get; set; } = "";
-    // The project's folder on this computer, the first segment of every local path in it.
-    // Stage E2 moves it in place when the project is renamed on the site; until then it
-    // follows the name.
+    // The project's folder on this computer, the first segment of every local path in it. It
+    // is the project's name, except while a rename on the site waits for a file to close
+    // (then the folder is moved in place, never copied).
     public string Folder { get; set; } = "";
+    // The top-level folder a student renamed this project's folder to in Explorer, while it
+    // waits to be put back (decision D16). The project's own folder is never made again
+    // beside it, and nothing in the project is planned meanwhile.
+    public string? PutBackFrom { get; set; }
     public long Cursor { get; set; }
     public int PinnedRelease { get; set; } = 2025;
     public bool Enforce { get; set; }
@@ -193,3 +217,17 @@ internal sealed record Inflight(string Kind, Guid Operation, string? EntryId = n
 // A rename sent through armory_move_file: requested with MoveAsync, or an Explorer rename the
 // engine detected (Local), whose bytes already sit at To.
 internal sealed record PendingMove(Guid Operation, Guid FileId, string From, string To, bool Local = false);
+
+// A folder change made on this disk (vault-relative folders), durable before its server call.
+// "rename": the student moved LocalFrom to LocalTo; the file states already follow the disk,
+// and armory_rename_folder is sent once (contract C5). "delete": the known folder LocalFrom is
+// gone; armory_delete_folder is sent once (C6). "putBack": a refused rename, waiting to move
+// LocalTo back to LocalFrom (something inside was open). Who refused is named in Refusal.
+internal sealed record PendingFolderOp(string Kind, Guid Operation, Guid ProjectId, string LocalFrom, string LocalTo, string? Refusal = null);
+
+// folder_renamed from the change feed, in the server's spelling (project-relative).
+internal sealed record RemoteFolderRename(Guid ProjectId, string From, string To);
+
+// One bulk add: the folder it landed in (vault-relative) and every file it brought. The
+// summary counts what is in Armory now, what shares a name, and the rest.
+internal sealed record ImportRecord(Guid Id, Guid ProjectId, string Folder, List<string> Paths, DateTimeOffset At);

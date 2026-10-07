@@ -521,7 +521,7 @@ public sealed partial class SyncEngine
         {
             if (!VaultPath.TryCreate(st.Path, out var path, out _, options.VaultRoot)) continue;
             var project = state.Projects.GetValueOrDefault(st.ProjectId);
-            if (project is null || !project.Usable) continue;
+            if (project is null || !project.Usable || (project.Archived && !MineToFinish(st)) || HeldByWork(st.Path) || heldProjects.Contains(project.Id)) continue;
             local.TryGetValue(st.Path, out var current);
             var remote = st.FileId is { } fid && remoteById.TryGetValue(fid, out var r) ? r.File : null;
             foreach (var id in st.Entries.Concat(st.Drafts).ToArray())
@@ -584,6 +584,8 @@ public sealed partial class SyncEngine
         foreach (var st in state.Files.Values.Where(f => f.FileId is not null && f.LocalMoveTo is null).ToArray())
         {
             if (!remoteById.TryGetValue(st.FileId!.Value, out var remote) || string.Equals(remote.Path.Value, st.Path, StringComparison.Ordinal)) continue;
+            // A folder being renamed or put back here moves as one, never file by file.
+            if (Held(st.Path) || Held(remote.Path.Value)) continue;
             if (!VaultPath.TryCreate(st.Path, out var from, out _, options.VaultRoot)) continue;
             if (state.Files.TryGetValue(remote.Path.Value, out var occupant) && !ReferenceEquals(occupant, st) && !string.Equals(remote.Path.Value, st.Path, StringComparison.OrdinalIgnoreCase))
             {
@@ -594,7 +596,11 @@ public sealed partial class SyncEngine
             {
                 if (IsOpenNow(from))
                 {
-                    Notice(NoticeKinds.NewerWaiting, st.FileId, st.Path, $"It was renamed to {remote.Path.Name}. Close {from.Name} to finish moving it.", $"{from.Name} was renamed");
+                    // Its folder was renamed or moved for the team (the rest of the folder moved already).
+                    var sameName = string.Equals(from.Name, remote.Path.Name, StringComparison.Ordinal);
+                    Notice(NoticeKinds.NewerWaiting, st.FileId, st.Path,
+                        sameName ? $"It was moved to {Where(Parent(remote.Path.Value)!)}. Close {from.Name} to finish moving it." : $"It was renamed to {remote.Path.Name}. Close {from.Name} to finish moving it.",
+                        sameName ? $"{from.Name} was moved" : $"{from.Name} was renamed");
                     continue;
                 }
                 var outcome = fs.Move(from, remote.Path, file.Hash);
@@ -634,7 +640,7 @@ public sealed partial class SyncEngine
             if (st.FileId is null || st.BaseHash is null || st.LocalMoveTo is not null || st.Inflight is not null || local.ContainsKey(st.Path)) continue;
             if (state.Moves.Any(m => m.FileId == st.FileId)) continue;
             var project = state.Projects.GetValueOrDefault(st.ProjectId);
-            if (project is null || !project.Usable) continue;
+            if (project is null || !project.Usable || project.Archived || HeldByWork(st.Path) || heldProjects.Contains(project.Id)) continue;
             string? to = null;
             if (platform.TryGetValue(st.Path, out var renamed) && local.ContainsKey(renamed)) to = renamed;
             else
@@ -782,6 +788,8 @@ public sealed partial class SyncEngine
         foreach (var st in state.Files.Values)
         {
             if (st.FileId is not { } id || !local.TryGetValue(st.Path, out var file)) continue;
+            // Archived (decision D8): its files are left as they are.
+            if (state.Projects.GetValueOrDefault(st.ProjectId) is { Archived: true }) continue;
             LockOwnership ownership;
             if (remoteById.TryGetValue(id, out var remote))
             {
