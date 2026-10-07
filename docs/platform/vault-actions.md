@@ -50,11 +50,18 @@ runtime associates (`.py .pyw .pyz .pyzw .pyc .pyo .sh .pl .rb .ahk .au3`) and t
 PowerShell data and console types. It stays a denylist rather than a list of allowed
 documents, so every CAD exchange type (STEP, IGES, STL, DXF, DWG, Parasolid) still opens.
 No association (`ERROR_NO_ASSOCIATION`, 1155) becomes "No program on this computer opens .X
-files."; a failed DDE conversation or a missing DLL (1156, 1157, a program that is there
-but busy starting) becomes "Windows could not open X. Wait a moment, then try again."
+files." Since v0.2.1 the shell call runs on a short-lived STA thread of its own
+(`ShellOpener`), never the engine thread: ShellExecute talks to SolidWorks by DDE, which
+needs an STA thread, and from the engine's MTA thread the conversation failed (1156) whenever
+SolidWorks was not running yet, so v0.2.0 answered "Wait a moment" and opened nothing. A
+failed DDE conversation or a missing DLL (1156, 1157), or a shell call that has not come back
+after 10 seconds, falls back to starting `explorer.exe` with the quoted full path, which is
+what a double-click in File Explorer does. The caller waits about a second at most; a call
+still going after that counts as opening and finishes (or falls back) on its own thread.
 
 Tests (Windows only, real disk): `MoveFolder_moves_a_closed_folder_and_refuses_open_files_existing_targets_and_long_paths`,
 `DeleteEmptyFolder_removes_only_folders_without_files`, `CopyIn_copies_through_staging_and_never_overwrites`,
 `CopyIn_refuses_a_symbolic_link`, `Launch_refuses_programs_and_scripts_and_opens_documents_through_the_shell`
-(with the shell call recorded, so nothing opens on the runner), and `LaunchPolicyTests`,
-which run on every host.
+(with the shell call recorded, so nothing opens on the runner), and `LaunchPolicyTests` and
+`ShellOpenerTests` (the STA thread, the Explorer fallback, a call that never returns), which
+run on every host.

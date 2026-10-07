@@ -375,25 +375,23 @@ public sealed class WindowsVaultFileSystem : IVaultFileSystem, IDisposable
             return ReplaceOutcome.Refused($"Armory does not open {Path.GetExtension(path.Name)} files, because opening one runs a program.");
         if (!File.Exists(file)) return ReplaceOutcome.Refused($"{path.Name} is not on this computer yet.");
         var plain = Shell.Plain(file!);
-        var start = new ProcessStartInfo(plain) { UseShellExecute = true, Verb = "open", WorkingDirectory = Path.GetDirectoryName(plain) ?? Root };
-        try
+        // On its own STA thread, falling back to File Explorer (ShellOpener); this call waits
+        // about a second at most.
+        var error = new ShellOpener(StartShell) { Log = LaunchLog }.Open(plain);
+        return error switch
         {
-            StartShell(start);
-            return ReplaceOutcome.Done;
-        }
-        // ERROR_NO_ASSOCIATION is the only "no program" answer. A failed DDE conversation or a
-        // missing DLL (1156, 1157) happens when the program is there but busy starting.
-        catch (Win32Exception error) when (error.NativeErrorCode is 1155)
-        { return ReplaceOutcome.Refused($"No program on this computer opens {Path.GetExtension(path.Name)} files."); }
-        catch (Win32Exception error) when (error.NativeErrorCode is 1156 or 1157)
-        { return ReplaceOutcome.Refused($"Windows could not open {path.Name}. Wait a moment, then try again."); }
-        catch (Win32Exception error) when (error.NativeErrorCode is 1223)
-        { return ReplaceOutcome.Refused($"Opening {path.Name} was canceled."); }
-        catch (Exception error) when (error is Win32Exception or InvalidOperationException or IOException)
-        { return ReplaceOutcome.Refused($"Windows could not open {path.Name}: {error.Message}"); }
+            null => ReplaceOutcome.Done,
+            // ERROR_NO_ASSOCIATION is the only "no program" answer.
+            Win32Exception { NativeErrorCode: 1155 } => ReplaceOutcome.Refused($"No program on this computer opens {Path.GetExtension(path.Name)} files."),
+            Win32Exception { NativeErrorCode: 1223 } => ReplaceOutcome.Refused($"Opening {path.Name} was canceled."),
+            _ => ReplaceOutcome.Refused($"Windows could not open {path.Name}: {error.Message}"),
+        };
     }
 
-    // ShellExecute; tests replace it so nothing really opens.
+    // Where the open's own problems go (the agent's log).
+    internal Action<string>? LaunchLog { get; set; }
+
+    // Process.Start (the shell's open, or explorer.exe); tests replace it so nothing really opens.
     internal Action<ProcessStartInfo> StartShell { get; set; } = start => { using var _ = Process.Start(start); };
 
     public void EnsureFolder(string vaultRelativeFolder)

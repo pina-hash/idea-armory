@@ -292,13 +292,60 @@ public sealed partial class SyncEngine
     }
 
     // Open: the file's own program (SolidWorks for a part). Programs and scripts are refused
-    // (decision D14). Needs no pass, so it never waits behind one.
-    public Task<ActionResult> LaunchAsync(string path, CancellationToken cancellationToken = default) => engineThread.InvokeAsync(() =>
+    // (decision D14). Needs no pass, so it never waits behind one, and the open itself runs off
+    // the engine thread (the platform answers within about a second). A file the team has that
+    // is not on this computer yet is downloaded first, ahead of everything else (a pass scoped
+    // to it, as for an action), and opens once it is here.
+    public Task<ActionResult> LaunchAsync(string path, CancellationToken cancellationToken = default) => engineThread.InvokeAsync(async () =>
     {
-        if (!VaultPath.TryCreate(path, out var file, out _, options.VaultRoot)) return Task.FromResult(new ActionResult(false, "That isn't a file in your Armory folder."));
-        var outcome = fs.Launch(file);
-        return Task.FromResult(outcome.Succeeded ? new ActionResult(true, $"Opening {file.Name}.") : new ActionResult(false, outcome.Problem ?? $"Armory couldn't open {file.Name}."));
+        if (!VaultPath.TryCreate(path, out var file, out _, options.VaultRoot)) return new ActionResult(false, "That isn't a file in your Armory folder.");
+        if (!Exists(file) && remoteByPath.TryGetValue(file.Value, out var remote) && !remote.File.Deleted && remote.File.Current is not null)
+        {
+            if (Unready() is { } why) return why;
+            if (online != true) return Offline($"{file.Name} can be downloaded and opened once this computer is back online.");
+            openWhenHere[remote.File.Id] = deps.Clock.GetUtcNow();
+            _ = DownloadToOpenAsync(file);
+            return new ActionResult(true, $"Downloading {file.Name}, it opens when it is here.");
+        }
+        var outcome = await Task.Run(() => fs.Launch(file), cancellationToken);
+        return outcome.Succeeded ? new ActionResult(true, $"Opening {file.Name}.") : new ActionResult(false, outcome.Problem ?? $"Armory couldn't open {file.Name}.");
     });
+
+    // Files the student opened before they were here: opened as soon as a pass brings them (for
+    // ten minutes; after that, a later download opens nothing by surprise).
+    private readonly Dictionary<Guid, DateTimeOffset> openWhenHere = [];
+    private static readonly TimeSpan OpenWhenHereFor = TimeSpan.FromMinutes(10);
+
+    private async Task DownloadToOpenAsync(VaultPath file)
+    {
+        try
+        {
+            await EnterActionAsync(stopping.Token);
+            try { if (Unready() is null) await PassLockedAsync(stopping.Token, PassScope.Under(file.Value)); }
+            finally { LeaveAction(); }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception error) when (error is not OutOfMemoryException) { deps.Log?.Invoke($"open {file}: {error.GetType().Name}: {error.Message}"); }
+    }
+
+    // After every pass: the files waiting to open that are here now, closed, open in their program.
+    private void OpenArrived()
+    {
+        if (openWhenHere.Count == 0) return;
+        foreach (var (id, asked) in openWhenHere.ToArray())
+        {
+            if (deps.Clock.GetUtcNow() - asked > OpenWhenHereFor || !remoteById.TryGetValue(id, out var remote) || remote.File.Deleted) { openWhenHere.Remove(id); continue; }
+            if (!TryLocal(remote.Path.Value, out var here)) continue;
+            openWhenHere.Remove(id);
+            if (IsOpenNow(here.Path)) continue;
+            var path = here.Path;
+            _ = Task.Run(() =>
+            {
+                var outcome = fs.Launch(path);
+                if (!outcome.Succeeded) deps.Log?.Invoke($"open {path}: {outcome.Problem}");
+            });
+        }
+    }
 
     // Rename one file in its folder (addendum 7). A file Armory does not have is renamed on this
     // disk; a file in Armory is renamed for everyone through armory_move_file under a lock taken

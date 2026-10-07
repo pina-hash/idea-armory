@@ -39,7 +39,8 @@ await engine.CheckOutAsync(paths, open: false); // "Check out" / "Check out and 
 await engine.CheckInAsync(paths);
 await engine.UndoCheckOutAsync(paths);
 await engine.TakeBackAsync(fileId);   // a mentor or CAD lead: armory_break_lock
-await engine.LaunchAsync(path);       // "Open": the file's own program (never programs or scripts, D14)
+await engine.LaunchAsync(path);       // "Open": the file's own program (never programs or scripts, D14);
+                                      // a file not here yet downloads first (a pass scoped to it) and opens when it arrives
 await engine.RenameFileAsync(path, newName);
 // Folders (a folder is in a project: "" is its top folder, "Drivetrain/Gearbox" one inside).
 await engine.CreateFolderAsync(projectId, parent, name);      // New folder (on this computer)

@@ -211,6 +211,36 @@ public sealed class CheckOutTests
         Assert.DoesNotContain("Robot 2027/Tools/setup.exe", t.A.Disk.Launched);
     }
 
+    // v0.2.1: Open on a file the team has that isn't on this computer yet answers at once,
+    // downloads it ahead of everything else, and opens it once it is here.
+    [PostgresFact]
+    public async Task Open_downloads_a_file_first_and_then_opens_it()
+    {
+        await using var t = await TeamAsync();
+        t.A.Write(Plate, "v1");
+        for (var i = 0; i < 60; i++) t.A.Write($"Robot 2027/Bulk/Part-{i:D2}.SLDPRT", $"bulk {i}");
+        await t.A.SyncTimesAsync(2);
+        // Maria's computer knows the files but has none of them (each download is slow).
+        t.B.Network.StorageFault = r => r.Method == HttpMethod.Get ? new HttpResponseMessage(System.Net.HttpStatusCode.ServiceUnavailable) : null;
+        await t.B.SyncAsync();
+        Assert.Null(t.B.Read(Plate));
+        t.B.Network.StorageFault = null;
+        t.B.Network.StorageDelay = r => r.Method == HttpMethod.Get ? TimeSpan.FromMilliseconds(200) : TimeSpan.Zero;
+        t.B.Engine.Start();
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var answer = await t.B.Engine.LaunchAsync(Plate);
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(2), $"Open answered after {watch.Elapsed.TotalSeconds:F1} s");
+        Assert.True(answer.Ok, answer.Message);
+        Assert.Equal("Downloading Plate.SLDPRT, it opens when it is here.", answer.Message);
+        Assert.True(SpinWait.SpinUntil(() => t.B.Disk.Launched.Contains(Plate), TimeSpan.FromSeconds(20)), "Plate.SLDPRT never opened");
+        Assert.Equal("v1", t.B.Text(Plate));
+        // Ahead of the rest: most of the other files were still to come when it opened.
+        var others = Directory.Exists(t.B.Disk.Full("Robot 2027/Bulk")) ? Directory.EnumerateFiles(t.B.Disk.Full("Robot 2027/Bulk")).Count() : 0;
+        Assert.True(others < 60, $"all {others} other files came first");
+        // A file that isn't anywhere is still said plainly.
+        Assert.False((await t.B.Engine.LaunchAsync("Robot 2027/Drivetrain/Nothing.SLDPRT")).Ok);
+    }
+
     // A file that shares a name is renamed in the app, then added under its new name; a file
     // in Armory is renamed for everyone, and not while someone else has it checked out.
     [PostgresFact]

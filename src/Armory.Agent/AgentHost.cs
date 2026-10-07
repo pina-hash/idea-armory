@@ -502,7 +502,7 @@ internal sealed class VaultRuntime
         var disposables = new Stack<IDisposable>();
         try
         {
-            var files = new WindowsVaultFileSystem(vaultRoot);
+            var files = new WindowsVaultFileSystem(vaultRoot) { LaunchLog = log is null ? null : log.Info };
             disposables.Push(files);
             var journal = new DurableJournalStore(Path.Combine(files.Root, ".armory", "journal.bin"));
             disposables.Push(journal);

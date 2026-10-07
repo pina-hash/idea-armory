@@ -489,14 +489,22 @@ public sealed class WindowsVaultFileSystemTests
         var none = files.Launch(TempFolder.PathValue("Robot/Plate.SLDPRT"));
         Assert.False(none.Succeeded);
         Assert.Equal("No program on this computer opens .SLDPRT files.", none.Problem);
-        // A program that is there but did not answer (a failed DDE conversation, a missing DLL)
-        // is not "no program".
+        // A program that is there but did not answer the shell (a failed DDE conversation, a
+        // missing DLL: SolidWorks not running yet) is opened through File Explorer instead, as a
+        // double-click does (v0.2.1; v0.2.0 answered "Wait a moment" and opened nothing).
         foreach (var code in new[] { 1156, 1157 })
         {
-            files.StartShell = _ => throw new System.ComponentModel.Win32Exception(code);
-            var busy = files.Launch(TempFolder.PathValue("Robot/Plate.SLDPRT"));
-            Assert.False(busy.Succeeded);
-            Assert.Equal("Windows could not open Plate.SLDPRT. Wait a moment, then try again.", busy.Problem);
+            List<System.Diagnostics.ProcessStartInfo> tried = [];
+            files.StartShell = s => { lock (tried) tried.Add(s); if (s.UseShellExecute) throw new System.ComponentModel.Win32Exception(code); };
+            var opened = files.Launch(TempFolder.PathValue("Robot/Plate.SLDPRT"));
+            Assert.True(opened.Succeeded, opened.Problem);
+            SpinWait.SpinUntil(() => { lock (tried) return tried.Count == 2; }, TimeSpan.FromSeconds(5));
+            lock (tried)
+            {
+                Assert.Equal(2, tried.Count);
+                Assert.Equal("explorer.exe", tried[1].FileName);
+                Assert.Equal("\"" + Path.Combine(Path.GetFullPath(vault.Root), "Robot", "Plate.SLDPRT") + "\"", tried[1].Arguments);
+            }
         }
     }
 

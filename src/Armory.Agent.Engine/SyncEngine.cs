@@ -481,6 +481,8 @@ public sealed partial class SyncEngine : IAsyncDisposable
         if (online == true) TidyFolders();
         // The read-only rule holds offline too, from the last ownership this computer knew.
         ApplyReadOnly();
+        // Files opened before they were here open now that they are.
+        OpenArrived();
         // Every notice of this pass is known now, so dismissed items that are gone are forgotten.
         if (online == true) PruneDismissed();
         return Report(true);
