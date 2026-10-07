@@ -51,6 +51,71 @@ to an open file is recorded as a violation.
 | Without directory identity a folder rename is still one folder move | `FolderScenarioTests.A_folder_renamed_without_directory_identity_is_still_one_folder_move` |
 | The team renames a folder while this computer has a file in it open: the rest moves now, the open one once it closes | `FolderScenarioTests.A_folder_renamed_by_the_team_waits_for_an_open_file` |
 
+## Folders after the second E2 review (one test each, all guards)
+
+Two adversarial reviewers (safety and product lenses) replayed the folder work and reported 24
+findings, several of them the same problem seen through both lenses. All are fixed except one
+noted below, each class with one test in `FolderSafetyTests` (named after the review's probe):
+
+| Holds | Test |
+|---|---|
+| A stop right after the team's folder move here (P18): no removal, nothing to recovery or downloaded, nothing "shares a name" | `A_stop_right_after_the_team_folder_move_here_removes_nothing` |
+| A stop right after the window's rename moved the folder here (P19): one change, no removal | `A_stop_right_after_the_window_renames_a_folder_here_removes_nothing` |
+| A stop right after a project folder moved for a rename on the site (P17): no folder made again, no download, both saves of a checked-out file kept | `A_stop_right_after_a_project_folder_moves_here_downloads_nothing` |
+| A stop right after a folder, and a project folder, went back: records kept, one notice each | `A_stop_right_after_a_folder_is_put_back_keeps_its_records` |
+| A stop before or after `armory_rename_folder` and `armory_delete_folder` replays to one change (the named points `before-folder` and `after-folder`) | `A_stop_before_or_after_a_folder_call_replays_to_one_change` |
+| A folder deleted over a teammate's newer version or new part (P6, P6b) is put back with her work and one notice naming her; deleted again, one call | `A_folder_deleted_over_newer_work_is_put_back_and_removes_nothing` |
+| A project folder dragged into another project's folder (P20) goes back; nothing is added to the other project | `A_project_folder_dragged_into_another_project_is_put_back` |
+| Two saves while a folder waits to go back (P4, P4b) both reach the server; My files says "changed" | `Saves_while_a_folder_waits_to_be_put_back_are_all_kept` |
+| A take back while the project folder waits (P16) makes the file read-only at once | `A_file_taken_back_while_its_project_folder_waits_is_read_only` |
+| Two folders swapped offline (P5): three renames through the temporary name, a save kept | `Folders_swapped_offline_go_through_their_temporary_name` |
+| A folder and a folder inside it renamed together (P2): two renames, never undone | `A_folder_and_a_folder_inside_it_renamed_together_are_two_renames` |
+| A renamed folder never takes over another file's record or unsent save (P15b) | `A_renamed_folder_never_takes_over_another_files_record` |
+| Folders a student makes stay, in the app or Explorer, at the top or inside a known folder (P1, D17) | `Folders_a_student_makes_stay` |
+| The window's Rename folder and Delete folder with their answer lost (P3) finish once, the whole folder together | `A_folder_rename_from_the_window_whose_answer_is_lost_finishes_once` |
+| 20 shared names cost no `armory_create_file` on any pass; an idle pass is at most 3 calls | `Files_sharing_a_name_cost_no_server_call` |
+| The unzipped folder deleted after the shared-name card: nothing waiting, nothing retried, the bytes kept locally | `Deleting_an_unzipped_folder_leaves_nothing_waiting` |
+| Two folders put back in one pass: one card naming who, each item saying why | `Two_folders_put_back_in_one_pass_are_one_card_naming_who` |
+| A folder of new files moved to another project is added there | `A_folder_of_new_files_moved_to_another_project_is_added_there` |
+| An unzip seen over three passes (the last under 10 files) is one import | `An_unzip_seen_over_several_passes_is_one_import` |
+| A rename raced by the team's rename (P14) follows the team's name with one notice, never two folders | `A_folder_renamed_here_and_by_the_team_at_once_follows_the_team` |
+| A file removed while open says so (not "a newer version is waiting"; row `notInArmory`) | `A_file_removed_while_it_is_open_here_says_so` |
+
+Against the engine before these fixes (`809a236`) 20 of the 21 fail; the one that passes is
+the before/after-folder replay, which the review found already held (only its guard was
+missing). Each fix was then broken on its own in the fixed engine (one edit, built, the 21
+run, restored byte for byte), on 2026-10-07:
+
+| Break | Red |
+|---|---|
+| no durable record before a folder move | the project-move and put-back stop tests |
+| no durable record and no "records follow a file already at its team path" | all four stop-after-move tests |
+| no check for newer work before `armory_delete_folder` | `A_folder_deleted_over_newer_work_...` |
+| a student's folder not kept by TidyFolders | `Folders_a_student_makes_stay` |
+| no save kept while a folder waits | `Saves_while_a_folder_waits_...` |
+| the read-only rule not applied where an away folder's file is | `A_file_taken_back_while_..._is_read_only` |
+| a rename allowed onto another file's record | `A_renamed_folder_never_takes_over_...` |
+| no fresh read between folder calls | the swap, the nested rename and the before/after-folder replay |
+| pending renames rewritten by later moves | the swap |
+| a project folder in another project's folder followed (and not found by its bytes) | `A_project_folder_dragged_...` |
+| no name check before `armory_create_file` | the shared-name cost test and the deleted-unzip test |
+| a vanished name-refused file kept waiting | `Deleting_an_unzipped_folder_...` |
+| a folder of new files put back | `A_folder_of_new_files_moved_...` |
+| no joining of an unzip's later passes | `An_unzip_seen_over_several_passes_...` |
+| a rename raced by the team not followed | `A_folder_renamed_here_and_by_the_team_...` |
+| the window's rename dropped when its answer is lost | `A_folder_rename_from_the_window_...` |
+| a removal while open said as "newer version waiting" | `A_file_removed_while_it_is_open_...` |
+| several put-backs titled without names | `Two_folders_put_back_...` |
+
+Two of these are guarded twice on purpose: the durable move record and the rule that a
+record follows a file already at its team path each save the team and window stop cases
+alone, and a project folder in another project's folder is found by its bytes when the
+platform's move is missing; each pair broken together turns its tests red.
+
+Not done: folder rename and delete steps in `SeededRunTests` (its oracle compares fixed
+paths; following moved folders would be a new oracle). The named crash points of folder work
+are reached by the stop tests above instead.
+
 ## Hardening after an adversarial review
 
 A four-lens review (data safety, crash replay, Core fidelity, proof strength) of the engine
@@ -182,3 +247,19 @@ Failed FolderScenarioTests.Pack_and_Go_with_duplicate_names_then_the_inner_folde
 Stage E3 adds the 5,000-file import test (at most 3 cards), which this break must also turn
 red. After the three restores the working tree matched the commit (`git status` clean) and
 the full suite passed again.
+
+### Rerun after the second E2 review (2026-10-07)
+
+The three breaks were run again against the engine with the review's fixes (the anchors and
+the one-line edits unchanged), each restored byte for byte. Each file's SHA-256 before the
+break and after the restore, then broken:
+
+- (a) `SyncEngine.Actions.cs` `ef92471fe2235a4cabe47aaaf63e0734700085413361631d427e60279dd3da12`,
+  broken `edacf7619187541378a7ff064a91fe82156ea2273a3da33af713051c4cf899a7`. Red: the same 3 of 3
+  (`E2E_SEEDS count=200 first=0 elapsed=14.7s failures=200`, first `ARMORY_E2E_SEED=0`).
+- (b) `SyncEngine.Folders.cs` `449ddb8b2d7a3b1658d3ff60d9a3bbb8c07d058afb88d4a052145f2c4536972b`,
+  broken `12e281cc19eaeda36bd4016b89c8b19dbfe06a288e9a81c121afbb3651d93e2f`. Red: the same 3 of
+  the 13 folder scenarios, each at `RpcCount("armory_rename_folder")` (expected 1, actual 0).
+- (c) `SyncEngine.View.cs` `ab59569089eead771372bb275cade7fd546167b00d9b42fdac25adff10077417`,
+  broken `1c15f4c042de7ced7d5ccbfdc3c9abf175a7aa4b4818c79d2d3516b6cbdfafdc`. Red: the Pack and
+  Go scenario, 15 cards instead of 2.

@@ -61,9 +61,10 @@ file (D13).
    someone else" and nothing syncs.
 2. **Scan, folders, capture.** The platform scan (ignore list applied) gives every file's hash,
    its read-only bit, the folders, the folder moves it proved and SolidWorks' `~$` markers.
-   Folder changes on this disk are read first (see Folders and projects): a renamed folder's
-   records follow the disk, a project folder renamed or removed in Explorer is put back, and
-   known folders gone from the scan are counted. Then a hash that differs from the base and
+   Folder changes on this disk are read first (see Folders and projects): a folder move this
+   engine was making when it stopped is finished from what the disk shows, a renamed folder's
+   records follow the disk, a project folder renamed, moved or removed in Explorer is put back,
+   folders waiting to go back are moved back, and known folders gone from the scan are counted. Then a hash that differs from the base and
    from the last capture is a save: `SaveRecorder` persists the bytes as an immutable
    snapshot and journals a Core `Upload` intent, offline too.
    `SaveRecorder.Recover` re-journals any capture a crash left unjournaled.
@@ -86,7 +87,9 @@ file (D13).
    the call with its operation id and arguments. It is re-sent with the same id, so the
    server answers from its receipt, and its result is applied. A release or a removal is
    dropped instead and decided again from fresh state. Then each folder rename or removal
-   made on this disk is sent, one call each, with its persisted operation id.
+   made on this disk or asked for in the window is sent in the order it happened, one call
+   each, with its persisted operation id, the project's files read again after each call (and
+   only those projects are read again before planning).
 5. **Moves and earlier saves.** A folder the team renamed moves here in one step; a file
    whose server folder or name changed otherwise is moved here (never while open). A bulk add
    is recorded for its import summary. An Explorer rename is sent as `armory_move_file`. A
@@ -208,36 +211,77 @@ the same id on the next pass.
   operation is durable in `EngineState.FolderOps` before the call, which goes after any file
   write a crash left in flight (that write lands in the folder as it was, and the rename
   takes it along). Files without a server record carry on and are added at the new path.
-  Until it is sent nothing under the old or new folder is planned, captured as new, or moved
-  file by file. Refused, the folder is moved back (`MoveFolder`, as soon as nothing inside is
-  open) with ONE `folderPutBack` notice: "Gearbox was put back: Maria Lopez has 2 of its
-  files checked out." A folder moved out of its project (into another one, or to the top of
-  the Armory folder) is put back too: folders move only inside their project.
+  Until it is sent nothing under the old or new folder is planned or moved file by file.
+  Renames and removals keep the paths they had when they happened and are sent in that
+  order, each worked out from the server as the one before left it (read again after every
+  call): a folder and a folder inside it renamed together are two renames, and a swap goes
+  through the platform's temporary name ("Left (moving)"), never two refused renames. "No
+  files under the old name" counts as sent only from a fresh read; when the files are under
+  one other folder because the team renamed it first, the whole folder here follows the
+  team's name (files not in Armory yet included) with one notice, "Gears is now Box: someone
+  renamed Gearbox first". A rename onto a name whose old files still have records here (a
+  folder removed here and not yet removed for the team) is put back at once, so no file's
+  record or unsent saves ever pass to another file. Refused, the folder is moved back
+  (`MoveFolder`, as soon as nothing inside is open) with ONE `folderPutBack` notice: "Gearbox
+  was put back: Maria Lopez has 2 of its files checked out." While it waits the card says so
+  ("Gearbox goes back once Housing.SLDPRT is closed: ..."), and the files Armory knows there
+  keep every save and the read-only rule (a new file there waits until the folder is back).
+  A folder moved out of its project (into another one, or to the top of the Armory folder)
+  is put back too when it holds files the server has: folders move only inside their
+  project, and its records stay at home while it is away. A folder of files Armory doesn't
+  have yet goes where it was moved: into another project, its files are added there; out of
+  every project, they are outside Armory (their saves already kept stay on this computer).
 - **A folder deleted on this disk**: a known folder (one that held files the server has, on
   this computer) gone for two consecutive scans, every file the server has there missing and
   looked at again right before the call, is ONE `armory_delete_folder` (unsent saves under it
   are kept on the server first, as earlier saves). Nothing under it is planned file by file
   meanwhile, so one bad scan never removes anything and no per-file removal is ever sent for
-  it. Refused, the folder is made again and its files downloaded, with ONE notice naming who.
+  it. The project's files are read again right before the call, and the folder is removed
+  only when every live file the team has in it is one this computer had at the team's
+  current version: newer work (a version checked in since, a file this computer never had)
+  is never removed by a folder gone from this disk, the same rule Core applies to one file.
+  Otherwise the folder comes back with its files, newer ones included, and ONE notice: "Gearbox
+  was put back: Maria Lopez has newer work in it." Deleted again once this computer has what
+  the team has, it goes in one call. (C6 takes no expected versions, so a check in landing
+  between that read and the call, milliseconds apart, is the one race left; the contract is
+  frozen.) Refused, the folder is made again and its files downloaded, with ONE notice naming who.
   `armory_delete_folder` leaves the caller's own check outs on the removed files; the pass
   lets them go like any removed file's.
 - **The team renamed a folder** (`folder_renamed` in the change feed, or every file of a
   folder moved under one new folder): ONE local `MoveFolder`, nothing downloaded, nothing to
   recovery. When that can't be done in one step (something inside is open, the new folder is
   already here) each file moves on its own, an open one once it closes, and the emptied
-  folder goes. The team removed files: each goes to recovery as before.
-- **Empty folders (D17)**: a known folder with no file here, no live file on the server and
-  no work waiting under it is removed (`DeleteEmptyFolder`), on every computer. A folder a
-  student makes, empty or not, stays.
+  folder goes. The team removed files: each goes to recovery as before; one that is open here
+  waits and says so ("Housing.SLDPRT was removed from Robot 2027", its row "notInArmory"),
+  never "a newer version is waiting".
+- **Empty folders (D17)**: a known folder with no file here, no live file on the server, no
+  work waiting under it and no folder a student made inside it is removed
+  (`DeleteEmptyFolder`), on every computer. A folder a student makes (in the app or in File
+  Explorer), empty or not, stays, and so does every known folder it is in.
+- **Folder moves on this disk are durable.** Every folder the engine moves (the team's
+  rename, the window's rename, a project renamed on the site, a folder or project folder put
+  back) is saved as started (`EngineState.MovingFolders`) before `MoveFolder` and as finished,
+  with its records following, in one save after it. A stop in between is finished on the next
+  start, before the scan's files are read: when the disk shows the folder at its new place and
+  not at the old, the records follow; otherwise nothing moved and the work that asked asks
+  again. Crash points right after each move: `after-team-folder-move`,
+  `after-app-folder-move`, `after-project-folder-move`, `after-putBack-folder-move`,
+  `after-projectPutBack-folder-move`. As a second guard, a record whose server file lives at
+  another path where this computer has the same bytes follows it there, and is never sent as
+  a removal.
 - **The project's folder** (`ProjectState.Folder`) is no longer reset to the project's name.
   A project renamed on the site moves its folder in place once nothing inside is open, and
   every record follows: no download, no removal, no second folder, check outs go on. Until
   then the project syncs in its old folder, with one `projectRenaming` notice: "Close
   Plate.SLDPRT to finish renaming Robot 2027 to Robot 2028". A project folder renamed in
-  Explorer is moved back (`ProjectState.PutBackFrom`, durable), with "Project names are
-  changed on ideabosco.com."; while a file inside is open it waits, and the project's folder
-  is never made again beside it. A project folder removed in Explorer is made again and its
-  files downloaded: a missing project folder is never a removal, per file or per folder.
+  Explorer, or dragged anywhere (into another project's folder too), is moved back
+  (`ProjectState.PutBackFrom`, durable), with "Project names are changed on ideabosco.com.";
+  while a file inside is open it waits, the project's folder is never made again beside it,
+  and none of its files is ever added to another project. Meanwhile its records stay at the
+  project's folder: a file there keeps every save (recorded under the path it goes back to)
+  and the read-only rule (a file taken back while it waits is read-only at once). A project
+  folder removed in Explorer is made again and its files downloaded: a missing project folder
+  is never a removal, per file or per folder.
 - **Archived projects (D8, addendum 7)** are skipped silently: not read, not planned, no
   notices, their folders and read-only bits left as they are. A check out this computer has
   in one stays in My files and can be checked in (the project's files are read for that
@@ -245,14 +289,23 @@ the same id on the next pass.
 - **Window actions.** New folder makes the folder here (the server keeps no empty folders).
   Rename folder and Delete folder go to the team first, one call each (refused while someone
   else has a file in it checked out, naming who; Delete folder also while a file in it is not
-  in Armory yet), then here: one move, or recovery and the empty folder removed. Add files
+  in Armory yet), then here: one move (files not in Armory yet included), or recovery and the
+  folder removed with every folder in it. Each is durable in `EngineState.FolderOps` with its
+  own operation id before the call: a lost answer ("You're offline. Armory renames Gearbox to
+  Gears as soon as this computer is back online.") is finished by the next pass, the same id
+  answered from the server's receipt and the move here made from the same record. Before any
+  pass since a start, a folder action runs one first, so it knows what is on the disk. Add files
   copies files and whole folders through `CopyIn` (never over anything there; a link, an
   ignored name or a source being written is refused), then a pass adds them.
 - **The import summary.** A bulk add (at least 10 files new to this computer and to the
   server under one new folder in one pass, or one Add files) is ONE `import` notice,
   "Added 46 of 60 files to Robot 2027 › Pack", counting what is in Armory now, what shares
   a name and the rest; the files that share a name are ONE `nameShared` card with one item
-  each. Notices are grouped by kind (one card per kind, however many files).
+  each. New files in the folder of an import that grew in the last 10 minutes join it,
+  however few (an unzip seen over several passes is one import). A file removed since, or
+  gone from the disk with nothing left to send, no longer counts, so an import whose folder
+  was deleted shows nothing waiting. Notices are grouped by kind (one card per kind, however
+  many files).
 
 ## Rules added after review
 
@@ -273,8 +326,14 @@ the same id on the next pass.
   revived file's current version is fetched fresh, so the new bytes are committed on top of
   it, never with no parent, even when the removal happened after this pass's refresh. The
   computer's own record of the removed file at its old path is forgotten when nothing of it
-  is on disk, so the removed bytes never come back (`RevivalTests`). A live name clash
-  (SQLSTATE 23505) is one "shares a name" notice item.
+  is on disk, so the removed bytes never come back (`RevivalTests`). The change feed is read
+  for that only when the id the server answered is one this computer has seen (a new id is a
+  new file). A live name clash is one "shares a name" notice item: looked up first in the
+  project's files this pass already read, so it costs no call (a Pack and Go with a hundred
+  shared names sends no `armory_create_file` for them, on any pass); a clash the read could
+  not show (SQLSTATE 23505) is the same item. A file never added because its name is taken,
+  then deleted from the disk, is forgotten: its saves stay in this computer's safe copies,
+  and nothing waits or is retried for it.
 - Saves the release gate refuses are private drafts: never sent, never holding the lock,
   offered again if the gate later allows them.
 - A `~$` marker counts as "open" while the platform corroborates it and for 10 minutes after
@@ -306,7 +365,10 @@ a lock a 0.1.0 marker took. `EngineUnitTests` loads a state.json the 0.1.0 engin
 Notices are grouped by kind, at most one card per kind, at most 200 items each (the count is
 the total): `import` (one item per bulk add), `nameShared`, `cantSend`, `cantRead` (disk
 problems, and a stale SolidWorks marker), `newerWaiting`, `keptCopy`, `takenBack`,
-`folderPutBack` (a refused file or folder rename, or a refused folder removal, put back),
+`folderPutBack` (a refused file or folder rename, or a refused folder removal, put back;
+several in one card are titled by what they are and, when that is why, who has files in them
+checked out: "2 folders were put back: Maria Lopez has files in them checked out", each item
+saying its own reason),
 `projectPutBack` (a project folder renamed or removed in Explorer, put back) and
 `projectRenaming` (a project renamed on the site, waiting for a file to close). "SolidWorks year not checked" is never a notice, only a tag on File detail; waiting
 to upload is activity, never rows. My files are the files this computer has checked out, in
@@ -338,9 +400,12 @@ attempt. A release uses the lock's holder and acquisition time, a take back the 
 ends and the computer asking, and a move a persisted id. A folder rename or removal made on
 this disk derives its id from its own durable operation (`EngineState.FolderOps`) and the
 server's spelling of the folder. The in-flight record is written before every write the
-engine resumes (all but a take back, which the mentor asks again, and the window's own
-folder actions, which are asked again); a crash at any point replays the same id and the
-server returns its receipt, so a save becomes exactly one version.
+engine resumes (all but a take back, which the mentor asks again); a crash at any point
+replays the same id and the server returns its receipt, so a save becomes exactly one
+version. The window's Rename folder and Delete folder derive theirs from their own durable
+operation too, so a lost answer or a stop is finished by the next pass with the same id
+(`before-folder` and `after-folder` are their crash points, as for a folder renamed or
+removed on this disk).
 
 ## Schedule (contract section 4)
 
