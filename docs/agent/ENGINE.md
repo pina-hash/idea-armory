@@ -25,6 +25,7 @@ var engine = new SyncEngine(new EngineOptions { VaultRoot = @"C:\IDEA\Armory", T
     Sessions = sessions, Api = api, Blobs = blobs,
     ReleaseReader = null,             // no standalone saved-release reader exists yet
     Log = log.Info,                   // the raw text of each problem, once; the window gets plain words
+    Recorder = telemetry.Recorder,    // the flight recorder (docs/agent/TELEMETRY.md); null records nothing
 });
 engine.ViewChanged += view => bridge.Post(BridgeMessages.ViewMessage(view));
 engine.ActivityChanged += activity => bridge.Post(BridgeMessages.ActivityMessage(activity)); // at most 4 a second
