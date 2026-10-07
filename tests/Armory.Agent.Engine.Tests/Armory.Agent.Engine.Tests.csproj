@@ -13,5 +13,7 @@
   <ItemGroup>
     <Compile Include="../GuardTests/DocumentedTestGuard.cs" Link="DocumentedTestGuard.cs" />
     <None Include="../GUARDS.txt" Link="GUARDS.txt" CopyToOutputDirectory="PreserveNewest" />
+    <!-- state.json exactly as the 0.1.0 engine (b18791d) wrote it; see EngineUnitTests. -->
+    <None Include="Fixtures/state-0.1.0.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

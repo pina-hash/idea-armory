@@ -6,6 +6,13 @@ in `Platform.cs`. It runs on Linux in the end-to-end proof with a portable vault
 system; on Windows, `Armory.Agent` supplies `WindowsVaultFileSystem` and the durable
 stores from `Armory.Platform.Windows`.
 
+v2 is PDM-style check out (v2-design.md, decisions D1 to D4, D13, D15, D18): a file the
+server has is read-only on disk unless this computer has it checked out, so SolidWorks opens
+it read-only and cannot save over it; a check out takes the lock; a save while checked out
+is kept on the server at once as a kept copy (a side version, "saved while checked out")
+and the shared version advances only at check in; nothing takes or lets go of a lock by
+itself except an add (below) and a lock taken only for a move or a removal.
+
 ## Public API
 
 ```csharp
@@ -23,43 +30,119 @@ engine.Start();                       // background loop on the contract's sched
 await engine.SyncOnceAsync();         // one full pass (tests drive the engine this way)
 engine.Pause(); engine.Resume(); engine.Wake();
 await engine.GetFileDetailAsync(fileId);
+
+// The window's actions. Each answers with ActionResult(Ok, Message), one plain sentence.
+// Paths are vault-relative; a folder means every file under it.
+await engine.CheckOutAsync(paths, open: false); // "Check out" / "Check out and open"
+await engine.CheckInAsync(paths);
+await engine.UndoCheckOutAsync(paths);
+await engine.TakeBackAsync(fileId);   // a mentor or CAD lead: armory_break_lock
+await engine.LaunchAsync(path);       // "Open": the file's own program (never programs or scripts, D14)
+await engine.RenameFileAsync(path, newName);
+engine.DismissNotice(key);            // a notice card's OK, or one check-out question ("prompt:...")
 await engine.MoveAsync(from, to);     // a rename through armory_move_file
 await engine.StopAsync();
 ```
+
+`View` is the window's `AgentView` (docs/agent/BRIDGE.md); `OpenWithoutCheckOut` lists the
+open files this computer has not checked out, for the tray's one quiet balloon per opened
+file (D13).
 
 ## One pass
 
 1. **Identity.** No session: the view says signed out. The state document is bound to the
    first email and device that sync into it; another account sees "this vault belongs to
    someone else" and nothing syncs.
-2. **Finish what a crash interrupted.** Each file's state may hold one in-flight server
+2. **Scan and capture.** The platform scan (ignore list applied) gives every file's hash,
+   its read-only bit, the folders and SolidWorks' `~$` markers. A hash that differs from the
+   base and from the last capture is a save: `SaveRecorder` persists the bytes as an
+   immutable snapshot and journals a Core `Upload` intent, offline too.
+   `SaveRecorder.Recover` re-journals any capture a crash left unjournaled.
+3. **Refresh.** `armory_my_projects`, then per project `armory_list_changes(cursor)` (the
+   cursor is persisted after processing) and `armory_project_files`. A `lock_broken` change
+   naming this computer records the obligation to keep its bytes.
+4. **Finish what a crash interrupted.** Each file's state may hold one in-flight server
    write (create, lock, commit, side version, release, tombstone, move), persisted before
    the call with its operation id and arguments. It is re-sent with the same id, so the
-   server answers from its receipt, and its result is applied.
-3. **Scan and capture.** The platform scan (ignore list applied) gives every file's hash.
-   A hash that differs from the base and from the last capture is a save: `SaveRecorder`
-   persists the bytes as an immutable snapshot and journals a Core `Upload` intent.
-   `SaveRecorder.Recover` re-journals any capture a crash left unjournaled.
-4. **Online check and refresh.** `armory_my_projects`, then per project
-   `armory_list_changes(cursor)` (the cursor is persisted after processing) and
-   `armory_project_files`. A `lock_broken` change naming this device records the
-   preservation obligation. A file whose server folder or name changed is moved locally
-   (never while open).
-5. **Archive superseded saves.** A journaled save whose bytes are no longer on disk is
-   kept as a side version ("Earlier save, kept"), through Core's release gate.
-6. **Plan with Core.** For every path: `Reconciler.Plan(SyncInput)` with base, local hash,
-   remote revision, lock ownership, open state (`IsOpenNow`: the platform's check or a
-   `~$` marker), online state, the break obligation, the saved release, the project's
-   pin and gate mode, and the preserved hash. Offline plans only add journal intents.
-   Online plans are executed in order; any failure stops that file until the next pass.
-7. **Locks.** A `~$<name>` marker beside a SolidWorks document takes the lock when it is
-   free. A lock this device holds is released once the file is closed, its bytes are on
-   the server, and nothing for it is waiting. Files someone else holds are read-only.
-8. **View.** The window's `AgentView` is rebuilt.
+   server answers from its receipt, and its result is applied. A release or a removal is
+   dropped instead and decided again from fresh state.
+5. **Moves and earlier saves.** A file whose server folder or name changed is moved here
+   (never while open). An Explorer rename is sent as `armory_move_file`. A journaled save
+   whose bytes are no longer on disk is kept as a side version ("earlier save, kept").
+6. **Plan with Core, Explicit mode.** For every path: `Reconciler.Plan(SyncInput)` with base,
+   local hash, remote revision, lock ownership, open state (`IsOpenNow`: the platform's check
+   or a `~$` marker), online state, the break obligation, the saved release, the project's
+   pin and gate mode, the preserved hash, `CheckoutMode.Explicit` and the student's request
+   (`CheckIn` or `Undo` from the file's state; a closed add counts as `CheckIn`). Offline
+   plans only add journal intents (never a lock intent for a shared file). Online plans run
+   in order; any failure stops that file until the next pass.
+7. **Finish requests.** Read the server again if the plans wrote, then: a check in, an
+   undo, a closed add and a lock taken only for a move or a removal let their lock go once
+   the file is clean (read-only first, then the release); an asked-for check out takes its
+   lock (see Check out). Read the server again if anything was written.
+8. **The read-only rule** (D4), every pass, offline too, from the ownership this computer
+   last knew: every file the server has a live version of is read-only unless this computer
+   has it checked out; a file it is letting go of is read-only already. Files the server does
+   not have (not added yet, a refused name, a release-gate draft, too large) are never
+   touched. A bit the scan finds cleared is set again. One batch per pass
+   (`ApplyLockAttributes`, one manifest write); a download sets the bit on the staged copy
+   before it is renamed into place (`Replace(readOnly)`), so new bytes are never writable.
+9. **View.** The window's `AgentView` is rebuilt.
 
 The engine re-decides nothing Core decides. It executes `Download` only after rechecking
 that the file is closed and unchanged, and `SaveSideVersion` and `Upload` only from
 immutable snapshot bytes.
+
+## Check out (D1 to D4, D18; v2-design.md 4.2)
+
+Every request is durable in the file's state before any server call, and is carried out
+inside a pass under the pass gate, with operation ids derived from it; a crash finishes it
+on the next pass, through the crash points every write already has (`before-lock`,
+`after-lock`, `before-commit`, `after-blob`, `after-commit-rpc`, `after-commit`,
+`before-release`, `after-release`, `before-side`, `after-side`).
+
+- **Check out** (`FileState.CheckOut`, the lock's operation id derives from it). The file is
+  hashed at check-out time and `CheckoutRules.NextCheckOutStep` decides: the lock is taken
+  only on `TakeLock`, over a copy that is the live shared version. On `DownloadFirst` (the
+  copy is behind and closed) or `KeepChangesFirst` (bytes saved without a check out) the
+  pass with the lock free has already brought it up to date (or kept the bytes as a kept
+  copy and put the shared version back), and the rule is asked again in one more pass. The
+  rest is refused in a sentence: someone else has it ("Plate.SLDPRT is checked out by Maria
+  Lopez on LAB-PC-07."), a newer version waits behind an open file, it was removed here, the
+  server has no live version. Taking the lock makes the file writable at once; "Check out
+  and open" then opens it, unless SolidWorks still has it open ("Close Plate.SLDPRT in
+  SolidWorks first"). A folder is every live file under it: "Checked out 12 of 14 files.
+  Maria Lopez has 2 of them checked out." A check out that could not finish is dropped, not
+  left to happen later by surprise; checking out a file that is being checked in or undone
+  keeps it checked out.
+- **Check in** (`Request = CheckIn`): Core uploads the bytes on disk if they changed (a commit
+  on the base, under this computer's lock); then the file is made read-only; then the lock is
+  released. Offline, the request waits and finishes when the computer is back online. Bytes
+  Armory can't take (the release gate, too large) can't be checked in: the request is
+  dropped and the file stays checked out.
+- **Undo check out** (`Request = Undo`): refused while the file is open. Core keeps unsent
+  bytes as a kept copy (`SideVersionReason.UndoCheckOut`), the shared version is put back,
+  the file is made read-only, then the lock is released.
+- **Saves while checked out** (D1): each is kept on the server at the next online pass as a
+  kept copy, "saved while checked out", so every save is on the server; the shared file
+  advances only at check in.
+- **Adds** (D2): a new file (no server record) is created, locked, committed and released in
+  one pass, read-only afterwards. A new file that is open when added stays checked out to its
+  creator (writable) and is checked in by the pass after it closes (`FileState.AutoCheckIn`).
+  These are the only automatic check ins; an explicit check out is never released by itself.
+- **No marker locks** (D3). A `~$` marker means only "open" (10 minutes of staleness kept). For
+  a file the server has and this computer has not checked out it raises the quiet question
+  (`AgentView.prompt`, the most recent open first, one per open, dismissed with its key);
+  if someone else has the file, the question says who.
+- **Changed without a check out**: if the attribute was cleared and the file saved anyway,
+  Core keeps every capture (earlier ones as "earlier save, kept") and the latest as one kept
+  copy ("changed without a check out"), never the shared version, and the shared version
+  comes back once the file is closed: one grouped notice.
+- **Take back** (`armory_break_lock`, for a mentor or CAD lead): the operation id derives from
+  that one check out, so asking twice takes it back once. The holder's computer keeps what was
+  not checked in (`lockBroken`) and shows one notice.
+- **Moves and removals** take the lock only for themselves (`FileState.TransientLock`) and let
+  it go once done; a removed file's lock is always let go.
 
 ## Rules added after review
 
@@ -69,33 +152,67 @@ immutable snapshot bytes.
 - A file this computer tracks is planned against its server record by id, wherever it now
   lives; a server rename waits until the file is closed.
 - An Explorer rename or move (NTFS file id, or the same bytes at exactly one new untracked
-  path in the same project) is sent as `armory_move_file`; a refused one is renamed back.
+  path in the same project) is sent as `armory_move_file`; a refused one is renamed back,
+  and the notice names who has the file checked out.
 - A deletion is planned only after two consecutive scans miss the file, and the file is
   probed again right before the tombstone is sent.
-- A brand-new file at a removed file's own path is refused here (names stay with their history).
-  Elsewhere in the project, the server (contract v2, C4) revives the removed file instead and
-  returns its id: the engine then commits the new bytes on top of the revived file's current
-  version, never with no parent, and forgets its record of the old path when nothing of it is
-  on disk, so the removed bytes never come back (`RevivalTests`).
+- Names are never refused here for having been removed. Adding a file under a removed file's
+  name (anywhere in the project, at its old path too) revives that file through
+  `armory_create_file` (contract C4): same id, its history going on. Whether an id is a
+  revival is read from the change feed (`file_revived`) before the first commit, and the
+  revived file's current version is fetched fresh, so the new bytes are committed on top of
+  it, never with no parent, even when the removal happened after this pass's refresh. The
+  computer's own record of the removed file at its old path is forgotten when nothing of it
+  is on disk, so the removed bytes never come back (`RevivalTests`). A live name clash
+  (SQLSTATE 23505) is one "shares a name" notice item.
 - Saves the release gate refuses are private drafts: never sent, never holding the lock,
   offered again if the gate later allows them.
 - A `~$` marker counts as "open" while the platform corroborates it and for 10 minutes after
-  it first appears; a marker left behind by a crash then stops holding the lock.
-- After a reconnect (a new device id), the old id's locks are still this computer's; writes
-  under them use the holding id.
+  it first appears; a stale marker is treated as closed, and never ends a check out.
+- After a reconnect (a new device id), the old id's check outs are still this computer's;
+  writes under them use the holding id.
 - An in-flight release or deletion is dropped on restart and planned again from fresh state.
+
+## Upgrade from 0.1.0 (D15)
+
+`EngineState` is schema 2. Loading schema 1 forgets every applied ownership (0.1.0 left a
+file nobody held writable), so the first pass applies the v2 rule to every file; keeps every
+lock this computer holds, which is now a check out ("Checked out by you"); sets each
+project's local folder to its name; and completes the journal intent of a lock a 0.1.0
+marker took. `EngineUnitTests` loads a state.json the 0.1.0 engine wrote
+(`tests/Armory.Agent.Engine.Tests/Fixtures/state-0.1.0.json`); `UpgradeTests` runs the first
+0.2.0 pass over a 0.1.0 vault.
+
+## The view (v2-design.md 4.4 to 4.6)
+
+Notices are grouped by kind, at most one card per kind, at most 200 items each (the count is
+the total): `nameShared`, `cantSend`, `cantRead` (disk problems, and a stale SolidWorks
+marker), `newerWaiting`, `keptCopy`, `takenBack`, `folderPutBack` (a refused rename put
+back). "SolidWorks year not checked" is never a notice, only a tag on File detail; waiting
+to upload is activity, never rows. My files are the files this computer has checked out, in
+any project. Every row says who has it checked out ("Checked out by you", "Checked out by
+Maria Lopez on LAB-PC-07", "Checked out by you on LAB-PC-07" for my other computer,
+"Available"). History entries are `version` ("Added to Armory", "Checked in", "Added again,
+with its history"), `keptCopy` ("Saved while checked out", "Kept when the check out was
+undone", "Changed without a check out, kept as Alex Kim's own copy", ...) and `removed`.
+The activity panel's directions and speed come with stage E3; offline and paused, its
+waiting line already counts the files waiting to upload. Folder, project and import work
+(renamed and deleted folders, project renames and archiving, the import summary) is stage E2.
 
 ## Operation ids (crash safety)
 
 Every server write carries an operation id derived (SHA-256, formatted as a UUID) from a
-Core journal entry id and the step: `create`, `lock#attempt`, `commit#parent#attempt`, `side`,
-`tomb#attempt`; every answer to a lock or commit spends the attempt. A
-release uses the lock's acquisition time, and a move a persisted id. The in-flight record
-is written before the call; a crash at any point replays the same id and the server
-returns its receipt, so a save becomes exactly one version.
+durable value and the step: a Core journal entry id for `create` (`revive` and the removed
+file's id for a revival), `lock#attempt`, `commit#parent#attempt`, `side`, `tomb#attempt`;
+a check out's lock from its request id; every answer to a lock or commit spends the
+attempt. A release uses the lock's holder and acquisition time, a take back the check out it
+ends, and a move a persisted id. The in-flight record is written before the call; a crash at
+any point replays the same id and the server returns its receipt, so a save becomes exactly
+one version.
 
 ## Schedule (contract section 4)
 
 The loop polls every 5 seconds while online and active, and backs off to 60 seconds after
 two minutes with no local or remote change. A disk hint (`Wake`) runs a pass at once.
-Offline, it retries on the idle interval.
+Offline, it retries on the idle interval. While paused, no pass runs and the window's
+actions say so.

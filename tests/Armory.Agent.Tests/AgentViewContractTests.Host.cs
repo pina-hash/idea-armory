@@ -48,14 +48,6 @@ public sealed partial class AgentViewContractTests
         }
     }
 
-    // While the engine still builds the v1 view (AgentView has NeedsMe), the records the
-    // engine lane rebuilds to v2-design.md 4.6 are named here, and every other record must
-    // already match bridge.js. Once AgentView is the v2 view, every record must match: the
-    // list is used only while NeedsMe exists, and it must name exactly the records that
-    // differ, so it can neither hide a new difference nor outlive the one it names.
-    private static readonly string[] EngineLaneRecords =
-        ["AgentView", "MyFileView", "ProjectView", "FolderView", "FileRowView", "FileDetailView", "AttentionView", "HolderView"];
-
     [Fact]
     public void The_host_view_records_have_the_fields_bridge_js_documents()
     {
@@ -76,12 +68,9 @@ public sealed partial class AgentViewContractTests
         }
         foreach (var name in records.Keys.Where(n => !typedefs.ContainsKey(n))) differing[name] = "the host has it; bridge.js does not document it";
 
-        var v1 = typeof(AgentView).GetProperty("NeedsMe") is not null;
-        var allowed = v1 ? EngineLaneRecords.OrderBy(n => n, StringComparer.Ordinal).ToList() : [];
+        // AgentView is the v2 view (the engine builds it), so every record matches bridge.js.
         var report = string.Join("\n", differing.Select(d => d.Key + ": " + d.Value));
-        Assert.True(differing.Keys.SequenceEqual(allowed),
-            (v1 ? "The engine still builds the v1 view, so only " + string.Join(", ", allowed) + " may differ from bridge.js. "
-                : "AgentView is the v2 view, so every record must match bridge.js. ") + "Differing now:\n" + report);
+        Assert.True(differing.Count == 0, "Every view record must match bridge.js. Differing now:\n" + report);
     }
 
     [Fact]

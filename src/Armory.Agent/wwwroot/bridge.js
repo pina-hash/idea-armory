@@ -144,6 +144,7 @@
 	/**
 	 * The quiet question when SolidWorks opens a file this computer has not checked out.
 	 * @typedef {object} PromptView
+	 * @property {string} key            one per open ("prompt:<path>:<when it opened>"); dismissNotice with it hides this one only
 	 * @property {string | null} fileId
 	 * @property {string} path
 	 * @property {string} name

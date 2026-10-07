@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using Armory.Agent.Engine;
+using Armory.Agent.Engine.View;
 using Armory.Client;
 using Armory.Core;
 using Armory.Storage;
@@ -200,6 +201,18 @@ internal sealed class Computer : IAsyncDisposable
 
     public Task<SyncReport> SyncAsync() => Engine.SyncOnceAsync();
     public async Task SyncTimesAsync(int times) { for (var i = 0; i < times; i++) await SyncAsync(); }
+
+    // The window's actions, as a student clicks them (v2 check out).
+    public Task<ActionResult> CheckOutAsync(params string[] paths) => Engine.CheckOutAsync(paths);
+    public Task<ActionResult> CheckOutAndOpenAsync(string path) => Engine.CheckOutAsync([path], open: true);
+    public Task<ActionResult> CheckInAsync(params string[] paths) => Engine.CheckInAsync(paths);
+    public Task<ActionResult> UndoCheckOutAsync(params string[] paths) => Engine.UndoCheckOutAsync(paths);
+    public Task<ActionResult> TakeBackAsync(Guid fileId) => Engine.TakeBackAsync(fileId);
+    // The notice card of one kind (at most one per kind), and every card's items flattened.
+    public NoticeGroupView? Card(string kind) => Assert.Single(Engine.View.Notices.Where(n => n.Kind == kind).DefaultIfEmpty());
+    public IReadOnlyList<(NoticeGroupView Card, NoticeItemView Item)> NoticeItems => Engine.View.Notices.SelectMany(n => n.Items.Select(i => (n, i))).ToArray();
+    // A file's row in the team's files.
+    public FileRowView Row(string path) => Engine.View.Projects.SelectMany(p => p.Folders).SelectMany(f => f.Files).Single(f => f.Path == path);
 
     // A raw write that ignores the read-only bit: for creating new files (a new file never
     // inherits an old file's bit) and for tests that predate the bit.

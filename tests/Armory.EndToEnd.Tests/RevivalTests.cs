@@ -61,8 +61,8 @@ public sealed class RevivalTests
         Assert.Equal(2, await t.Versions(file));
         Assert.Equal(0, await t.Sides(file));
         Assert.Null(t.B.Read(Plate));
-        Assert.DoesNotContain(t.A.Engine.View.NeedsMe, n => n.Kind != AttentionKinds.ReleaseNotChecked);
-        Assert.DoesNotContain(t.B.Engine.View.NeedsMe, n => n.Kind != AttentionKinds.ReleaseNotChecked);
+        Assert.Empty(t.A.Engine.View.Notices);
+        Assert.Empty(t.B.Engine.View.Notices);
         NoViolations(t.A); NoViolations(t.B);
     }
 
@@ -92,8 +92,8 @@ public sealed class RevivalTests
         Assert.Equal("Alex's new plate", t.B.Text(Intake));
         Assert.Null(t.B.Read(Plate));
         Assert.Equal((2L, 0L), (await t.Versions(file), await t.Sides(file)));
-        Assert.DoesNotContain(t.A.Engine.View.NeedsMe, n => n.Kind != AttentionKinds.ReleaseNotChecked);
-        Assert.DoesNotContain(t.B.Engine.View.NeedsMe, n => n.Kind != AttentionKinds.ReleaseNotChecked);
+        Assert.Empty(t.A.Engine.View.Notices);
+        Assert.Empty(t.B.Engine.View.Notices);
         NoViolations(t.A); NoViolations(t.B);
     }
 }

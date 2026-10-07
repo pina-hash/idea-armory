@@ -545,7 +545,14 @@
 			params: { folder: 'Drivetrain' },
 			view: signedIn({
 				sync: SYNCED,
-				prompt: { fileId: 'f-plate-left', path: 'Robot 2027/Drivetrain/Plate-Left.SLDPRT', name: 'Plate-Left.SLDPRT', checkout: available(), canCheckOut: true },
+				prompt: {
+					key: 'prompt:Robot 2027/Drivetrain/Plate-Left.SLDPRT:' + ago(2 * MIN),
+					fileId: 'f-plate-left',
+					path: 'Robot 2027/Drivetrain/Plate-Left.SLDPRT',
+					name: 'Plate-Left.SLDPRT',
+					checkout: available(),
+					canCheckOut: true
+				},
 				changes: shared({})
 			})
 		},
@@ -556,7 +563,14 @@
 			params: { folder: 'Drivetrain' },
 			view: signedIn({
 				sync: SYNCED,
-				prompt: { fileId: 'f-plate-left', path: 'Robot 2027/Drivetrain/Plate-Left.SLDPRT', name: 'Plate-Left.SLDPRT', checkout: other(MARIA, 25 * MIN), canCheckOut: false },
+				prompt: {
+					key: 'prompt:Robot 2027/Drivetrain/Plate-Left.SLDPRT:' + ago(2 * MIN),
+					fileId: 'f-plate-left',
+					path: 'Robot 2027/Drivetrain/Plate-Left.SLDPRT',
+					name: 'Plate-Left.SLDPRT',
+					checkout: other(MARIA, 25 * MIN),
+					canCheckOut: false
+				},
 				changes: shared({ 'f-plate-left': MARIA_HAS_PLATE })
 			})
 		},

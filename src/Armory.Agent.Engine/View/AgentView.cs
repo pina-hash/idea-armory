@@ -3,15 +3,19 @@ using System.Text.Json.Serialization;
 
 namespace Armory.Agent.Engine.View;
 
-// The window's whole picture (docs/agent/BRIDGE.md). The page renders from this alone.
+// The window's whole picture (docs/agent/BRIDGE.md, v2-design.md 4.6). The page renders from
+// this alone. AgentViewContractTests holds every record here to the fields wwwroot/bridge.js
+// documents; data objects use kind and direction, never a type field.
 public sealed record AgentView(
     string Connection,
     ConnectView Connect,
     AccountView? Account,
     SyncView Sync,
+    ActivityView Activity,
     string VaultRoot,
+    IReadOnlyList<NoticeGroupView> Notices,
+    PromptView? Prompt,
     IReadOnlyList<MyFileView> MyFiles,
-    IReadOnlyList<AttentionView> NeedsMe,
     IReadOnlyList<ProjectView> Projects,
     SettingsView Settings,
     string EffectiveTheme);
@@ -19,23 +23,24 @@ public sealed record AgentView(
 public sealed record ConnectView(string Phase, string? Message);
 public sealed record AccountView(string Email, string DeviceName);
 public sealed record SyncView(string State, string Line, string? Detail, int PendingCount);
-public sealed record MyFileView(string? FileId, string Path, string Name, string Project, string Status, string? Note);
-public sealed record AttentionView(string Kind, string? FileId, string Path, string Name, string Title, string Detail, string? At);
-public sealed record ProjectView(string Id, string Name, IReadOnlyList<FolderView> Folders);
-public sealed record FolderView(string Path, string Name, IReadOnlyList<FileRowView> Files);
-public sealed record FileRowView(string FileId, string Name, string Path, string Status, HolderView? Holder, bool ReleaseNotChecked, string? UpdatedAt, string? UpdatedBy);
-public sealed record HolderView(string Name, string Email, string Device, string Since, bool IsMe, bool IsMyOtherComputer, bool SavedToArmory);
+// The files THIS computer has checked out, in any project (archived ones too, so they can
+// always be checked in).
+public sealed record MyFileView(string? FileId, string Path, string Name, string Project, string Status, string? Note, CheckoutView Checkout);
+public sealed record ProjectView(string Id, string Name, bool Archived, string Role, bool CanTakeBack, IReadOnlyList<FolderView> Folders);
+// Path is in the project ("" for its top folder); FileCount counts the files directly in it.
+public sealed record FolderView(string Path, string Name, int FileCount, IReadOnlyList<FileRowView> Files);
+public sealed record FileRowView(string? FileId, string Name, string Path, string Status, CheckoutView Checkout, bool Changed, bool ReleaseNotChecked,
+    string? UpdatedAt, string? UpdatedBy);
 public sealed record SettingsView(string VaultRoot, bool StartAtSignIn, string Theme);
-public sealed record FileDetailView(string FileId, string Name, string Path, string Project, string Folder, string Status, HolderView? Holder,
-    bool ReleaseNotChecked, IReadOnlyList<HistoryEntryView> History);
+public sealed record FileDetailView(string FileId, string Name, string Path, string Project, string Folder, string Status, CheckoutView Checkout,
+    bool ReleaseNotChecked, bool CanTakeBack, IReadOnlyList<HistoryEntryView> History);
 public sealed record HistoryEntryView(string Id, string Kind, string Author, string At, long Bytes, string Note, bool ReleaseNotChecked, bool IsCurrent);
-
-// v2 records the page already reads (docs/agent/BRIDGE.md, v2-design.md 4.6). The engine
-// lane puts them into AgentView (activity, notices, prompt, every row's checkout) when it
-// rebuilds the records above to v2; until then they serialize on their own messages.
-// AgentViewContractTests holds every record here to the fields wwwroot/bridge.js names.
+// Who has a file checked out. Label is always set: "Checked out by you", "Checked out by Maria
+// Lopez on LAB-PC-07", "Checked out by you on LAB-PC-07" (my other computer) or "Available".
 public sealed record CheckoutView(string State, string Label, string? Name, string? Email, string? Device, string? Since);
-public sealed record PromptView(string? FileId, string Path, string Name, CheckoutView Checkout, bool CanCheckOut);
+// SolidWorks opened a file this computer has not checked out. Key is one per open
+// ("prompt:<path>:<when the open was first seen>"); dismissNotice with it hides that one only.
+public sealed record PromptView(string Key, string? FileId, string Path, string Name, CheckoutView Checkout, bool CanCheckOut);
 public sealed record ActivityView(string? Line, DirectionView? Upload, DirectionView? Download, DirectionView? Move, WaitingView? Waiting,
     IReadOnlyList<ActiveTransferView> Active);
 public sealed record DirectionView(int FilesDone, int FilesTotal, long BytesDone, long BytesTotal, long BytesPerSecond, int? SecondsLeft, string Line);
@@ -60,15 +65,10 @@ public static class SyncStates
 }
 public static class FileStatuses
 {
-    public const string Synced = "synced", Syncing = "syncing", WaitingToSend = "waitingToSend", EditingByMe = "editingByMe",
-        EditingByOther = "editingByOther", NewerWaiting = "newerWaiting", Conflict = "conflict", Refused = "refused", NotOnThisComputer = "notOnThisComputer";
+    public const string Synced = "synced", Changed = "changed", Uploading = "uploading", Downloading = "downloading", Waiting = "waiting",
+        NewerWaiting = "newerWaiting", KeptCopy = "keptCopy", NotInArmory = "notInArmory", NotOnThisComputer = "notOnThisComputer";
     public static readonly IReadOnlySet<string> All = new HashSet<string>(StringComparer.Ordinal)
-        { Synced, Syncing, WaitingToSend, EditingByMe, EditingByOther, NewerWaiting, Conflict, Refused, NotOnThisComputer };
-}
-public static class AttentionKinds
-{
-    public const string NewerWaiting = "newerWaiting", SideVersion = "sideVersion", Refused = "refused", LockBroken = "lockBroken",
-        NameTaken = "nameTaken", ReleaseNotChecked = "releaseNotChecked";
+        { Synced, Changed, Uploading, Downloading, Waiting, NewerWaiting, KeptCopy, NotInArmory, NotOnThisComputer };
 }
 public static class CheckoutStates
 {
@@ -87,6 +87,10 @@ public static class NoticeKinds
     public const string Import = "import", NameShared = "nameShared", NewerWaiting = "newerWaiting", KeptCopy = "keptCopy", TakenBack = "takenBack",
         FolderPutBack = "folderPutBack", ProjectPutBack = "projectPutBack", ProjectRenaming = "projectRenaming", CantSend = "cantSend",
         CantRead = "cantRead", CheckInPartial = "checkInPartial";
+}
+public static class HistoryKinds
+{
+    public const string Version = "version", KeptCopy = "keptCopy", Removed = "removed";
 }
 
 // Message names on the bridge, both directions. AgentViewContractTests keeps

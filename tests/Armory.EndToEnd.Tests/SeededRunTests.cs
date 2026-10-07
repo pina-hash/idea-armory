@@ -11,8 +11,12 @@ namespace Armory.EndToEnd.Tests;
 // The Core simulation's invariants, end to end: two real engines per seed, through the
 // fake site and Supabase into a real PostgreSQL database and the fake S3, under a seeded
 // schedule of saves, opens, closes, disconnections, crashes, lock breaks, remote and local
-// deletions and simultaneous edits. ARMORY_E2E_SEED=<n> reproduces one seed;
-// ARMORY_E2E_SEEDS=<count> changes the count (default 200).
+// deletions and simultaneous edits, with v2 check out: students check files out (sometimes
+// "Check out and open"), save only what is writable (SolidWorks cannot save over a read-only
+// file), check in, undo, and now and then clear the read-only attribute and save anyway.
+// Crashes land inside passes and inside check outs, check ins and undos. ARMORY_E2E_SEED=<n>
+// reproduces one seed; ARMORY_E2E_SEEDS=<count> changes the count (default 200);
+// ARMORY_E2E_TRACE=1 prints every step to standard error.
 public sealed class SeededRunTests(ITestOutputHelper output)
 {
 
@@ -69,6 +73,11 @@ internal sealed class SeededRun(World world, Person mentor, int seed)
     private readonly ScheduleRandom random = new(seed);
     private readonly string project = $"Seed {seed:D4}";
     private readonly Dictionary<string, (Computer Saver, byte[] Bytes)> everSaved = new(StringComparer.Ordinal);
+    // Bytes saved by a computer that did not have the file checked out (the read-only attribute
+    // cleared by hand). They are kept, but never become the shared version.
+    private readonly HashSet<string> savedWithoutCheckOut = new(StringComparer.Ordinal);
+    // Check ins and undos asked for and not finished yet: their file may already be read-only.
+    private readonly HashSet<(Computer, string)> asked = [];
     private readonly List<(Guid Id, string Hash)> history = [];
     private Guid projectId;
     private Computer a = null!, b = null!;
@@ -85,7 +94,7 @@ internal sealed class SeededRun(World world, Person mentor, int seed)
         a = await world.ComputerAsync($"A{seed}", alex);
         b = await world.ComputerAsync($"B{seed}", maria);
         paths = [$"{project}/robot/plate.txt", $"{project}/robot/bracket.txt", $"{project}/class/gear.SLDPRT"];
-        foreach (var path in paths) Save(a, path);
+        foreach (var path in paths) await SaveAsync(a, path);
         await SyncAsync(a);
         await SyncAsync(b);
         for (step = 0; step < Steps; step++)
@@ -93,19 +102,28 @@ internal sealed class SeededRun(World world, Person mentor, int seed)
             var c = random.Next(2) == 0 ? a : b;
             var other = c == a ? b : a;
             var path = paths[random.Next(paths.Length)];
-            switch (random.Next(12))
+            var kind = random.Next(16);
+            Trace($"step {step} {c.Name} case {kind} {path}");
+            switch (kind)
             {
-                case 0: case 1: Save(c, path); break;
+                case 0: case 1: await SaveAsync(c, path); break;
                 case 2: if (c.Read(path) is not null) c.Open(path); break;
                 case 3: c.Close(path); break;
                 case 4: c.Offline = true; break;
                 case 5: c.Offline = false; break;
-                case 6: if (random.Next(2) == 0) Save(c, path); await CrashAsync(c); break;
+                case 6: if (random.Next(2) == 0) await SaveAsync(c, path); await CrashAsync(c, path); break;
                 case 7: await BreakLockAsync(path); break;
                 case 8: await RemoteDeleteAsync(path); break;
                 case 9: if (c.Read(path) is not null && !c.Disk.IsOpenNow(path)) c.Delete(path); break;
-                case 10: Save(c, path); Save(other, path); await SyncAsync(other); break;
+                case 10: await SaveAsync(c, path); await SaveAsync(other, path); await SyncAsync(other); break;
                 case 11: await SyncAsync(other); break;
+                case 12: await CheckOutAsync(c, path, open: random.Next(4) == 0); break;
+                case 13: if (random.Next(2) == 0) await SaveAsync(c, path); await CheckInAsync(c, path); break;
+                case 14:
+                    if (random.Next(2) == 0) c.Close(path); // Undo refuses an open file
+                    await UndoAsync(c, path);
+                    break;
+                case 15: await ForceWriteAsync(c, path); break;
             }
             await SyncAsync(c);
             await CheckSafetyAsync();
@@ -114,11 +132,57 @@ internal sealed class SeededRun(World world, Person mentor, int seed)
         await DrainAsync();
     }
 
-    private void Save(Computer computer, string path)
+    private static readonly bool Tracing = Environment.GetEnvironmentVariable("ARMORY_E2E_TRACE") == "1";
+    private static void Trace(string line) { if (Tracing) Console.Error.WriteLine("TRACE " + line); }
+
+    private byte[] Next(Computer computer, string path, string how) => Encoding.UTF8.GetBytes($"seed={seed};{how}={++saves};computer={computer.Name};path={path}");
+
+    // Ctrl+S in SolidWorks: refused while the file is read-only (not checked out here). A
+    // student who meets that usually checks the file out first, as the window asks.
+    private async Task SaveAsync(Computer computer, string path)
     {
-        var bytes = Encoding.UTF8.GetBytes($"seed={seed};save={++saves};computer={computer.Name};path={path}");
-        computer.Write(path, bytes);
+        if (computer.Read(path) is not null && computer.Disk.IsReadOnly(path) && random.Next(2) == 0) await CheckOutAsync(computer, path, open: false);
+        var bytes = Next(computer, path, "save");
+        try { computer.Save(path, bytes); }
+        catch (IOException) { Trace($"  save refused {computer.Name} {path}"); return; } // SolidWorks could not save over a read-only file
+        Trace($"  saved {computer.Name} {path} {Hash(bytes)[..8]}");
         everSaved[Hash(bytes)] = (computer, bytes);
+    }
+
+    // The read-only attribute cleared by hand, then a save anyway.
+    private async Task ForceWriteAsync(Computer computer, string path)
+    {
+        // Only a file under the read-only rule needs its attribute cleared; a file the server
+        // does not have (a new one, a removed one added again) is simply writable.
+        var cleared = computer.Read(path) is not null && computer.Disk.IsReadOnly(path);
+        var held = await HolderAsync(path) == computer.Sessions.Current!.DeviceId;
+        var bytes = Next(computer, path, "forced");
+        computer.ForceWrite(path, bytes);
+        everSaved[Hash(bytes)] = (computer, bytes);
+        if (cleared && !held) savedWithoutCheckOut.Add(Hash(bytes));
+        Trace($"  forced {computer.Name} {path} {Hash(bytes)[..8]} cleared={cleared} held={held}");
+    }
+
+    private async Task CheckOutAsync(Computer computer, string path, bool open)
+    {
+        var result = await computer.Engine.CheckOutAsync([path], open);
+        Trace($"  check out {computer.Name} {path}: {result.Ok} {result.Message}");
+        if (result.Ok) asked.Remove((computer, path));
+        if (result.Ok && open && computer.Read(path) is not null) computer.Open(path); // SolidWorks opens it
+    }
+
+    private async Task CheckInAsync(Computer computer, string path)
+    {
+        asked.Add((computer, path));
+        var result = await computer.Engine.CheckInAsync([path]);
+        Trace($"  check in {computer.Name} {path}: {result.Ok} {result.Message}");
+    }
+
+    private async Task UndoAsync(Computer computer, string path)
+    {
+        asked.Add((computer, path));
+        var result = await computer.Engine.UndoCheckOutAsync([path]);
+        Trace($"  undo {computer.Name} {path}: {result.Ok} {result.Message}");
     }
 
     private async Task SyncAsync(Computer computer)
@@ -127,33 +191,53 @@ internal sealed class SeededRun(World world, Person mentor, int seed)
         if (report.Online) await CheckReadOnlyAsync(computer);
     }
 
-    // After an online pass, a file the other student is editing is read-only here, and a file
-    // this computer holds is not.
+    private async Task<Guid?> HolderAsync(string path)
+    {
+        var name = path[(path.LastIndexOf('/') + 1)..];
+        var rows = await world.QueryAsync("select l.holder_device_id from armory_locks l join armory_files f on f.id=l.file_id where f.project_id=@p and f.name=@n and l.broken_at is null",
+            r => r.GetGuid(0), ("p", projectId), ("n", name));
+        return rows.Count == 0 ? null : rows[0];
+    }
+
+    // The v2 read-only rule after an online pass: every file the server has a live version of is
+    // read-only on this computer unless this computer has it checked out (decision D4), and a
+    // file it has checked out is writable unless the student asked to check it in or undo it.
     private async Task CheckReadOnlyAsync(Computer computer)
     {
-        var other = computer == a ? b : a;
-        var locks = await world.QueryAsync("select f.name, l.holder_email from armory_locks l join armory_files f on f.id=l.file_id where f.project_id=@p and l.broken_at is null",
-            r => (Name: r.GetString(0), Holder: r.GetString(1)), ("p", projectId));
+        var device = computer.Sessions.Current!.DeviceId;
+        var live = await world.QueryAsync("select f.name, (select l.holder_device_id from armory_locks l where l.file_id=f.id and l.broken_at is null) from armory_files f where f.project_id=@p and f.deleted_at is null and f.current_version_id is not null",
+            r => (Name: r.GetString(0), Holder: r.IsDBNull(1) ? (Guid?)null : r.GetGuid(1)), ("p", projectId));
         foreach (var path in paths)
         {
-            if (computer.Read(path) is null || !computer.Disk.Attributes.TryGetValue(path, out var applied)) continue;
+            if (computer.Read(path) is null) continue;
             var name = path[(path.LastIndexOf('/') + 1)..];
-            var holder = locks.FirstOrDefault(l => l.Name == name).Holder;
-            if (holder is null) continue;
-            var expected = holder == other.Sessions.Current!.Email ? Armory.Core.LockOwnership.OtherPerson
-                : holder == computer.Sessions.Current!.Email ? Armory.Core.LockOwnership.ThisDevice : (Armory.Core.LockOwnership?)null;
-            if (expected is { } want && applied != want)
-                throw new InvalidOperationException($"{computer.Name}: {path} read-only state {applied}, expected {want} (step {step})");
+            var file = live.FirstOrDefault(f => f.Name == name);
+            if (file.Name is null) continue; // the server has no live version: not under the rule
+            var held = file.Holder == device;
+            if (!held && !computer.Disk.IsReadOnly(path))
+                throw new InvalidOperationException($"{computer.Name}: {path} is writable but this computer has not checked it out (step {step})");
+            if (!held) asked.Remove((computer, path));
+            else if (!asked.Contains((computer, path)) && computer.Disk.IsReadOnly(path))
+                throw new InvalidOperationException($"{computer.Name}: {path} is checked out here but read-only (step {step})");
         }
     }
 
-    // The agent process dies, possibly in the middle of a pass; SolidWorks keeps its files open.
-    private async Task CrashAsync(Computer computer)
+    // The agent process dies, possibly in the middle of a pass, a check out, a check in or an
+    // undo; SolidWorks keeps its files open. A check out, check in or undo asked for is durable.
+    private async Task CrashAsync(Computer computer, string path)
     {
         var countdown = random.Next(14);
-        computer.CrashPoint = point => { if (countdown-- == 0) { Reached[point] = true; throw new SimulatedCrash(point); } };
+        computer.CrashPoint = point => { if (countdown-- == 0) { Reached[point] = true; Trace($"  crash {computer.Name} at {point}"); throw new SimulatedCrash(point); } };
         computer.Restart();
-        try { await computer.SyncAsync(); } catch (SimulatedCrash) { }
+        var what = random.Next(8);
+        try
+        {
+            if (what < 4) await computer.SyncAsync();
+            else if (what < 6) await CheckInAsync(computer, path);
+            else if (what < 7) await computer.Engine.CheckOutAsync([path]);
+            else await UndoAsync(computer, path);
+        }
+        catch (SimulatedCrash) { }
         computer.CrashPoint = null;
         computer.Restart();
     }
@@ -203,6 +287,10 @@ internal sealed class SeededRun(World world, Person mentor, int seed)
         foreach (var (hash, (saver, _)) in everSaved)
             if (!serverHashes.Contains(hash) && !saver.Snapshots.Enumerate().Any(s => s.Hash == hash) && !SameBytesOnDisk(saver, hash))
                 throw new InvalidOperationException($"saved bytes lost at step {step}");
+        // A save made without a check out is kept, never shared (v2).
+        var shared = (await world.QueryAsync("select v.content_sha256 from armory_versions v join armory_files f on f.id=v.file_id where f.project_id=@p",
+            r => r.GetString(0), ("p", projectId))).ToHashSet(StringComparer.Ordinal);
+        if (savedWithoutCheckOut.Overlaps(shared)) throw new InvalidOperationException($"bytes saved without a check out became the shared version at step {step}");
         await CheckAdvancesAsync();
     }
 
@@ -221,7 +309,7 @@ internal sealed class SeededRun(World world, Person mentor, int seed)
             switch (change.Kind)
             {
                 case "lock_acquired": holders[file] = change.Payload["device_id"]!.GetValue<string>(); break;
-                case "lock_released": case "lock_broken": holders[file] = null; break;
+                case "lock_released": case "lock_broken": case "file_revived": holders[file] = null; break;
                 case "version":
                     var device = change.Payload["device_id"]!.GetValue<string>();
                     if (holders.GetValueOrDefault(file) != device) throw new InvalidOperationException($"a shared advance by a device that did not hold the lock at step {step}");
@@ -230,6 +318,7 @@ internal sealed class SeededRun(World world, Person mentor, int seed)
         }
     }
 
+    // Everyone closes everything, goes online, and checks in every check out.
     private async Task DrainAsync()
     {
         foreach (var computer in new[] { a, b })
@@ -239,9 +328,22 @@ internal sealed class SeededRun(World world, Person mentor, int seed)
         }
         for (var round = 0; round < 4; round++)
         {
-            await SyncAsync(a); await CheckSafetyAsync();
-            await SyncAsync(b); await CheckSafetyAsync();
+            foreach (var computer in new[] { a, b })
+            {
+                var device = computer.Sessions.Current!.DeviceId;
+                List<string> held = [];
+                foreach (var path in paths) if (await HolderAsync(path) == device) held.Add(path);
+                if (held.Count > 0)
+                {
+                    foreach (var path in held) asked.Add((computer, path));
+                    await computer.Engine.CheckInAsync(held);
+                }
+                await SyncAsync(computer);
+                await CheckSafetyAsync();
+            }
         }
+        if (await world.CountAsync("select count(*) from armory_locks l join armory_files f on f.id=l.file_id where f.project_id=@p and l.broken_at is null", ("p", projectId)) != 0)
+            throw new InvalidOperationException($"a file is still checked out after the drain (step {step})");
         // Every capture made by either computer is retrievable from server history, byte for byte.
         var server = (await world.QueryAsync("select v.content_sha256 from armory_versions v join armory_files f on f.id=v.file_id where f.project_id=@p union select s.content_sha256 from armory_side_versions s join armory_files f on f.id=s.file_id where f.project_id=@p",
             r => r.GetString(0), ("p", projectId))).ToHashSet(StringComparer.Ordinal);
@@ -263,6 +365,8 @@ internal sealed class SeededRun(World world, Person mentor, int seed)
             {
                 var local = computer.Read(path) is { } bytes ? Hash(bytes) : null;
                 if (local != current) throw new InvalidOperationException($"{computer.Name} did not converge on {path} (step {step}): local {Short(local)} server {Short(current)}");
+                if (local is not null && !computer.Disk.IsReadOnly(path))
+                    throw new InvalidOperationException($"{computer.Name}: {path} is writable after everything was checked in (step {step})");
             }
         }
     }

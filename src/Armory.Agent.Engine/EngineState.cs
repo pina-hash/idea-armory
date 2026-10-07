@@ -25,7 +25,9 @@ public static class OperationIds
 // engine knows, and always before a server write (the in-flight record).
 internal sealed class EngineState
 {
-    public int Schema { get; set; } = 1;
+    // 1 is 0.1.0. 2 is v2 check out (decision D15): see Migrate.
+    internal const int CurrentSchema = 2;
+    public int Schema { get; set; } = CurrentSchema;
     public string? Email { get; set; }
     public Guid? DeviceId { get; set; }
     public long Sequence { get; set; }
@@ -40,6 +42,9 @@ internal sealed class EngineState
     // One-off events a student should still see on the next screen, such as a rename that
     // was put back. Shown for a while, then dropped.
     public List<RememberedNotice> Remembered { get; set; } = [];
+    // Notice cards the student dismissed: the card's key and the items it showed then. Those
+    // items stay hidden; a new item brings the card back with only the new ones.
+    public Dictionary<string, HashSet<string>> Dismissed { get; set; } = new(StringComparer.Ordinal);
 
     internal bool IsMine(Guid device) => device == DeviceId || FormerDevices.Contains(device);
 
@@ -55,7 +60,32 @@ internal sealed class EngineState
         // JSON does not preserve the comparers.
         state.Files = new(state.Files, StringComparer.OrdinalIgnoreCase);
         state.Completed = new(state.Completed, StringComparer.Ordinal);
+        state.Dismissed = new(state.Dismissed, StringComparer.Ordinal);
+        state.Migrate();
         return state;
+    }
+
+    // 0.1.0 (schema 1) to v2 (decision D15). 0.1.0 made a file read-only only while someone
+    // else held its lock, and recorded the ownership it applied; v2 makes every file the server
+    // has read-only unless this computer has it checked out, so every applied ownership is
+    // forgotten and the first pass applies the v2 rule to every file. A lock this computer holds
+    // is kept: it is now a check out ("Checked out by you"), never released by itself. A
+    // project's local folder is its name. Roles are kept in the server's words.
+    internal void Migrate()
+    {
+        if (Schema >= CurrentSchema) return;
+        foreach (var file in Files.Values)
+        {
+            file.AppliedOwnership = null;
+            if (file.MarkerEntry is { } marker) Completed.Add(marker);
+            file.MarkerEntry = null;
+        }
+        foreach (var project in Projects.Values)
+        {
+            if (string.IsNullOrEmpty(project.Folder)) project.Folder = project.Name;
+            project.Role = ProjectState.RoleName(project.Role);
+        }
+        Schema = CurrentSchema;
     }
 }
 
@@ -63,11 +93,29 @@ internal sealed class ProjectState
 {
     public Guid Id { get; set; }
     public string Name { get; set; } = "";
+    // The project's folder on this computer, the first segment of every local path in it.
+    // Stage E2 moves it in place when the project is renamed on the site; until then it
+    // follows the name.
+    public string Folder { get; set; } = "";
     public long Cursor { get; set; }
     public int PinnedRelease { get; set; } = 2025;
     public bool Enforce { get; set; }
     public string Role { get; set; } = "student";
     public bool Usable { get; set; } = true;
+    public bool Archived { get; set; }
+
+    // A mentor or CAD lead may take a file back (armory_break_lock).
+    [JsonIgnore] public bool CanTakeBack => Role is "mentor" or "cad_lead";
+
+    // The server's words for a role; 0.1.0 stored the client's enum names.
+    internal static string RoleName(string? role) => role switch
+    {
+        "Student" or "student" => "student",
+        "CadLead" or "cad_lead" => "cad_lead",
+        "Mentor" or "mentor" => "mentor",
+        "Instructor" or "instructor" => "instructor",
+        _ => "student",
+    };
 }
 
 internal sealed class FileState
@@ -83,6 +131,8 @@ internal sealed class FileState
     public List<string> Entries { get; set; } = [];
     public string? CreateEntry { get; set; }
     public string? DeleteEntry { get; set; }
+    // 0.1.0 only: the journal intent of a lock its ~$ marker took. v2 markers never lock;
+    // Migrate completes it.
     public string? MarkerEntry { get; set; }
     public int Attempt { get; set; }
     public bool BreakNotice { get; set; }
@@ -91,6 +141,8 @@ internal sealed class FileState
     public bool ReleaseNotChecked { get; set; }
     public bool NewerWaiting { get; set; }
     public string? NewerAuthor { get; set; }
+    // The ownership the read-only rule was last applied from: this computer's last knowledge
+    // of who holds the file, used again while offline.
     public LockOwnership? AppliedOwnership { get; set; }
     public List<SideRecord> Sides { get; set; } = [];
     public Inflight? Inflight { get; set; }
@@ -102,6 +154,17 @@ internal sealed class FileState
     // Journaled saves the release gate refused: private drafts kept on this computer. They
     // never hold the lock and are offered again whenever the gate would allow them.
     public List<string> Drafts { get; set; } = [];
+    // v2 check out (docs/agent/ENGINE.md). Each request is durable here before any server call,
+    // so a crash finishes it on the next pass.
+    // CheckOut: the student asked to check this file out; the lock's operation id derives from it.
+    public string? CheckOut { get; set; }
+    // Check in or Undo check out, asked for a file this computer has checked out.
+    public CheckoutRequest Request { get; set; }
+    // A file added while open stays checked out to its creator and is checked in when it
+    // closes (decision D2). A closed add is checked in by the same pass.
+    public bool AutoCheckIn { get; set; }
+    // The lock was taken only for a move or a removal, and is let go once that is done.
+    public bool TransientLock { get; set; }
 
     [JsonIgnore] public Revision? Base => BaseId is null ? null : new(BaseId, BaseHash, "");
     public void SetBase(Revision? revision) { BaseId = revision?.Id; BaseHash = revision?.Hash; }

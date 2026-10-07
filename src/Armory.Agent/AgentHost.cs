@@ -400,7 +400,8 @@ internal sealed class AgentHost : IAsyncDisposable
             : phase is "waitingForBrowser" or "finishing" ? Connections.Connecting : Connections.SignedOut;
         return new AgentView(connection, new ConnectView(phase, message),
             session is null ? null : new AccountView(session.Email, session.DeviceName),
-            new SyncView(SyncStates.Attention, line, null, 0), current.VaultRoot, [], [], [], current.ToView(), theme);
+            new SyncView(SyncStates.Attention, line, null, 0), new ActivityView(null, null, null, null, null, []), current.VaultRoot, [], null, [], [],
+            current.ToView(), theme);
     }
 
     private void StartupRegistrationApply(AgentSettings settings, bool startup)

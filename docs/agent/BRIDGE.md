@@ -31,7 +31,7 @@ uses a demo transport that answers from `wwwroot/demo/states.js`. See "The demo"
   files are up to date here, who is signed in, Sign out). On the right, in one
   scrolling column: the selection bar (while files are selected), the quiet check-out
   question (`prompt`), Right now (`activity`), the notices (one card per kind), My
-  files (my check outs and my files that aren't in Armory), and Team files: project
+  files (the files this computer has checked out), and Team files: project
   tabs, then the open project's card with where you are (Project › Folder ›
   Subfolder), the folder's keys (New folder, Add files, Rename folder, Delete folder,
   Check out all, Check in all), and its folder rows and file rows. Files dragged from
@@ -73,7 +73,7 @@ AgentView {
   vaultRoot: string                 // e.g. C:\IDEA\Armory
   notices: NoticeGroupView[]        // at most one per kind
   prompt: PromptView | null
-  myFiles: MyFileView[]             // my check outs, and my files that aren't in Armory
+  myFiles: MyFileView[]             // the files THIS computer has checked out, in any project (archived ones too)
   projects: ProjectView[]
   settings: SettingsView
   effectiveTheme: "idea" | "spaceWhite"
@@ -126,6 +126,7 @@ NoticeActionView { label: string, command: string, paths: string[] }
 NoticeItemView { fileId: string | null, path: string, name: string, detail: string | null }
 
 PromptView {                        // SolidWorks opened a file this computer hasn't checked out
+  key: string,                      // one per open ("prompt:<path>:<when it opened>"); dismissNotice {key} hides this one only
   fileId: string | null, path: string, name: string,
   checkout: CheckoutView,
   canCheckOut: boolean              // false when someone else has it: the card says who
