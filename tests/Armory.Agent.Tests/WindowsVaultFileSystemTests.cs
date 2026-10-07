@@ -273,6 +273,75 @@ public sealed class WindowsVaultFileSystemTests
         Assert.Empty(files.Scan().FolderMoves!);
     }
 
+    // The review's gap: the destination's bit used to be cleared before the new bytes were even
+    // staged, so a file nobody checked out was writable for as long as a large download took
+    // to copy, hash and check. It stays read-only the whole time now.
+    [WindowsFact]
+    public void Replace_keeps_a_read_only_file_read_only_while_the_new_bytes_are_staged()
+    {
+        using var vault = new TempFolder();
+        File.WriteAllBytes(vault.File("part.SLDPRT"), A);
+        File.SetAttributes(vault.File("part.SLDPRT"), FileAttributes.ReadOnly);
+        using var files = new WindowsVaultFileSystem(vault.Root);
+        var bytes = new byte[8 << 20];
+        new Random(7).NextBytes(bytes);
+        var content = new WatchingStream(bytes, () => File.GetAttributes(vault.File("part.SLDPRT")).HasFlag(FileAttributes.ReadOnly));
+        var outcome = files.Replace(TempFolder.PathValue("part.SLDPRT"), TempFolder.Hash(A), content);
+        Assert.True(outcome.Succeeded, outcome.Problem);
+        Assert.True(content.Seen.Count > 10);
+        Assert.All(content.Seen, Assert.True);
+        Assert.True(File.GetAttributes(vault.File("part.SLDPRT")).HasFlag(FileAttributes.ReadOnly));
+        Assert.Equal(bytes, File.ReadAllBytes(vault.File("part.SLDPRT")));
+    }
+
+    // Under v2 a read-only bit means "the server has this file". An intent belongs to the file
+    // it was made for: when the file leaves its path (moved to recovery, renamed by the agent,
+    // deleted in Explorer), a new file at that path is one the server does not have and stays
+    // writable after a restart, while the files the server has get their bits back.
+    [WindowsFact]
+    public void Read_only_intents_follow_the_file_not_the_path()
+    {
+        using var vault = new TempFolder();
+        Directory.CreateDirectory(vault.File("Robot"));
+        string[] names = ["Robot/recovered.SLDPRT", "Robot/renamed.SLDPRT", "Robot/deleted.SLDPRT", "Robot/replaced.SLDPRT"];
+        foreach (var name in names) File.WriteAllBytes(vault.File(name), A);
+        bool ReadOnly(string name) => File.GetAttributes(vault.File(name)).HasFlag(FileAttributes.ReadOnly);
+        using (var files = new WindowsVaultFileSystem(vault.Root))
+        {
+            files.ApplyLockAttributes([.. names.Select(name => (TempFolder.PathValue(name), LockOwnership.Free))]);
+            Assert.All(names, name => Assert.True(ReadOnly(name)));
+            Assert.True(files.MoveToRecovery(TempFolder.PathValue("Robot/recovered.SLDPRT"), TempFolder.Hash(A)).Succeeded);
+            Assert.True(files.Move(TempFolder.PathValue("Robot/renamed.SLDPRT"), TempFolder.PathValue("Robot/Plate.SLDPRT"), TempFolder.Hash(A)).Succeeded);
+            File.SetAttributes(vault.File("Robot/deleted.SLDPRT"), FileAttributes.Normal);
+            File.Delete(vault.File("Robot/deleted.SLDPRT"));
+            // A download replaces the fourth file: its intent follows the new bytes.
+            Assert.True(files.Replace(TempFolder.PathValue("Robot/replaced.SLDPRT"), TempFolder.Hash(A), new MemoryStream(B), readOnly: true).Succeeded);
+            // A file checked out here (writable) is deleted in Explorer, and the server's version
+            // comes down again, read-only: the old file's "writable" intent must not follow it.
+            File.WriteAllBytes(vault.File("Robot/mine.SLDPRT"), A);
+            files.ApplyLockAttribute(TempFolder.PathValue("Robot/mine.SLDPRT"), LockOwnership.ThisDevice);
+            File.Delete(vault.File("Robot/mine.SLDPRT"));
+            Assert.True(files.Replace(TempFolder.PathValue("Robot/mine.SLDPRT"), null, new MemoryStream(B), readOnly: true).Succeeded);
+            // New files the server does not have (a re-added copy, a draft) at the old paths.
+            foreach (var name in names.Take(3)) File.WriteAllBytes(vault.File(name), C);
+        }
+        // While Armory was closed, someone cleared the bits of the two files the server has.
+        File.SetAttributes(vault.File("Robot/Plate.SLDPRT"), FileAttributes.Normal);
+        File.SetAttributes(vault.File("Robot/replaced.SLDPRT"), FileAttributes.Normal);
+        using (var restarted = new WindowsVaultFileSystem(vault.Root))
+        {
+            Assert.All(names.Take(3), name => Assert.False(ReadOnly(name), name));
+            Assert.True(ReadOnly("Robot/Plate.SLDPRT"));
+            Assert.True(ReadOnly("Robot/replaced.SLDPRT"));
+            Assert.True(ReadOnly("Robot/mine.SLDPRT"));
+            Assert.Empty(restarted.Scan().Problems);
+        }
+        // The manifest holds the two files that are still there, and nothing else.
+        using var manifest = System.Text.Json.JsonDocument.Parse(File.ReadAllBytes(vault.File(".armory/read-only.json")));
+        Assert.Equal(["Robot/Plate.SLDPRT", "Robot/replaced.SLDPRT"],
+            manifest.RootElement.GetProperty("intents").EnumerateObject().Select(p => p.Name).Order(StringComparer.Ordinal));
+    }
+
     [WindowsFact]
     public void MoveFolder_moves_a_closed_folder_and_refuses_open_files_existing_targets_and_long_paths()
     {
@@ -429,5 +498,30 @@ public sealed class WindowsVaultFileSystemTests
             Assert.False(busy.Succeeded);
             Assert.Equal("Windows could not open Plate.SLDPRT. Wait a moment, then try again.", busy.Problem);
         }
+    }
+
+    // A download body that looks at the destination every time Armory reads from it.
+    private sealed class WatchingStream(byte[] bytes, Func<bool> look) : Stream
+    {
+        private int position;
+        public List<bool> Seen { get; } = [];
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override int Read(byte[] buffer, int offset, int count) => Read(buffer.AsSpan(offset, count));
+        public override int Read(Span<byte> buffer)
+        {
+            Seen.Add(look());
+            var count = Math.Min(buffer.Length, Math.Min(64 * 1024, bytes.Length - position));
+            bytes.AsSpan(position, count).CopyTo(buffer);
+            position += count;
+            return count;
+        }
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 }

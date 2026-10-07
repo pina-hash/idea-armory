@@ -114,36 +114,28 @@ public sealed class WindowsVaultFileSystem : IVaultFileSystem, IDisposable
         ArgumentNullException.ThrowIfNull(content);
         lock (gate)
         {
-            if (!paths.TryResolve(path, out var file, out var problem)) return ReplaceOutcome.Refused(problem ?? "The path is not valid in this vault.");
+            if (!paths.TryResolve(path, out _, out var problem)) return ReplaceOutcome.Refused(problem ?? "The path is not valid in this vault.");
             // SafeFileReplace's documented limitation still applies (docs/platform/safe-replace.md):
             // it is not an atomic compare-and-replace against a non-cooperating writer, which can
             // save between its final check and the rename, so the engine replaces only closed
-            // files and rechecks first. MoveFileEx cannot replace a read-only file: the bit is
-            // cleared only for the replace and always put back (on the new bytes after success,
-            // on the old bytes after a refusal). With readOnly, SafeFileReplace sets the bit on
-            // the staged copy before the rename, so the new bytes are never writable.
-            var wasReadOnly = false;
-            if (expectedHash is not null && File.Exists(file))
-            {
-                try
-                {
-                    var attributes = File.GetAttributes(file!);
-                    if ((attributes & FileAttributes.ReadOnly) != 0)
-                    {
-                        File.SetAttributes(file!, attributes & ~FileAttributes.ReadOnly);
-                        wasReadOnly = true;
-                    }
-                }
-                catch (Exception error) when (error is IOException or UnauthorizedAccessException)
-                {
-                    if (wasReadOnly) RestoreReadOnly(path, file!);
-                    return ReplaceOutcome.Refused(error.Message);
-                }
-            }
-            ReplaceResult result;
-            try { result = replacer.Replace(path, expectedHash, content, readOnly: readOnly); }
-            finally { if (wasReadOnly) RestoreReadOnly(path, file!); }
-            return result.Succeeded ? ReplaceOutcome.Done : ReplaceOutcome.Refused(result.Problem ?? "The file could not be replaced.");
+            // files and rechecks first. A read-only destination is never made writable here:
+            // SafeFileReplace stages, hashes and checks with the bit in place and renames over
+            // it (FileRenameInfoEx, ignoring the read-only attribute), so a file nobody checked
+            // out is never writable while SolidWorks could open it. With readOnly, or over a
+            // read-only destination, the new bytes are read-only from their first moment.
+            // The file being replaced, so its read-only intent (if it was made for this very
+            // file) can follow the new bytes. Unknown means the intent is dropped instead.
+            string? previous = null;
+            try { previous = policy.CurrentFileId(path); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+            var result = replacer.Replace(path, expectedHash, content, readOnly: readOnly);
+            if (result.ReadOnlyNotRestored) readOnlyToRestore.Add(path);
+            if (!result.Succeeded) return ReplaceOutcome.Refused(result.Problem ?? "The file could not be replaced.");
+            readOnlyToRestore.Remove(path);
+            try { policy.Renew(path, previous); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            { pendingProblems.Add($"{path.Value}: the read-only setting could not follow the new bytes: {error.Message}"); }
+            return ReplaceOutcome.Done;
         }
     }
 
@@ -158,7 +150,10 @@ public sealed class WindowsVaultFileSystem : IVaultFileSystem, IDisposable
             var target = Path.Combine(recoveryFolder, stamp, relative);
             for (var n = 2; File.Exists(WindowsPaths.Extended(target)) || Directory.Exists(WindowsPaths.Extended(target)); n++)
                 target = Path.Combine(recoveryFolder, stamp + "-" + n.ToString(CultureInfo.InvariantCulture), relative);
-            return MoveChecked(file!, WindowsPaths.Extended(target), expectedHash);
+            var outcome = MoveChecked(file!, WindowsPaths.Extended(target), expectedHash);
+            // The path no longer holds this file, so it keeps no read-only intent.
+            if (outcome.Succeeded) AfterLeaving(path, () => policy.Forget(path));
+            return outcome;
         }
     }
 
@@ -173,8 +168,21 @@ public sealed class WindowsVaultFileSystem : IVaultFileSystem, IDisposable
             var caseOnly = from == to;
             if (!caseOnly && (File.Exists(destination) || Directory.Exists(destination)))
                 return ReplaceOutcome.Refused($"Something named {to.Name} is already in that folder.");
-            return MoveChecked(source!, destination!, expectedHash);
+            var outcome = MoveChecked(source!, destination!, expectedHash);
+            // The same file at its new path: its read-only intent goes with it.
+            if (outcome.Succeeded) AfterLeaving(from, () => policy.Move(from, to));
+            return outcome;
         }
+    }
+
+    // The file already moved; an intent that cannot follow is reported, never a failed move.
+    private void AfterLeaving(VaultPath path, Action update)
+    {
+        readOnlyToRestore.Remove(path);
+        attributeRetry.Remove(path);
+        try { update(); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        { pendingProblems.Add($"{path.Value}: the read-only setting could not follow the file: {error.Message}"); }
     }
 
     public void ApplyLockAttribute(VaultPath path, LockOwnership ownership)
@@ -199,7 +207,7 @@ public sealed class WindowsVaultFileSystem : IVaultFileSystem, IDisposable
                 if (paths.TryResolve(item.Path, out _, out var problem)) valid.Add(item);
                 else pendingProblems.Add($"{item.Path.Value}: {problem}");
             }
-            var failed = policy.ApplyMany(valid).ToDictionary(f => f.Path, f => f.Problem);
+            var failed = ApplyBatch(valid);
             foreach (var (path, ownership) in valid)
             {
                 readOnlyToRestore.Remove(path);
@@ -262,8 +270,12 @@ public sealed class WindowsVaultFileSystem : IVaultFileSystem, IDisposable
                 return ReplaceOutcome.Refused(error.Message);
             }
             changes.Absorb(fromPath, toPath);
-            policy.Rekey(fromPath, toPath);
             RekeyPending(fromPath, toPath);
+            // The folder already moved: intents that cannot be saved yet are reported (and
+            // saved by the next write), never a failed move.
+            try { policy.Rekey(fromPath, toPath); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            { pendingProblems.Add($"{toPath}: the read-only settings could not follow the folder yet: {error.Message}"); }
             return ReplaceOutcome.Done;
         }
     }
@@ -473,12 +485,37 @@ public sealed class WindowsVaultFileSystem : IVaultFileSystem, IDisposable
             RestoreReadOnly(path, file!);
             if (readOnlyToRestore.Contains(path)) problems.Add($"{path.Value}: Armory could not make this file read-only again yet.");
         }
+        // One batch, which writes the manifest only if an intent was not recorded yet.
+        List<(VaultPath Path, LockOwnership Ownership)> retry = [];
         foreach (var (path, ownership) in attributeRetry.ToArray())
         {
-            if (!paths.TryResolve(path, out _, out _)) { attributeRetry.Remove(path); continue; }
-            if (policy.ApplyMany([(path, ownership)]).Count == 0) { attributeRetry.Remove(path); continue; }
+            if (paths.TryResolve(path, out _, out _)) retry.Add((path, ownership));
+            else attributeRetry.Remove(path);
+        }
+        if (retry.Count == 0) return;
+        var failed = ApplyBatch(retry);
+        foreach (var (path, ownership) in retry)
+        {
+            if (!failed.ContainsKey(path)) { attributeRetry.Remove(path); continue; }
             problems.Add($"{path.Value}: Armory could not make this file {(ReadOnlyPolicy.IsReadOnly(ownership) ? "read-only" : "writable")} yet.");
         }
+    }
+
+    // One ApplyMany. When the manifest itself cannot be written, no bit changed: every file in
+    // the batch is returned, to be retried by the next scan, and the reason is reported once.
+    private Dictionary<VaultPath, string> ApplyBatch(IReadOnlyList<(VaultPath Path, LockOwnership Ownership)> items)
+    {
+        var failed = new Dictionary<VaultPath, string>();
+        try
+        {
+            foreach (var (path, problem) in policy.ApplyMany(items)) failed[path] = problem;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            pendingProblems.Add("Armory could not save its read-only settings yet: " + error.Message);
+            foreach (var (path, _) in items) failed[path] = error.Message;
+        }
+        return failed;
     }
 
     // A vault-relative folder (not the root, not .armory or a "~$" folder), validated like a

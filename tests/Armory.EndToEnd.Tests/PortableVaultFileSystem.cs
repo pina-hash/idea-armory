@@ -46,8 +46,11 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
     public List<string> UnpreservedOverwrites { get; } = [];
     public int Moves { get; private set; }
     public int Replaces { get; private set; }
-    // The lock ownership the engine last applied to each path (what the Windows adapter keeps
-    // in its read-only intent manifest).
+    // The lock ownership the engine last applied to each path: a record of the engine's calls
+    // for the oracles. The bit itself (readOnlyBits) stays with its file, as on Windows, where
+    // the read-only manifest keeps an intent only while the same file (NTFS id) is at its path
+    // and a restart applies it to that file alone, so a new file at an old path never inherits
+    // a bit there either.
     public Dictionary<string, LockOwnership> Attributes { get; } = new(StringComparer.OrdinalIgnoreCase);
     public int AttributeBatches { get; private set; }
     public List<string> Recovered { get; } = [];
@@ -317,7 +320,8 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
         lock (gate)
         {
             Attributes[path.Value] = ownership;
-            // Windows changes the bit of a file that exists; the intent stays for later.
+            // Windows changes the bit of a file that exists; a path with no file gets no bit
+            // (and no intent in the Windows manifest).
             if (!File.Exists(Full(path.Value))) readOnlyBits.Remove(path.Value);
             else if (IsReadOnlyByRule(ownership)) readOnlyBits.Add(path.Value);
             else readOnlyBits.Remove(path.Value);
