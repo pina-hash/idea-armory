@@ -246,8 +246,8 @@ Plate.SLDPRT.", "Close Plate.SLDPRT in SolidWorks first."). The actions are
 | `renameFolder` | `projectId`, `folder`, `newName`, `requestId` | Rename folder, after the small dialog | renames it for everyone (refused, and put back, when someone else has a file in it checked out) |
 | `deleteFolder` | `projectId`, `folder`, `requestId` | Delete folder, after the small dialog | removes it and its files for everyone; their history is kept |
 | `renameFile` | `path`, `newName`, `requestId` | Rename on a notice's file that shares a name (after the small dialog refuses a name the project has, a lost extension or a character Windows forbids) | renames that one file in its folder: a file Armory doesn't have is renamed on disk (and then added); a file in Armory is renamed for everyone (`armory_move_file`), refused while someone else has it checked out |
-| `addFiles` | `projectId`, `folder`, `requestId` | Add files | host shows a file picker, then copies the files in |
-| `dropFiles` | `projectId`, `folder`, `requestId` (+ the dropped files) | a drop on the open folder's list | host copies the dropped files in |
+| `addFiles` | `projectId`, `folder`, `requestId` | Add files | host shows a file picker, then copies the files in (never over a file already there) and adds them: one import summary; closing the picker answers with an empty message, which the page doesn't show |
+| `dropFiles` | `projectId`, `folder`, `requestId` (+ the dropped files) | a drop on the open folder's list | host copies the dropped files in, a dropped folder whole, the same way |
 | `dismissNotice` | `key` | a notice's Done or OK (`dismissNotice` action); Not now or OK on the check-out question (its `PromptView.key`) | the host drops that notice card, or that one question and asks about the next file SolidWorks has open without a check out |
 | `saveSettings` | `vaultRoot`, `startAtSignIn`, `theme` | a setting, Use (a folder of my own) | saves settings; host answers with `view` |
 | `chooseVaultRoot` | | Change, Choose another folder | host shows a folder picker, then answers with `view` |

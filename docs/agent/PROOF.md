@@ -4,7 +4,7 @@
 lab PC") on Linux, each with its own temp vault folder, durable stores, device and identity,
 through:
 
-- a real PostgreSQL database with `server/sql/001-004` plus the test identity and `is_admin`
+- a real PostgreSQL database with `server/sql/001-005` (005 is idea-app's live migration 0232 with a grant-parity section) plus the test identity and `is_admin`
   stubs (`tests/Armory.Server.Tests/sql/`);
 - the fake ideabosco.com (`tests/Armory.TestSupport/FakeIdeaBosco.cs`), which implements
   contract sections 2 and 3, and the fake Supabase (PostgREST over that database, and token
@@ -31,6 +31,25 @@ to an open file is recorded as a violation.
 | f | The same person on two devices: the second device's work becomes a side version | `The_same_person_on_a_second_device_cannot_commit_over_the_first` |
 | g | A rename through `armory_move_file` arrives on B as a move | `A_rename_arrives_on_B_as_a_move` |
 | h | A 2026-release SolidWorks file is refused, naming both releases (fake release reader) | `A_2026_SolidWorks_file_is_refused_naming_both_releases` |
+
+## v2 scenarios: check out, folders, projects and imports (one test each, all guards)
+
+| Scenario | Test |
+|---|---|
+| Two students try to edit the same part: the second can't save and sees who has it | `ScenarioTests.Two_students_try_to_edit_the_same_part` |
+| A Pack and Go of 60 files (14 names the project already has) is unzipped, the connection drops after 20 are in, and the inner folder is renamed: one `armory_rename_folder`, no `armory_move_file`, no `armory_tombstone`, one `folder_renamed` and no `file_moved`, the same file ids, the 26 that waited added at the new place, the other computer moves its folder in place (no storage GET and no replace for the 20 it had, nothing to recovery), one import card ("Added 46 of 60 files to Robot 2027 › Pack") and one card listing the 14, nothing else | `FolderScenarioTests.Pack_and_Go_with_duplicate_names_then_the_inner_folder_is_renamed` |
+| A folder deleted on disk: one scan does nothing, then one `armory_delete_folder` (no `armory_tombstone`), one `folder_deleted`; the other computer moves its copies to recovery and its empty folder goes | `FolderScenarioTests.A_folder_deleted_on_disk_tombstones_its_files_in_one_call` |
+| The same while Maria has a file in it checked out: refused, the folder is downloaded again, exactly one notice naming Maria Lopez | `FolderScenarioTests.A_folder_deleted_on_disk_while_Maria_has_a_file_checked_out_is_put_back` |
+| A folder renamed on disk while Maria has a file in it checked out: one refused call, moved back, one notice naming her | `FolderScenarioTests.A_folder_renamed_on_disk_while_Maria_has_a_file_checked_out_is_put_back` |
+| A removed name added again: the same id, v1 kept, one `file_revived`, the new bytes current on top of v1 | `FolderScenarioTests.A_removed_name_is_revived_with_its_history` |
+| The project renamed on the site while Maria has a file open: she waits with one notice and untouched bytes; then the folder is renamed in place (no download, no removal, no second folder) and her check out goes on | `FolderScenarioTests.A_project_renamed_on_the_site_while_a_file_is_open` |
+| A project folder renamed in Explorer is put back ("Project names are changed on ideabosco.com."), and waits, never made again beside it, while a file inside is open | `FolderScenarioTests.An_Explorer_rename_of_a_project_folder_is_put_back` |
+| A project folder removed in Explorer is made again and downloaded, never a removal | `FolderScenarioTests.A_project_folder_removed_in_Explorer_is_put_back` |
+| An archived project stops syncing, keeps its folder and bits, shows no notice; a check out there can still be checked in | `FolderScenarioTests.An_archived_project_stops_syncing_and_keeps_its_folder` |
+| No view or File detail field carries a season | `FolderScenarioTests.No_view_field_carries_a_season` |
+| The window's New folder, Add files (files and a whole folder, never over a file), Rename folder and Delete folder, one call each | `FolderScenarioTests.Folders_made_renamed_deleted_and_filled_in_the_app` |
+| Without directory identity a folder rename is still one folder move | `FolderScenarioTests.A_folder_renamed_without_directory_identity_is_still_one_folder_move` |
+| The team renames a folder while this computer has a file in it open: the rest moves now, the open one once it closes | `FolderScenarioTests.A_folder_renamed_by_the_team_waits_for_an_open_file` |
 
 ## Hardening after an adversarial review
 
@@ -108,3 +127,58 @@ E2E_SEEDS count=200 first=0 elapsed=67.5s failures=81
 and the full run passed again. The same break against the first engine (`c4b5573`, SHA-256
 `4c041107945c859d5b053a27a2d946b29892195803e20ab52972bfdabfc25c78`) failed 75 of 200 seeds,
 first `ARMORY_E2E_SEED=0`.
+
+## Deliberate breaks for v2 (brief section 8)
+
+Each break is one line, marked by its anchor comment, replaced in the source, built and run
+against the end-to-end tests with `ARMORY_TEST_POSTGRES` set (a skipped test would not count),
+then restored byte for byte. The SHA-256 of each file is the committed engine's (`a26c154`):
+the same before the break and after the restore. Run on 2026-10-07.
+
+**(a) A checked-in file left writable.** `src/Armory.Agent.Engine/SyncEngine.Actions.cs`,
+anchor `// MUTATION: a checked-in file left writable` (the read-only rule's ownership,
+`DesiredOwnership`): `? LockOwnership.Free : ownership;` became
+`? LockOwnership.Free : ownership == LockOwnership.Free ? LockOwnership.ThisDevice : ownership;`,
+so a file nobody has checked out (a file just checked in among them) is made writable.
+SHA-256 `9bf1f3bb62ea84bd2700ec785df11fdcf3c5f68d22da33334538dfd735c18c70` before and after,
+`1973dc78e217a149a2c9d2be62fb17a8a9a433c5ce94a1178e77d7acb201c27f` broken. Red: 3 of 3.
+
+```text
+Failed ScenarioTests.Two_students_try_to_edit_the_same_part          Assert.True(t.A.Disk.IsReadOnly(Plate)) after A's check in
+Failed HardeningTests.Files_someone_else_holds_are_read_only_until_they_release   Expected: Free, Actual: ThisDevice
+Failed SeededRunTests.Seeded_engines_preserve_every_save_and_converge_end_to_end
+REPRO: ARMORY_E2E_SEED=0 dotnet test tests/Armory.EndToEnd.Tests --filter Seeded | A0: Seed 0000/robot/plate.txt is writable but this computer has not checked it out (step 0)
+E2E_SEEDS count=200 first=0 elapsed=15.2s failures=200
+```
+
+**(b) A directory rename handled as per-file moves.** `src/Armory.Agent.Engine/SyncEngine.Folders.cs`,
+anchor `// MUTATION: a directory rename is one folder move` (the branch that turns a
+`FolderMove` into one `armory_rename_folder`): `StartFolderRename(source, from, to);` became
+`return;`, so the folder move is dropped and the per-file evidence (`DetectLocalMoves`) moves
+each file. In the Pack and Go scenario that sent 20 `armory_move_file` calls (20
+`file_moved` changes) and no `armory_rename_folder`. SHA-256
+`15de5120b612d1eba27ce32a792b6b330fb702d342fd19e5dc148afa2b014302` before and after,
+`a73d4e42c4376795613c3362c7eda8b29a2d9384472dcb5815b44d7d333f15f7` broken. Red: 3 of the 13
+folder scenarios, each at `RpcCount("armory_rename_folder")` (expected 1, actual 0):
+
+```text
+Failed FolderScenarioTests.Pack_and_Go_with_duplicate_names_then_the_inner_folder_is_renamed
+Failed FolderScenarioTests.A_folder_renamed_on_disk_while_Maria_has_a_file_checked_out_is_put_back
+Failed FolderScenarioTests.A_folder_renamed_without_directory_identity_is_still_one_folder_move
+```
+
+**(c) One notice per file.** `src/Armory.Agent.Engine/SyncEngine.View.cs`, anchor
+`// MUTATION: notices are grouped by kind` (the key notices are grouped under):
+`var key = kind;` became `var key = kind + ":" + item.Path;`. SHA-256
+`858632a43ebdd909bcac0bf690a2f9d8d030bc8cdd6315d07468f3b0d3b9afa0` before and after,
+`ddf623ee155b104fae12eae66fef4a4e1cf5a9378565e581e8e56797e0f9d3df` broken. Red: the Pack and
+Go scenario, where the uploading student saw 15 cards (the import summary and one card per
+file sharing a name) instead of 2:
+
+```text
+Failed FolderScenarioTests.Pack_and_Go_with_duplicate_names_then_the_inner_folder_is_renamed   Expected: 2, Actual: 15
+```
+
+Stage E3 adds the 5,000-file import test (at most 3 cards), which this break must also turn
+red. After the three restores the working tree matched the commit (`git status` clean) and
+the full suite passed again.
