@@ -104,6 +104,34 @@ internal sealed class AgentHost : IAsyncDisposable
     internal void Resume() => OnEngine("resume", e => e.Resume());
     internal void Wake() => OnEngine("wake", e => e.Wake());
 
+    // The window's actions (docs/agent/BRIDGE.md, "Page to host"; v2-design.md 4.2 and 4.3).
+    // Paths are vault-relative and already checked by the Bridge; a folder means every file
+    // under it. The engine lane gives SyncEngine these calls; until it does, each one says
+    // plainly that this version can't do it, so no action is ever dropped without a word.
+    internal Task<ActionResult> LaunchFileAsync(string path) => NotYet("open " + path);
+    internal Task<ActionResult> CheckOutAsync(IReadOnlyList<string> paths, bool open) => NotYet("check out " + paths.Count + (open ? " and open" : ""));
+    internal Task<ActionResult> CheckInAsync(IReadOnlyList<string> paths) => NotYet("check in " + paths.Count);
+    internal Task<ActionResult> UndoCheckOutAsync(IReadOnlyList<string> paths) => NotYet("undo check out " + paths.Count);
+    internal Task<ActionResult> TakeBackAsync(Guid fileId) => NotYet("take back " + fileId);
+    internal Task<ActionResult> CreateFolderAsync(Guid project, string parent, string name) => NotYet("new folder in " + project);
+    internal Task<ActionResult> RenameFolderAsync(Guid project, string folder, string newName) => NotYet("rename a folder in " + project);
+    internal Task<ActionResult> DeleteFolderAsync(Guid project, string folder) => NotYet("delete a folder in " + project);
+    // sources: full paths on this computer (the file picker's, or the files dropped on the window).
+    internal Task<ActionResult> AddFilesAsync(Guid project, string folder, IReadOnlyList<string> sources) => NotYet("add " + sources.Count + " files to " + project);
+
+    // A notice card's Done, or "prompt:<path>" for Not now on the check-out question.
+    internal void DismissNotice(string key)
+    {
+        log.Info("window: dismiss notice, not in this engine yet");
+        RaiseView();
+    }
+
+    private Task<ActionResult> NotYet(string what)
+    {
+        log.Info("window action not in this engine yet: " + what);
+        return Task.FromResult(new ActionResult(false, "This version of Armory can't do that yet."));
+    }
+
     internal void SignOut()
     {
         CancelConnect();

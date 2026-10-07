@@ -20,25 +20,38 @@
 //               against the ground it sits on; so does the divider between two rows.
 //   keyboard    Tab reaches every control, and each one shows a focus ring at least 2px
 //               wide that holds 3:1 against its ground.
-//   copy        the words a student sees never use jargon: lock, conflict, sync, journal,
-//               side version, intent, RPC, hash, vault, upload, download.
+//   copy        the words a student sees never use jargon: lock, unlock, conflict, sync,
+//               journal, side version, intent, RPC, hash, vault. Upload and download are
+//               allowed (v2 decision D5: Mr. Pina's own words for what is moving).
 //   offline     no file in wwwroot names a web address (the SVG namespace inside a data:
 //               URI is the one exception: it is an identifier, never fetched), loads a
 //               font with @font-face or anything with @import, or points url() anywhere
 //               but data: or an in-page #id (%23id inside a data: URI).
 //   flows       clicking (or pressing Enter on) a row moves the view to that file's
 //               detail, scrolled to the top with its heading focused, and Back returns to
-//               the row; a Needs-you card's key opens its file; the Settings sheet, Pause
-//               (Resume is the green primary, and nothing to pause while offline),
-//               Connect and the one-click folder of your own do what they say.
+//               the row; a notice card opens and closes its list; a folder row goes into the
+//               folder and a crumb back out; picking files (Shift for a range) and Check
+//               out checks them out, says so in the quiet result line, and Escape lets go;
+//               the 5,000-file folder keeps fewer than 150 rows drawn and reaches its last
+//               file by scrolling and by the End key; the Settings sheet, Pause (Resume is
+//               the green primary, and nothing to pause while offline), Connect and the
+//               one-click folder of your own do what they say.
+//   logo        the IDEA gear turns (idea-gear-spin, 24s, linear, infinite) when motion is
+//               allowed, holds still when the student asks for reduced motion, and is
+//               fully painted in both.
 //   bridge      inside a stand-in WebView2 host (no demo transport): the page says ready
 //               first, renders Home, detail and Connect from host messages alone, wears
-//               effectiveTheme, ignores a stray or unknown message, and every one of the 11
+//               effectiveTheme, ignores a stray or unknown message, and every one of the 22
 //               page-to-host types is sent by the control that should send it, carrying
-//               exactly the fields BRIDGE.md gives it. In a plain browser the theme comes
-//               from ?theme= (idea, spaceWhite or space-white) or prefers-color-scheme.
-//   em dash     no U+2014 anywhere in wwwroot (or in these tools, the screens index and the
-//               design review).
+//               exactly the fields BRIDGE.md gives it (an action's requestId included; a
+//               drop goes with its files through postMessageWithAdditionalObjects). An
+//               'activity' message keeps focus and scroll and patches only the panel and
+//               the status line; an 'actionResult' shows its words in the quiet line; a
+//               view that arrives while the folder dialog is open keeps the typed name. In
+//               a plain browser the theme comes from ?theme= (idea, spaceWhite or
+//               space-white) or prefers-color-scheme.
+//   em dash     no U+2014 anywhere in wwwroot (or in these tools, BRIDGE.md, the design
+//               review, both screens indexes and docs/overnight).
 //
 // Exits non-zero on any failure. Run: node tools/agent-ui/check-ui.mjs
 
@@ -78,12 +91,19 @@ function problem(kind, where, detail) {
 /* ------------------------------------------------------------- Em dash */
 
 const EM_DASH = String.fromCharCode(0x2014);
+const overnight = path.join(ROOT, 'docs', 'overnight');
 const scanned = [
 	...walkFiles(WWWROOT),
 	...walkFiles(path.join(ROOT, 'tools', 'agent-ui')),
 	path.join(ROOT, 'docs', 'agent', 'screens', 'README.md'),
-	path.join(ROOT, 'docs', 'agent', 'DESIGN-REVIEW.md')
+	path.join(ROOT, 'docs', 'agent', 'screens', 'v2', 'README.md'),
+	path.join(ROOT, 'docs', 'agent', 'DESIGN-REVIEW.md'),
+	path.join(ROOT, 'docs', 'agent', 'BRIDGE.md'),
+	...(fs.existsSync(overnight) ? walkFiles(overnight) : [])
 ].filter((f) => fs.existsSync(f) && !/\.(png|jpe?g|gif|ico|webp)$/i.test(f));
+// The v2 index must be there to be swept: a missing file would pass in silence.
+for (const must of [path.join(ROOT, 'docs', 'agent', 'screens', 'v2', 'README.md'), path.join(ROOT, 'docs', 'agent', 'BRIDGE.md')])
+	if (!fs.existsSync(must)) problem('em dash', path.relative(ROOT, must), 'missing, so it was never swept');
 for (const file of scanned) {
 	const lines = fs.readFileSync(file, 'utf8').split('\n');
 	lines.forEach((line, i) => {
@@ -135,7 +155,9 @@ for (const file of walkFiles(WWWROOT).filter((f) => /\.(html|css|js|mjs|json|svg
 /* ------------------------------------------------------ In-page probes */
 
 // Words a student never reads or hears in this window. Kept here as source strings so the
-// in-page probe and the self-test below use the same list.
+// in-page probe and the self-test below use the same list. v2 (decision D5) lets upload
+// and download through: "Uploading", "Downloading" and "Moving" are Mr. Pina's words for
+// what is happening right now. Every other word stays banned.
 const JARGON = [
 	'\\block(s|ed|ing)?\\b',
 	'\\bunlock',
@@ -146,17 +168,18 @@ const JARGON = [
 	'\\bintents?\\b',
 	'\\bRPC\\b',
 	'\\bhash(es)?\\b',
-	'\\bvault',
-	'\\bupload',
-	'\\bdownload'
+	'\\bvault'
 ];
 // Each pattern must catch the word it is for.
 for (const [re, sample] of JARGON.map((src, i) => [
 	new RegExp(src, 'i'),
-	['Lock held', 'Unlock it', 'Sync conflict', 'Syncing now', 'Journal entry', 'A side version', 'Intent sent', 'RPC failed', 'Hash mismatch', 'Open vault', 'Upload failed', 'Download it'][i]
+	['Lock held', 'Unlock it', 'Sync conflict', 'Syncing now', 'Journal entry', 'A side version', 'Intent sent', 'RPC failed', 'Hash mismatch', 'Open vault'][i]
 ])) {
 	if (!re.test(sample)) problem('control', 'jargon list', `${re} misses "${sample}"`);
 }
+// And the list must let the v2 words through, and nothing wider than it means.
+for (const fine of ['Uploading 3 of 9 files', 'Downloading 412 of 1,280 files', 'Moving 120 files to Gearbox', 'Checked out by Maria Lopez', 'Blocks of files'])
+	for (const src of JARGON) if (new RegExp(src, 'i').test(fine)) problem('control', 'jargon list', `${src} wrongly catches "${fine}"`);
 
 /** Runs in the page. Everything that can be read without moving the mouse or keyboard. */
 function inspect(jargonSources) {
@@ -360,7 +383,7 @@ function inspect(jargonSources) {
 		}
 		return bodyBg;
 	};
-	const edgeSel = '.key, .switch, .well, .list-well, .panel, .display, .history-well, dialog.housing, .pad';
+	const edgeSel = '.key, .switch, .well, .list-well, .panel, .display, .history-well, dialog.housing, .pad, .field, .track';
 	for (const el of document.querySelectorAll(edgeSel)) {
 		if (!visible(el) || el.matches(':disabled, [aria-disabled="true"]')) continue;
 		const cs = getComputedStyle(el);
@@ -616,7 +639,7 @@ for (const c of list) {
 		main.insertAdjacentHTML('beforeend', '<img alt="" src="https://example.invalid/planted.png">');
 		document.querySelector('.chip').style.cursor = 'pointer';
 		// A rail planted on a card, off the main plate.
-		document.querySelector('.panel').insertAdjacentHTML('beforeend', '<span class="plate-rail"></span>');
+		[...document.querySelectorAll('.panel')].find((p) => p.getClientRects().length).insertAdjacentHTML('beforeend', '<span class="plate-rail"></span>');
 		// A row chip dropped back under the row's whole-row key, so the hand shows on it.
 		document.querySelectorAll('.row .chip')[1].style.zIndex = 'auto';
 		const key = document.querySelector('[data-key="hdr-settings"]');
@@ -642,13 +665,14 @@ for (const c of list) {
 
 /* -------------------------------------------------------------- Flows */
 
-async function flow(name, size, state, run) {
-	const c = { screen: state === 'signedOut' ? 'connect' : 'home', state, size };
+async function flow(name, size, state, run, screen) {
+	const c = { screen: state === 'signedOut' ? 'connect' : screen || 'home', state, size };
 	const { context, page } = await openPage(browser, c, 'idea');
 	const where = `flow ${name} ${size.w}x${size.h}`;
 	tally.flows++;
 	try {
 		const fails = [];
+		page.on('pageerror', (e) => fails.push('page error: ' + e.message));
 		await run(page, (ok, what) => {
 			if (!ok) fails.push(what);
 		});
@@ -662,7 +686,7 @@ async function flow(name, size, state, run) {
 	}
 	await context.close();
 }
-const settle = (page) => page.evaluate(() => new Promise((r) => setTimeout(() => requestAnimationFrame(() => r()), 30)));
+const settle = (page) => page.evaluate(() => new Promise((r) => setTimeout(() => requestAnimationFrame(() => requestAnimationFrame(() => r())), 30)));
 const where = (page) =>
 	page.evaluate(() => ({
 		screen: document.body.getAttribute('data-screen'),
@@ -671,11 +695,31 @@ const where = (page) =>
 		title: (document.getElementById('detail-title') || {}).textContent || null,
 		history: document.querySelectorAll('.history-list > li').length
 	}));
+const text = async (page, sel) => ((await page.textContent(sel).catch(() => '')) || '').replace(/\s+/g, ' ').trim();
+// A row is clicked where its name is (a narrow row's tag may lie over its middle; a click
+// on the tag opens the row too, but Playwright would wait for the key itself).
+const clickRow = async (page, key) => {
+	const sel = `[data-key="${key}"]`;
+	await page.$eval(sel, (el) => el.scrollIntoView({ block: 'center' }));
+	const box = await page.$eval(sel, (el) => {
+		const r = el.getBoundingClientRect();
+		return { w: r.width, h: r.height };
+	});
+	await page.click(sel, { position: { x: Math.round(box.w * 0.55), y: Math.min(16, Math.round(box.h / 3)) } });
+};
+const toBottom = (page) =>
+	page.evaluate(() => {
+		for (const id of ['recess-scroll', 'scroller']) {
+			const e = document.getElementById(id);
+			if (e) e.scrollTop = e.scrollHeight;
+		}
+	});
 
 for (const size of SIZES) {
-	await flow('row opens detail', size, 'lockedByOther', async (page, expect) => {
-		await page.evaluate(() => (document.getElementById('scroller').scrollTop = 99999));
-		await page.click('[data-key="row-f-wheel-hub"]');
+	await flow('row opens detail', size, 'checkedOutByOther', async (page, expect) => {
+		await toBottom(page);
+		await settle(page);
+		await clickRow(page, 'row-f-wheel-hub');
 		await page.waitForSelector('.history-list');
 		let s = await where(page);
 		expect(s.screen === 'detail', `screen is ${s.screen}, not detail`);
@@ -683,23 +727,36 @@ for (const size of SIZES) {
 		expect(s.focus === 'detail-title', `focus is on ${s.focus}, not the heading`);
 		expect(s.title === 'Wheel-Hub.SLDPRT', `heading says ${s.title}`);
 		expect(s.history > 0, 'no history rows');
+		const free = await page.$$eval('.detail-act button', (b) => b.map((x) => x.textContent.trim()));
+		expect(free.join('|') === 'Open|Check out|Check out and open|Show in folder', `an available file offers ${free.join(', ')}`);
+		expect(/Available\. ?Check it out to make changes\./.test(await text(page, '.who-panel')), 'Checked out does not say the file is available');
 		await page.click('[data-key="back"]');
 		await settle(page);
 		s = await where(page);
 		expect(s.screen === 'home', `Back went to ${s.screen}`);
 		expect(s.focus === 'row-f-wheel-hub', `Back put focus on ${s.focus}, not the row that opened detail`);
-		await page.focus('[data-key="mine-f-plate-left"]');
+		await page.focus('[data-key="row-mine:f-gearbox"]');
 		await page.keyboard.press('Enter');
 		await page.waitForSelector('.history-list');
 		s = await where(page);
-		expect(s.screen === 'detail' && s.title === 'Plate-Left.SLDPRT', `Enter on a row opened ${s.title}`);
+		expect(s.screen === 'detail' && s.title === 'Gearbox.SLDASM', `Enter on a row opened ${s.title}`);
 		expect(s.focus === 'detail-title', `Enter left focus on ${s.focus}`);
-		const holder = await page.textContent('.holder-line');
-		expect(/Maria Lopez is editing this/.test(holder), `holder line says "${holder}"`);
-		const email = await page.textContent('.who-email').catch(() => null);
-		expect(email === 'maria.lopez@boscotech.edu', `Who's editing gives no way to reach Maria (${email})`);
+		const mine = await page.$$eval('.detail-act button', (b) => b.map((x) => x.textContent.trim()));
+		expect(mine.join('|') === 'Open|Check in|Undo check out|Show in folder', `a file I have checked out offers ${mine.join(', ')}`);
+		await page.click('[data-key="back"]');
+		await settle(page);
+		await clickRow(page, 'row-f-plate-left');
+		await page.waitForSelector('.history-list');
+		const holder = await text(page, '.holder-line');
+		expect(/Checked out by Maria Lopez on LAB-PC-07/.test(holder), `holder line says "${holder}"`);
+		const email = await text(page, '.who-email');
+		expect(email === 'maria.lopez@boscotech.edu', `Checked out gives no way to reach Maria (${email})`);
+		const taken = await page.$$eval('.detail-act button', (b) => b.map((x) => x.textContent.trim()));
+		expect(taken.join('|') === 'Open|Show in folder', `a file Maria has checked out offers ${taken.join(', ')}`);
+		const page2 = await page.content();
+		expect(!/double-click/i.test(page2), 'the page still tells the student to double-click');
 	});
-	await flow('a chip in a row opens the row', size, 'lockedByOther', async (page, expect) => {
+	await flow('a chip in a row opens the row', size, 'checkedOutByOther', async (page, expect) => {
 		const chip = 'li.row:has([data-key="row-f-plate-left"]) .chip.who';
 		const cursor = await page.$eval(chip, (c) => getComputedStyle(c).cursor);
 		expect(cursor !== 'pointer', `the chip shows a ${cursor} cursor`);
@@ -709,12 +766,129 @@ for (const size of SIZES) {
 		expect(s.screen === 'detail' && s.title === 'Plate-Left.SLDPRT', `clicking the chip opened ${s.screen} ${s.title}`);
 		expect(s.top === 0 && s.focus === 'detail-title', `top ${s.top}, focus ${s.focus}`);
 	});
-	await flow('needs-you card opens detail', size, 'conflict', async (page, expect) => {
-		await page.click('[data-key="attn-open-0"]');
-		await page.waitForSelector('.history-list');
-		const s = await where(page);
-		expect(s.screen === 'detail' && s.title === 'Plate-Left.SLDPRT', `opened ${s.title}`);
-		expect(s.top === 0 && s.focus === 'detail-title', `top ${s.top}, focus ${s.focus}`);
+	await flow('every row says who has it checked out', size, 'checkedOutByOther', async (page, expect) => {
+		const lines = await page.$$eval('#vl-browser .vrow:not(.folder-item)', (rows) =>
+			rows.map((r) => [r.querySelector('.row-name').textContent, (r.querySelector('.chip.who') || r.querySelector('.row-avail') || {}).textContent || ''])
+		);
+		expect(lines.length >= 5, `only ${lines.length} file rows drawn`);
+		for (const [name, mark] of lines) expect(/^(?:[A-Z]{1,2})?(Checked out by .+|Available)$/.test(mark.trim()), `${name} shows "${mark}" for who has it`);
+		const plate = lines.find((l) => l[0] === 'Plate-Left.SLDPRT');
+		expect(plate && /Checked out by Maria Lopez on LAB-PC-07$/.test(plate[1]), 'Plate-Left does not say Maria has it');
+		const gearbox = lines.find((l) => l[0] === 'Gearbox.SLDASM');
+		expect(gearbox && /Checked out by you$/.test(gearbox[1]), 'Gearbox does not say I have it');
+		const avail = await page.$$eval('.row-avail', (a) => a.length);
+		const chips = await page.$$eval('.chip.who', (c) => c.filter((x) => /Available/.test(x.textContent)).length);
+		expect(avail > 0 && chips === 0, 'Available is a chip, not plain meta text');
+	});
+	await flow('notice list opens and closes', size, 'groupedNotices', async (page, expect) => {
+		const k = '[data-key="nt-expand-nameShared"]';
+		expect((await page.getAttribute(k, 'aria-expanded')) === 'false', 'the list starts open');
+		await page.click(k);
+		await settle(page);
+		expect((await page.getAttribute(k, 'aria-expanded')) === 'true', 'the list did not open');
+		const rows = await page.$$eval('.attn-card[data-kind="nameShared"] .vrow', (r) => r.length);
+		expect(rows > 0 && rows <= 14, `the open list draws ${rows} rows`);
+		const f = await page.evaluate(() => document.activeElement.getAttribute('data-key'));
+		expect(f === 'nt-expand-nameShared', `opening the list moved focus to ${f}`);
+		await page.click(k);
+		await settle(page);
+		expect(!(await page.$('.attn-card[data-kind="nameShared"] .vrow')), 'the list did not close');
+		const kinds = await page.$$eval('.attn-card', (c) => c.map((x) => x.getAttribute('data-kind')));
+		expect(new Set(kinds).size === kinds.length, 'two cards of one kind: ' + kinds.join(', '));
+		const said = await page.evaluate(() => document.body.innerText);
+		expect(!/SolidWorks year not checked/i.test(said), 'SolidWorks year not checked shows on Home');
+	});
+	await flow('folders: in, deeper, and back out', size, 'synced', async (page, expect) => {
+		await page.click('[data-key="row-dir:Drivetrain"]');
+		await settle(page);
+		expect((await text(page, '.crumb-here')) === 'Drivetrain', `went into ${await text(page, '.crumb-here')}`);
+		expect(!!(await page.$('[data-key="row-f-wheel-hub"]')), 'Drivetrain does not list Wheel-Hub');
+		await page.click('[data-key="row-dir:Drivetrain/Gearbox"]');
+		await settle(page);
+		expect(/^Robot 2027\s*›\s*Drivetrain\s*›\s*Gearbox$/.test(await text(page, '.crumbs')), `the crumbs say ${await text(page, '.crumbs')}`);
+		await page.click('[data-key="crumb-"]');
+		await settle(page);
+		expect((await text(page, '.crumb-here')) === 'Robot 2027', `the top crumb went to ${await text(page, '.crumb-here')}`);
+		const keys = await page.$$eval('.folder-keys button', (b) => b.map((x) => x.getAttribute('data-key')));
+		expect(!keys.includes('fk-rename') && !keys.includes('fk-delete'), 'the project folder offers Rename or Delete');
+	});
+	await flow('select, check out, let go', size, 'checkedOutByOther', async (page, expect) => {
+		await page.click('[data-key="sel-f-plate-right"]');
+		await settle(page);
+		await page.click('[data-key="sel-f-wheel-hub"]', { modifiers: ['Shift'] });
+		await settle(page);
+		expect((await text(page, '.sel-count')) === '2 selected', `the bar says ${await text(page, '.sel-count')}`);
+		const on = await page.$$eval('.sel-key[aria-checked="true"]', (k) => k.map((x) => x.getAttribute('data-key')));
+		expect(on.join() === 'sel-f-plate-right,sel-f-wheel-hub', `selected ${on.join(', ')}`);
+		await page.click('[data-key="sel-out"]');
+		await settle(page);
+		expect((await text(page, '#result-word')) === 'Checked out 2 files.', `the result line says "${await text(page, '#result-word')}"`);
+		expect((await page.getAttribute('#result', 'data-on')) === 'true', 'the result line did not show');
+		expect(/Checked out by you$/.test(await text(page, 'li.row:has([data-key="row-f-wheel-hub"]) .chip.who')), 'Wheel-Hub does not say I have it now');
+		await page.keyboard.press('Escape');
+		await settle(page);
+		expect(!(await page.$('.sel-bar')), 'Escape did not let go of the selection');
+	});
+	await flow('folder dialog: refuses a bad name, renames, follows', size, 'checkedOutByOther', async (page, expect) => {
+		await page.click('[data-key="fk-rename"]');
+		await settle(page);
+		expect(await page.evaluate(() => document.getElementById('ask').open), 'Rename folder did not ask');
+		expect((await page.inputValue('#ask-name')) === 'Drivetrain', 'the field does not start with the name');
+		await page.fill('#ask-name', 'Drive/train');
+		await page.click('[data-key="ask-ok"]');
+		await settle(page);
+		expect(/can't use/.test(await text(page, '#ask-error')), `a slash was not refused: "${await text(page, '#ask-error')}"`);
+		await page.fill('#ask-name', 'Chassis');
+		await page.keyboard.press('Enter');
+		await settle(page);
+		expect(!(await page.evaluate(() => document.getElementById('ask').open)), 'Enter did not rename');
+		expect((await text(page, '#result-word')) === 'Renamed Drivetrain to Chassis.', `the result says "${await text(page, '#result-word')}"`);
+		expect((await text(page, '.crumb-here')) === 'Chassis', `after the rename the list shows ${await text(page, '.crumb-here')}`);
+		await page.click('[data-key="fk-delete"]');
+		await settle(page);
+		const words = await text(page, '#ask-words');
+		expect(/the 8 files in it/.test(words) && /history of every file is kept/.test(words), `Delete folder says "${words}"`);
+		await page.keyboard.press('Escape');
+		await settle(page);
+		const f = await page.evaluate(() => document.activeElement.getAttribute('data-key'));
+		expect(f === 'fk-delete', `closing the dialog put focus on ${f}`);
+	});
+	await flow('5,000 files stay windowed', size, 'bigProject', async (page, expect) => {
+		const drawn = () => page.$$eval('.vrow', (r) => r.length);
+		let n = await drawn();
+		expect(n < 150, `${n} rows are drawn for 5,000 files`);
+		expect((await page.getAttribute('#vl-browser', 'data-total')) === '5000', 'the list does not know its 5,000 files');
+		expect(/^4,9\d\d more files below$/.test(await text(page, '#recess-cue .cue-word, #window-cue .cue-word')) || size.w < 761, `the cue says "${await text(page, '#recess-cue .cue-word')}"`);
+		await toBottom(page);
+		await settle(page);
+		await settle(page);
+		const last = await page.$eval('#vl-browser', (ul) => {
+			const rows = ul.querySelectorAll('.vrow');
+			return rows.length ? rows[rows.length - 1].getAttribute('data-i') : null;
+		});
+		expect(last === '4999', `scrolled to the bottom, the last row drawn is ${last}`);
+		n = await drawn();
+		expect(n < 150, `${n} rows are drawn at the bottom`);
+		await page.focus('#vl-browser [data-rove="row"][tabindex="0"]');
+		await page.keyboard.press('Home');
+		await settle(page);
+		const at = () => page.evaluate(() => (document.activeElement.closest('li[data-i]') || { getAttribute: () => null }).getAttribute('data-i'));
+		expect((await at()) === '0', `Home went to row ${await at()}`);
+		await page.keyboard.press('ArrowDown');
+		await page.keyboard.press('ArrowDown');
+		expect((await at()) === '2', `two downs went to row ${await at()}`);
+		await page.keyboard.press('End');
+		await settle(page);
+		expect((await at()) === '4999', `End went to row ${await at()}`);
+		const vis = await page.evaluate(() => {
+			const r = document.activeElement.getBoundingClientRect();
+			return r.top >= 0 && r.bottom <= innerHeight;
+		});
+		expect(vis, 'the last row is focused but out of sight');
+		n = await drawn();
+		expect(n < 150, `${n} rows are drawn after End`);
+		const tabbable = await page.$$eval('#vl-browser [data-rove]:not([tabindex="-1"])', (k) => new Set(k.map((x) => x.closest('li').getAttribute('data-i'))).size);
+		expect(tabbable === 1, `${tabbable} rows are in the Tab order, not one`);
 	});
 	await flow('settings sheet', size, 'synced', async (page, expect) => {
 		await page.click('[data-key="hdr-settings"]');
@@ -744,7 +918,7 @@ for (const size of SIZES) {
 		expect(f === 'hdr-settings', `closing put focus on ${f}`);
 	});
 	await flow('settings from detail is over Home', size, 'synced', async (page, expect) => {
-		await page.click('[data-key="mine-f-gearbox"]');
+		await page.click('[data-key="row-mine:f-gearbox"]');
 		await page.waitForSelector('.history-list');
 		await page.click('[data-key="hdr-settings"]');
 		await settle(page);
@@ -762,9 +936,10 @@ for (const size of SIZES) {
 		await settle(page);
 		expect(/All saved/i.test(await page.textContent('.status-group .screen')), 'Resume did not come back');
 	});
-	await flow('nothing to pause while offline', size, 'offline', async (page, expect) => {
+	await flow('nothing to pause while offline', size, 'offlineWaiting', async (page, expect) => {
 		expect(!(await page.$('[data-key="sync-toggle"]')), 'Pause is offered while offline');
 		expect(/Offline/i.test(await page.textContent('.status-group .screen')), 'the status does not say Offline');
+		expect(/waiting to upload/.test(await text(page, '#act-panel')), 'waiting files are not in Right now');
 	});
 	await flow('a folder of my own', size, 'vaultOwnedByOther', async (page, expect) => {
 		const label = (await page.textContent('[data-key="cn-own"]')).trim();
@@ -787,11 +962,69 @@ for (const size of SIZES) {
 	});
 }
 
+/* --------------------------------------------------------------- Logo */
+
+// The IDEA gear turns like ideabosco.com's (AnimatedLogo.svelte): idea-gear-spin, 24s,
+// linear, infinite, only when motion is allowed; still under reduced motion; both layers
+// painted either way; the gear 46.95% of the mark's width. A planted change of speed must
+// be caught first, or the probe proves nothing.
+tally.logo = 0;
+tally.logoFailures = 0;
+async function logoProbe(state, sel, motion, plant) {
+	const c = { screen: state === 'signedOut' ? 'connect' : 'home', state, size: SIZES[0] };
+	const { context, page } = await openPage(browser, c, 'idea', { reducedMotion: motion, bypassCSP: !!plant });
+	if (plant) await page.addStyleTag({ content: plant });
+	const r = await page.$eval(sel, (el) => {
+		const g = getComputedStyle(el, '::before');
+		const p = getComputedStyle(el, '::after');
+		return {
+			name: g.animationName,
+			dur: g.animationDuration,
+			timing: g.animationTimingFunction,
+			count: g.animationIterationCount,
+			gearOpacity: g.opacity,
+			plateOpacity: p.opacity,
+			gearShown: g.content !== 'none' && g.display !== 'none' && g.visibility !== 'hidden',
+			plateShown: p.content !== 'none' && p.display !== 'none' && p.visibility !== 'hidden',
+			gearArt: /url\(/.test(g.backgroundImage),
+			plateArt: /url\(/.test(p.backgroundImage),
+			share: parseFloat(g.width) / el.getBoundingClientRect().width
+		};
+	});
+	await context.close();
+	const found = [];
+	if (motion === 'no-preference') {
+		if (r.name !== 'idea-gear-spin' || r.dur !== '24s' || r.timing !== 'linear' || r.count !== 'infinite') found.push(`the gear turns as ${r.name} ${r.dur} ${r.timing} ${r.count}, not idea-gear-spin 24s linear infinite`);
+	} else if (r.name !== 'none') found.push(`the gear turns (${r.name}) under reduced motion`);
+	if (r.gearOpacity !== '1' || r.plateOpacity !== '1' || !r.gearShown || !r.plateShown || !r.gearArt || !r.plateArt) found.push('a layer of the mark is hidden or unpainted');
+	if (Math.abs(r.share - 0.4695) > 0.005) found.push(`the gear is ${r.share.toFixed(4)} of the mark's width, not 0.4695`);
+	return found;
+}
+for (const motion of ['no-preference', 'reduce']) {
+	for (const [state, sel] of [
+		['synced', '.plate-header .wordmark'],
+		['signedOut', '.wordmark-hero']
+	]) {
+		tally.logo++;
+		for (const f of await logoProbe(state, sel, motion, null)) {
+			tally.logoFailures++;
+			problem('logo', `${state} ${motion}`, f);
+		}
+	}
+}
+{
+	const caught = await logoProbe('synced', '.plate-header .wordmark', 'no-preference', '.wordmark::before { animation-duration: 3s !important; }');
+	tally.logoPlanted = caught.length ? 1 : 0;
+	if (!caught.length) problem('logo', 'planted', 'a gear planted at 3s a turn was not caught');
+}
+
 /* ------------------------------------------------------------- Bridge */
 
 // The page as WebView2 hosts it: a stand-in window.chrome.webview records every message
-// the page posts and delivers the host's. Each page-to-host type must be sent, by the
-// control that should send it, with exactly the fields BRIDGE.md lists.
+// the page posts (and the files a drop sends with postMessageWithAdditionalObjects) and
+// delivers the host's. Each page-to-host type must be sent, by the control that should
+// send it, with exactly the fields BRIDGE.md lists; an action carries its requestId.
+const ACT = ['requestId'];
 const CONTRACT = {
 	ready: [],
 	connect: [],
@@ -801,7 +1034,18 @@ const CONTRACT = {
 	resume: [],
 	openVault: [],
 	openFile: ['fileId'],
+	launchFile: ['path', ...ACT],
 	showInFolder: ['path'],
+	checkOut: ['paths', 'open', ...ACT],
+	checkIn: ['paths', ...ACT],
+	undoCheckOut: ['paths', ...ACT],
+	takeBack: ['fileId', ...ACT],
+	createFolder: ['projectId', 'parent', 'name', ...ACT],
+	renameFolder: ['projectId', 'folder', 'newName', ...ACT],
+	deleteFolder: ['projectId', 'folder', ...ACT],
+	addFiles: ['projectId', 'folder', ...ACT],
+	dropFiles: ['projectId', 'folder', ...ACT],
+	dismissNotice: ['key'],
 	saveSettings: ['vaultRoot', 'startAtSignIn', 'theme'],
 	chooseVaultRoot: []
 };
@@ -823,7 +1067,9 @@ tally.bridgeTypes = 0;
 			webview: {
 				addEventListener: (n, f) => t.addEventListener(n, f),
 				removeEventListener: (n, f) => t.removeEventListener(n, f),
-				postMessage: (m) => window.__sent.push(JSON.parse(JSON.stringify(m)))
+				postMessage: (m) => window.__sent.push(JSON.parse(JSON.stringify(m))),
+				postMessageWithAdditionalObjects: (m, objects) =>
+					window.__sent.push(Object.assign(JSON.parse(JSON.stringify(m)), { __files: Array.prototype.map.call(objects, (f) => f.name) }))
 			}
 		};
 		window.__host = (m) => t.dispatchEvent(new MessageEvent('message', { data: m }));
@@ -840,8 +1086,8 @@ tally.bridgeTypes = 0;
 		};
 		const view = (name, patch) => Object.assign(JSON.parse(JSON.stringify(demo.states[name].view)), patch || {});
 		const all = [];
-		const click = async (sel) => {
-			await page.click(sel);
+		const click = async (sel, opts) => {
+			await page.click(sel, opts);
 			await page.waitForTimeout(40);
 			const m = await take();
 			all.push(...m);
@@ -851,7 +1097,11 @@ tally.bridgeTypes = 0;
 		all.push(...first);
 		expect(first.length === 1 && first[0].type === 'ready', 'the first message was not ready: ' + JSON.stringify(first));
 		expect(!requests.some((u) => /demo\/states\.js/.test(u)), 'the demo states loaded inside WebView2');
+		const lists = await page.evaluate(() => window.ArmoryBridge.PAGE_TO_HOST.slice());
+		expect(lists.slice().sort().join() === Object.keys(CONTRACT).sort().join(), 'bridge.js PAGE_TO_HOST is not the list this check knows: ' + lists.join(', '));
 
+		const GEARBOX = 'Robot 2027/Drivetrain/Gearbox.SLDASM';
+		const HUB = 'Robot 2027/Drivetrain/Wheel-Hub.SLDPRT';
 		await host({ type: 'view', view: view('synced', { effectiveTheme: 'spaceWhite' }) });
 		expect((await page.getAttribute('html', 'data-theme')) === 'spaceWhite', 'effectiveTheme spaceWhite was not worn');
 		expect((await page.getAttribute('body', 'data-screen')) === 'home', 'a signed-in view did not show Home');
@@ -859,21 +1109,141 @@ tally.bridgeTypes = 0;
 		expect(m.type === 'openVault', 'Open Armory folder sent ' + JSON.stringify(m));
 		m = await click('[data-key="sync-toggle"]');
 		expect(m.type === 'pause', 'Pause sent ' + JSON.stringify(m));
-		m = await click('[data-key="mine-folder-f-gearbox"]');
-		expect(m.type === 'showInFolder' && m.path === 'Robot 2027/Drivetrain/Gearbox.SLDASM', 'a My files folder key sent ' + JSON.stringify(m));
+		m = await click('[data-key="open-mine:f-gearbox"]');
+		expect(m.type === 'launchFile' && m.path === GEARBOX && !!m.requestId, 'a My files Open key sent ' + JSON.stringify(m));
+		m = await click('[data-key="in-mine:f-gearbox"]');
+		expect(m.type === 'checkIn' && m.paths.join() === GEARBOX, 'a My files Check in key sent ' + JSON.stringify(m));
+
+		// Into Drivetrain: select a file, Check out; select mine, Undo check out.
+		await click('[data-key="row-dir:Drivetrain"]');
+		expect((await page.textContent('.crumb-here')).trim() === 'Drivetrain', 'a folder row did not open the folder');
+		await click('[data-key="sel-f-wheel-hub"]');
+		m = await click('[data-key="sel-out"]');
+		expect(m.type === 'checkOut' && m.paths.join() === HUB && m.open === false, 'select then Check out sent ' + JSON.stringify(m));
+		await click('[data-key="sel-clear"]');
+		await click('[data-key="sel-f-gearbox"]');
+		m = await click('[data-key="sel-undo"]');
+		expect(m.type === 'undoCheckOut' && m.paths.join() === GEARBOX, 'Undo check out sent ' + JSON.stringify(m));
+		await click('[data-key="sel-clear"]');
+		m = await click('[data-key="fk-out"]');
+		expect(m.type === 'checkOut' && m.paths.join() === 'Robot 2027/Drivetrain', 'Check out all sent ' + JSON.stringify(m));
+		m = await click('[data-key="fk-in"]');
+		expect(m.type === 'checkIn' && m.paths.join() === 'Robot 2027/Drivetrain', 'Check in all sent ' + JSON.stringify(m));
+
+		// The folder dialog: a host view while typing keeps the typed name.
+		await click('[data-key="fk-new"]');
+		await page.fill('#ask-name', 'Brackets');
+		await host({ type: 'view', view: view('synced') });
+		expect((await page.inputValue('#ask-name')) === 'Brackets' && (await page.evaluate(() => document.getElementById('ask').open)), 'a host view lost the folder name being typed');
+		m = await click('[data-key="ask-ok"]');
+		expect(m.type === 'createFolder' && m.projectId === 'proj-robot-2027' && m.parent === 'Drivetrain' && m.name === 'Brackets', 'New folder sent ' + JSON.stringify(m));
+		await click('[data-key="fk-rename"]');
+		await page.fill('#ask-name', 'Chassis');
+		m = await click('[data-key="ask-ok"]');
+		expect(m.type === 'renameFolder' && m.folder === 'Drivetrain' && m.newName === 'Chassis', 'Rename folder sent ' + JSON.stringify(m));
+		await click('[data-key="fk-delete"]');
+		m = await click('[data-key="ask-ok"]');
+		expect(m.type === 'deleteFolder' && m.folder === 'Drivetrain', 'Delete folder sent ' + JSON.stringify(m));
+		m = await click('[data-key="fk-add"]');
+		expect(m.type === 'addFiles' && m.folder === 'Drivetrain', 'Add files sent ' + JSON.stringify(m));
+
+		// Files dropped from File Explorer go with the message, as WebView2 objects.
+		const dropped = await page.evaluate(() => {
+			const zone = document.querySelector('[data-drop]');
+			const dt = new DataTransfer();
+			dt.items.add(new File(['x'], 'Bracket-2.SLDPRT'));
+			dt.items.add(new File(['y'], 'Bracket-3.SLDPRT'));
+			zone.dispatchEvent(new DragEvent('dragover', { dataTransfer: dt, bubbles: true, cancelable: true }));
+			const painted = zone.getAttribute('data-drag');
+			zone.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }));
+			return { painted, after: zone.getAttribute('data-drag') };
+		});
+		expect(dropped.painted === 'true' && dropped.after === 'false', 'holding files over the list did not paint it: ' + JSON.stringify(dropped));
+		m = (await take())[0] || {};
+		all.push(m);
+		expect(m.type === 'dropFiles' && m.folder === 'Drivetrain' && (m.__files || []).join() === 'Bracket-2.SLDPRT,Bracket-3.SLDPRT', 'a drop sent ' + JSON.stringify(m));
+
+		// An 'activity' message patches the panel and the status line, and nothing else.
+		await page.evaluate(() => {
+			const r = document.getElementById('recess-scroll');
+			r.scrollTop = 140;
+		});
+		await page.focus('[data-key="row-f-plate-left"]');
+		const before = await page.evaluate(() => {
+			window.__row = document.activeElement;
+			const r = document.getElementById('recess-scroll');
+			return { top: r.scrollTop, y: document.activeElement.getBoundingClientRect().top };
+		});
+		const busy = JSON.parse(JSON.stringify(demo.states.transferring.view.activity));
+		await host({ type: 'activity', activity: busy });
+		let after = await page.evaluate(() => ({
+			same: document.activeElement === window.__row,
+			top: document.getElementById('recess-scroll').scrollTop,
+			y: document.activeElement.getBoundingClientRect().top,
+			line: document.getElementById('sync-line').textContent,
+			shown: !document.getElementById('activity-group').hidden,
+			bars: document.querySelectorAll('#act-panel .track').length
+		}));
+		expect(after.same, 'an activity message moved focus');
+		expect(Math.abs(after.y - before.y) < 1, `an activity message moved the focused row on screen (${before.y} to ${after.y})`);
+		expect(after.shown && after.bars === 9, `Right now did not show its 3 directions and 6 files (${after.bars} tracks)`);
+		expect(after.line.replace(/\u00a0/g, ' ') === busy.line, `the status line says "${after.line}", not the activity line`);
+		const steady = { top: after.top, y: after.y };
+		busy.download.filesDone = 640;
+		busy.download.bytesDone += 200000000;
+		busy.active[0].bytesDone = busy.active[0].bytesTotal;
+		await host({ type: 'activity', activity: busy });
+		after = await page.evaluate(() => ({
+			same: document.activeElement === window.__row,
+			top: document.getElementById('recess-scroll').scrollTop,
+			y: document.activeElement.getBoundingClientRect().top,
+			count: document.querySelector('.act-dir[data-direction="download"] .act-count').textContent,
+			full: document.querySelector('.act-file .track-fill').style.width
+		}));
+		expect(after.same && after.top === steady.top && after.y === steady.y, 'a second activity message moved focus or scroll: ' + JSON.stringify(after));
+		expect(after.count.replace(/\u00a0/g, ' ') === '640 of 1,280 files' && after.full === '100%', 'the panel did not patch its numbers: ' + JSON.stringify(after));
+
+		// An actionResult is a quiet line, never an alert or a focus change.
+		await host({ type: 'actionResult', requestId: 'r9', ok: false, message: 'Close Plate-Left.SLDPRT in SolidWorks first.' });
+		const said = await page.evaluate(() => ({ words: document.getElementById('result-word').textContent, on: document.getElementById('result').getAttribute('data-on'), same: document.activeElement === window.__row }));
+		expect(said.words === 'Close Plate-Left.SLDPRT in SolidWorks first.' && said.on === 'true' && said.same, 'an actionResult did not show quietly: ' + JSON.stringify(said));
+
+		// File detail from host messages alone.
 		m = await click('[data-key="row-f-wheel-hub"]');
 		expect(m.type === 'openFile' && m.fileId === 'f-wheel-hub', 'a row sent ' + JSON.stringify(m));
 		expect((await page.getAttribute('body', 'data-screen')) === 'detail', 'a row did not move the view to detail');
 		await host({ type: 'fileDetail', detail: demo.detailFor('synced', 'f-wheel-hub') });
 		expect((await page.$$('.history-list > li')).length === 5, 'fileDetail did not render its history');
+		m = await click('[data-key="d-checkout"]');
+		expect(m.type === 'checkOut' && m.paths.join() === HUB && m.open === false, 'detail Check out sent ' + JSON.stringify(m));
+		m = await click('[data-key="d-checkout-open"]');
+		expect(m.type === 'checkOut' && m.open === true, 'Check out and open sent ' + JSON.stringify(m));
+		m = await click('[data-key="d-open"]');
+		expect(m.type === 'launchFile' && m.path === HUB, 'detail Open sent ' + JSON.stringify(m));
 		m = await click('[data-key="show-in-folder"]');
-		expect(m.type === 'showInFolder' && m.path === 'Robot 2027/Drivetrain/Wheel-Hub.SLDPRT', 'detail Show in folder sent ' + JSON.stringify(m));
+		expect(m.type === 'showInFolder' && m.path === HUB, 'detail Show in folder sent ' + JSON.stringify(m));
 		await host({ type: 'fileDetail', detail: demo.detailFor('synced', 'f-bracket') });
 		expect((await page.textContent('#detail-title')).trim() === 'Wheel-Hub.SLDPRT', 'a fileDetail for another file replaced the open one');
 		await host({ type: 'view', view: view('synced') });
 		expect((await page.getAttribute('body', 'data-screen')) === 'detail', 'a new view threw the open detail away');
 		expect((await page.getAttribute('html', 'data-theme')) === 'idea', 'effectiveTheme idea was not worn');
 		await click('[data-key="back"]');
+
+		// Take back, as a CAD lead, after the question.
+		await host({ type: 'view', view: view('takeBack') });
+		m = await click('[data-key="row-f-plate-left"]');
+		await host({ type: 'fileDetail', detail: demo.detailFor('takeBack', 'f-plate-left') });
+		await click('[data-key="d-takeback"]');
+		expect(/Any changes Maria hasn't checked in are kept/.test(await page.textContent('#ask-words')), 'Take back does not say what happens to Maria\'s changes');
+		m = await click('[data-key="ask-ok"]');
+		expect(m.type === 'takeBack' && m.fileId === 'f-plate-left', 'Take back sent ' + JSON.stringify(m));
+		await click('[data-key="back"]');
+
+		// A notice's action.
+		await host({ type: 'view', view: view('importSummary') });
+		m = await click('[data-key="nt-act-import"]');
+		expect(m.type === 'dismissNotice' && m.key === 'import', 'the import summary\'s Done sent ' + JSON.stringify(m));
+
 		await click('[data-key="hdr-settings"]');
 		m = await click('[data-key="set-root"]');
 		expect(m.type === 'chooseVaultRoot', 'Change sent ' + JSON.stringify(m));
@@ -884,17 +1254,14 @@ tally.bridgeTypes = 0;
 		await page.keyboard.press('Escape');
 		m = await click('[data-key="signout"]');
 		expect(m.type === 'signOut', 'Sign out sent ' + JSON.stringify(m));
-		const quiet = view('offline');
+		const quiet = view('offlineWaiting');
 		quiet.sync.detail = null;
 		await host({ type: 'view', view: quiet });
-		const said = ((await page.textContent('.status-group .sync-detail').catch(() => '')) || '').replace(/\s+/g, ' ').trim();
-		expect(said === '3 changes are waiting to send.', `with no detail sentence, pendingCount 3 read "${said}"`);
-		await host({ type: 'view', view: view('paused') });
+		const pending = ((await page.textContent('.status-group .sync-detail').catch(() => '')) || '').replace(/\s+/g, ' ').trim();
+		expect(pending === '3 files are waiting to upload.', `with no detail sentence, pendingCount 3 read "${pending}"`);
+		await host({ type: 'view', view: view('pausedWaiting') });
 		m = await click('[data-key="sync-toggle"]');
 		expect(m.type === 'resume', 'Resume sent ' + JSON.stringify(m));
-		await host({ type: 'view', view: view('conflict') });
-		m = await click('[data-key="attn-open-0"]');
-		expect(m.type === 'openFile' && m.fileId === 'f-plate-left', 'a Needs-you key sent ' + JSON.stringify(m));
 		await host({ type: 'view', view: view('signedOut') });
 		expect((await page.getAttribute('body', 'data-screen')) === 'connect', 'a signed-out view did not show Connect');
 		m = await click('[data-key="cn-connect"]');
@@ -916,11 +1283,13 @@ tally.bridgeTypes = 0;
 				fails.push('sent a type BRIDGE.md does not have: ' + x.type);
 				continue;
 			}
-			const keys = Object.keys(x).filter((k) => k !== 'type').sort();
+			const keys = Object.keys(x)
+				.filter((k) => k !== 'type' && k !== '__files')
+				.sort();
 			if (keys.join() !== [...want].sort().join()) fails.push(`${x.type} carried {${keys.join(', ')}}, BRIDGE.md gives {${want.join(', ')}}`);
 		}
 		const types = new Set(all.map((x) => x.type));
-		tally.bridgeTypes = types.size;
+		tally.bridgeTypes = [...types].filter((t) => CONTRACT[t]).length;
 		for (const t of Object.keys(CONTRACT)) if (!types.has(t)) fails.push('never sent ' + t);
 		expect(!requests.some((u) => /^https?:/i.test(u)), 'a request left file://');
 	} catch (e) {
@@ -963,7 +1332,7 @@ console.log(
 		`grids=${tally.grids} rowGrids=${tally.rowGrids} plantedGridLayersFound=${tally.gridControl ?? 0}/3 rowDecoration=${tally.rowDecoration} ` +
 		`chipsLikeButtons=${tally.chipsLikeButtons} overflow=${tally.overflow} hairlines=${tally.hairlines} hairlineMin=${fmt(tally.hairlineMin)} ` +
 		`hairlineUnder3=${tally.hairlineUnder3} tabStops=${tally.tabStops} focusMissed=${tally.focusMissed} ringMin=${fmt(tally.ringMin)} ` +
-		`ringFailures=${tally.ringFailures} jargon=${tally.jargon} offline=${tally.offline} plantedOfflineFound=${tally.offlinePlanted}/5 flows=${tally.flows} flowFailures=${tally.flowFailures} bridgeTypes=${tally.bridgeTypes}/11 bridgeFailures=${tally.bridgeFailures} plantedDefectsCaught=${tally.controlsCaught}/${tally.controlsPlanted} emDash=${tally.emDash} files=${scanned.length}`
+		`ringFailures=${tally.ringFailures} jargon=${tally.jargon} offline=${tally.offline} plantedOfflineFound=${tally.offlinePlanted}/5 flows=${tally.flows} flowFailures=${tally.flowFailures} logo=${tally.logo} logoFailures=${tally.logoFailures} plantedLogoFound=${tally.logoPlanted}/1 bridgeTypes=${tally.bridgeTypes}/${Object.keys(CONTRACT).length} bridgeFailures=${tally.bridgeFailures} plantedDefectsCaught=${tally.controlsCaught}/${tally.controlsPlanted} emDash=${tally.emDash} files=${scanned.length}`
 );
 console.log(problems.length ? `CHECK-UI FAIL problems=${problems.length}` : 'CHECK-UI PASS');
 process.exit(problems.length ? 1 : 0);

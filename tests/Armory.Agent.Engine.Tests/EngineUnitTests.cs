@@ -90,6 +90,33 @@ public sealed class EngineUnitTests
         Assert.True(row.GetProperty("releaseNotChecked").GetBoolean());
         Assert.Equal("synced", row.GetProperty("status").GetString());
         Assert.True(v.GetProperty("settings").GetProperty("startAtSignIn").GetBoolean());
+
+        // The two v2 host messages (docs/agent/BRIDGE.md): what is moving right now, and the
+        // one answer to an action, with the names the page reads.
+        var activity = new ActivityView("Uploading 1 of 3 files, 48 MB left, about 20 sec",
+            new DirectionView(1, 3, 30, 78, 2, 20, "Uploading 1 of 3 files, 48 MB left, about 20 sec"), null,
+            new DirectionView(45, 120, 0, 0, 0, null, "Moving 120 files to Gearbox"),
+            new WaitingView(2, "2 checked-out files have changes. Check them in to share them."),
+            [new ActiveTransferView("Robot/Gearbox.SLDASM", "Gearbox.SLDASM", Directions.Upload, 12, 14)]);
+        using var a = JsonDocument.Parse(BridgeMessages.ActivityMessage(activity));
+        Assert.Equal("activity", a.RootElement.GetProperty("type").GetString());
+        var act = a.RootElement.GetProperty("activity");
+        foreach (var name in new[] { "line", "upload", "download", "move", "waiting", "active" })
+            Assert.True(act.TryGetProperty(name, out _), name);
+        Assert.Equal(JsonValueKind.Null, act.GetProperty("download").ValueKind);
+        foreach (var name in new[] { "filesDone", "filesTotal", "bytesDone", "bytesTotal", "bytesPerSecond", "secondsLeft", "line" })
+            Assert.True(act.GetProperty("upload").TryGetProperty(name, out _), name);
+        Assert.Equal(JsonValueKind.Null, act.GetProperty("move").GetProperty("secondsLeft").ValueKind);
+        Assert.Equal(2, act.GetProperty("waiting").GetProperty("count").GetInt32());
+        var moving = act.GetProperty("active")[0];
+        Assert.Equal("upload", moving.GetProperty("direction").GetString());
+        foreach (var name in new[] { "path", "name", "bytesDone", "bytesTotal" })
+            Assert.True(moving.TryGetProperty(name, out _), name);
+        using var r = JsonDocument.Parse(BridgeMessages.ActionResultMessage("r3", true, "Checked in Plate.SLDPRT."));
+        Assert.Equal(["type", "requestId", "ok", "message"], r.RootElement.EnumerateObject().Select(p => p.Name).ToArray());
+        Assert.Equal("actionResult", r.RootElement.GetProperty("type").GetString());
+        Assert.Equal("r3", r.RootElement.GetProperty("requestId").GetString());
+        Assert.True(r.RootElement.GetProperty("ok").GetBoolean());
     }
 
     private sealed class MemoryState : IEngineStateStore
