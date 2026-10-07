@@ -8,7 +8,9 @@ public sealed record LocalFile(VaultPath Path, string Hash, long Size, bool Read
 // Files excludes the platform's ignore list (Armory.Platform.Windows.VaultIgnore). Markers
 // are the vault-relative paths of "~$<name>" files, which SolidWorks creates beside a
 // document it has open (docs/spike/solidworks-lock-file.md). Problems never imply deletion.
-// Renames are moves the platform proved by file identity (NTFS file id); the engine also
+// Renames are moves the platform proved by file identity (NTFS file id), each From and each To
+// once, in an order that can be applied one by one where one exists (a rename onto a path that
+// another rename leaves comes after it; two files swapped have no such order); the engine also
 // recognizes a tracked file's exact bytes reappearing at one new path in the same project.
 // Folders are every vault-relative directory ("Robot 2027/Gearbox": forward slashes, no
 // leading or trailing slash, valid VaultPath segments), empty ones included, excluding the

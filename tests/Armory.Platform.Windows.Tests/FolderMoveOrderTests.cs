@@ -176,4 +176,26 @@ public sealed class FolderMoveOrderTests
         }
         Assert.True(moved > 1000, $"Only {moved} moves in all rounds: the generator is not exercising the order.");
     }
+    private static LocalRename Rename(string from, string to) => new(TestVault.PathValue(from), TestVault.PathValue(to), from);
+
+    // File renames come in an order that applies one by one: Plate to "Plate old", then
+    // "Plate v2" to Plate, although "Plate v2.txt" sorts before "Plate.txt". A case-only rename
+    // waits for nothing, and a swap is listed whole (it has no such order).
+    [Fact]
+    public void File_renames_come_in_an_order_that_can_be_applied()
+    {
+        var chain = LocalChangeDetector.RenameOrder([Rename("R/Plate.txt", "R/Plate old.txt"), Rename("R/Plate v2.txt", "R/Plate.txt"),
+            Rename("R/a.txt", "R/A.txt"), Rename("R/Plate v3.txt", "R/Plate v2.txt")]);
+        Assert.Equal([("R/a.txt", "R/A.txt"), ("R/Plate.txt", "R/Plate old.txt"), ("R/Plate v2.txt", "R/Plate.txt"), ("R/Plate v3.txt", "R/Plate v2.txt")],
+            chain.Select(r => (r.Before.Value, r.After.Value)));
+        var present = new HashSet<string>(["R/Plate.txt", "R/Plate v2.txt", "R/Plate v3.txt", "R/a.txt"], StringComparer.OrdinalIgnoreCase);
+        foreach (var rename in chain)
+        {
+            Assert.True(present.Remove(rename.Before.Value), rename.Before.Value);
+            Assert.True(present.Add(rename.After.Value), $"{rename.After.Value} is still taken");
+        }
+        var swap = LocalChangeDetector.RenameOrder([Rename("R/b.txt", "R/c.txt"), Rename("R/c.txt", "R/b.txt"), Rename("R/z.txt", "R/y.txt")]);
+        Assert.Equal(3, swap.Count);
+        Assert.Equal(["R/b.txt", "R/c.txt"], swap.Take(2).Select(r => r.Before.Value).Order(StringComparer.Ordinal));
+    }
 }
