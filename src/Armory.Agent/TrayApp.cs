@@ -90,7 +90,18 @@ internal sealed class TrayApp : ApplicationContext
         catch (InvalidOperationException) { }
     }
 
-    private void OnViewChanged(AgentView view) => Post(() => UpdateMenu(view));
+    private void OnViewChanged(AgentView view)
+    {
+        // The quiet check-out question outside the window (decision D13): files that closed may
+        // ask again when reopened, and the newest question gets one balloon while hidden.
+        var stillOpen = host.OpenWithoutCheckOut;
+        Post(() => UpdateMenu(view));
+        KeepCheckOutPromptsFor(stillOpen);
+        if (view.Prompt is { } prompt)
+            OfferCheckOut(prompt.Path, prompt.Name, prompt.CanCheckOut ? null
+                : prompt.Checkout.State == CheckoutStates.MyOtherComputer ? "you on " + (prompt.Checkout.Device ?? "another computer")
+                : (prompt.Checkout.Name ?? "someone else") + " on " + (prompt.Checkout.Device ?? "another computer"));
+    }
 
     private void OnUserPreferenceChanged(object? sender, UserPreferenceChangedEventArgs e)
     {

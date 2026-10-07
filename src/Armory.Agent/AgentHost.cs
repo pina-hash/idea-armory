@@ -106,24 +106,51 @@ internal sealed class AgentHost : IAsyncDisposable
 
     // The window's actions (docs/agent/BRIDGE.md, "Page to host"; v2-design.md 4.2 and 4.3).
     // Paths are vault-relative and already checked by the Bridge; a folder means every file
-    // under it. The engine lane gives SyncEngine these calls; until it does, each one says
-    // plainly that this version can't do it, so no action is ever dropped without a word.
-    internal Task<ActionResult> LaunchFileAsync(string path) => NotYet("open " + path);
-    internal Task<ActionResult> CheckOutAsync(IReadOnlyList<string> paths, bool open) => NotYet("check out " + paths.Count + (open ? " and open" : ""));
-    internal Task<ActionResult> CheckInAsync(IReadOnlyList<string> paths) => NotYet("check in " + paths.Count);
-    internal Task<ActionResult> UndoCheckOutAsync(IReadOnlyList<string> paths) => NotYet("undo check out " + paths.Count);
-    internal Task<ActionResult> TakeBackAsync(Guid fileId) => NotYet("take back " + fileId);
+    // under it. Each one goes to the engine, which answers with one plain sentence; the
+    // folder and add-file actions come with the engine's stage E2, and until then say plainly
+    // that this version can't do them, so no action is ever dropped without a word.
+    internal Task<ActionResult> LaunchFileAsync(string path) => OnEngineAsync("open", e => e.LaunchAsync(path));
+    internal Task<ActionResult> CheckOutAsync(IReadOnlyList<string> paths, bool open) => OnEngineAsync("check out", e => e.CheckOutAsync(paths, open));
+    internal Task<ActionResult> CheckInAsync(IReadOnlyList<string> paths) => OnEngineAsync("check in", e => e.CheckInAsync(paths));
+    internal Task<ActionResult> UndoCheckOutAsync(IReadOnlyList<string> paths) => OnEngineAsync("undo check out", e => e.UndoCheckOutAsync(paths));
+    internal Task<ActionResult> TakeBackAsync(Guid fileId) => OnEngineAsync("take back", e => e.TakeBackAsync(fileId));
     internal Task<ActionResult> CreateFolderAsync(Guid project, string parent, string name) => NotYet("new folder in " + project);
     internal Task<ActionResult> RenameFolderAsync(Guid project, string folder, string newName) => NotYet("rename a folder in " + project);
     internal Task<ActionResult> DeleteFolderAsync(Guid project, string folder) => NotYet("delete a folder in " + project);
     // sources: full paths on this computer (the file picker's, or the files dropped on the window).
     internal Task<ActionResult> AddFilesAsync(Guid project, string folder, IReadOnlyList<string> sources) => NotYet("add " + sources.Count + " files to " + project);
 
-    // A notice card's Done, or "prompt:<path>" for Not now on the check-out question.
-    internal void DismissNotice(string key)
+    // A notice card's Done or OK, or a check-out question's key ("prompt:<path>:<when>").
+    internal void DismissNotice(string key) => OnEngine("dismiss notice", e => e.DismissNotice(key));
+
+    // The open files this computer has not checked out (the tray's quiet balloons, D13).
+    internal IReadOnlyCollection<string> OpenWithoutCheckOut
     {
-        log.Info("window: dismiss notice, not in this engine yet");
-        RaiseView();
+        get
+        {
+            var engine = Volatile.Read(ref runtime)?.Engine;
+            try { return engine?.OpenWithoutCheckOut ?? []; }
+            catch (Exception error) when (error is not OutOfMemoryException) { LogEngineFailure("open files", error); return []; }
+        }
+    }
+
+    // Runs one window action on the engine, off the window's thread. An engine that is not
+    // running, or a failure, is a plain sentence, never silence.
+    private async Task<ActionResult> OnEngineAsync(string what, Func<SyncEngine, Task<ActionResult>> action)
+    {
+        var engine = Volatile.Read(ref runtime)?.Engine;
+        if (engine is null) return new ActionResult(false, runtimeProblem ?? "Armory is starting. Try again in a moment.");
+        try
+        {
+            var result = await Task.Run(() => action(engine)).ConfigureAwait(false);
+            log.Info("window: " + what + (result.Ok ? " done" : " refused"));
+            return result;
+        }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            LogEngineFailure(what, error);
+            return new ActionResult(false, "Armory couldn't do that. Try again in a moment.");
+        }
     }
 
     private Task<ActionResult> NotYet(string what)
