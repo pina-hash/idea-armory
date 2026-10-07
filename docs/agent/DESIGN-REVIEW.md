@@ -687,3 +687,166 @@ BBOX states=27 comparisons=66 differing=0 missing=0 elements=23188
 CHECK-UI pages=132 controls=3376 under44=0 network=0 grids=0 rowGrids=0 plantedGridLayersFound=3/3 rowDecoration=0 chipsLikeButtons=0 overflow=0 hairlines=2982 hairlineMin=3.07 hairlineUnder3=0 tabStops=1476 focusMissed=0 ringMin=4.69 ringFailures=0 jargon=0 offline=0 plantedOfflineFound=5/5 flows=28 flowFailures=0 logo=4 logoFailures=0 plantedLogoFound=1/1 bridgeTypes=22/22 bridgeFailures=0 plantedDefectsCaught=8/8 emDash=0 files=16
 CHECK-UI PASS
 ```
+
+## v2 review pass
+
+A fresh-eyes reviewer looked at the v2 window (the 132 renders, the page's code and the
+host's side) and listed 21 problems, 3 high and 6 medium. The design was then settled
+for each in `v2-design.md` section 7. This pass fixed every high and medium item and
+the cheap low ones, applied section 7, rendered every screen again (168 images now, 42
+screens and states) and looked at them. Each item says what was done. Where this pass
+differs from the v2 pass above (Pause sending, Not now sending nothing, My files holding
+files that aren't in Armory, the import title's ">"), this pass is current.
+
+Files changed: `src/Armory.Agent/wwwroot/` (app.js, app.css, bridge.js,
+demo/states.js), `src/Armory.Agent.Engine/View/AgentView.cs` (`PromptView.Key`, the
+`renameFile` message), `src/Armory.Agent/Bridge.cs` and `AgentHost.cs` (the
+`renameFile` case and call), `tests/Armory.Agent.Engine.Tests/EngineUnitTests.cs`,
+`tools/agent-ui/check-ui.mjs` and `render-screens.mjs`, `docs/agent/BRIDGE.md`, this
+file and the renders.
+
+### High
+
+1. **The page was built to the v2 view, the host side still v1.** Partly this lane's
+   to fix, partly the engine lane's, as expected. Done here: `Bridge.cs` has one case
+   and one message record per page-to-host type, `renameFile` included, each record
+   reading exactly the fields bridge.js sends, and every action is answered with one
+   `actionResult` (committed just before this pass, with four guards in
+   `tests/GUARDS.txt`). `PromptView` gained `Key` on both sides. What was missing was
+   the link from the demo to the host: check-ui now holds every demo view and file
+   detail to the JSDoc typedefs in bridge.js (exact fields, and only the words a union
+   such as `FileStatus` allows; a planted extra field, missing field and v1 status word
+   are caught), and `AgentViewContractTests` holds the C# records to the same typedefs,
+   so a field the demo invents fails one side or the other.
+   `EngineUnitTests.The_view_serializes_with_the_bridge_field_names` was changed (not
+   removed) to check the question's serialized names too. The page also no longer
+   throws on a view that leaves `checkout` out: a row without one reads as Available,
+   so a v1 view from the current engine draws Home (checked with a v1-shaped view
+   through a stand-in WebView2) instead of a blank window. **Left to the engine lane:**
+   `AgentView`'s own v1 records (NeedsMe, `Holder`, the v1 `FileStatuses` names); the
+   guard `The_host_view_records_have_the_fields_bridge_js_documents` names exactly the
+   eight records allowed to differ until then and fails once they no longer need to.
+   Reading `AdditionalObjects` in `MainWindow` is the Windows lane's.
+2. **Check out all took a whole project in one click.** Fixed. It asks first, in the
+   small dialog, with the count and what it means: "Check out 16 files in Robot 2027
+   and its folders? Nobody else can save them until you check them in. 1 other file is
+   checked out by someone else, and stays with them." The question starts on Cancel
+   (Enter cancels) and its key is not the green primary. A project's top folder is
+   allowed only through it (section 7). New render: `home-checkOutAll`.
+3. **Per-file noise in My files.** Fixed as section 7 settles it: My files is the files
+   this computer has checked out, in every project, an archived one too, and nothing
+   else. A file that isn't in Armory is never a row there; the notices say what became
+   of it, and it sits in its own folder in Team files ("Not in Armory", or "New, not
+   uploaded yet" for a new file that is only waiting). There is no Waiting to upload
+   tag on any row: how many wait is said once, by Right now, and the status display no
+   longer repeats it while Right now does. The import summary lists no files (the name
+   card lists the 13), so no file is named twice.
+
+### Medium
+
+4. **No recognizable way to check out.** Fixed. Every file row has one state key: Check
+   out when nobody has it, Check in when it is checked out here, nothing when someone
+   else has it (the row says who). It stands before Open, at one width, so Open keeps
+   one column down a list; at 560px and under both are icon keys with their words for
+   screen readers and in the tooltip. The select key always draws its box: an empty
+   recessed square, ticked and filled when picked.
+5. **The question's words were not true of SolidWorks.** Fixed with section 7's words:
+   "SolidWorks opened it read-only. Check it out, then close it in SolidWorks and open
+   it again here to save changes." Its key is Check out and reopen (`checkOut` with
+   `open: true`); the host asks for the file to be closed first while SolidWorks still
+   has it. File detail keeps Check out and open. **Not measured:** whether SolidWorks
+   saves once the read-only bit is cleared under an open document needs the Windows
+   machine; the words hold either way.
+6. **The check out line could be cut.** Fixed. Who has it comes first on the line, then
+   the state tag, the kind tag and the last check in. When the line is short of room
+   the last check in goes first, then the computer's name (ending in an ellipsis), and
+   the person's name last; the whole label is the tag's tooltip. Two sub-pixel cuts
+   ("Checked out by y...") were found and closed while doing it. The reviewer's names
+   ("Alexandra Montgomery-Whitfield on ENGINEERING-LAB-PC-27" beside Your copy kept,
+   "Maria Lopez on DESKTOP-7F3K2LQ" beside Newer version waiting) were drawn through a
+   stand-in host at both sizes: the person and the state tag stay, the computer gives
+   way.
+7. **The demo contradicted itself.** Fixed; every number on a screen now agrees.
+   `transferring`: a 1,276-file folder plus four changed team files make the 1,280
+   being downloaded, 412 of them here, so the ring reads 431 of 1,299; three files go
+   up, one done, too soon for a time left. `importSummary`: 4,987 added files and the
+   13 that share a name make 5,000 in the folder, and the ring reads all 5,010.
+   `offlineWaiting`: three files wait (two check outs with saves and a new file);
+   `pausedWaiting`: two.
+8. **The newer version card said "close it" and offered Open it.** Fixed. It has no
+   action now, and a card about one file gets See the file (its File detail), never a
+   list of one.
+9. **Fixing a shared name still went through File Explorer.** Fixed. Each file in the
+   name card has Rename, which asks in the small dialog with the name picked up to its
+   extension, refuses a name the project already has, a lost extension and a character
+   Windows forbids, then sends the new `renameFile` message. The row itself opens the
+   page of the file that already has the name ("See the Bracket.SLDPRT in Robot 2027 ›
+   Intake"), and the item's line says where that file is first ("The other one is in
+   Robot 2027 › Intake.") and may take two lines at 560px and under.
+
+### Low
+
+10. The Moving meta is the engine's line as given; the page never picks an engine
+    sentence apart (section 7).
+11. A save made while checked out reads like any save in the history (no amber, no
+    tag). My other computer is amber on rows and on File detail alike, the Checked out
+    card's disc included.
+12. Pause and Resume, in the window and in BRIDGE.md; the paused line is "Paused.
+    Nothing uploads or downloads until you resume." The tray already says Pause and
+    Resume on the Windows lane's branch, so `TrayApp.cs` was left alone here.
+13. The folder sign in engine sentences is " › ", as in the crumbs.
+14. The waiting count is said once (item 3).
+15. Seven new states and one more screen: `checkOutAll`, `renameFile`,
+    `partialCheckOut` (the answer at the foot: "Checked out 12 of 14 files. Maria Lopez
+    has 2 of them checked out."), `myOtherComputer` (row and detail), `emptyFolder`,
+    `moreNotices` (taken back, part checked in, can't read), `notHereYet` (detail), and
+    `transferring` on File detail (a file downloading).
+16. The drop cue lies over the list only; where you are and the folder's keys stay in
+    sight.
+17. The selection bar sits on the cards' own line.
+18. Check out all and Check in all keep their words at 560px and under; a long name
+    gives way in the middle, so its extension stays.
+19. An archived project's check outs stay in My files with Check in, and the archived
+    panel says how many and where.
+20. **Not done:** a dropped folder. Whether WebView2 hands the host a usable path for a
+    dropped directory needs a real WebView2; the contract's `dropFiles` carries
+    `projectId` and `folder` only, so walking the entries and sending their paths would
+    be a contract change. Left for the Windows lane's test on the machine.
+21. Not now sends the question's own key; it hides that one question, and the next
+    open of the file asks again.
+
+No finding was judged wrong. Two were true when written and fixed just before this
+pass (`Bridge.cs` dropping the new types, nothing serializing `activity` or
+`actionResult`).
+
+### Checker changes (none loosen a rule)
+
+- A demo shape check (above), with its planted control.
+- New flows at both sizes: a row's Check out and Check in, Open in one column and the
+  empty pick box; Check out all asks first, starts on Cancel and Cancel sends nothing;
+  My files is my check outs and "waiting to upload" is said once; one import summary
+  that agrees with the ring; Rename refuses a taken name and a lost extension, then
+  renames and the card counts one fewer; the question's words, keys and answer.
+- The stand-in WebView2 check sends all 23 page-to-host types, `renameFile` included;
+  Check out all goes through the dialog; Not now sends the question's key, the same
+  question stays hidden and a new open asks again; Right now and the status never both
+  say how many wait.
+
+### Proof
+
+```
+node tools/agent-ui/render-screens.mjs
+node tools/agent-ui/bbox-diff.mjs
+node tools/agent-ui/check-ui.mjs
+```
+
+```
+SCREENS rendered=168 removed_stale=132 dir=docs/agent/screens/v2 index=docs/agent/screens/v2/README.md
+BBOX planted control (home-synced-1280x800, one length in Space White): differing=190 (must be above 0)
+BBOX states=34 comparisons=84 differing=0 missing=0 elements=32984
+CHECK-UI pages=168 controls=5140 under44=0 network=0 grids=0 rowGrids=0 plantedGridLayersFound=3/3 rowDecoration=0 chipsLikeButtons=0 overflow=0 hairlines=4562 hairlineMin=3.07 hairlineUnder3=0 tabStops=1844 focusMissed=0 ringMin=4.69 ringFailures=0 jargon=0 offline=0 plantedOfflineFound=5/5 flows=40 flowFailures=0 logo=4 logoFailures=0 plantedLogoFound=1/1 bridgeTypes=23/23 bridgeFailures=0 plantedDefectsCaught=8/8 shapes=34 shapeFailures=0 plantedShapesFound=2/2 emDash=0 files=16
+CHECK-UI PASS
+```
+
+`AgentViewContractTests` (9 tests) and the view serialization test pass; each new
+contract field was shown to fail its test when planted wrong in bridge.js.
