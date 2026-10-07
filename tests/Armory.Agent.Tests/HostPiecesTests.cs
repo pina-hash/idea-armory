@@ -70,4 +70,57 @@ public sealed class HostPiecesTests
         foreach (var word in new[] { "sync", "lock", "vault", "conflict", "hash", "journal" })
             Assert.DoesNotContain(word, (title + text + taken + why).ToLowerInvariant());
     }
+
+    // v0.2.1: a run that ended without "stopped" (a stack overflow or a native crash, which no
+    // handler can log) is named by the next start, with its last pass line.
+    [Fact]
+    public void A_run_that_died_without_a_word_is_named_by_the_next_start()
+    {
+        Assert.Null(AgentLog.UncleanEnd([]));
+        Assert.Null(AgentLog.UncleanEnd(["2026-10-07T20:52:00.000Z started 0.2.1", "2026-10-07T20:53:00.000Z stopped"]));
+        Assert.Equal("2026-10-07T20:52:30.000Z pass: moving 2,014 of 2,014 files (loop)", AgentLog.UncleanEnd([
+            "2026-10-07T20:51:00.000Z started 0.2.1", "2026-10-07T20:51:30.000Z stopped",
+            "2026-10-07T20:52:00.000Z started 0.2.1", "2026-10-07T20:52:01.000Z vault runtime started at C:\\IDEA\\Armory",
+            "2026-10-07T20:52:30.000Z pass: moving 2,014 of 2,014 files (loop)", "2026-10-07T20:52:31.000Z window: open done"]));
+        Assert.Equal("2026-10-07T20:52:01.000Z session loaded for maria@school.org", AgentLog.UncleanEnd([
+            "2026-10-07T20:52:00.000Z started 0.2.1", "2026-10-07T20:52:01.000Z session loaded for maria@school.org"]));
+
+        var folder = Path.Combine(Path.GetTempPath(), "armory-log-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var first = new AgentLog(Path.Combine(folder, "agent.log"), Path.Combine(folder, "crash.log"));
+            Assert.Null(first.PreviousRunEndedUnexpectedly());
+            first.Info("started 0.2.1");
+            first.Info("pass: still going after 60 s, 400 downloaded, 0 uploaded so far (loop)");
+            var second = new AgentLog(Path.Combine(folder, "agent.log"), Path.Combine(folder, "crash.log"));
+            Assert.EndsWith("pass: still going after 60 s, 400 downloaded, 0 uploaded so far (loop)", second.PreviousRunEndedUnexpectedly());
+            second.Info("started 0.2.1");
+            second.Info("stopped");
+            Assert.Null(new AgentLog(Path.Combine(folder, "agent.log"), Path.Combine(folder, "crash.log")).PreviousRunEndedUnexpectedly());
+        }
+        finally { Directory.Delete(folder, true); }
+    }
+
+    // The crash handler never throws, even for an error that can't describe itself.
+    [Fact]
+    public void A_crash_line_is_written_even_when_the_error_cannot_describe_itself()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), "armory-log-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var log = new AgentLog(Path.Combine(folder, "agent.log"), Path.Combine(folder, "crash.log"));
+            log.Crash("engine", new Unprintable());
+            log.Crash("engine", null);
+            var lines = File.ReadAllLines(Path.Combine(folder, "agent.log"));
+            Assert.Equal(2, lines.Length);
+            Assert.Contains("crash in engine (details in crash.log): Unprintable", lines[0]);
+            Assert.Contains("could not be written", File.ReadAllText(Path.Combine(folder, "crash.log")));
+        }
+        finally { Directory.Delete(folder, true); }
+    }
+
+    private sealed class Unprintable : Exception
+    {
+        public override string ToString() => throw new InvalidOperationException("no words");
+    }
 }

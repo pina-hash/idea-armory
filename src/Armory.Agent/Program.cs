@@ -44,6 +44,9 @@ internal static class Program
         }
 
         var log = new AgentLog(paths.LogFile, paths.CrashFile);
+        // A run that died without a word (a stack overflow, a native crash, the power) says so
+        // in the next one, with the last thing it wrote about a pass.
+        if (log.PreviousRunEndedUnexpectedly() is { } lastWords) log.Info("previous run ended unexpectedly; its last line was: " + lastWords);
         AppDomain.CurrentDomain.UnhandledException += (_, e) => log.Crash("unhandled exception", e.ExceptionObject);
         TaskScheduler.UnobservedTaskException += (_, e) =>
         {
