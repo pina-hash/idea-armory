@@ -1254,23 +1254,40 @@ public sealed partial class SyncEngine : IAsyncDisposable
     private void PublishSoon()
     {
         if (!viewWanted || refreshing || !inPass) return;
-        var since = deps.Clock.GetElapsedTime(lastViewBuilt);
-        if (since >= ViewEvery)
+        if (deps.Clock.GetElapsedTime(lastViewBuilt) >= ViewEvery)
         {
             PublishLocked();
             return;
         }
         if (viewTimerSet) return;
         viewTimerSet = true;
-        _ = LaterAsync(ViewEvery - since);
-
-        async Task LaterAsync(TimeSpan wait)
-        {
-            await Task.Delay(wait);
-            viewTimerSet = false;
-            PublishSoon();
-        }
+        _ = PublishLaterAsync();
     }
+
+    // One timer at a time, as a loop. v0.2.0 called PublishSoon again from the timer: a timer
+    // that fired a fraction of a millisecond early (Windows timers often do, measured against
+    // the Stopwatch) asked Task.Delay for under a millisecond, which completes at once, and the
+    // two called each other until the stack overflowed and the process died without a word.
+    private async Task PublishLaterAsync()
+    {
+        try
+        {
+            while (true)
+            {
+                await Task.Delay(WaitBeforeNextView(deps.Clock.GetElapsedTime(lastViewBuilt)));
+                if (!viewWanted || refreshing || !inPass) return;
+                if (deps.Clock.GetElapsedTime(lastViewBuilt) < ViewEvery) continue;
+                PublishLocked();
+                return;
+            }
+        }
+        finally { viewTimerSet = false; }
+    }
+
+    // How long to wait before the next view: the rest of ViewEvery, in whole milliseconds and
+    // never less than one, so Task.Delay always really waits.
+    internal static TimeSpan WaitBeforeNextView(TimeSpan sinceLast)
+        => TimeSpan.FromMilliseconds(Math.Max(1, Math.Ceiling((ViewEvery - sinceLast).TotalMilliseconds)));
 
     private void PublishLocked()
     {

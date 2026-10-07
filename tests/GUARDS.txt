@@ -305,3 +305,4 @@ Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.ConcurrencyTests|Moving_files_reads_
 Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.ResponsivenessTests|A_check_out_answers_while_hundreds_of_files_download
 Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.ResponsivenessTests|Someone_elses_check_out_shows_during_a_long_download
 Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.ResponsivenessTests|A_check_in_answers_while_hundreds_of_files_upload
+Armory.Agent.Engine.Tests|Armory.Agent.Engine.Tests.StateAndActivityTests|The_view_timer_always_really_waits

@@ -433,6 +433,26 @@ public sealed class StateAndActivityTests
         Assert.True(done.Wait(TimeSpan.FromSeconds(5)));
     }
 
+    // v0.2.1, the field crash: a view timer that fired a fraction of a millisecond early asked
+    // Task.Delay for under a millisecond, which completes at once, and the timer and PublishSoon
+    // called each other until the stack overflowed. The wait is now always at least 1 ms, in
+    // whole milliseconds (and the timer is a loop, never a call back into PublishSoon).
+    [Fact]
+    public async Task The_view_timer_always_really_waits()
+    {
+        Assert.Equal(TimeSpan.FromMilliseconds(500), SyncEngine.WaitBeforeNextView(TimeSpan.Zero));
+        Assert.Equal(TimeSpan.FromMilliseconds(490), SyncEngine.WaitBeforeNextView(TimeSpan.FromMilliseconds(10.5)));
+        Assert.Equal(TimeSpan.FromMilliseconds(1), SyncEngine.WaitBeforeNextView(TimeSpan.FromMilliseconds(499.95)));
+        Assert.Equal(TimeSpan.FromMilliseconds(1), SyncEngine.WaitBeforeNextView(TimeSpan.FromMilliseconds(499.2)));
+        Assert.Equal(TimeSpan.FromMilliseconds(1), SyncEngine.WaitBeforeNextView(TimeSpan.FromMilliseconds(500)));
+        Assert.Equal(TimeSpan.FromMilliseconds(1), SyncEngine.WaitBeforeNextView(TimeSpan.FromSeconds(3)));
+        // What made it recursive: a delay under a millisecond is already complete.
+        Assert.True(Task.Delay(TimeSpan.FromMilliseconds(0.4)).IsCompleted);
+        var waited = Task.Delay(SyncEngine.WaitBeforeNextView(TimeSpan.FromMilliseconds(499.6)));
+        Assert.False(waited.IsCompleted);
+        await waited;
+    }
+
     private sealed class Store : IEngineStateStore
     {
         private byte[]? bytes;
