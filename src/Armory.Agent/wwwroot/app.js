@@ -955,7 +955,7 @@
 				cls: 'items',
 				label: n.title,
 				items: n.items.map(function (it) {
-					return { kind: 'item', notice: n.key, item: it };
+					return { kind: 'item', notice: n.key, noticeKind: n.kind, item: it };
 				}),
 				key: function (x) {
 					return 'ni:' + x.notice + ':' + (x.item.fileId || x.item.path);
@@ -982,6 +982,12 @@
 	function itemRow(x, i, active) {
 		var it = x.item;
 		var k = 'ni:' + x.notice + ':' + (it.fileId || it.path);
+		// A file that shares a name can be renamed right here, then it is added by itself.
+		var extra =
+			x.noticeKind === 'nameShared'
+				? '<button class="key row-key" type="button" data-rove="rename" data-action="askRenameFile" data-path="' + esc(it.path) + '" data-key="rename-' + esc(k) + '"' +
+				  ' aria-label="Rename ' + esc(it.name) + '" title="Rename ' + esc(it.name) + '">' + icon('rename') + '<span class="key-word">Rename</span></button>'
+				: '';
 		return rowHtml({
 			i: i,
 			vkey: k,
@@ -990,6 +996,7 @@
 			k: k,
 			name: it.name,
 			line: '<span class="row-meta">' + esc(it.detail || whereIs(it.path)) + '</span>',
+			extra: extra,
 			go: it.fileId ? 'chev-right' : 'folder-go'
 		});
 	}
@@ -1569,6 +1576,11 @@
 			body = 'Rename ' + c.name + ' in ' + c.parentWhere + '. Everyone on the team sees the new name, and its files keep their history.';
 			field = fieldHtml('New name', c.name);
 			ok = 'Rename';
+		} else if (kind === 'renameFile') {
+			title = 'Rename file';
+			body = 'Rename ' + c.name + ' in ' + c.where + '. A project keeps one file per name, so pick a name no other file in the project has.';
+			field = fieldHtml('New name', c.name);
+			ok = 'Rename';
 		} else if (kind === 'deleteFolder') {
 			title = 'Delete folder';
 			body =
@@ -1605,12 +1617,13 @@
 		);
 	}
 
-	/** Why a folder name won't do, in plain words, or null when it will. */
+	/** Why a folder or file name won't do, in plain words, or null when it will. */
 	function nameProblem(name, c) {
-		if (!name) return 'Type a name for the folder.';
-		if (BAD_NAME.test(name)) return 'A folder name can\'t use any of these: \\ / : * ? " < > |';
-		if (/^\.+$/.test(name) || /[. ]$/.test(name)) return 'A folder name can\'t end with a dot or a space.';
-		if (c.kind === 'renameFolder' && name === c.name) return 'That is already its name.';
+		var what = c.kind === 'renameFile' ? 'file' : 'folder';
+		if (!name) return 'Type a name for the ' + what + '.';
+		if (BAD_NAME.test(name)) return 'A ' + what + ' name can\'t use any of these: \\ / : * ? " < > |';
+		if (/^\.+$/.test(name) || /[. ]$/.test(name)) return 'A ' + what + ' name can\'t end with a dot or a space.';
+		if ((c.kind === 'renameFolder' || c.kind === 'renameFile') && name === c.name) return 'That is already its name.';
 		var taken = (c.siblings || []).some(function (s) {
 			return s.toLowerCase() === name.toLowerCase() && !(c.kind === 'renameFolder' && s.toLowerCase() === c.name.toLowerCase());
 		});
@@ -1622,7 +1635,7 @@
 		var a = ui.ask;
 		if (!a) return;
 		var c = a.ctx;
-		if (a.kind === 'newFolder' || a.kind === 'renameFolder') {
+		if (a.kind === 'newFolder' || a.kind === 'renameFolder' || a.kind === 'renameFile') {
 			var input = ask.querySelector('#ask-name');
 			var name = input.value.trim();
 			var problem = nameProblem(name, { kind: a.kind, name: c.name, siblings: c.siblings, where: c.where, parentWhere: c.parentWhere });
@@ -1632,7 +1645,8 @@
 				input.focus();
 				return;
 			}
-			if (a.kind === 'newFolder') act('createFolder', { projectId: c.projectId, parent: c.folder, name: name });
+			if (a.kind === 'renameFile') act('renameFile', { path: c.path, newName: name });
+			else if (a.kind === 'newFolder') act('createFolder', { projectId: c.projectId, parent: c.folder, name: name });
 			else {
 				act('renameFolder', { projectId: c.projectId, folder: c.folder, newName: name });
 				// When the host's next view has the new name, the browser goes with it.
@@ -1675,6 +1689,12 @@
 		if (kind !== 'newFolder' && !c.folder) return;
 		c.siblings = kind === 'newFolder' ? c.siblingsHere : c.siblingsParent;
 		openAsk(kind, c, from);
+	}
+
+	/** Rename one file (a file that shares a name with another in its project). */
+	function askRenameFile(path, from) {
+		var parts = String(path).split('/');
+		openAsk('renameFile', { path: path, name: parts[parts.length - 1], where: parts.slice(0, -1).join(' \u203a '), siblings: [] }, from);
 	}
 
 	/** Take back one file, or the picked files someone else has. */
@@ -2191,6 +2211,9 @@
 				break;
 			case 'askTakeBack':
 				askTakeBack([findRow(el.getAttribute('data-file-id'))], from);
+				break;
+			case 'askRenameFile':
+				askRenameFile(path, from);
 				break;
 			case 'promptCheckOut':
 				act('checkOut', { paths: [path], open: false });

@@ -114,6 +114,7 @@ internal sealed class AgentHost : IAsyncDisposable
     internal Task<ActionResult> CheckInAsync(IReadOnlyList<string> paths) => OnEngineAsync("check in", e => e.CheckInAsync(paths));
     internal Task<ActionResult> UndoCheckOutAsync(IReadOnlyList<string> paths) => OnEngineAsync("undo check out", e => e.UndoCheckOutAsync(paths));
     internal Task<ActionResult> TakeBackAsync(Guid fileId) => OnEngineAsync("take back", e => e.TakeBackAsync(fileId));
+    internal Task<ActionResult> RenameFileAsync(string path, string newName) => OnEngineAsync("rename a file", e => e.RenameFileAsync(path, newName));
     internal Task<ActionResult> CreateFolderAsync(Guid project, string parent, string name) => NotYet("new folder in " + project);
     internal Task<ActionResult> RenameFolderAsync(Guid project, string folder, string newName) => NotYet("rename a folder in " + project);
     internal Task<ActionResult> DeleteFolderAsync(Guid project, string folder) => NotYet("delete a folder in " + project);

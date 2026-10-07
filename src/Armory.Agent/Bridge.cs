@@ -17,6 +17,7 @@ internal sealed record TakeBackMessage(string? FileId, string? RequestId);
 internal sealed record CreateFolderMessage(string? ProjectId, string? Parent, string? Name, string? RequestId);
 internal sealed record RenameFolderMessage(string? ProjectId, string? Folder, string? NewName, string? RequestId);
 internal sealed record DeleteFolderMessage(string? ProjectId, string? Folder, string? RequestId);
+internal sealed record RenameFileMessage(string? Path, string? NewName, string? RequestId);
 internal sealed record AddFilesMessage(string? ProjectId, string? Folder, string? RequestId);
 internal sealed record DropFilesMessage(string? ProjectId, string? Folder, string? RequestId);
 internal sealed record DismissNoticeMessage(string? Key);
@@ -61,6 +62,7 @@ internal sealed class Bridge(AgentHost host, IBridgeWindow window, AgentLog log)
         [BridgeMessages.CreateFolder] = typeof(CreateFolderMessage),
         [BridgeMessages.RenameFolder] = typeof(RenameFolderMessage),
         [BridgeMessages.DeleteFolder] = typeof(DeleteFolderMessage),
+        [BridgeMessages.RenameFile] = typeof(RenameFileMessage),
         [BridgeMessages.AddFiles] = typeof(AddFilesMessage),
         [BridgeMessages.DropFiles] = typeof(DropFilesMessage),
         [BridgeMessages.DismissNotice] = typeof(DismissNoticeMessage),
@@ -72,6 +74,7 @@ internal sealed class Bridge(AgentHost host, IBridgeWindow window, AgentLog log)
     private static readonly ActionResult NotAFile = new(false, "That isn't a file or folder in your Armory folder.");
     private static readonly ActionResult NotAProject = new(false, "That project isn't on this computer.");
     private static readonly ActionResult NotAName = new(false, "That name can't be used for a folder.");
+    private static readonly ActionResult NotAFileName = new(false, "That name can't be used for a file.");
 
     internal static bool TryRead(string webMessageJson, out string type, out JsonElement message)
     {
@@ -184,6 +187,13 @@ internal sealed class Bridge(AgentHost host, IBridgeWindow window, AgentLog log)
                         !Guid.TryParse(delete?.ProjectId, out var deleteIn) ? Refuse(NotAProject)
                         : !TryFolder(delete!.Folder, allowTop: false, out var deleted) ? Refuse(NotAFile)
                         : host.DeleteFolderAsync(deleteIn, deleted));
+                    break;
+                case BridgeMessages.RenameFile:
+                    var renameFile = Read<RenameFileMessage>(message);
+                    await AnswerAsync(renameFile?.RequestId,
+                        !TryPath(renameFile?.Path, out var renamedFile) ? Refuse(NotAFile)
+                        : !TryName(renameFile!.NewName, out var newFileName) ? Refuse(NotAFileName)
+                        : host.RenameFileAsync(renamedFile, newFileName));
                     break;
                 case BridgeMessages.AddFiles:
                     // The picker (the Windows file dialog) chooses the files once the engine

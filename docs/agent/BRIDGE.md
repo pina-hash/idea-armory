@@ -43,7 +43,7 @@ uses a demo transport that answers from `wwwroot/demo/states.js`. See "The demo"
 - **Settings** is a sheet over Home with exactly the folder (and Change), Start Armory
   when I sign in, and the theme.
 - **The small dialog** (`<dialog id="ask">`) asks New folder, Rename folder, Delete
-  folder and Take back. It is filled once when it opens and never redrawn by a host
+  folder, Rename file (a file that shares a name, from its notice item) and Take back. It is filled once when it opens and never redrawn by a host
   message, so typed words stay.
 
 Every file row shows who has it checked out, always: "Checked out by you" or "Checked
@@ -190,7 +190,7 @@ answers it with exactly one `actionResult` carrying the same id and a plain sent
 ("Checked out 12 of 14 files. Maria Lopez has 2 of them checked out.", "Checked in
 Plate.SLDPRT.", "Close Plate.SLDPRT in SolidWorks first."). The actions are
 `launchFile`, `checkOut`, `checkIn`, `undoCheckOut`, `takeBack`, `createFolder`,
-`renameFolder`, `deleteFolder`, `addFiles` and `dropFiles`.
+`renameFolder`, `deleteFolder`, `renameFile`, `addFiles` and `dropFiles`.
 
 | `type` | fields | sent by | effect |
 |---|---|---|---|
@@ -210,6 +210,7 @@ Plate.SLDPRT.", "Close Plate.SLDPRT in SolidWorks first."). The actions are
 | `createFolder` | `projectId`, `parent`, `name`, `requestId` | New folder, after the small dialog | makes the folder |
 | `renameFolder` | `projectId`, `folder`, `newName`, `requestId` | Rename folder, after the small dialog | renames it for everyone (refused, and put back, when someone else has a file in it checked out) |
 | `deleteFolder` | `projectId`, `folder`, `requestId` | Delete folder, after the small dialog | removes it and its files for everyone; their history is kept |
+| `renameFile` | `path`, `newName`, `requestId` | Rename on a "shares a name" notice item, after the small dialog | renames one file in its folder: on this computer for a file Armory does not have, for everyone (`armory_move_file`) for one it has; refused while someone else has it checked out |
 | `addFiles` | `projectId`, `folder`, `requestId` | Add files | host shows a file picker, then copies the files in |
 | `dropFiles` | `projectId`, `folder`, `requestId` (+ the dropped files) | a drop on the open folder's list | host copies the dropped files in |
 | `dismissNotice` | `key` | a notice's Done or OK (`dismissNotice` action) | the host drops that notice card |

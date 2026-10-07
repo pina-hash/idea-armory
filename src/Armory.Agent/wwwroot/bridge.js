@@ -258,13 +258,14 @@
 	 *   checkOut: { paths, open }             (files or folders, vault-relative)
 	 *   checkIn: { paths }    undoCheckOut: { paths }    takeBack: { fileId }
 	 *   createFolder: { projectId, parent, name }    renameFolder: { projectId, folder, newName }
-	 *   deleteFolder: { projectId, folder }   addFiles: { projectId, folder }
+	 *   deleteFolder: { projectId, folder }   renameFile: { path, newName }
+	 *   addFiles: { projectId, folder }
 	 *   dropFiles: { projectId, folder }      (sent with the dropped File objects)
 	 *   dismissNotice: { key }
 	 *   saveSettings: { vaultRoot, startAtSignIn, theme }
 	 * @typedef {'ready' | 'connect' | 'cancelConnect' | 'signOut' | 'pause' | 'resume'
 	 *   | 'openVault' | 'openFile' | 'launchFile' | 'showInFolder' | 'checkOut' | 'checkIn'
-	 *   | 'undoCheckOut' | 'takeBack' | 'createFolder' | 'renameFolder' | 'deleteFolder'
+	 *   | 'undoCheckOut' | 'takeBack' | 'createFolder' | 'renameFolder' | 'deleteFolder' | 'renameFile'
 	 *   | 'addFiles' | 'dropFiles' | 'dismissNotice' | 'saveSettings' | 'chooseVaultRoot'} PageMessageType
 	 */
 
@@ -286,7 +287,7 @@
 	/* ------------------------------------------------------- Message lists */
 
 	/** Page to host message types (BRIDGE.md, "Page to host"). */
-	var PAGE_TO_HOST = ['ready', 'connect', 'cancelConnect', 'signOut', 'pause', 'resume', 'openVault', 'openFile', 'launchFile', 'showInFolder', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'addFiles', 'dropFiles', 'dismissNotice', 'saveSettings', 'chooseVaultRoot'];
+	var PAGE_TO_HOST = ['ready', 'connect', 'cancelConnect', 'signOut', 'pause', 'resume', 'openVault', 'openFile', 'launchFile', 'showInFolder', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'dismissNotice', 'saveSettings', 'chooseVaultRoot'];
 
 	/** Host to page message types (BRIDGE.md, "Host to page"). */
 	var HOST_TO_PAGE = ['view', 'fileDetail', 'activity', 'actionResult'];
@@ -303,6 +304,7 @@
 		createFolder: ['projectId', 'parent', 'name'],
 		renameFolder: ['projectId', 'folder', 'newName'],
 		deleteFolder: ['projectId', 'folder'],
+		renameFile: ['path', 'newName'],
 		addFiles: ['projectId', 'folder'],
 		dropFiles: ['projectId', 'folder'],
 		dismissNotice: ['key'],
@@ -310,7 +312,7 @@
 	};
 
 	/** Actions: each carries a requestId, and the host answers it with one actionResult. */
-	var ACTIONS = ['launchFile', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'addFiles', 'dropFiles'];
+	var ACTIONS = ['launchFile', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles'];
 
 	/* ----------------------------------------------------------- Plumbing */
 
@@ -625,6 +627,26 @@
 					refreshMine();
 					postView();
 					result(message, true, 'Deleted ' + message.folder.split('/').pop() + ' and the ' + words(gone, 'file', 'files') + ' in it. Their history is kept.');
+					break;
+				case 'renameFile':
+					// A file that shares a name is renamed here; it then has its own name to be added under.
+					var renamedFrom = message.path.split('/').pop();
+					view.notices = view.notices
+						.map(function (n) {
+							var left = n.items.filter(function (it) {
+								return it.path !== message.path;
+							});
+							if (left.length === n.items.length) return n;
+							var copy = clone(n);
+							copy.items = left;
+							copy.count = Math.max(0, n.count - 1);
+							return copy;
+						})
+						.filter(function (n) {
+							return n.count > 0;
+						});
+					postView();
+					result(message, true, 'Renamed ' + renamedFrom + ' to ' + message.newName + '.');
 					break;
 				case 'dismissNotice':
 					view.notices = view.notices.filter(function (n) {

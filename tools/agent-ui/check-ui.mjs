@@ -41,7 +41,7 @@
 //               fully painted in both.
 //   bridge      inside a stand-in WebView2 host (no demo transport): the page says ready
 //               first, renders Home, detail and Connect from host messages alone, wears
-//               effectiveTheme, ignores a stray or unknown message, and every one of the 22
+//               effectiveTheme, ignores a stray or unknown message, and every one of the 23
 //               page-to-host types is sent by the control that should send it, carrying
 //               exactly the fields BRIDGE.md gives it (an action's requestId included; a
 //               drop goes with its files through postMessageWithAdditionalObjects). An
@@ -1043,6 +1043,7 @@ const CONTRACT = {
 	createFolder: ['projectId', 'parent', 'name', ...ACT],
 	renameFolder: ['projectId', 'folder', 'newName', ...ACT],
 	deleteFolder: ['projectId', 'folder', ...ACT],
+	renameFile: ['path', 'newName', ...ACT],
 	addFiles: ['projectId', 'folder', ...ACT],
 	dropFiles: ['projectId', 'folder', ...ACT],
 	dismissNotice: ['key'],
@@ -1238,6 +1239,14 @@ tally.bridgeTypes = 0;
 		m = await click('[data-key="ask-ok"]');
 		expect(m.type === 'takeBack' && m.fileId === 'f-plate-left', 'Take back sent ' + JSON.stringify(m));
 		await click('[data-key="back"]');
+
+		// A file that shares a name is renamed from its notice item, after the small dialog.
+		await host({ type: 'view', view: view('groupedNotices') });
+		await click('[data-key="nt-expand-nameShared"]');
+		await click('[data-key="rename-ni:nameShared:Robot 2027/CopyDesignTemp/Bracket.SLDPRT"]');
+		await page.fill('#ask-name', 'Bracket-Pack.SLDPRT');
+		m = await click('[data-key="ask-ok"]');
+		expect(m.type === 'renameFile' && m.path === 'Robot 2027/CopyDesignTemp/Bracket.SLDPRT' && m.newName === 'Bracket-Pack.SLDPRT', 'a shared name\'s Rename sent ' + JSON.stringify(m));
 
 		// A notice's action.
 		await host({ type: 'view', view: view('importSummary') });
