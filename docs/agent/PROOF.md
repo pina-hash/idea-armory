@@ -37,7 +37,7 @@ to an open file is recorded as a violation.
 | Scenario | Test |
 |---|---|
 | Two students try to edit the same part: the second can't save and sees who has it | `ScenarioTests.Two_students_try_to_edit_the_same_part` |
-| A Pack and Go of 60 files (14 names the project already has) is unzipped, the connection drops after 20 are in, and the inner folder is renamed: one `armory_rename_folder`, no `armory_move_file`, no `armory_tombstone`, one `folder_renamed` and no `file_moved`, the same file ids, the 26 that waited added at the new place, the other computer moves its folder in place (no storage GET and no replace for the 20 it had, nothing to recovery), one import card ("Added 46 of 60 files to Robot 2027 › Pack") and one card listing the 14, nothing else | `FolderScenarioTests.Pack_and_Go_with_duplicate_names_then_the_inner_folder_is_renamed` |
+| A Pack and Go of 60 files (14 names the project already has) is unzipped, the connection drops after 20 are in (files go several at once, so those already on their way may land too: at least 20 and fewer than 46 are in), and the inner folder is renamed: one `armory_rename_folder`, no `armory_move_file`, no `armory_tombstone`, one `folder_renamed` and no `file_moved`, the same file ids, the rest of the 46 added at the new place, the other computer moves its folder in place (no storage GET and no replace for the ones it had, nothing to recovery), one import card ("Added 46 of 60 files to Robot 2027 › Pack") and one card listing the 14, nothing else | `FolderScenarioTests.Pack_and_Go_with_duplicate_names_then_the_inner_folder_is_renamed` |
 | A folder deleted on disk: one scan does nothing, then one `armory_delete_folder` (no `armory_tombstone`), one `folder_deleted`; the other computer moves its copies to recovery and its empty folder goes | `FolderScenarioTests.A_folder_deleted_on_disk_tombstones_its_files_in_one_call` |
 | The same while Maria has a file in it checked out: refused, the folder is downloaded again, exactly one notice naming Maria Lopez | `FolderScenarioTests.A_folder_deleted_on_disk_while_Maria_has_a_file_checked_out_is_put_back` |
 | A folder renamed on disk while Maria has a file in it checked out: one refused call, moved back, one notice naming her | `FolderScenarioTests.A_folder_renamed_on_disk_while_Maria_has_a_file_checked_out_is_put_back` |
@@ -244,8 +244,8 @@ file sharing a name) instead of 2:
 Failed FolderScenarioTests.Pack_and_Go_with_duplicate_names_then_the_inner_folder_is_renamed   Expected: 2, Actual: 15
 ```
 
-Stage E3 adds the 5,000-file import test (at most 3 cards), which this break must also turn
-red. After the three restores the working tree matched the commit (`git status` clean) and
+Stage E3 adds the 5,000-file import test (at most 3 cards), which this break also turns red
+(see "Stage E3" below). After the three restores the working tree matched the commit (`git status` clean) and
 the full suite passed again.
 
 ### Rerun after the second E2 review (2026-10-07)
@@ -263,3 +263,147 @@ break and after the restore, then broken:
 - (c) `SyncEngine.View.cs` `ab59569089eead771372bb275cade7fd546167b00d9b42fdac25adff10077417`,
   broken `1c15f4c042de7ced7d5ccbfdc3c9abf175a7aa4b4818c79d2d3516b6cbdfafdc`. Red: the Pack and
   Go scenario, 15 cards instead of 2.
+
+
+## Stage E3: transfers made fast and visible (2026-10-07)
+
+Measured on this container's 4 CPUs with nothing else of this stage running. Other agents'
+processes may have shared the machine (the load average was between 0.2 and 3.5 during the
+runs); the throughput runs wait on the profile's simulated delays, not on the CPU.
+
+### Throughput
+
+`ThroughputTests.Transfers_through_a_school_network_profile` through the school network
+profile (`LatencyProfile.School`: 60 ms to file storage at 4 MB/s per connection and 25 MB/s
+for the whole link, 250 ms for a blob URL, 60 ms per server call). Alex adds 120 parts of
+256 KiB and two of 32 MiB (122 files, 98.6 MB), then Maria's computer receives them. Each run
+is its own world (nothing is stored already), and both computers move
+`EngineOptions.TransferConcurrency` files at once. The sweep:
+`ARMORY_THROUGHPUT=1 ARMORY_TEST_POSTGRES=... dotnet test tests/Armory.EndToEnd.Tests --filter ThroughputTests`.
+
+Before (v1, `b18791d`, one file at a time, the same profile and batch): upload 122 files,
+98.6 MB in 100.0 s (1.22 files/s, 0.99 MB/s); download 65.4 s (1.86 files/s, 1.51 MB/s).
+
+After (`1dcbcd4`, one run each):
+
+```text
+THROUGHPUT label=after-c1 files=122 bytes=98566144 upload_s=100.0 upload_passes=1 upload_files_per_s=1.22 upload_MB_per_s=0.99 download_s=64.8 download_passes=1 download_files_per_s=1.88 download_MB_per_s=1.52 a_rpc=494 a_site=123 a_storage=122 b_rpc=3 b_site=123 b_storage=122
+THROUGHPUT label=after-c2 files=122 bytes=98566144 upload_s=54.7 upload_passes=1 upload_files_per_s=2.23 upload_MB_per_s=1.80 download_s=32.7 download_passes=1 download_files_per_s=3.73 download_MB_per_s=3.02 a_rpc=494 a_site=123 a_storage=122 b_rpc=3 b_site=123 b_storage=122
+THROUGHPUT label=after-c4 files=122 bytes=98566144 upload_s=34.0 upload_passes=1 upload_files_per_s=3.59 upload_MB_per_s=2.90 download_s=17.9 download_passes=1 download_files_per_s=6.82 download_MB_per_s=5.51 a_rpc=494 a_site=123 a_storage=122 b_rpc=3 b_site=123 b_storage=122
+THROUGHPUT label=after-c6 files=122 bytes=98566144 upload_s=26.3 upload_passes=1 upload_files_per_s=4.64 upload_MB_per_s=3.74 download_s=12.7 download_passes=1 download_files_per_s=9.61 download_MB_per_s=7.77 a_rpc=494 a_site=123 a_storage=122 b_rpc=3 b_site=123 b_storage=122
+THROUGHPUT label=after-c8 files=122 bytes=98566144 upload_s=24.9 upload_passes=1 upload_files_per_s=4.89 upload_MB_per_s=3.95 download_s=11.5 download_passes=1 download_files_per_s=10.58 download_MB_per_s=8.55 a_rpc=494 a_site=123 a_storage=122 b_rpc=3 b_site=123 b_storage=122
+THROUGHPUT label=after-c12 files=122 bytes=98566144 upload_s=19.2 upload_passes=1 upload_files_per_s=6.36 upload_MB_per_s=5.14 download_s=9.4 download_passes=1 download_files_per_s=13.04 download_MB_per_s=10.53 a_rpc=494 a_site=123 a_storage=122 b_rpc=3 b_site=123 b_storage=122
+```
+
+`after-c1` reproduces the v1 numbers, so the harness measures what it measured then. A first
+sweep on `281804d` (before the group commit waited for the save being written) agreed within
+1.4 s at every point.
+
+| Files at once | Upload | Faster than 1 | Download | Faster than 1 |
+|---|---|---|---|---|
+| 1 | 100.0 s | 1.0x | 64.8 s | 1.0x |
+| 2 | 54.7 s | 1.8x | 32.7 s | 2.0x |
+| 4 | 34.0 s | 2.9x | 17.9 s | 3.6x |
+| 6 | 26.3 s | 3.8x | 12.7 s | 5.1x |
+| 8 | 24.9 s | 4.0x | 11.5 s | 5.6x |
+| 12 | 19.2 s | 5.2x | 9.4 s | 6.9x |
+
+**The default is 6, the knee.** Up to 6, each added connection adds 0.5 to 1.0 files a second
+to the upload and 1.4 to 1.9 to the download; past 6, 0.1 to 0.4 to the upload and 0.4 to 1.0 to
+the download (both sweeps). At 6 a check in of this batch is 3.8 times faster and a download
+5.1 times faster than one at a time, with about three quarters of the throughput of 12 on half
+the connections. What holds the upload past 6 does not run at once: four server calls for each
+new file, and the releases at the end of the pass, which go one after the other (122 of them at
+60 ms, about 7 s of the 26). The profile is one computer alone on the link; in a classroom the
+school's link and the project's server are shared by every computer, where the doubled
+connections of 12 would buy less and cost every other student. 6 also keeps every file in flight
+in the activity panel's 8 rows.
+
+The default run of the same test (a guard, about 25 s) moves 16 parts at 1 and at the default
+and requires the default to be at least twice as fast both ways; it also holds every activity
+message to the window's words, at most 8 files listed, more than one file moving at once, at
+most one message every 250 ms from each computer, and status lines that start with
+"Uploading" and "Downloading":
+
+```text
+THROUGHPUT label=smoke-c1 files=16 bytes=4194304 upload_s=12.3 upload_passes=1 upload_files_per_s=1.30 upload_MB_per_s=0.34 download_s=6.7 download_passes=1 download_files_per_s=2.38 download_MB_per_s=0.62 a_rpc=70 a_site=17 a_storage=16 b_rpc=3 b_site=17 b_storage=16
+THROUGHPUT label=smoke-c6 files=16 bytes=4194304 upload_s=3.9 upload_passes=1 upload_files_per_s=4.05 upload_MB_per_s=1.06 download_s=1.5 download_passes=1 download_files_per_s=10.74 download_MB_per_s=2.82 a_rpc=70 a_site=17 a_storage=16 b_rpc=3 b_site=17 b_storage=16
+ACTIVITY messages=17 lines: Uploading 0 of 16 files, 4 MB left | Uploading 6 of 16 files, 2.5 MB left | Uploading 9 of 16 files, 1 MB left | Uploading 12 of 16 files, 1 MB left | Downloading 0 of 16 files, 4 MB left | Downloading 6 of 16 files, 2.5 MB left | Downloading 12 of 16 files, 1 MB left
+```
+
+### The 5,000-file import
+
+`ImportScaleTests.A_5000_file_import_is_quiet_and_complete` (a guard): Maria's 100 parts are in
+the project; Alex unzips 5,000 small files (10 assemblies of 25 subfolders of 20 files, every
+10th a text file, every 50th with the name of one of Maria's parts) and syncs until a pass
+sends nothing. It holds at most 3 cards (exactly one import summary, "Added 4,900 of 5,000
+files to Robot 2027 › Unzipped", and one card for the 100 shared names), every other file in
+Armory with exactly one version, no check out left, the 4,900 read-only and the 100 writable,
+no write to an open file, no unpreserved overwrite, and fewer saves of the state document than
+server writes. Run alone on `1dcbcd4`:
+
+```text
+SCAN files=5000 scan_ms=178 rescan_ms=110 first_pass_s=77.8 until_idle_s=78.7 cards=2 passes=2 state_saves=10052
+```
+
+`scan_ms` and `rescan_ms` are the portable test file system's (`PortableVaultFileSystem`),
+which lists, reads and hashes all 5,000 files on every scan; the Windows adapter
+(`LocalChangeDetector`) hashes again only what changed. On Windows,
+`LocalStateTests.Five_thousand_files_with_real_watcher_overflow_match_clean_scan` (5,000 files
+made under a stalled watcher, all edited and renamed, 2,500 deleted, compared with a fresh
+scan) takes about 12 s on windows-latest, as reported to this stage; its own timing could not
+be read from here (the proxy refuses the CI log and artifact downloads), and the whole Platform
+tests step of run 37578843714 took 44 s.
+
+The first pass is the import: 4,900 new files through the fake server, PostgreSQL and the fake
+storage on this machine, 6 at once, then their releases one after the other. Serializing only
+the changed blocks of the state document (it is about 4 MB at 5,000 files) brought that pass
+from 115.7 s to under 90 s during this stage. In the parallel end-to-end suite it shares the
+CPUs with the seeded run (141.0 s there).
+
+### Suite time
+
+| End-to-end suite, alone | Tests | Time |
+|---|---|---|
+| Before E3 (`4c76cf8`) | 85 | 3 min 6 s |
+| After E3 (`1dcbcd4`) | 92 | 4 min 0 s |
+
+The seeded run is the suite's longest test: alone, 163.1 s before E3 and 156.8 s after
+(`E2E_SEEDS count=200 first=0 failures=0` both), 236.5 s inside the parallel suite. The whole
+solution's tests took 5 min 35 s (`1dcbcd4`, every project passed; skipped only the Windows-only
+tests).
+
+### New guards
+
+| Test | Holds |
+|---|---|
+| `StateAndActivityTests.The_state_document_written_in_pieces_is_the_whole_document` | the pieces a save writes are the reflection serializer's document, after every kind of change |
+| `StateAndActivityTests.Every_field_of_a_file_record_marks_it_changed` | every `FileState` property and list marks its record changed (by reflection) |
+| `StateAndActivityTests.Ids_come_from_saved_blocks_and_never_repeat_after_a_restart` | an id block is saved before its first id; a restart never repeats one |
+| `StateAndActivityTests.The_activity_panel_says_what_moves_in_the_window_s_words` | the activity lines, " › " in folder paths, the waiting line |
+| `ClientTests.A_storage_refusal_or_timeout_fails_one_transfer_and_a_dead_connection_is_offline` | storage refusals, timeouts and cut downloads are `StorageTransferException`; a connection that fails is offline |
+| `ConcurrencyTests.The_engine_works_on_its_own_thread_never_the_callers` | every step and view on the "Armory engine" thread |
+| `ConcurrencyTests.File_detail_answers_while_a_pass_moves_files` | File detail in under 2 s while a pass waits 3 s a request on storage |
+| `ConcurrencyTests.A_crash_among_files_moving_at_once_stops_them_all_and_replays_to_one_version_each` | a crash at the 4th of 12 uploads: no step and no save after it; the next engine makes one version each |
+| `ConcurrencyTests.A_storage_refusal_fails_that_one_file_and_the_rest_go_on` | a refused upload and a refused download are one file's item; the pass stays online |
+| `ConcurrencyTests.The_server_is_read_at_most_twice_a_pass_and_not_again_when_nothing_moved` | two reads of the server at most a pass; a quiet pass reads no project files |
+| `ConcurrencyTests.A_slow_disk_makes_fewer_larger_saves` | with 50 ms saves, at most one save for every two server writes |
+| `ThroughputTests.Transfers_through_a_school_network_profile` | the default at least twice as fast as one at a time, both ways; the activity messages |
+| `ImportScaleTests.A_5000_file_import_is_quiet_and_complete` | the 5,000-file import above |
+
+### Break (c) against the 5,000-file import
+
+The same one-line break as before (`var key = kind;` became `var key = kind + ":" + item.Path;`
+at `// MUTATION: notices are grouped by kind` in `src/Armory.Agent.Engine/SyncEngine.View.cs`),
+built and run against the 5,000-file import and the Pack and Go scenario with
+`ARMORY_TEST_POSTGRES` set, then restored byte for byte. SHA-256 before the break and after the
+restore `2f940dbea559ead2b823abe84ea13117b02d1031797427f45946c23741e6b9c6` (`1dcbcd4`), broken
+`0e905e239f5a02786cdfc92311ec58654d0b5120a98b08a5bd45ac3014d4404f`. Red: 2 of 2.
+
+```text
+Failed ImportScaleTests.A_5000_file_import_is_quiet_and_complete   Assert.InRange() Failure: Range: (1 - 3) Actual: 101
+SCAN files=5000 scan_ms=201 rescan_ms=145 first_pass_s=85.9 until_idle_s=86.8 cards=101 passes=2 state_saves=9994
+Failed FolderScenarioTests.Pack_and_Go_with_duplicate_names_then_the_inner_folder_is_renamed   Expected: 2, Actual: 15
+```
+
+Alex saw 101 cards (the import summary and one for each of the 100 shared names) instead of 2.

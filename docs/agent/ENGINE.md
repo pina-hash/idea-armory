@@ -16,7 +16,7 @@ itself except an add (below) and a lock taken only for a move or a removal.
 ## Public API
 
 ```csharp
-var engine = new SyncEngine(new EngineOptions { VaultRoot = @"C:\IDEA\Armory" }, new EngineDependencies
+var engine = new SyncEngine(new EngineOptions { VaultRoot = @"C:\IDEA\Armory", TransferConcurrency = 6 }, new EngineDependencies
 {
     Files = vaultFileSystem,          // IVaultFileSystem
     Journal = journalStore,           // Core IJournalStore (DurableJournalStore on Windows)
@@ -27,6 +27,7 @@ var engine = new SyncEngine(new EngineOptions { VaultRoot = @"C:\IDEA\Armory" },
     Log = log.Info,                   // the raw text of each problem, once; the window gets plain words
 });
 engine.ViewChanged += view => bridge.Post(BridgeMessages.ViewMessage(view));
+engine.ActivityChanged += activity => bridge.Post(BridgeMessages.ActivityMessage(activity)); // at most 4 a second
 engine.Start();                       // background loop on the contract's schedule
 await engine.SyncOnceAsync();         // one full pass (tests drive the engine this way)
 engine.Pause(); engine.Resume(); engine.Wake();
@@ -46,15 +47,23 @@ await engine.RenameFolderAsync(projectId, folder, newName);   // one armory_rena
 await engine.DeleteFolderAsync(projectId, folder);            // one armory_delete_folder, then recovery here
 await engine.AddFilesAsync(projectId, folder, sources);       // files and whole folders, copied in, never over anything
 engine.DismissNotice(key);            // a notice card's OK, or one check-out question ("prompt:...")
+await engine.DismissNoticeAsync(key); // the same, done once the view (or the next one) leaves it out
 await engine.MoveAsync(from, to);     // a rename through armory_move_file
 await engine.StopAsync();
 ```
 
 `View` is the window's `AgentView` (docs/agent/BRIDGE.md); `OpenWithoutCheckOut` lists the
 open files this computer has not checked out, for the tray's one quiet balloon per opened
-file (D13).
+file (D13). Every method marshals onto the engine's own thread (see Threading), so the
+window's UI thread only awaits: it never scans, hashes, saves the state or waits on a pass.
+`View`, `IsPaused` and `OpenWithoutCheckOut` are published values, read without the engine.
 
 ## One pass
+
+A pass has four phases. A, B and D run one step at a time; C moves files several at once
+(see Threading and concurrency).
+
+**Phase A, in order.**
 
 1. **Identity.** No session: the view says signed out. The state document is bound to the
    first email and device that sync into it; another account sees "this vault belongs to
@@ -68,9 +77,12 @@ file (D13).
    from the last capture is a save: `SaveRecorder` persists the bytes as an immutable
    snapshot and journals a Core `Upload` intent, offline too.
    `SaveRecorder.Recover` re-journals any capture a crash left unjournaled.
-3. **Refresh.** `armory_my_projects` (a project renamed on the site moves its folder here;
-   an archived one is not read), then per project `armory_list_changes(cursor)` (the
-   cursor is persisted after processing) and `armory_project_files`. A `lock_broken` change
+3. **Refresh** (the first of at most two reads of the server in a pass). `armory_my_projects`
+   (a project renamed on the site moves its folder here; an archived one is not read), then per
+   project `armory_list_changes(cursor)` (the cursor is persisted after processing) and, only
+   when that feed moved, this computer wrote to the project since its files were read, its
+   folder changed or a minute went by, `armory_project_files` (every write emits a change, so a
+   quiet feed means the files as last read are still the files). A `lock_broken` change
    naming this computer records the obligation to keep its bytes; a `file_revived` change
    records when the file was revived (File detail marks the version that followed). Every
    tracked file's live check out is remembered in its state (`FileState.Holder`), so the
@@ -83,35 +95,52 @@ file (D13).
    and a lock held only for a move give way to it. This runs only once the server was read,
    so a check out refused offline cancels nothing.
 4. **Finish what a crash interrupted.** Each file's state may hold one in-flight server
-   write (create, lock, commit, side version, release, tombstone, move), persisted before
+   write (create, lock, commit, side version, release, tombstone, move), on disk before
    the call with its operation id and arguments. It is re-sent with the same id, so the
    server answers from its receipt, and its result is applied. A release or a removal is
-   dropped instead and decided again from fresh state. Then each folder rename or removal
+   dropped instead and decided again from fresh state. The projects written to are read again
+   (only those). Then each folder rename or removal
    made on this disk or asked for in the window is sent in the order it happened, one call
    each, with its persisted operation id, the project's files read again after each call (and
    only those projects are read again before planning).
 5. **Moves and earlier saves.** A folder the team renamed moves here in one step; a file
-   whose server folder or name changed otherwise is moved here (never while open). A bulk add
-   is recorded for its import summary. An Explorer rename is sent as `armory_move_file`. A
+   whose server folder or name changed otherwise is moved here (never while open); moves on
+   this disk change nothing on the server, so nothing is read again for them. A bulk add
+   is recorded for its import summary. An Explorer rename is sent as `armory_move_file` (the
+   projects it changed are read again). A
    journaled save whose bytes are no longer on disk is kept as a side version ("earlier
    save, kept"). A known folder gone for a second scan is one `armory_delete_folder`.
-6. **Plan with Core, Explicit mode.** For every path: `Reconciler.Plan(SyncInput)` with base,
+
+**Phase B. Plan with Core, Explicit mode.** For every path, in path order:
+   `Reconciler.Plan(SyncInput)` with base,
    local hash, remote revision, lock ownership, open state (`IsOpenNow`: the platform's check
    or a `~$` marker), online state, the break obligation, the saved release, the project's
    pin and gate mode, the preserved hash, `CheckoutMode.Explicit` and the student's request
    (`CheckIn` or `Undo` from the file's state; a closed add counts as `CheckIn`). Offline
-   plans only add journal intents (never a lock intent for a shared file). Online plans run
-   in order; any failure stops that file until the next pass.
-7. **Finish requests.** Nothing under a folder being renamed, removed or put back, or in a
+   plans only add journal intents (never a lock intent for a shared file). Online plans are
+   grouped into units: one file each, except that files sharing a name (in any case) in a
+   project are one unit, in path order, so which of them gets the name never depends on
+   timing. The activity panel learns here how many files and bytes will go each way.
+
+**Phase C. The units**, at most `EngineOptions.TransferConcurrency` at once. A unit runs its
+   files' plans in order and each plan's actions in order; any failure stops that file until
+   the next pass. Going offline in a unit starts no new unit (the rest are planned offline).
+
+**Phase D, in order.**
+
+6. **Finish requests.** Nothing under a folder being renamed, removed or put back, or in a
    project whose folder is gone, is planned file by file; in an archived project only this
-   computer's own check outs are. Read the server again if the plans wrote, then: a check in, an
+   computer's own check outs are. The server is read again if anything was written (the
+   second and last read of the pass). Then, file by file in path order: a check in, an
    undo and a closed add let their lock go once the file is clean, and a lock taken only for
    a move or a removal as soon as that is done, whatever is on disk; always read-only first,
    then the release, and a read-only bit that can't be set keeps the lock until a later pass
-   can set it. An asked-for check out keeps any lock this computer holds and otherwise takes
-   its own (see Check out). Read the server again if anything was written.
+   can set it. The releases' in-flight records are saved together, once, and the releases
+   are then sent one by one. An asked-for check out keeps any lock this computer holds and
+   otherwise takes its own (see Check out). The read-only rule follows this computer's own
+   lock changes without another read (`KnowLock`).
    Known folders with nothing left in them are removed (D17).
-8. **The read-only rule** (D4), every pass, offline too, from the ownership this computer
+7. **The read-only rule** (D4), every pass, offline too, from the ownership this computer
    last knew (its own lock changes of the pass included; offline since the start, the
    ownership it last applied, and none known means nobody's): every file the server has a
    live version of is read-only unless this computer has it checked out; a file it is
@@ -120,11 +149,106 @@ file (D13).
    touched. A bit the scan finds cleared is set again. One batch per pass
    (`ApplyLockAttributes`, one manifest write); a download sets the bit on the staged copy
    before it is renamed into place (`Replace(readOnly)`), so new bytes are never writable.
-9. **View.** The window's `AgentView` is rebuilt.
+8. **View and state.** The window's `AgentView` is rebuilt (during the pass, at most every
+   500 ms), and everything the pass changed is saved before it returns.
 
 The engine re-decides nothing Core decides. It executes `Download` only after rechecking
 that the file is closed and unchanged, and `SaveSideVersion` and `Upload` only from
 immutable snapshot bytes.
+
+## Threading and concurrency (v2-design.md 4.1)
+
+- **One engine thread.** `EngineThread` is a `SynchronizationContext` with its own queue and
+  thread ("Armory engine"). Every public method marshals onto it (`InvokeAsync`, `Enqueue`;
+  the constructor reads the state document there too), and every await inside the engine
+  comes back to it, so engine state is only ever touched by that thread and needs no locks.
+  The thread ends after 10 seconds with nothing to do and a new one starts on the next call,
+  so an engine a test drops keeps no thread alive.
+- **File detail** never waits for a pass: it reads the server's files as last published
+  (`publishedRemote`, replaced at the end of every read of the server and patched by
+  `KnowLock`) and this computer's records between two steps of a pass.
+- **Units.** Phase C runs units as interleaved async tasks on the engine thread, at most
+  `TransferConcurrency` at once (default 6, chosen by measurement: docs/agent/PROOF.md). A
+  unit is one file's whole plan, or the files of a project that share a name, in path order.
+  Every crash point name fires once per file in the order it always did. A unit that finds
+  the connection gone (`ArmoryOfflineException`) stops new units from starting; those already
+  running end their current step and keep their in-flight record. Any failure that is not
+  one file's (a `SimulatedCrash` in tests, a bug) cancels the pass's units: each stops at its
+  next step (`Checkpoint`: the cancellation is checked before every named step and before
+  every save of an in-flight record), and the failure is thrown only after every unit has
+  stopped and every save already asked for is on disk, so a crashed engine never saves, sends
+  or writes after the test builds the next engine over the same stores. Folder, project, move
+  and check-in, undo and release work (phases A and D) stays one step at a time.
+- **A storage refusal or timeout is one file's problem.** `BlobClient` throws
+  `StorageTransferException` when file storage answers with anything but success, takes too
+  long, or cuts a download off, and when ideabosco.com takes too long to sign a transfer; that
+  file shows one `cantSend` item ("Plate.SLDPRT didn't go through this time") and goes again on
+  the next pass. Only a connection that cannot be made (and the site's 5xx for storage, as the
+  client guard tests require) is offline.
+
+## Saving state
+
+The engine's whole state document (`EngineState`) is replaced atomically on every save
+(`IEngineStateStore`). What has to be on disk before what:
+
+- **An in-flight record before its server call.** `SendAsync` records the write in the file's
+  state and awaits `FlushAsync()`, a group commit: every unit waiting at that moment (the
+  ones whose answers just arrived join after one `Task.Yield`), and every unit that becomes
+  ready while the save before is still being written, shares one save. The document is
+  serialized once, on the engine thread, when that earlier write is done, and written off it,
+  in order. A slow disk therefore means fewer, larger groups, never a queue of writes (50 ms
+  saves and 36 new files: 38 saves instead of 106; `A_slow_disk_makes_fewer_larger_saves`).
+  The releases of phase D are made ready together and saved once.
+- **An id before anything durable carries it.** Ids (captures, removals, check outs, folder
+  operations) come from blocks of 1,024: `EngineState.Sequence` as saved is the end of the
+  block in use, saved before the block's first id is handed out, so a crash never reuses an
+  id and 5,000 captures need five saves, not 5,000.
+- **A folder move, or a folder operation, before it happens** (`SaveNow`, rare), as before.
+- **Everything else** marks the document dirty and is saved at the end of the pass (or of the
+  action) that changed it. A crash replays from the last save: in-flight records are sent
+  again with the same operation id, captures not attached yet are attached again
+  (`AttachEntries`), a download whose bookkeeping was lost is recognized by its bytes
+  (`AdoptIdenticalBases`), cursors are read again.
+
+Serialization costs what changed, not the document's size (`StateSerializer`): file records
+are written in blocks of 128 whose bytes are rebuilt only when one of their records changed
+(`FileState` setters and its lists mark the record changed; `FileTable` reports records that
+come and go), each record's JSON is rebuilt only when it changed, completed journal ids are
+written once each, and import summaries (replaced, never changed in place) once each. A save
+with nothing changed writes nothing. The pieces go to the store as a list and are written one
+after the other. With 5,000 files the document is about 4 MB; a save costs about 0.4 ms on
+the engine thread (Debug build) instead of 38 ms. A unit test holds the pieces to the
+reflection serializer's document and every `FileState` property to its change tracking.
+The longer-term fix is a record per file (or a small log of in-flight records): on Windows
+every save still writes the whole document through `FileStateStore` (write-through, then
+rename), about 4 MB per group commit at 5,000 files.
+
+**Indexes.** Journal entries by id (`OfflineJournal.TryGet`, its cache), snapshots by id and
+by (path, hash) with the size counted at capture (`SizeOf` never reads a snapshot again in a
+start), file records by `FileId` (kept by `FileState.FileId` and `FileTable`), each project's
+live files by name (for "shares a name", built once per read). Nothing per file scans all
+files.
+
+## Activity (v2-design.md 4.4)
+
+`ActivityTracker` keeps, per direction (Uploading, Downloading, Moving), files and bytes done
+and in all, the speed and the time left, the files moving now (at most 8 listed) and the
+waiting line. Phase B tells it what the pass will move; each transfer is an
+`IProgress<long>` that `BlobClient` reports bytes to (from any thread); a file counts once it
+is where it goes, and a file that did not go leaves the totals. Speed is an exponential
+average over about 5 seconds of `TimeProvider.GetTimestamp` time (bytes and files); time left
+is the larger of bytes left over byte speed and files left over file speed, shown after 3
+seconds and 2 files. Lines are the brief's words, sizes and times as the window writes them:
+"Downloading 412 of 1,280 files, 2.1 GB left, about 3 min", "Uploading 3 of 9 files, 48 MB
+left, about 20 sec", "Moving 120 files to Robot 2027 › Gearbox". A direction shows while files
+are on their way; `ActivityView.Line` is the line of the one with the most files left, and
+the status line (`SyncView.Line`) follows it while files move. Waiting: "3 files are waiting
+to upload. They upload when this computer is back online." (offline or paused) or "2
+checked-out files have changes. Check them in to share them." (never for an archived project).
+`ActivityChanged` is raised from a timer, at most four times a second while a pass runs and
+once more when it ends; the host posts `{type: 'activity', activity}` without the whole view
+(the page patches the panel and the status line in place), and the full view is rebuilt at
+most every 500 ms during a pass and at its end.
 
 ## Check out (D1 to D4, D18; v2-design.md 4.2)
 
@@ -387,8 +511,7 @@ since the server keeps no removal row once a file is revived), `keptCopy` ("Save
 checked out", "Kept when the check out was undone", "Changed without a check out, kept as
 Alex Kim's own copy", ...; `routine` for saves kept while checked out and earlier saves) and
 `removed`.
-The activity panel's directions and speed come with stage E3; offline and paused, its
-waiting line already counts the files waiting to upload. No view field carries a season.
+The activity panel's words are in Activity above. No view field carries a season.
 
 ## Operation ids (crash safety)
 

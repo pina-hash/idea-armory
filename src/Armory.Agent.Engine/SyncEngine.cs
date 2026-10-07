@@ -90,7 +90,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
     internal Action<string>? CrashPoint { get; set; }
 
     // A named step inside a file's unit. After a crash in another unit (the pass's token is
-    // cancelled), no unit passes another step: none of them saves, sends or writes anything more.
+    // canceled), no unit passes another step: none of them saves, sends or writes anything more.
     private void Checkpoint(string point, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
