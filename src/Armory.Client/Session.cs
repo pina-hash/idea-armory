@@ -71,6 +71,9 @@ public sealed class ArmoryRpcException(int status, string? sqlState, string mess
     // 40P01 (deadlock) and 40001 (serialization failure): the server rolled the call back and
     // nothing was written. PostgrestClient resends such a call itself before raising this.
     public bool IsTransient => SqlState is "40P01" or "40001";
+    // PostgREST's 404 PGRST202: the site has no such function (yet). An RPC the website has not
+    // shipped answers this until its migration is live (docs/agent/TELEMETRY.md, "Upload").
+    public bool IsFunctionMissing => Status == 404 && SqlState == "PGRST202";
 }
 
 internal static class Json

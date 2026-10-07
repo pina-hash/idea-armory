@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
     <ProjectReference Include="../Armory.Storage/Armory.Storage.csproj" />
+    <ProjectReference Include="../Armory.Telemetry/Armory.Telemetry.csproj" />
     <InternalsVisibleTo Include="Armory.Client.Tests" />
   </ItemGroup>
 </Project>

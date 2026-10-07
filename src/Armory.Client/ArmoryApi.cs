@@ -90,6 +90,19 @@ public sealed class ArmoryApi(PostgrestClient rest)
     public async Task<bool> RaisePinnedReleaseAsync(Guid project, int release, Guid operation, CancellationToken ct = default)
         => BoolOf(await rest.CallAsync("armory_raise_pinned_release", Args(("p_project", project), ("p_release", (short)release), ("p_operation", operation)), ct));
 
+    // Website v0.3 (docs/agent/website-requests-v0.3.md, sections 4 and 4b). Until the site's
+    // migration is live both answer 404 PGRST202 (ArmoryRpcException.IsFunctionMissing).
+    public const string SubmitFeedbackRpc = "armory_submit_app_feedback", SubmitIncidentRpc = "armory_submit_app_incident";
+    // kind: bug, idea or other. context: what the window was doing, never file contents.
+    public async Task<Guid> SubmitAppFeedbackAsync(string kind, string body, string appVersion, string? deviceName, JsonObject context, CancellationToken ct = default)
+        => GuidOf(await rest.CallAsync(SubmitFeedbackRpc, Args(("p_kind", kind), ("p_body", body), ("p_app_version", appVersion), ("p_device_name", deviceName),
+            ("p_context", context)), ct));
+    // kind: crash, slowAction, slowPass, repeatedFailure, repairedCheckout, readOnlyBroken or userReport.
+    public async Task<Guid> SubmitAppIncidentAsync(string kind, string summary, string appVersion, string? deviceName, Guid? project, JsonObject report,
+        Guid? feedback, CancellationToken ct = default)
+        => GuidOf(await rest.CallAsync(SubmitIncidentRpc, Args(("p_kind", kind), ("p_summary", summary), ("p_app_version", appVersion), ("p_device_name", deviceName),
+            ("p_project", project), ("p_report", report), ("p_feedback", feedback)), ct));
+
     public async Task<IReadOnlyList<RemoteProject>> MyProjectsAsync(CancellationToken ct = default)
         => Array(await rest.CallAsync("armory_my_projects", Args(), ct)).Select(p => new RemoteProject(
             Guid.Parse(p["id"]!.GetValue<string>()), p["name"]!.GetValue<string>(), p["season"]?.GetValue<int>(), ParseRole(p["role"]!.GetValue<string>()),

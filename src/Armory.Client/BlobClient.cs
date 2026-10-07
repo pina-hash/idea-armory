@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Armory.Storage;
+using Armory.Telemetry;
 
 namespace Armory.Client;
 
@@ -19,12 +20,63 @@ public sealed class BlobRefusedException(int status, string message) : ArmoryCli
 public sealed class StorageTransferException(string message, Exception? inner = null) : ArmoryClientException(message, inner);
 
 // Contract section 2: ideabosco.com mints a 15-minute URL for one content-addressed object;
-// the bytes go straight between this computer and storage.
-public sealed class BlobClient(HttpClient siteHttp, HttpClient storageHttp, Uri site, SessionManager sessions)
+// the bytes go straight between this computer and storage. Each URL request and each transfer
+// goes into the flight recorder (its size, how long, how it ended; never the URL, which is a
+// credential while it lasts).
+public sealed class BlobClient(HttpClient siteHttp, HttpClient storageHttp, Uri site, SessionManager sessions, FlightRecorder? recorder = null)
 {
     public const long MaximumPutBytes = 2L * 1024 * 1024 * 1024;
+    public const string UrlCall = "blob-url";
+    private int active;
+
+    // Uploads and downloads under way right now (the incident uploader waits for none).
+    public int ActiveTransfers => Volatile.Read(ref active);
 
     public async Task<BlobUrl> GetUrlAsync(Guid project, string hash, long bytes, HttpMethod method, CancellationToken ct = default)
+    {
+        if (recorder is null) return await GetUrlUnrecordedAsync(project, hash, bytes, method, ct);
+        var started = recorder.Now();
+        try
+        {
+            var url = await GetUrlUnrecordedAsync(project, hash, bytes, method, ct);
+            recorder.Rpc(UrlCall, recorder.MillisecondsSince(started), 200, null);
+            return url;
+        }
+        catch (Exception error)
+        {
+            recorder.Rpc(UrlCall, recorder.MillisecondsSince(started), (error as BlobRefusedException)?.Status ?? 0, Outcome(error));
+            throw;
+        }
+    }
+
+    private static string Outcome(Exception error) => error switch
+    {
+        ArmoryOfflineException => "offline",
+        ArmorySignedOutException => "signedOut",
+        OperationCanceledException => "canceled",
+        _ => error.GetType().Name,
+    };
+
+    // One transfer, counted while it runs and recorded when it ends.
+    private async Task<T> TransferAsync<T>(string direction, long bytes, Func<Task<T>> transfer, Func<T, bool> sent)
+    {
+        Interlocked.Increment(ref active);
+        var started = recorder?.Now() ?? 0;
+        try
+        {
+            var result = await transfer();
+            if (recorder is not null && sent(result)) recorder.Transfer(direction, bytes, recorder.MillisecondsSince(started), true, 200, null);
+            return result;
+        }
+        catch (Exception error)
+        {
+            recorder?.Transfer(direction, bytes, recorder.MillisecondsSince(started), false, (error as BlobRefusedException)?.Status ?? 0, Outcome(error));
+            throw;
+        }
+        finally { Interlocked.Decrement(ref active); }
+    }
+
+    private async Task<BlobUrl> GetUrlUnrecordedAsync(Guid project, string hash, long bytes, HttpMethod method, CancellationToken ct)
     {
         _ = ContentObjectKey.FromHash(hash);
         if (method != HttpMethod.Put && method != HttpMethod.Get) throw new ArgumentException("Only PUT and GET URLs exist.", nameof(method));
@@ -64,7 +116,10 @@ public sealed class BlobClient(HttpClient siteHttp, HttpClient storageHttp, Uri 
     // Returns false when storage already held the object, so nothing was sent (and nothing is
     // reported). progress receives the bytes sent so far: 0 when sending starts, then the running
     // total, and 0 again if the request body is sent again from the start.
-    public async Task<bool> UploadAsync(Guid project, string hash, long bytes, Func<Stream> open, CancellationToken ct = default, IProgress<long>? progress = null)
+    public Task<bool> UploadAsync(Guid project, string hash, long bytes, Func<Stream> open, CancellationToken ct = default, IProgress<long>? progress = null)
+        => TransferAsync("upload", bytes, () => UploadUnrecordedAsync(project, hash, bytes, open, ct, progress), sent => sent);
+
+    private async Task<bool> UploadUnrecordedAsync(Guid project, string hash, long bytes, Func<Stream> open, CancellationToken ct, IProgress<long>? progress)
     {
         if (bytes > MaximumPutBytes) throw new BlobRefusedException(400, "Files larger than 2 GiB cannot be stored in Armory yet.");
         var url = await GetUrlAsync(project, hash, bytes, HttpMethod.Put, ct);
@@ -84,7 +139,10 @@ public sealed class BlobClient(HttpClient siteHttp, HttpClient storageHttp, Uri 
     // after writing; the caller owns the destination and must discard it. progress receives the
     // bytes received so far: 0 when the body starts, then the running total. Every call starts
     // again from 0, so a retried download reports from 0.
-    public async Task DownloadAsync(Guid project, string hash, long bytes, Stream destination, CancellationToken ct = default, IProgress<long>? progress = null)
+    public Task DownloadAsync(Guid project, string hash, long bytes, Stream destination, CancellationToken ct = default, IProgress<long>? progress = null)
+        => TransferAsync("download", bytes, async () => { await DownloadUnrecordedAsync(project, hash, bytes, destination, ct, progress); return true; }, _ => true);
+
+    private async Task DownloadUnrecordedAsync(Guid project, string hash, long bytes, Stream destination, CancellationToken ct, IProgress<long>? progress)
     {
         var url = await GetUrlAsync(project, hash, bytes, HttpMethod.Get, ct);
         using var request = new HttpRequestMessage(HttpMethod.Get, url.Url);

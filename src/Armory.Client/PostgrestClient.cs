@@ -2,18 +2,48 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Armory.Telemetry;
 
 namespace Armory.Client;
 
 // POST {supabase_url}/rest/v1/rpc/{function} with the signed-in user's token and the
-// public anon key (docs/agent/CLIENT.md section 1).
-public sealed class PostgrestClient(HttpClient http, SessionManager sessions)
+// public anon key (docs/agent/CLIENT.md section 1). Every call goes into the flight recorder
+// with its name, how long it took and its answer (never a token or a body).
+public sealed class PostgrestClient(HttpClient http, SessionManager sessions, FlightRecorder? recorder = null)
 {
     public const int MaximumResends = 3;
 
     public async Task<JsonNode?> CallAsync(string function, IReadOnlyDictionary<string, object?> arguments, CancellationToken cancellationToken = default)
     {
         if (!function.StartsWith("armory_", StringComparison.Ordinal)) throw new ArgumentException("Only armory_ RPCs are called.", nameof(function));
+        if (recorder is null) return await CallUnrecordedAsync(function, arguments, cancellationToken);
+        var started = recorder.Now();
+        try
+        {
+            var answer = await CallUnrecordedAsync(function, arguments, cancellationToken);
+            recorder.Rpc(function, recorder.MillisecondsSince(started), 200, null);
+            return answer;
+        }
+        catch (ArmoryRpcException error)
+        {
+            recorder.Rpc(function, recorder.MillisecondsSince(started), error.Status, error.SqlState ?? "refused");
+            throw;
+        }
+        catch (Exception error)
+        {
+            recorder.Rpc(function, recorder.MillisecondsSince(started), 0, error switch
+            {
+                ArmoryOfflineException => "offline",
+                ArmorySignedOutException => "signedOut",
+                OperationCanceledException => "canceled",
+                _ => error.GetType().Name,
+            });
+            throw;
+        }
+    }
+
+    private async Task<JsonNode?> CallUnrecordedAsync(string function, IReadOnlyDictionary<string, object?> arguments, CancellationToken cancellationToken)
+    {
         var session = await sessions.GetFreshAsync(cancellationToken: cancellationToken);
         // One token refresh per call, whatever came before it: a token can expire during a
         // deadlock resend's wait, and that 401 is still refreshed once and sent again.
