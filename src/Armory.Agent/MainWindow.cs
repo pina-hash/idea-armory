@@ -9,8 +9,9 @@ namespace Armory.Agent;
 // tray; Quit in the tray exits.
 internal sealed class MainWindow : Form, IBridgeWindow
 {
-    internal const string HostName = "armory.local";
-    internal static readonly Uri StartPage = new("https://" + HostName + "/index.html");
+    internal const string HostName = PageAssets.HostName;
+    // ?v=<version>: a new version never shows a page cached by the old one (PageAssets).
+    internal static readonly Uri StartPage = PageAssets.StartPage(AgentPaths.Version);
     internal static readonly Uri RuntimeDownload = new("https://go.microsoft.com/fwlink/p/?LinkId=2124703");
     private readonly AgentHost host;
     private readonly AgentPaths paths;
@@ -109,6 +110,11 @@ internal sealed class MainWindow : Form, IBridgeWindow
             core.Settings.AreHostObjectsAllowed = false;
             core.Settings.IsWebMessageEnabled = true;
             core.SetVirtualHostNameToFolderMapping(HostName, AgentPaths.WebRoot, CoreWebView2HostResourceAccessKind.Deny);
+            await ForgetOldPageAsync(core);
+            // index.html is served from here, never cached, with ?v=<version> on its scripts and
+            // style sheets. When anything fails the folder mapping above serves it as is.
+            core.AddWebResourceRequestedFilter("https://" + HostName + "/index.html*", CoreWebView2WebResourceContext.Document);
+            core.WebResourceRequested += (_, args) => ServeStartPage(core, args);
             core.NavigationStarting += (_, args) => KeepInsideApp(args.Uri, () => args.Cancel = true);
             // A frame never leaves the app and never opens the browser by itself.
             core.FrameNavigationStarting += (_, args) => { if (!IsAppUri(args.Uri)) args.Cancel = true; };
@@ -126,7 +132,7 @@ internal sealed class MainWindow : Form, IBridgeWindow
                 string json;
                 try { json = args.WebMessageAsJson; }
                 catch (ArgumentException) { return; }
-                await bridge.HandleAsync(json);
+                await bridge.HandleAsync(json, DroppedFiles(args));
             };
             core.ProcessFailed += (_, args) =>
             {
@@ -171,6 +177,62 @@ internal sealed class MainWindow : Form, IBridgeWindow
     internal static bool IsAppUri(string? uri)
         => Uri.TryCreate(uri, UriKind.Absolute, out var parsed) && parsed.Scheme == Uri.UriSchemeHttps &&
            parsed.IsDefaultPort && string.Equals(parsed.Host, HostName, StringComparison.OrdinalIgnoreCase);
+
+    // Files the page sent along with a message (chrome.webview.postMessageWithAdditionalObjects):
+    // only File objects cross, as CoreWebView2File with the full path on this computer.
+    // Dropping files on the window never navigates: the page handles the drop, and a drop it
+    // missed would be a file: navigation that KeepInsideApp cancels.
+    private IReadOnlyList<string> DroppedFiles(CoreWebView2WebMessageReceivedEventArgs args)
+    {
+        try
+        {
+            var objects = args.AdditionalObjects;
+            if (objects is null || objects.Count == 0) return [];
+            List<string> files = [];
+            foreach (var item in objects)
+                if (item is CoreWebView2File file && !string.IsNullOrWhiteSpace(file.Path)) files.Add(file.Path);
+            return files;
+        }
+        catch (Exception error) when (error is InvalidOperationException or System.Runtime.InteropServices.COMException or NotImplementedException)
+        {
+            log.Error("could not read the files sent with a window message", error);
+            return [];
+        }
+    }
+
+    private void ServeStartPage(CoreWebView2 core, CoreWebView2WebResourceRequestedEventArgs args)
+    {
+        try
+        {
+            if (!IsAppUri(args.Request.Uri) || !Uri.TryCreate(args.Request.Uri, UriKind.Absolute, out var uri) ||
+                !string.Equals(uri.AbsolutePath, "/index.html", StringComparison.OrdinalIgnoreCase)) return;
+            var html = PageAssets.Versioned(File.ReadAllText(Path.Combine(AgentPaths.WebRoot, "index.html")), AgentPaths.Version);
+            args.Response = core.Environment.CreateWebResourceResponse(new MemoryStream(System.Text.Encoding.UTF8.GetBytes(html)), 200, "OK",
+                "Content-Type: text/html; charset=utf-8\r\nCache-Control: no-store");
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException or System.Runtime.InteropServices.COMException)
+        {
+            log.Error("could not serve the start page; the folder mapping serves it instead", error);
+        }
+    }
+
+    // The WebView2 profile outlives an upgrade. The first start of a new version empties the
+    // HTTP cache once, so not even a file the page loads without ?v= can come from the old one.
+    private async Task ForgetOldPageAsync(CoreWebView2 core)
+    {
+        var marker = Path.Combine(paths.WebView2Folder, "page-version.txt");
+        try
+        {
+            var seen = File.Exists(marker) ? File.ReadAllText(marker).Trim() : null;
+            if (string.Equals(seen, AgentPaths.Version, StringComparison.Ordinal)) return;
+            await core.Profile.ClearBrowsingDataAsync(CoreWebView2BrowsingDataKinds.DiskCache | CoreWebView2BrowsingDataKinds.CacheStorage);
+            File.WriteAllText(marker, AgentPaths.Version);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException or System.Runtime.InteropServices.COMException)
+        {
+            log.Error("could not clear the window's cache after an update", error);
+        }
+    }
 
     // Any navigation away from https://armory.local is canceled; web links open in the
     // default browser instead, and everything else (file:, javascript:, ...) goes nowhere.
@@ -245,6 +307,24 @@ internal sealed class MainWindow : Form, IBridgeWindow
             InitialDirectory = Directory.Exists(current) ? current : Path.GetDirectoryName(current) ?? "",
         };
         return dialog.ShowDialog(this) == DialogResult.OK ? dialog.SelectedPath : null;
+    }
+
+    IReadOnlyList<string>? IBridgeWindow.ChooseFiles(string title)
+    {
+        using var dialog = new OpenFileDialog
+        {
+            Title = title,
+            Multiselect = true,
+            CheckFileExists = true,
+            CheckPathExists = true,
+            // A shortcut picks the file it points to; Armory never copies links themselves.
+            DereferenceLinks = true,
+            RestoreDirectory = true,
+            Filter = "SolidWorks files (*.sldprt;*.sldasm;*.slddrw)|*.sldprt;*.sldasm;*.slddrw|All files (*.*)|*.*",
+            FilterIndex = 2,
+            InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+        };
+        return dialog.ShowDialog(this) == DialogResult.OK && dialog.FileNames.Length > 0 ? dialog.FileNames : null;
     }
 
     void IBridgeWindow.ShowProblem(string message)

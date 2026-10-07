@@ -1,9 +1,19 @@
 #!/usr/bin/env python3
-"""Draws the IDEA Armory tray and app icon and writes src/Armory.Agent/Assets/armory.ico.
+"""Draws the IDEA Armory app icon and its tray icons into src/Armory.Agent/Assets/.
 
 The mark is a heater shield (a piece of plate armor) on a rounded dark tile: a steel rim
 and a green field with a light green chevron, which also reads as the "A" of Armory. It stays a
 recognizable shield at 16 px in the notification area.
+
+armory.ico is the app icon. tray-<state>.ico are the notification-area icons for each sync
+state the window shows (AgentView.sync.state). Each state has its own badge SHAPE, not only
+its own color, so it reads for color-blind students and on any taskbar:
+
+    synced     the plain shield
+    syncing    a blue disc with a circular arrow
+    paused     a light disc with two pause bars
+    offline    the shield turned gray, with a gray disc crossed by a slash
+    attention  an amber triangle with an exclamation mark
 
 Standard library only. The output is deterministic, so rerunning it after a change gives a
 reviewable diff of the script and a byte-identical icon when nothing changed:
@@ -11,7 +21,8 @@ reviewable diff of the script and a byte-identical icon when nothing changed:
     python3 tools/agent-icon/make_icon.py
 
 Sizes: 16, 32 and 48 px as 32-bit BMP entries (the most compatible form for the tray and
-Explorer), 256 px as a PNG entry (what Windows expects at that size).
+Explorer), 256 px as a PNG entry (what Windows expects at that size). The tray icons carry
+16, 20, 24, 32, 40 and 48 px, the notification-area size at 100% to 300% display scaling.
 """
 
 import math
@@ -20,6 +31,8 @@ import struct
 import zlib
 
 SIZES = (16, 32, 48, 256)
+TRAY_SIZES = (16, 20, 24, 32, 40, 48)
+TRAY_STATES = ("synced", "syncing", "paused", "offline", "attention")
 SUPERSAMPLE = 4
 
 # The IDEA emblem's palette (the window's header uses the same emblem): a near-black
@@ -29,6 +42,13 @@ STEEL = (203, 210, 196)
 GREEN_TOP = (60, 122, 76)
 GREEN_BOTTOM = (31, 74, 44)
 LIGHT = (159, 226, 154)
+# Tray badges.
+WHITE = (245, 248, 246)
+BLUE = (52, 140, 230)
+PAUSE = (205, 212, 200)
+GRAY = (122, 128, 124)
+AMBER = (245, 183, 49)
+BADGE_X, BADGE_Y, BADGE_R = 0.70, 0.70, 0.29
 
 
 def tile(x, y):
@@ -80,8 +100,85 @@ def color_at(x, y, size):
     return TILE
 
 
-def render(size):
+def gray(c):
+    """The same lightness without color (the offline shield)."""
+    v = round(0.30 * c[0] + 0.59 * c[1] + 0.11 * c[2])
+    return (v, v, v)
+
+
+def triangle_distance(x, y, points):
+    """Smallest signed distance from (x, y) to the triangle's edges, positive inside."""
+    d = float("inf")
+    for i in range(3):
+        ax, ay = points[i]
+        bx, by = points[(i + 1) % 3]
+        cx, cy = points[(i + 2) % 3]
+        nx, ny = by - ay, ax - bx
+        length = math.hypot(nx, ny)
+        nx, ny = nx / length, ny / length
+        if (cx - ax) * nx + (cy - ay) * ny < 0:
+            nx, ny = -nx, -ny
+        d = min(d, (x - ax) * nx + (y - ay) * ny)
+    return d
+
+
+def badge_at(x, y, size, state):
+    """The state badge's color at (x, y), or None where the shield shows through."""
+    edge = 0.075 if size <= 20 else 0.06
+    if state == "attention":
+        points = ((0.71, 0.36), (0.985, 0.975), (0.435, 0.975))
+        d = triangle_distance(x, y, points)
+        if d < -edge:
+            return None
+        if d < 0:
+            return TILE
+        stroke = 0.085 if size <= 20 else 0.07
+        if segment_distance(x, y, 0.71, 0.57, 0.71, 0.76) <= stroke / 2 or math.hypot(x - 0.71, y - 0.87) <= stroke * 0.62:
+            return TILE
+        return AMBER
+    r = math.hypot(x - BADGE_X, y - BADGE_Y)
+    if r > BADGE_R + edge:
+        return None
+    if r > BADGE_R:
+        return TILE
+    stroke = 0.085 if size <= 20 else 0.07
+    dx, dy = x - BADGE_X, y - BADGE_Y
+    if state == "syncing":
+        # A circular arrow: a ring open at the upper right, with an arrowhead at the gap.
+        ring = 0.135
+        angle = math.degrees(math.atan2(-dy, dx)) % 360
+        if abs(r - ring) <= stroke / 2 and not (0 <= angle <= 70):
+            return WHITE
+        head = ((BADGE_X + ring - 0.085, BADGE_Y - 0.005), (BADGE_X + ring + 0.085, BADGE_Y - 0.005), (BADGE_X + ring, BADGE_Y + 0.085))
+        if triangle_distance(x, y, head) >= 0:
+            return WHITE
+        return BLUE
+    if state == "paused":
+        bar = stroke * 0.95
+        if abs(dy) <= 0.12 and (abs(dx + 0.065) <= bar / 2 or abs(dx - 0.065) <= bar / 2):
+            return TILE
+        return PAUSE
+    if state == "offline":
+        if segment_distance(x, y, BADGE_X - 0.13, BADGE_Y + 0.13, BADGE_X + 0.13, BADGE_Y - 0.13) <= stroke / 2:
+            return WHITE
+        return GRAY
+    raise ValueError(state)
+
+
+def tray_color_at(x, y, size, state):
+    if state != "synced":
+        badge = badge_at(x, y, size, state)
+        if badge is not None:
+            return badge
+    c = color_at(x, y, size)
+    if c is not None and state == "offline":
+        return gray(c)
+    return c
+
+
+def render(size, color=None):
     """Returns rows of RGBA tuples, top row first, anti-aliased by supersampling."""
+    color = color or color_at
     rows = []
     n = SUPERSAMPLE
     for py in range(size):
@@ -92,7 +189,7 @@ def render(size):
                 for sx in range(n):
                     x = (px + (sx + 0.5) / n) / size
                     y = (py + (sy + 0.5) / n) / size
-                    c = color_at(x, y, size)
+                    c = color(x, y, size)
                     if c is not None:
                         r += c[0]
                         g += c[1]
@@ -140,12 +237,13 @@ def ico(images):
 
 def main():
     here = os.path.dirname(os.path.abspath(__file__))
-    target = os.path.normpath(os.path.join(here, "..", "..", "src", "Armory.Agent", "Assets", "armory.ico"))
+    assets = os.path.normpath(os.path.join(here, "..", "..", "src", "Armory.Agent", "Assets"))
+    target = os.path.join(assets, "armory.ico")
     images = []
     for size in SIZES:
         rows = render(size)
         images.append((size, png(rows) if size >= 256 else bmp(rows)))
-    os.makedirs(os.path.dirname(target), exist_ok=True)
+    os.makedirs(assets, exist_ok=True)
     with open(target, "wb") as out:
         out.write(ico(images))
     preview = os.environ.get("ARMORY_ICON_PREVIEW")
@@ -153,6 +251,18 @@ def main():
         with open(preview, "wb") as out:
             out.write(png(render(256)))
     print(f"wrote {target} ({', '.join(str(s) for s in SIZES)} px)")
+    for state in TRAY_STATES:
+        def paint(x, y, size, state=state):
+            return tray_color_at(x, y, size, state)
+        tray = os.path.join(assets, f"tray-{state}.ico")
+        with open(tray, "wb") as out:
+            out.write(ico([(size, bmp(render(size, paint))) for size in TRAY_SIZES]))
+        if preview:
+            root, _ = os.path.splitext(preview)
+            for size in (16, 48):
+                with open(f"{root}-{state}-{size}.png", "wb") as out:
+                    out.write(png(render(size, paint)))
+        print(f"wrote {tray} ({', '.join(str(s) for s in TRAY_SIZES)} px)")
 
 
 if __name__ == "__main__":

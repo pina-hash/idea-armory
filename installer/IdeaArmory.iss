@@ -81,6 +81,11 @@ FinishedLabel=[name] is installed and running in the tray, near the clock. It st
 Source: "{#PayloadDir}\scripts\Setup.ps1"; DestDir: "{tmp}"; DestName: "ArmorySetup.ps1"; Flags: dontcopy
 Source: "{#PayloadDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
+[InstallDelete]
+; The window's page is replaced as a whole: a page file an older version shipped and this one
+; does not must never be served next to the new page (an upgrade keeps everything else).
+Type: filesandordirs; Name: "{app}\wwwroot"
+
 [Icons]
 Name: "{userprograms}\IDEA Armory"; Filename: "{app}\IdeaArmory.exe"; WorkingDir: "{app}"; Comment: "IDEA Armory: the team and class CAD vault"
 

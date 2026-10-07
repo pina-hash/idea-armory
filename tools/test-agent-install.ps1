@@ -3,6 +3,17 @@
 #                Check again (must fail), and the drive's logs\<COMPUTERNAME>.txt
 #   -Kind Setup  with IDEA-Armory-Setup-v<version>.exe /VERYSILENT twice, the installed Check,
 #                then unins000.exe /VERYSILENT
+#   -Kind Upgrade  for the flash drive and for setup.exe (-Route Both, the default, or one of
+#                them): download the published v<From> release (0.1.0 by default) into
+#                RUNNER_TEMP and check each asset against its .sha256, install it and wait for
+#                it to start, plant the vault's proof files, a settings.json with a non-default
+#                theme and a sign-in in the exact DpapiSecretStore format, then install this
+#                build over it. This build must run, the Apps entry must show its version, the
+#                sign-in, the settings and the proof files must keep every byte, the sign-in
+#                must still decrypt for this Windows account and this build's log must say it
+#                loaded that session, its vault runtime must start on the old vault, a 0.1.0
+#                read-only intent must not make a file the server does not have read-only, and
+#                no file of the old page (wwwroot) may survive. Then uninstall.
 # Each cycle checks the exe, the start at sign-in value, the Apps entry, the Start menu
 # shortcut, IdeaArmory.exe --check, the running process and agent.log, and that uninstall
 # removes all of it while C:\IDEA\Armory\Proof\ keeps the same bytes.
@@ -10,9 +21,12 @@
 # It installs and removes IDEA Armory for the current Windows account and writes into
 # C:\IDEA\Armory\Proof. Run it only on a throwaway machine such as a CI runner.
 param(
-    [Parameter(Mandatory = $true)][ValidateSet('Usb', 'Setup')][string]$Kind,
+    [Parameter(Mandatory = $true)][ValidateSet('Usb', 'Setup', 'Upgrade')][string]$Kind,
     [string]$Dist = 'dist',
-    [string]$Evidence = 'evidence'
+    [string]$Evidence = 'evidence',
+    [ValidateSet('Both', 'Usb', 'Setup')][string]$Route = 'Both',
+    [ValidatePattern('^\d+\.\d+\.\d+$')][string]$From = '0.1.0',
+    [string]$ReleaseUrl = 'https://github.com/pina-hash/idea-armory/releases/download/v{0}/'
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
@@ -46,6 +60,15 @@ if (-not $temp) { $temp = [IO.Path]::GetTempPath() }
 $Usb = Join-Path $temp 'armory-usb'
 $script:Runs = 0
 $script:ProofHashes = @()
+# Upgrade: what the old version leaves and the new one must keep byte for byte.
+$SettingsFile = Join-Path $DataDir 'settings.json'
+$SecretFile = Join-Path $DataDir 'secrets\armory-session.secret'
+$StalePage = Join-Path $Target 'wwwroot\stale-page-file.js'
+$SessionEmail = 'upgrade.test@example.com'
+$VaultStarted = 'vault runtime started at ' + $Vault
+$OldManifest = Join-Path $Vault '.armory\read-only.json'
+$script:Kept = [ordered]@{}
+$script:SessionJson = $null
 
 function Note([string]$text) { Add-Content -LiteralPath $Log -Value $text -Encoding utf8; Write-Host $text }
 function Step([string]$text) { Note ''; Note ('--- ' + $text) }
@@ -193,11 +216,11 @@ function Assert-Restarted($Before) {
     if ($same.Count -gt 0) { Fail ('The app was not restarted: process ' + ($same -join ', ') + ' is still the one from before') }
     Note ('restarted: process ' + ($Before -join ', ') + ' closed, ' + ($now -join ', ') + ' running')
 }
-function Assert-Installed([string]$Entry) {
+function Assert-Installed([string]$Entry, [string]$Expect = $Version) {
     if (-not (Test-Path -LiteralPath $Exe)) { Fail ('IdeaArmory.exe is missing at ' + $Exe) }
     $info = [Diagnostics.FileVersionInfo]::GetVersionInfo($Exe)
     $exeVersion = '{0}.{1}.{2}' -f $info.FileMajorPart, $info.FileMinorPart, $info.FileBuildPart
-    if ($exeVersion -ne $Version) { Fail ('IdeaArmory.exe is ' + $exeVersion + ', expected ' + $Version) }
+    if ($exeVersion -ne $Expect) { Fail ('IdeaArmory.exe is ' + $exeVersion + ', expected ' + $Expect) }
     Note ('exe: ' + $Exe + ' ' + $exeVersion + ' (' + $info.ProductName + ', ' + $info.CompanyName + ')')
     $run = Get-RunValue
     if ($run -cne $RunCommand) { Fail ('Run value is "' + $run + '", expected "' + $RunCommand + '"') }
@@ -207,7 +230,7 @@ function Assert-Installed([string]$Entry) {
     if (-not (Test-Path -LiteralPath $key)) { Fail ('The Apps entry is missing: ' + $key) }
     if (Test-Path -LiteralPath $other) { Fail ('A second Apps entry exists: ' + $other) }
     $u = Get-ItemProperty -LiteralPath $key
-    $wanted = [ordered]@{ DisplayName = 'IDEA Armory'; Publisher = 'IDEA, Don Bosco Tech'; DisplayVersion = $Version }
+    $wanted = [ordered]@{ DisplayName = 'IDEA Armory'; Publisher = 'IDEA, Don Bosco Tech'; DisplayVersion = $Expect }
     foreach ($name in $wanted.Keys) { if ($u.$name -cne $wanted[$name]) { Fail ('Apps entry ' + $name + ' is "' + $u.$name + '", expected "' + $wanted[$name] + '"') } }
     foreach ($name in @('DisplayIcon', 'UninstallString', 'QuietUninstallString')) { if (-not $u.$name) { Fail ('Apps entry has no ' + $name) } }
     foreach ($name in @('NoModify', 'NoRepair')) { if ($u.$name -ne 1) { Fail ('Apps entry ' + $name + ' is "' + $u.$name + '", expected 1') } }
@@ -220,15 +243,189 @@ function Assert-Installed([string]$Entry) {
     Note ('IdeaArmory.exe --check: exit ' + $check.Code + ': ' + $check.Raw)
     if ($check.Code -ne 0) { Fail 'IdeaArmory.exe --check did not exit 0' }
     if (-not $check.Json) { Fail 'IdeaArmory.exe --check printed no JSON line' }
-    if ($check.Json.version -ne $Version) { Fail ('--check version is ' + $check.Json.version) }
+    if ($check.Json.version -ne $Expect) { Fail ('--check version is ' + $check.Json.version + ', expected ' + $Expect) }
     if ($check.Json.wwwroot -ne $true) { Fail '--check reports wwwroot missing' }
     if (-not $check.Json.webView2Runtime) { Fail '--check reports no WebView2 runtime' }
     if (-not $check.Json.vaultRoot) { Fail '--check reports no vaultRoot' }
     if (-not (Wait-Until { @(Get-ArmoryPids).Count -gt 0 } 30)) { Fail ('IdeaArmory.exe is not running from ' + $Exe) }
     Note ('running: process ' + (@(Get-ArmoryPids) -join ', ') + ' from ' + $Exe)
-    $started = 'started ' + $Version
+    $started = 'started ' + $Expect
     if (-not (Wait-Until { (Read-AgentLog).Contains($started) } 30)) { Fail ('agent.log has no "' + $started + '" line') }
     Note ('agent.log: "' + $started + '" found in ' + $AgentLog)
+}
+
+# unins000.exe /VERYSILENT from the Apps entry, waiting for its copy in TEMP to finish.
+function Invoke-SetupUninstall([string]$Label, [string]$InnoLog) {
+    $uninstallString = [string](Get-ItemProperty -LiteralPath $InnoKey).UninstallString
+    $uninstaller = [regex]::Match($uninstallString, '^"([^"]+)"').Groups[1].Value
+    if (-not $uninstaller) { $uninstaller = ($uninstallString -split ' ')[0] }
+    if (-not [string]::Equals($uninstaller, (Join-Path $Target 'unins000.exe'), [StringComparison]::OrdinalIgnoreCase)) { Fail ('UninstallString points at ' + $uninstaller) }
+    [void](Expect $Label $uninstaller ($silent -f (Join-Path $Evidence $InnoLog)) $true)
+    # The uninstaller returns while its copy in TEMP is still removing files.
+    $done = Wait-Until { -not (Test-Path -LiteralPath $InnoKey) -and -not (Test-Path -LiteralPath $Target) -and @(Get-Process -Name '_iu*' -ErrorAction SilentlyContinue).Count -eq 0 } 120
+    if (-not $done) { Note 'the uninstaller was still finishing after 120 seconds' }
+}
+
+# Downloads the published release's flash-drive zip and setup.exe (the repository is public, so
+# no token) into RUNNER_TEMP, never into dist, and checks each against its .sha256 file.
+function Get-OldRelease {
+    $folder = Join-Path $temp ('armory-release-v' + $From)
+    [void][IO.Directory]::CreateDirectory($folder)
+    $base = $ReleaseUrl -f $From
+    $saved = $ProgressPreference
+    $ProgressPreference = 'SilentlyContinue'
+    try {
+        foreach ($name in @(('IDEA-Armory-USB-v' + $From + '.zip'), ('IDEA-Armory-Setup-v' + $From + '.exe'))) {
+            foreach ($file in @($name, ($name + '.sha256'))) {
+                $target = Join-Path $folder $file
+                if (Test-Path -LiteralPath $target) { continue }
+                for ($attempt = 1; ; $attempt++) {
+                    try { Invoke-WebRequest -Uri ($base + $file) -OutFile $target -UseBasicParsing; break }
+                    catch {
+                        Remove-Item -LiteralPath $target -ErrorAction SilentlyContinue
+                        if ($attempt -ge 3) { Fail ('Could not download ' + $base + $file + ': ' + $_.Exception.Message) }
+                        Start-Sleep -Seconds (10 * $attempt)
+                    }
+                }
+            }
+            $line = (Get-Content -LiteralPath (Join-Path $folder ($name + '.sha256')) -Raw).Trim()
+            $parts = @($line -split '\s+', 2)
+            if ($parts.Count -ne 2 -or $parts[0] -notmatch '^[0-9a-fA-F]{64}$' -or $parts[1].TrimStart('*') -cne $name) { Fail ('Unexpected ' + $name + '.sha256: ' + $line) }
+            $actual = (Get-FileHash -LiteralPath (Join-Path $folder $name) -Algorithm SHA256).Hash
+            if ($actual -ne $parts[0].ToUpperInvariant()) {
+                Remove-Item -LiteralPath (Join-Path $folder $name) -ErrorAction SilentlyContinue
+                Fail ($name + ' has SHA-256 ' + $actual + ', but its .sha256 says ' + $parts[0])
+            }
+            Note ('downloaded ' + $base + $name + ', SHA-256 ' + $actual + ' matches its .sha256')
+        }
+    } finally { $ProgressPreference = $saved }
+    return $folder
+}
+
+# DPAPI exactly as src/Armory.Platform.Windows/DpapiSecretStore.cs calls it: CurrentUser,
+# CRYPTPROTECT_UI_FORBIDDEN, description "IDEA Armory", entropy "IDEA Armory secret store v1/<name>".
+function Initialize-Dpapi {
+    if ('ArmoryUpgradeDpapi' -as [type]) { return }
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class ArmoryUpgradeDpapi
+{
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Blob { public int Size; public IntPtr Data; }
+    [DllImport("crypt32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CryptProtectData(ref Blob input, string description, ref Blob entropy, IntPtr reserved, IntPtr prompt, int flags, out Blob output);
+    [DllImport("crypt32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CryptUnprotectData(ref Blob input, IntPtr description, ref Blob entropy, IntPtr reserved, IntPtr prompt, int flags, out Blob output);
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr LocalFree(IntPtr memory);
+    public static byte[] Protect(byte[] plain, byte[] entropy) { return Run(plain, entropy, true); }
+    public static byte[] Unprotect(byte[] blob, byte[] entropy) { return Run(blob, entropy, false); }
+    private static byte[] Run(byte[] data, byte[] entropy, bool protect)
+    {
+        GCHandle input = GCHandle.Alloc(data, GCHandleType.Pinned);
+        GCHandle salt = GCHandle.Alloc(entropy, GCHandleType.Pinned);
+        try
+        {
+            Blob dataIn = new Blob { Size = data.Length, Data = input.AddrOfPinnedObject() };
+            Blob extra = new Blob { Size = entropy.Length, Data = salt.AddrOfPinnedObject() };
+            Blob output;
+            bool ok = protect
+                ? CryptProtectData(ref dataIn, "IDEA Armory", ref extra, IntPtr.Zero, IntPtr.Zero, 1, out output)
+                : CryptUnprotectData(ref dataIn, IntPtr.Zero, ref extra, IntPtr.Zero, IntPtr.Zero, 1, out output);
+            if (!ok) return null;
+            try
+            {
+                byte[] bytes = new byte[output.Size];
+                if (output.Size > 0) Marshal.Copy(output.Data, bytes, 0, output.Size);
+                return bytes;
+            }
+            finally { LocalFree(output.Data); }
+        }
+        finally { input.Free(); salt.Free(); }
+    }
+}
+'@
+}
+$SecretHeader = [Text.Encoding]::ASCII.GetBytes("ARMORY-DPAPI-1`n")
+$SecretEntropy = [Text.Encoding]::UTF8.GetBytes('IDEA Armory secret store v1/armory-session')
+
+# The sign-in as src/Armory.Client/Session.cs stores it (SessionStorage.Stored, default JSON
+# names). Its Supabase address answers nothing (port 9) and its token lasts until 2099, so
+# neither version can refresh or refuse it: a missing or changed file after the upgrade can
+# only be the installer's or the new version's doing.
+function Get-TestSession {
+    if (-not $script:SessionJson) {
+        $script:SessionJson = '{"SupabaseUrl":"http://127.0.0.1:9","AnonKey":"upgrade-test-anon-key","AccessToken":"upgrade-test-access-token",' +
+            '"RefreshToken":"upgrade-test-refresh-token","ExpiresAt":"2099-01-01T00:00:00+00:00","Email":"' + $SessionEmail + '",' +
+            '"DeviceId":"' + [guid]::NewGuid().ToString() + '","DeviceName":"' + $env:COMPUTERNAME + '"}'
+    }
+    return $script:SessionJson
+}
+function Read-SignIn {
+    $stored = [IO.File]::ReadAllBytes($SecretFile)
+    if ($stored.Length -le $SecretHeader.Length) { return $null }
+    for ($i = 0; $i -lt $SecretHeader.Length; $i++) { if ($stored[$i] -ne $SecretHeader[$i]) { return $null } }
+    $blob = [byte[]]::new($stored.Length - $SecretHeader.Length)
+    [Buffer]::BlockCopy($stored, $SecretHeader.Length, $blob, 0, $blob.Length)
+    $plain = [ArmoryUpgradeDpapi]::Unprotect($blob, $SecretEntropy)
+    if ($null -eq $plain) { return $null }
+    return [Text.Encoding]::UTF8.GetString($plain)
+}
+# The log text written since the last "started <version>" line, or $null before that line.
+function Get-LogSince([string]$version) {
+    $text = Read-AgentLog
+    $at = $text.LastIndexOf('started ' + $version)
+    if ($at -lt 0) { return $null }
+    return $text.Substring($at)
+}
+function Save-UpgradeState {
+    Initialize-Dpapi
+    # Earlier cycles may have made .armory already: the old version's own log line is the proof
+    # that it opened this vault.
+    if (-not (Wait-Until { [string](Get-LogSince $From) -match [regex]::Escape($VaultStarted) } 60)) { Fail ('IDEA Armory ' + $From + ' did not log "' + $VaultStarted + '"') }
+    Note ('agent.log: ' + $From + ' logged "' + $VaultStarted + '"')
+    # A read-only intent in the 0.1.0 format ({"<path>": n}, 0 = Free, which 0.1.0 left
+    # writable) for a file the server does not have: 0.2.0 must never apply it.
+    [IO.File]::WriteAllText($OldManifest, '{"Proof/keep.txt":0}', [Text.UTF8Encoding]::new($false))
+    (Get-Item -LiteralPath $ProofFiles[0]).IsReadOnly = $false
+    [IO.File]::WriteAllText($SettingsFile, '{"vaultRoot":"C:\\IDEA\\Armory","startAtSignIn":true,"theme":"spaceWhite"}', [Text.UTF8Encoding]::new($false))
+    $blob = [ArmoryUpgradeDpapi]::Protect([Text.Encoding]::UTF8.GetBytes((Get-TestSession)), $SecretEntropy)
+    if ($null -eq $blob) { Fail 'Windows could not protect the test sign-in' }
+    $bytes = [byte[]]::new($SecretHeader.Length + $blob.Length)
+    [Buffer]::BlockCopy($SecretHeader, 0, $bytes, 0, $SecretHeader.Length)
+    [Buffer]::BlockCopy($blob, 0, $bytes, $SecretHeader.Length, $blob.Length)
+    [void][IO.Directory]::CreateDirectory((Split-Path -Parent $SecretFile))
+    [IO.File]::WriteAllBytes($SecretFile, $bytes)
+    if ((Read-SignIn) -cne (Get-TestSession)) { Fail 'The planted sign-in does not read back' }
+    [IO.File]::WriteAllText($StalePage, '// a page file only the old version shipped', [Text.UTF8Encoding]::new($false))
+    $script:Kept = [ordered]@{}
+    foreach ($file in @($SettingsFile, $SecretFile)) { $script:Kept[$file] = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash }
+    Note ('planted settings.json (theme spaceWhite), the sign-in ' + $SecretFile + ', a 0.1.0 read-only intent ' + $OldManifest + ' and ' + $StalePage)
+    foreach ($file in $script:Kept.Keys) { Note ('    ' + $file + ' SHA-256 ' + $script:Kept[$file]) }
+}
+function Assert-UpgradeKept {
+    foreach ($file in $script:Kept.Keys) {
+        if (-not (Test-Path -LiteralPath $file)) { Fail ($file + ' is gone after the upgrade') }
+        $hash = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash
+        if ($hash -ne $script:Kept[$file]) { Fail ($file + ' changed during the upgrade') }
+    }
+    Note ('settings.json and the sign-in kept every byte: ' + (@($script:Kept.Keys) -join ', '))
+    if ((Read-SignIn) -cne (Get-TestSession)) { Fail 'The sign-in no longer decrypts for this Windows account' }
+    Note 'the sign-in still decrypts for this Windows account and holds the same session'
+    # The new version itself, not only this script, read that sign-in, and opened the old vault.
+    $loaded = 'session loaded for ' + $SessionEmail
+    $since = [string](Get-LogSince $Version)
+    if (-not $since.Contains($loaded)) { Fail ('IDEA Armory ' + $Version + ' did not load the kept sign-in: no "' + $loaded + '" after "started ' + $Version + '" in agent.log') }
+    Note ('agent.log: ' + $Version + ' logged "' + $loaded + '"')
+    if (-not (Wait-Until { [string](Get-LogSince $Version) -match [regex]::Escape($VaultStarted) } 60)) { Fail ('IDEA Armory ' + $Version + ' did not start its vault runtime on the old vault: no "' + $VaultStarted + '"') }
+    Note ('agent.log: ' + $Version + ' logged "' + $VaultStarted + '"')
+    if ((Get-Item -LiteralPath $ProofFiles[0]).IsReadOnly) { Fail ('A 0.1.0 read-only intent made ' + $ProofFiles[0] + ', a file the server does not have, read-only') }
+    Note ('the 0.1.0 read-only intent was not applied: ' + $ProofFiles[0] + ' is still writable')
+    if (Test-Path -LiteralPath $StalePage) { Fail ('A file of the old page survived the upgrade: ' + $StalePage) }
+    Note 'no file of the old page survived (wwwroot)'
 }
 
 Remove-Item -LiteralPath $Log -ErrorAction SilentlyContinue
@@ -285,7 +482,7 @@ if ($Kind -eq 'Usb') {
         if ($line -notmatch '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} ' -or -not $line.Contains(' v' + $Version + ' ') -or $line -notmatch ' user=\S+' -or $line -notmatch ' seconds=([\d.]+) ') { Fail ('Drive log line ' + ($i + 1) + ' lacks the date, version, user or seconds: ' + $line) }
         if ($line.Contains(' INSTALL ') -and [double]($line -replace '^.* seconds=([\d.]+) .*$', '$1') -gt 120) { Fail ('An install took over 120 seconds: ' + $line) }
     }
-} else {
+} elseif ($Kind -eq 'Setup') {
     if (-not (Test-Path -LiteralPath $SetupExe)) { Fail ('Missing ' + $SetupExe) }
     $silent = '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG="{0}"'
     Step 'before: nothing installed'
@@ -304,18 +501,59 @@ if ($Kind -eq 'Usb') {
     Step 'the installed scripts\Check.cmd /quiet'
     [void](Expect 'check-installed' (Join-Path $Target 'scripts\Check.cmd') '/quiet' $true)
     Step 'unins000.exe /VERYSILENT'
-    $uninstallString = [string](Get-ItemProperty -LiteralPath $InnoKey).UninstallString
-    $uninstaller = [regex]::Match($uninstallString, '^"([^"]+)"').Groups[1].Value
-    if (-not $uninstaller) { $uninstaller = ($uninstallString -split ' ')[0] }
-    if (-not [string]::Equals($uninstaller, (Join-Path $Target 'unins000.exe'), [StringComparison]::OrdinalIgnoreCase)) { Fail ('UninstallString points at ' + $uninstaller) }
-    [void](Expect 'unins000' $uninstaller ($silent -f (Join-Path $Evidence 'setup-uninstall.log')) $true)
-    # The uninstaller returns while its copy in TEMP is still removing files.
-    $done = Wait-Until { -not (Test-Path -LiteralPath $InnoKey) -and -not (Test-Path -LiteralPath $Target) -and @(Get-Process -Name '_iu*' -ErrorAction SilentlyContinue).Count -eq 0 } 120
-    if (-not $done) { Note 'the uninstaller was still finishing after 120 seconds' }
+    Invoke-SetupUninstall 'unins000' 'setup-uninstall.log'
     Assert-Clean 'after uninstall'
     Assert-Proof
     Step 'Check IDEA Armory.cmd /quiet after uninstall (must fail)'
     [void](Expect 'check-after' $UsbCheck '/quiet' $false)
+} else {
+    if ([version]$From -ge [version]$Version) { Fail ('This build is ' + $Version + '; an upgrade from ' + $From + ' must go up') }
+    if (-not (Test-Path -LiteralPath $SetupExe)) { Fail ('Missing ' + $SetupExe) }
+    $silent = '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG="{0}"'
+    Step ('download IDEA Armory ' + $From + ' from the published release')
+    $old = Get-OldRelease
+    $oldUsb = Join-Path $temp ('armory-usb-v' + $From)
+    if (Test-Path -LiteralPath $oldUsb) { Remove-Item -LiteralPath $oldUsb -Recurse -Force }
+    Expand-Archive -LiteralPath (Join-Path $old ('IDEA-Armory-USB-v' + $From + '.zip')) -DestinationPath $oldUsb
+    $routes = @('Usb', 'Setup')
+    if ($Route -ne 'Both') { $routes = @($Route) }
+    foreach ($way in $routes) {
+        Step ($way + ': before, nothing installed')
+        Assert-Clean 'before install' -Before
+        if ($way -eq 'Usb') {
+            Step ('IDEA Armory ' + $From + ': Install IDEA Armory.cmd /quiet from its flash-drive zip')
+            [void](Expect ('usb-' + $From) (Join-Path $oldUsb 'Install IDEA Armory.cmd') '/quiet' $true)
+        } else {
+            Step ('IDEA Armory ' + $From + ': IDEA-Armory-Setup-v' + $From + '.exe /VERYSILENT')
+            [void](Expect ('setup-' + $From) (Join-Path $old ('IDEA-Armory-Setup-v' + $From + '.exe')) ($silent -f (Join-Path $Evidence ('setup-upgrade-from-' + $From + '.log'))) $true)
+        }
+        Assert-Installed $way $From
+        Step 'the vault, the settings and the sign-in the upgrade must keep'
+        Save-Proof
+        Save-UpgradeState
+        $firstRun = @(Get-ArmoryPids)
+        if ($way -eq 'Usb') {
+            Step ('IDEA Armory ' + $Version + ': Install IDEA Armory.cmd /quiet over ' + $From)
+            $upgraded = Expect ('usb-' + $Version) $UsbInstall '/quiet' $true
+            if (-not ([string]$upgraded.Output).Contains('Upgraded IDEA Armory ' + $From + ' to ' + $Version)) { Fail ('The flash drive install did not report "Upgraded IDEA Armory ' + $From + ' to ' + $Version + '"') }
+        } else {
+            Step ('IDEA Armory ' + $Version + ': ' + (Split-Path -Leaf $SetupExe) + ' /VERYSILENT over ' + $From)
+            [void](Expect ('setup-' + $Version) $SetupExe ($silent -f (Join-Path $Evidence ('setup-upgrade-to-' + $Version + '.log'))) $true)
+        }
+        Assert-Installed $way
+        Assert-Restarted $firstRun
+        # Let the new version run with the sign-in for a while before looking at it.
+        Start-Sleep -Seconds 15
+        if (@(Get-ArmoryPids).Count -eq 0) { Fail ('IDEA Armory ' + $Version + ' stopped running after the upgrade') }
+        Assert-UpgradeKept
+        Assert-Proof
+        Step ($way + ': uninstall')
+        if ($way -eq 'Usb') { [void](Expect 'usb-uninstall' $UsbUninstall '/quiet' $true) }
+        else { Invoke-SetupUninstall 'unins000' 'setup-upgrade-uninstall.log' }
+        Assert-Clean 'after uninstall'
+        Assert-Proof
+    }
 }
 Note ''
-Note ('PASS: the ' + $Kind + ' install, launch and uninstall cycle for IDEA Armory ' + $Version)
+if ($Kind -eq 'Upgrade') { Note ('PASS: the upgrade from IDEA Armory ' + $From + ' to ' + $Version + ' (' + $Route + ') kept the vault, the settings and the sign-in') }
+else { Note ('PASS: the ' + $Kind + ' install, launch and uninstall cycle for IDEA Armory ' + $Version) }

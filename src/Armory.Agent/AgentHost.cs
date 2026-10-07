@@ -50,6 +50,10 @@ internal sealed class AgentHost : IAsyncDisposable
         storageHttp = Http(TimeSpan.FromHours(2));
         var secrets = new DpapiSecretStore(paths.SecretsFolder, problem => log.Error(problem));
         Sessions = new SessionManager(restHttp, secrets);
+        // Says whether this start found a saved sign-in (the email only; tokens never reach the
+        // log). The upgrade cycle (tools/test-agent-install.ps1 -Kind Upgrade) reads it to prove
+        // that a new version still uses the sign-in an older one saved.
+        log.Info(Sessions.Current is { } saved ? "session loaded for " + saved.Email : "no saved session");
         Api = new ArmoryApi(new PostgrestClient(restHttp, Sessions));
         Blobs = new BlobClient(siteHttp, storageHttp, site, Sessions);
         Connector = new ConnectFlow(siteHttp, site, new DefaultBrowserLauncher(), Sessions);

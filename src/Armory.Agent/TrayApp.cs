@@ -4,7 +4,9 @@ using Microsoft.Win32;
 namespace Armory.Agent;
 
 // The notification-area icon and its menu. The window is created the first time it opens;
-// "--background" starts with the icon only. Quit stops the engine and exits cleanly.
+// "--background" starts with the icon only. Quit stops the engine and exits cleanly. The icon
+// follows the sync state (view.Sync.State) with a badge whose shape, not only its color, says
+// syncing, paused, offline or attention (tools/agent-icon/make_icon.py draws them).
 internal sealed class TrayApp : ApplicationContext
 {
     // NotifyIcon.Text refuses longer text on some Windows Forms versions.
@@ -13,7 +15,8 @@ internal sealed class TrayApp : ApplicationContext
     private readonly AgentPaths paths;
     private readonly AgentLog log;
     private readonly Icon appIcon;
-    private readonly Icon trayIcon;
+    private readonly Dictionary<string, Icon> trayIcons = new(StringComparer.Ordinal);
+    private readonly CheckOutPrompts prompts = new();
     private readonly NotifyIcon notify;
     private readonly ContextMenuStrip menu;
     private readonly ToolStripMenuItem pauseItem;
@@ -33,13 +36,14 @@ internal sealed class TrayApp : ApplicationContext
         marshal = new Control();
         marshal.CreateControl();
         _ = marshal.Handle;
-        appIcon = LoadIcon(new Size(32, 32));
-        trayIcon = LoadIcon(SystemInformation.SmallIconSize);
+        appIcon = LoadIcon("armory.ico", new Size(32, 32));
+        foreach (var state in new[] { SyncStates.Synced, SyncStates.Syncing, SyncStates.Paused, SyncStates.Offline, SyncStates.Attention })
+            trayIcons[state] = LoadIcon("tray-" + state + ".ico", SystemInformation.SmallIconSize);
 
         menu = new ContextMenuStrip();
         var openItem = new ToolStripMenuItem("Open Armory", null, (_, _) => OpenWindow()) { Font = new Font(menu.Font, FontStyle.Bold) };
-        var vaultItem = new ToolStripMenuItem("Open vault folder", null, (_, _) => OpenVault());
-        pauseItem = new ToolStripMenuItem("Pause sync", null, (_, _) => TogglePause());
+        var vaultItem = new ToolStripMenuItem("Open Armory folder", null, (_, _) => OpenVault());
+        pauseItem = new ToolStripMenuItem("Pause", null, (_, _) => TogglePause());
         accountItem = new ToolStripMenuItem("Connect this computer", null, (_, _) => ConnectOrSignOut());
         var quitItem = new ToolStripMenuItem("Quit", null, (_, _) => Quit());
         menu.Items.AddRange([openItem, vaultItem, pauseItem, accountItem, quitItem]);
@@ -47,12 +51,13 @@ internal sealed class TrayApp : ApplicationContext
 
         notify = new NotifyIcon
         {
-            Icon = trayIcon,
+            Icon = trayIcons[SyncStates.Synced],
             Text = "IDEA Armory",
             ContextMenuStrip = menu,
             Visible = true,
         };
         notify.DoubleClick += (_, _) => OpenWindow();
+        notify.BalloonTipClicked += (_, _) => OpenWindow();
 
         host.ViewChanged += OnViewChanged;
         SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
@@ -71,10 +76,10 @@ internal sealed class TrayApp : ApplicationContext
         UpdateMenu(host.View);
     }
 
-    private static Icon LoadIcon(Size size)
+    private static Icon LoadIcon(string name, Size size)
     {
-        using var stream = typeof(TrayApp).Assembly.GetManifestResourceStream("armory.ico")
-            ?? throw new InvalidOperationException("The Armory icon is missing from the app.");
+        using var stream = typeof(TrayApp).Assembly.GetManifestResourceStream(name)
+            ?? throw new InvalidOperationException("The Armory icon " + name + " is missing from the app.");
         return new Icon(stream, size);
     }
 
@@ -100,11 +105,37 @@ internal sealed class TrayApp : ApplicationContext
     {
         if (quitting) return;
         signedIn = view.Connection is Connections.SignedIn or Connections.VaultOwnedByOther;
-        pauseItem.Text = host.IsPaused ? "Resume sync" : "Pause sync";
+        var paused = host.IsPaused;
+        pauseItem.Text = paused ? "Resume" : "Pause";
         accountItem.Text = signedIn ? "Sign out" : "Connect this computer";
         var line = string.IsNullOrWhiteSpace(view.Sync.Line) ? "IDEA Armory" : view.Sync.Line.Trim();
         notify.Text = line.Length <= TooltipLimit ? line : line[..(TooltipLimit - 3)] + "...";
+        var state = paused ? SyncStates.Paused : view.Sync.State;
+        var icon = trayIcons.TryGetValue(state ?? string.Empty, out var found) ? found : trayIcons[SyncStates.Synced];
+        if (!ReferenceEquals(notify.Icon, icon)) notify.Icon = icon;
     }
+
+    // Decision D13, for when SolidWorks opened a file this computer has not checked out (its ~$
+    // marker appeared). While the window shows, its own prompt card asks; while it is hidden,
+    // one quiet balloon per opened file, and clicking it opens the window on that card.
+    // checkedOutBy is "Maria Lopez on LAB-PC-07" when someone else has it. Nothing calls this
+    // or KeepCheckOutPromptsFor yet: the integration with the v2 engine calls them when
+    // AgentView.prompt changes (and with the files still open), as it routes addFiles to
+    // ChooseFiles and dropFiles to the engine's AddFilesAsync.
+    internal void OfferCheckOut(string path, string name, string? checkedOutBy) => Post(() =>
+    {
+        if (quitting) return;
+        var showing = window is { IsDisposed: false, Visible: true } && window.WindowState != FormWindowState.Minimized;
+        if (!prompts.ShouldOffer(path, showing)) return;
+        var (title, text) = CheckOutPrompts.Words(name, checkedOutBy);
+        notify.BalloonTipTitle = title;
+        notify.BalloonTipText = text;
+        notify.BalloonTipIcon = ToolTipIcon.None;
+        notify.ShowBalloonTip(10000);
+    });
+
+    // The files SolidWorks still has open; any other file may ask again when reopened.
+    internal void KeepCheckOutPromptsFor(IReadOnlyCollection<string> stillOpen) => Post(() => prompts.KeepOnly(stillOpen));
 
     internal void OpenWindow()
     {
@@ -142,7 +173,7 @@ internal sealed class TrayApp : ApplicationContext
             _ = host.ConnectAsync();
             return;
         }
-        var answer = MessageBox.Show("Sign out of Armory on this computer? Your files stay in the vault folder.", "IDEA Armory",
+        var answer = MessageBox.Show("Sign out of Armory on this computer? Your files stay in the Armory folder.", "IDEA Armory",
             MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2);
         if (answer == DialogResult.Yes) host.SignOut();
     }
@@ -174,7 +205,7 @@ internal sealed class TrayApp : ApplicationContext
             window?.Dispose();
             marshal.Dispose();
             appIcon.Dispose();
-            trayIcon.Dispose();
+            foreach (var icon in trayIcons.Values) icon.Dispose();
         }
         base.Dispose(disposing);
     }

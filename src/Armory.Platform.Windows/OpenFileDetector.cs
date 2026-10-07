@@ -12,6 +12,47 @@ public sealed class OpenFileDetector
     public OpenFileStatus Inspect(string file)
     {
         if (!File.Exists(file)) return new(false, [], null);
+        var (holders, diagnostic) = Holders([Path.GetFullPath(file)]);
+        var blocked = IsBlocked(file, ref diagnostic);
+        return new(blocked || holders.Count > 0, holders, diagnostic);
+    }
+
+    // A whole folder before it is moved: one Restart Manager session per batch of files (one
+    // session per file would take seconds for a large assembly), then the exclusive-open probe
+    // on each file. firstOpen is the open file (as given) when the probe found one.
+    public OpenFileStatus InspectAll(IReadOnlyList<string> files, out string? firstOpen)
+    {
+        firstOpen = null;
+        var existing = files.Where(File.Exists).ToArray();
+        List<HoldingProcess> holders = [];
+        string? diagnostic = null;
+        foreach (var batch in existing.Select(Path.GetFullPath).Chunk(500))
+        {
+            var (found, problem) = Holders(batch);
+            holders.AddRange(found);
+            diagnostic ??= problem;
+        }
+        foreach (var file in existing)
+        {
+            if (!IsBlocked(file, ref diagnostic)) continue;
+            firstOpen = file;
+            break;
+        }
+        var processes = holders.DistinctBy(p => p.Id).OrderBy(p => p.Id).ToArray();
+        return new(firstOpen is not null || processes.Length > 0, processes, diagnostic);
+    }
+
+    private static bool IsBlocked(string file, ref string? diagnostic)
+    {
+        try { using var probe = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.None); return false; }
+        catch (FileNotFoundException) { return false; }
+        catch (DirectoryNotFoundException) { return false; }
+        catch (IOException error) { diagnostic ??= error.Message; return true; }
+        catch (UnauthorizedAccessException error) { diagnostic ??= error.Message; return true; }
+    }
+
+    private static (IReadOnlyList<HoldingProcess> Holders, string? Diagnostic) Holders(string[] files)
+    {
         List<HoldingProcess> holders = [];
         string? diagnostic = null;
         var key = new StringBuilder(33);
@@ -20,7 +61,7 @@ public sealed class OpenFileDetector
         {
             try
             {
-                var registered = RmRegisterResources(session, 1, [Path.GetFullPath(file)], 0, null, 0, null);
+                var registered = RmRegisterResources(session, (uint)files.Length, files, 0, null, 0, null);
                 if (registered == 0)
                 {
                     uint needed = 0, count = 0, reasons = 0;
@@ -47,11 +88,7 @@ public sealed class OpenFileDetector
             finally { _ = RmEndSession(session); }
         }
         else diagnostic = $"Restart Manager session returned {start}; exclusive-open probe used.";
-        var blocked = false;
-        try { using var probe = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.None); }
-        catch (IOException error) { blocked = true; diagnostic ??= error.Message; }
-        catch (UnauthorizedAccessException error) { blocked = true; diagnostic ??= error.Message; }
-        return new(blocked || holders.Count > 0, holders.OrderBy(p => p.Id).ToArray(), diagnostic);
+        return (holders.OrderBy(p => p.Id).ToArray(), diagnostic);
     }
 
     [StructLayout(LayoutKind.Sequential)]

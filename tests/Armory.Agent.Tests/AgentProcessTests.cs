@@ -12,11 +12,12 @@ public sealed class AgentProcessTests
         using var data = new TempFolder();
         WriteSettings(data);
         var folder = AgentExe.Folder();
+        var started = "started " + AgentExe.Version(folder);
         var log = data.File("logs/agent.log");
         using var first = AgentExe.Start(folder, data.Root, "--background");
         try
         {
-            Assert.True(WaitUntil(() => AgentExe.ReadShared(log).Contains("started 0.1.0", StringComparison.Ordinal) || first.HasExited, TimeSpan.FromSeconds(60)),
+            Assert.True(WaitUntil(() => AgentExe.ReadShared(log).Contains(started, StringComparison.Ordinal) || first.HasExited, TimeSpan.FromSeconds(60)),
                 "The first instance did not log that it started.");
             Assert.False(first.HasExited, "The first instance exited early: " + AgentExe.ReadShared(log));
 
@@ -42,7 +43,7 @@ public sealed class AgentProcessTests
             var text = AgentExe.ReadShared(log);
             Assert.Contains("stopped", text);
             Assert.DoesNotContain("crash", text);
-            Assert.Single(text.Split('\n'), line => line.Contains("started 0.1.0", StringComparison.Ordinal));
+            Assert.Single(text.Split('\n'), line => line.Contains(started, StringComparison.Ordinal));
         }
         finally { AgentExe.Stop(first); }
     }
@@ -61,9 +62,10 @@ public sealed class AgentProcessTests
     {
         using var data = new TempFolder();
         WriteSettings(data);
-        var (code, json) = RunCheck(AgentExe.Folder(), data.Root);
+        var folder = AgentExe.Folder();
+        var (code, json) = RunCheck(folder, data.Root);
         Assert.Equal(["vaultRoot", "version", "webView2Runtime", "wwwroot"], json.RootElement.EnumerateObject().Select(p => p.Name).Order(StringComparer.Ordinal));
-        Assert.Equal("0.1.0", json.RootElement.GetProperty("version").GetString());
+        Assert.Equal(AgentExe.Version(folder), json.RootElement.GetProperty("version").GetString());
         Assert.True(json.RootElement.GetProperty("wwwroot").GetBoolean());
         Assert.Equal(data.File("vault"), json.RootElement.GetProperty("vaultRoot").GetString());
         var runtime = json.RootElement.GetProperty("webView2Runtime");

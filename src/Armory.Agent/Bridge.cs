@@ -13,6 +13,9 @@ internal interface IBridgeWindow
 {
     void Post(string json);
     string? ChooseFolder(string current);
+    // Add files: the Windows file picker, several files at once. Null when the student cancels.
+    // Called once the bridge carries addFiles (the integration with the v2 engine).
+    IReadOnlyList<string>? ChooseFiles(string title);
     void ShowProblem(string message);
 }
 
@@ -51,7 +54,12 @@ internal sealed class Bridge(AgentHost host, IBridgeWindow window, AgentLog log)
         return true;
     }
 
-    internal async Task HandleAsync(string webMessageJson)
+    // files: the full paths of File objects the page sent with the message
+    // (chrome.webview.postMessageWithAdditionalObjects, read by MainWindow from
+    // CoreWebView2WebMessageReceivedEventArgs.AdditionalObjects), such as files dropped on the
+    // window. Empty for every other message. Only the message that adds dropped files (handled
+    // once the engine can add files) may use them, and only through CopyIn's own checks.
+    internal async Task HandleAsync(string webMessageJson, IReadOnlyList<string>? files = null)
     {
         if (!TryRead(webMessageJson, out var type, out var message)) return;
         try
