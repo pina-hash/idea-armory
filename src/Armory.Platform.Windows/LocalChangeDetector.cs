@@ -223,7 +223,7 @@ public sealed class LocalChangeDetector : IDisposable
                 var from = VaultPath.TryCreate(before, out var translated, out _, paths.Root, paths.MaximumLength) ? translated : old.Path;
                 if (from != file.Path) renames.Add(new LocalRename(from, file.Path, file.FileId));
             }
-            renames.Sort((a, b) => a.Before.CompareTo(b.Before));
+            renames = RenameOrder(renames);
         }
         cache = next;
         cacheKnown = true;
@@ -390,6 +390,33 @@ public sealed class LocalChangeDetector : IDisposable
             if (aside.Blocker is null) return null;
             Apply(aside.Blocker, aside.Name);
         }
+    }
+
+    // File renames in path order, except that a rename onto a path another rename leaves comes
+    // after that one, so a chain applies one by one (Plate to "Plate old", then "Plate v2" to
+    // Plate). Each From and each To is unique, so the renames form chains and cycles; a cycle
+    // (two files swapped) has no such order, and its renames are listed next to each other.
+    internal static List<LocalRename> RenameOrder(IEnumerable<LocalRename> renames)
+    {
+        var sorted = renames.OrderBy(r => r.Before).ToList();
+        var leaving = new Dictionary<string, LocalRename>(StringComparer.OrdinalIgnoreCase);
+        foreach (var rename in sorted) leaving.TryAdd(rename.Before.Value, rename);
+        var placed = new HashSet<LocalRename>(ReferenceEqualityComparer.Instance);
+        var ordered = new List<LocalRename>(sorted.Count);
+        foreach (var start in sorted)
+        {
+            // Follow what must go first (the rename leaving this one's target) until a rename
+            // that waits for nothing, or back around a cycle, then place them last to first.
+            var chain = new List<LocalRename>();
+            var seen = new HashSet<LocalRename>(ReferenceEqualityComparer.Instance);
+            for (var at = start; at is not null && !placed.Contains(at) && seen.Add(at);)
+            {
+                chain.Add(at);
+                at = leaving.TryGetValue(at.After.Value, out var first) && !ReferenceEquals(first, at) ? first : null;
+            }
+            for (var i = chain.Count - 1; i >= 0; i--) if (placed.Add(chain[i])) ordered.Add(chain[i]);
+        }
+        return ordered;
     }
 
     // Where a path from before the moves is after applying them in order (NTFS names are

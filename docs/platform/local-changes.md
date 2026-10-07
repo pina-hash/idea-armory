@@ -40,7 +40,9 @@ had no readable id, or when its id was not found while another folder's id could
 `Renames` is null on the first scan after a start, which has no earlier file map.
 
 Renames require an identical NTFS volume/file id. Ambiguous hard-link identities are not
-guessed. Hashing holds a read handle that denies writers but shares read and delete, so a
+guessed. File renames come in path order, except that a rename onto a path another rename
+leaves comes after it, so a chain (Plate to "Plate old", then "Plate v2" to Plate) applies
+one by one; two files swapped have no such order and are listed next to each other. Hashing holds a read handle that denies writers but shares read and delete, so a
 student can rename or delete the file, or a folder above it, during a scan; the adapter's
 `OpenRead` (captures) shares delete the same way. A problem keeps, as they were, only the
 entries it could hide: everything under a directory that could not be listed, an entry whose
@@ -72,8 +74,9 @@ file or a deleted folder elsewhere, on three scans in a row; a folder that canno
 deny ACE) keeps only what is inside it; a chain and a swap of real folders come in an order
 that applies; and a folder renamed while the detector was stopped is one move from the saved
 map, reported again after a crash and never after the agent's own move. `FolderMoveOrderTests`
-run the ordering on every host, including 2,000 random trees of student renames, moves,
-deletions and new folders, each list applied move by move with every target free.
+run the ordering on every host, including 3,000 random trees of student renames, moves,
+deletions and new folders, each list applied move by move with every target free, and the
+order of file renames (a chain, a case-only rename and a swap).
 
 See [validation](validation.md) for observed counts. Reference:
 [FileSystemWatcher buffers](https://learn.microsoft.com/en-us/dotnet/api/system.io.filesystemwatcher.internalbuffersize).
