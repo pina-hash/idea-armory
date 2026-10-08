@@ -401,7 +401,8 @@ public sealed class WindowsVaultFileSystem : IVaultFileSystem, IDisposable
     {
         if (!VaultPath.TryCreate(vaultPath, out var path, out _, Root) || !VaultLocator.TryResolve(Root, path.Value, out var file)) return null;
         if (path.Value.StartsWith(".armory", StringComparison.OrdinalIgnoreCase)) return null;
-        return File.Exists(file) ? file : null;
+        // The shell takes the plain path, as for Open (the \\?\ form is for file calls).
+        return File.Exists(file) ? Shell.Plain(file!) : null;
     }
 
     public ReplaceOutcome Launch(VaultPath path)
