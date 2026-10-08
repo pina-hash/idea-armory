@@ -339,6 +339,13 @@ public sealed partial class SyncEngine : IAsyncDisposable
             return scope;
         }
 
+        internal static PassScope FilesOf(IEnumerable<Guid> ids)
+        {
+            var scope = new PassScope();
+            scope.Files.UnionWith(ids);
+            return scope;
+        }
+
         internal static PassScope File(Guid id)
         {
             var scope = new PassScope();

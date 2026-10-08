@@ -307,6 +307,89 @@ public sealed partial class SyncEngine
         finally { LeaveAction(); }
     }
 
+    // How many armory_break_lock calls a Force check in of many files has in flight at once: each
+    // is one small call, so several hundred files take seconds, not one pass per file.
+    internal const int TakeBackConcurrency = 16;
+
+    // Force check in of many files at once (Force check in all, the selection bar): one action, the
+    // locks broken TakeBackConcurrency at a time with each file's own operation id (as for one
+    // file), then ONE pass for all of them. Until 0.3.1 the window sent one action per file, and
+    // each ran a whole pass of its own: a few hundred files took the better part of an hour.
+    public async Task<ActionResult> TakeBackAsync(IReadOnlyList<Guid> fileIds, CancellationToken cancellationToken = default)
+    {
+        var ids = fileIds.Distinct().ToList();
+        if (ids.Count == 1) return await TakeBackAsync(ids[0], cancellationToken);
+        if (!engineThread.IsCurrent) return await engineThread.InvokeAsync(() => TakeBackAsync(ids, cancellationToken));
+        if (ids.Count == 0) return new(false, "There are no files there to force check in.");
+        await EnterActionAsync(cancellationToken);
+        try
+        {
+            if (Unready() is { } why) return why;
+            await EnsureKnownAsync(cancellationToken);
+            List<(Guid Id, RemoteFile File, ProjectState Project, RemoteLock Held)> targets = [];
+            int notThere = 0, notOut = 0, mine = 0, notAllowed = 0;
+            foreach (var id in ids)
+            {
+                if (!remoteById.TryGetValue(id, out var remote) || remote.File.Deleted) { notThere++; continue; }
+                if (!remote.Project.CanTakeBack) { notAllowed++; continue; }
+                if (remote.File.Lock is not { IsLive: true } held) { notOut++; continue; }
+                if (OwnershipOf(held) == LockOwnership.ThisDevice) { mine++; continue; }
+                targets.Add((id, remote.File, remote.Project, held));
+            }
+            if (targets.Count == 0)
+                return new(false, notAllowed > 0 && notOut + mine + notThere == 0 ? "Only a mentor or CAD lead can force a check in." : "None of those files is checked out by someone else now.");
+            List<Guid> broken = [], reread = [];
+            int gone = 0, refusedRole = 0, failed = 0;
+            var offline = false;
+            foreach (var chunk in targets.Chunk(TakeBackConcurrency))
+            {
+                var calls = chunk.Select(async t =>
+                {
+                    // The same id as a single Force check in of this check out from this computer.
+                    var operation = OperationIds.Derive("take back", t.Id.ToString(), t.Held.HolderDeviceId.ToString(), t.Held.AcquiredAt.UtcTicks.ToString(CultureInfo.InvariantCulture),
+                        state.DeviceId.ToString()!);
+                    projectsWritten.Add(t.Project.Id);
+                    try { return (t.Id, Broke: await deps.Api.BreakLockAsync(t.Id, state.DeviceId!.Value, operation, cancellationToken), Error: (Exception?)null); }
+                    catch (ArmoryOfflineException error) { return (t.Id, Broke: false, Error: (Exception?)error); }
+                    catch (ArmoryRpcException error) { return (t.Id, Broke: false, Error: (Exception?)error); }
+                }).ToList();
+                foreach (var (id, broke, error) in await Task.WhenAll(calls))
+                {
+                    switch (error)
+                    {
+                        case null when broke: broken.Add(id); break;
+                        case null: gone++; break; // someone else took it back first
+                        case ArmoryOfflineException: offline = true; break;
+                        case ArmoryRpcException rpc when rpc.IsForbidden || (rpc.SqlState == "P0001" && rpc.Message == TakeBackRefused): refusedRole++; break;
+                        case ArmoryRpcException rpc when rpc.IsNotMember: NoteNotMember(targets.First(t => t.Id == id).Project.Id, rpc); failed++; break;
+                        default:
+                            // As for one file: the server would not take it back as asked (someone
+                            // else already did, or the check out changed), so read it again.
+                            gone++;
+                            reread.Add(id);
+                            deps.Log?.Invoke($"take back: {id}: {error.Message}");
+                            break;
+                    }
+                }
+                if (offline) { online = false; break; }
+            }
+            foreach (var id in broken) KnowLock(id, null);
+            // One pass for every file, never one per file.
+            if (broken.Count + reread.Count > 0) await PassLockedAsync(cancellationToken, PassScope.FilesOf(broken.Concat(reread)));
+            var message = broken.Count == targets.Count
+                ? $"Force checked in {Count(broken.Count, "file", "files")}."
+                : $"Force checked in {broken.Count:N0} of {Count(targets.Count, "file", "files")}.";
+            if (broken.Count > 0) message += " Anything that wasn't checked in is kept as its holder's own copy.";
+            if (gone + notOut > 0) message += $" {Count(gone + notOut, "file wasn't", "files weren't")} checked out any more.";
+            if (refusedRole + notAllowed > 0) message += $" {Count(refusedRole + notAllowed, "file is", "files are")} in a project where only a mentor or CAD lead can force a check in.";
+            if (mine > 0) message += $" {Count(mine, "file is", "files are")} checked out by you: check {(mine == 1 ? "it" : "them")} in instead.";
+            if (offline) message += " You went offline: try again once this computer is back online to finish the rest.";
+            else if (failed > 0) message += $" {Count(failed, "file is", "files are")} in a project you may no longer be in.";
+            return new(broken.Count > 0, message);
+        }
+        finally { LeaveAction(); }
+    }
+
     // Open: the file's own program (SolidWorks for a part). Programs and scripts are refused
     // (decision D14). Needs no pass, so it never waits behind one, and the open itself runs off
     // the engine thread (the platform answers within about a second). A file the team has that

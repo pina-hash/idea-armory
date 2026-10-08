@@ -1252,6 +1252,7 @@ const CONTRACT = {
 	checkIn: ['paths', ...ACT],
 	undoCheckOut: ['paths', ...ACT],
 	takeBack: ['fileId', ...ACT],
+	takeBackAll: ['fileIds', ...ACT],
 	createFolder: ['projectId', 'parent', 'name', ...ACT],
 	renameFolder: ['projectId', 'folder', 'newName', ...ACT],
 	deleteFolder: ['projectId', 'folder', ...ACT],
@@ -1501,6 +1502,21 @@ tally.bridgeTypes = 0;
 		m = await click('[data-key="ask-ok"]');
 		expect(m.type === 'takeBack' && m.fileId === 'f-plate-left', 'Force check in sent ' + JSON.stringify(m));
 		await click('[data-key="back"]');
+		// Force check in all of more than one file is ONE takeBackAll (the host forces them in one
+		// action and one pass), never a takeBack per file.
+		const twoHeld = view('takeBack');
+		const heldRows = twoHeld.projects.flatMap((p) => p.folders.flatMap((f) => f.files));
+		const plateLeft = heldRows.find((r) => r.fileId === 'f-plate-left');
+		heldRows.find((r) => r.fileId === 'f-plate-right').checkout = JSON.parse(JSON.stringify(plateLeft.checkout));
+		await host({ type: 'view', view: twoHeld });
+		m = await click('[data-key="fk-force"]');
+		expect(!m.type && (await page.evaluate(() => document.getElementById('ask').open)), 'Force check in all did not ask first: ' + JSON.stringify(m));
+		await page.click('[data-key="ask-ok"]');
+		await page.waitForTimeout(40);
+		const forced = await take();
+		all.push(...forced);
+		expect(forced.length === 1 && forced[0].type === 'takeBackAll' && forced[0].fileIds.slice().sort().join() === 'f-plate-left,f-plate-right' && typeof forced[0].requestId === 'string',
+			'Force check in all sent ' + JSON.stringify(forced));
 
 		// A notice's action.
 		await host({ type: 'view', view: view('importSummary') });

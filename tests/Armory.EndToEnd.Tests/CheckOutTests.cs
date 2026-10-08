@@ -153,6 +153,82 @@ public sealed class CheckOutTests
         NoViolations(t.A);
     }
 
+    // Force check in of many files (Force check in all, the selection bar) is one action: every
+    // lock broken with one armory_break_lock each, a few at a time, then ONE pass for all of them.
+    // Until 0.3.1 each file was its own action with a whole pass, and a few hundred files took the
+    // better part of an hour.
+    [PostgresFact]
+    public async Task Force_check_in_of_many_files_is_one_action_and_one_pass()
+    {
+        await using var t = await TeamAsync();
+        var mentor = await t.World.ComputerAsync("mentor laptop", Mentor);
+        const int many = 40;
+        for (var i = 0; i < many; i++) t.A.Write($"Robot 2027/Fonts/Font{i:00}.ttf", "font " + i);
+        t.A.Write(Plate, "v1");
+        await t.A.SyncAsync();
+        Assert.True((await t.A.CheckOutAsync("Robot 2027/Fonts")).Ok);
+        t.A.Save("Robot 2027/Fonts/Font07.ttf", "Alex unfinished");
+        await mentor.SyncAsync();
+        List<Guid> ids = [];
+        for (var i = 0; i < many; i++) ids.Add(await t.FileId($"Font{i:00}.ttf"));
+        var plate = await t.FileId("Plate.SLDPRT");
+        ids.Add(plate); // not checked out: counted, never sent
+
+        var reads = t.World.Supabase.RpcCount("armory_list_changes");
+        var took = await mentor.Engine.TakeBackAsync(ids);
+        Assert.True(took.Ok);
+        Assert.Equal($"Force checked in {many} files. Anything that wasn't checked in is kept as its holder's own copy. 1 file wasn't checked out any more.", took.Message);
+        Assert.Equal(many, t.World.Supabase.RpcCount("armory_break_lock"));
+        // One pass reads the project's changes once (and its own refresh may read once more);
+        // a pass per file would read them at least once per file.
+        Assert.InRange(t.World.Supabase.RpcCount("armory_list_changes") - reads, 1, 2);
+        foreach (var id in ids) Assert.Equal(0, await t.LiveLocks(id));
+
+        // Asked again from the same view: nothing is checked out, so nothing is sent.
+        Assert.Equal("None of those files is checked out by someone else now.", (await mentor.Engine.TakeBackAsync(ids)).Message);
+        Assert.Equal(many, t.World.Supabase.RpcCount("armory_break_lock"));
+        // A student is refused before anything is sent.
+        Assert.Equal("Only a mentor or CAD lead can force a check in.", (await t.B.Engine.TakeBackAsync(ids.Take(2).ToList())).Message);
+
+        // The holder keeps what wasn't checked in, as for one file.
+        await t.A.SyncAsync();
+        Assert.Contains(Alex + "|lock broken", await t.SideAuthors(ids[7]));
+        Assert.Equal("font 7", t.A.Text("Robot 2027/Fonts/Font07.ttf"));
+        Assert.True(t.A.Disk.IsReadOnly("Robot 2027/Fonts/Font07.ttf"));
+        NoViolations(t.A, mentor);
+    }
+
+    // Every other action on many files is one action too: Check out all, Check in all and Undo
+    // check out of a whole folder each go in one batch call (armory_lock_files or
+    // armory_release_locks, up to 500 files) and one pass, never a pass or a lock call per file.
+    [PostgresFact]
+    public async Task Check_out_check_in_and_undo_of_many_files_each_take_one_batch_and_one_pass()
+    {
+        await using var t = await TeamAsync();
+        await ArmoryV3StandIn.ApplyCoreAsync(t.World.Database);
+        const int many = 120;
+        const string Fonts = "Robot 2027/Fonts";
+        for (var i = 0; i < many; i++) t.A.Write($"{Fonts}/Font{i:000}.ttf", "font " + i);
+        await t.A.SyncAsync();
+        var s = t.World.Supabase;
+        (int Reads, int Locks, int Releases, int One) Calls() =>
+            (s.RpcCount("armory_list_changes"), s.RpcCount("armory_lock_files"), s.RpcCount("armory_release_locks"), s.RpcCount("armory_acquire_lock") + s.RpcCount("armory_release_lock"));
+        async Task OneBatchAndOnePass(Func<Task<ActionResult>> action, string said, int locks, int releases)
+        {
+            var before = Calls();
+            Assert.Equal(said, (await action()).Message);
+            var after = Calls();
+            Assert.InRange(after.Reads - before.Reads, 1, 2);
+            Assert.Equal((locks, releases, 0), (after.Locks - before.Locks, after.Releases - before.Releases, after.One - before.One));
+        }
+
+        await OneBatchAndOnePass(() => t.A.CheckOutAsync(Fonts), $"Checked out {many} files.", 1, 0);
+        await OneBatchAndOnePass(() => t.A.CheckInAsync(Fonts), $"Checked in {many} files.", 0, 1);
+        await OneBatchAndOnePass(() => t.A.CheckOutAsync(Fonts), $"Checked out {many} files.", 1, 0);
+        await OneBatchAndOnePass(() => t.A.UndoCheckOutAsync(Fonts), $"Undid {many} check outs.", 0, 1);
+        NoViolations(t.A);
+    }
+
     // The quiet question: one per open, dismissed for that open only; a file opened again
     // asks again. Check out and open refuses to open a file SolidWorks still has open.
     [PostgresFact]

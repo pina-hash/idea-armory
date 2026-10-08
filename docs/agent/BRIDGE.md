@@ -227,7 +227,7 @@ An **action** carries a `requestId` (bridge.js makes one, `r1`, `r2`, ...) and t
 answers it with exactly one `actionResult` carrying the same id and a plain sentence
 ("Checked out 12 of 14 files. Maria Lopez has 2 of them checked out.", "Checked in
 Plate.SLDPRT.", "Close Plate.SLDPRT in SolidWorks first."). The actions are
-`launchFile`, `checkOut`, `checkIn`, `undoCheckOut`, `takeBack`, `createFolder`,
+`launchFile`, `checkOut`, `checkIn`, `undoCheckOut`, `takeBack`, `takeBackAll`, `createFolder`,
 `renameFolder`, `deleteFolder`, `renameFile`, `addFiles`, `dropFiles`, `reportProblem` and
 `sendFeedback`.
 
@@ -254,7 +254,8 @@ replaces all of it. The spinner holds still under `prefers-reduced-motion`.
 | `checkOut` | `paths`, `open`, `requestId` | Check out (a file row, File detail, the selection bar), Check out and open on File detail and Check out and reopen on the question (`open: true`), Check out all after the small dialog (the folder's path) | takes each file to change it, makes it writable here, downloads a newer version first; with `open`, then opens it (asking first for SolidWorks to close it, if it has it open) |
 | `checkIn` | `paths`, `requestId` | Check in (a file row, File detail, My files, the selection bar), Check in all | uploads the changes, makes the file read-only, lets it go |
 | `undoCheckOut` | `paths`, `requestId` | Undo check out (File detail, the selection bar) | puts back the version from before the check out (changes are kept in the history), lets it go |
-| `takeBack` | `fileId`, `requestId` | Force check in (a file row, File detail, the selection bar; one message per file for Force check in all), after the small dialog asks (mentors and CAD leads) | ends the check out for its holder (the type keeps its old name); anything they hadn't checked in is kept as their own copy |
+| `takeBack` | `fileId`, `requestId` | Force check in of one file (a file row, File detail, the selection bar), after the small dialog asks (mentors and CAD leads) | ends the check out for its holder (the type keeps its old name); anything they hadn't checked in is kept as their own copy |
+| `takeBackAll` | `fileIds`, `requestId` | Force check in of more than one file (Force check in all, the selection bar), after the small dialog asks; at most 20,000 ids | one action: each lock broken as for one file (16 at a time), then one pass for all of them, and one sentence back (since 0.3.1; before, the page sent one `takeBack` per file and each ran a whole pass) |
 | `createFolder` | `projectId`, `parent`, `name`, `requestId` | New folder, after the small dialog | makes the folder |
 | `renameFolder` | `projectId`, `folder`, `newName`, `requestId` | Rename folder, after the small dialog | renames it for everyone (refused, and put back, when someone else has a file in it checked out) |
 | `deleteFolder` | `projectId`, `folder`, `requestId` | Delete folder, after the small dialog | removes it and its files for everyone; their history is kept |

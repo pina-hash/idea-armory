@@ -14,6 +14,8 @@ internal sealed record CheckOutMessage(IReadOnlyList<string>? Paths, bool? Open,
 internal sealed record CheckInMessage(IReadOnlyList<string>? Paths, string? RequestId);
 internal sealed record UndoCheckOutMessage(IReadOnlyList<string>? Paths, string? RequestId);
 internal sealed record TakeBackMessage(string? FileId, string? RequestId);
+// Force check in of many files in one action (0.3.1): Force check in all, the selection bar.
+internal sealed record TakeBackAllMessage(IReadOnlyList<string>? FileIds, string? RequestId);
 internal sealed record CreateFolderMessage(string? ProjectId, string? Parent, string? Name, string? RequestId);
 internal sealed record RenameFolderMessage(string? ProjectId, string? Folder, string? NewName, string? RequestId);
 internal sealed record DeleteFolderMessage(string? ProjectId, string? Folder, string? RequestId);
@@ -75,10 +77,13 @@ internal sealed class Bridge(AgentHost host, IBridgeWindow window, AgentLog log)
         [BridgeMessages.ReportProblem] = typeof(ReportProblemMessage),
         [BridgeMessages.OpenIncidents] = null,
         [BridgeMessages.SendFeedback] = typeof(SendFeedbackMessage),
+        [BridgeMessages.TakeBackAll] = typeof(TakeBackAllMessage),
     };
 
     // The answer to an action the window sent with something unusable in it.
     private static readonly ActionResult NotAFile = new(false, "That isn't a file or folder in your Armory folder.");
+    // The most files one Force check in all names (a whole project's worth).
+    private const int MaximumTakeBack = 20_000;
     private static readonly ActionResult NotAProject = new(false, "That project isn't on this computer.");
     private static readonly ActionResult NotAName = new(false, "That name can't be used for a folder.");
     private static readonly ActionResult NotAFileName = new(false, "That name can't be used for a file.");
@@ -178,6 +183,17 @@ internal sealed class Bridge(AgentHost host, IBridgeWindow window, AgentLog log)
                 case BridgeMessages.TakeBack:
                     var takeBack = Read<TakeBackMessage>(message);
                     await AnswerAsync(type, 1, asked, takeBack?.RequestId, Guid.TryParse(takeBack?.FileId, out var taken) ? host.TakeBackAsync(taken) : Refuse(NotAFile));
+                    break;
+                case BridgeMessages.TakeBackAll:
+                    var takeAll = Read<TakeBackAllMessage>(message);
+                    var takeIds = new List<Guid>();
+                    var allIds = takeAll?.FileIds is { Count: > 0 and <= MaximumTakeBack };
+                    foreach (var s in allIds ? takeAll!.FileIds! : [])
+                    {
+                        if (!Guid.TryParse(s, out var g)) { allIds = false; break; }
+                        takeIds.Add(g);
+                    }
+                    await AnswerAsync(type, takeIds.Count, asked, takeAll?.RequestId, allIds ? host.TakeBackAsync(takeIds) : Refuse(NotAFile));
                     break;
                 case BridgeMessages.CreateFolder:
                     var create = Read<CreateFolderMessage>(message);

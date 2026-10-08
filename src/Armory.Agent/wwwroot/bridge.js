@@ -265,6 +265,7 @@
 	 *   showInFolder: { path }
 	 *   checkOut: { paths, open }             (files or folders, vault-relative)
 	 *   checkIn: { paths }    undoCheckOut: { paths }    takeBack: { fileId }
+ *   takeBackAll: { fileIds }              (Force check in of more than one file: one action, one pass)
 	 *   createFolder: { projectId, parent, name }    renameFolder: { projectId, folder, newName }
 	 *   deleteFolder: { projectId, folder }   renameFile: { path, newName }   (one file, in its folder)
 	 *   addFiles: { projectId, folder }
@@ -280,7 +281,7 @@
 	 *   | 'openVault' | 'openFile' | 'launchFile' | 'showInFolder' | 'checkOut' | 'checkIn'
 	 *   | 'undoCheckOut' | 'takeBack' | 'createFolder' | 'renameFolder' | 'deleteFolder' | 'renameFile'
 	 *   | 'addFiles' | 'dropFiles' | 'dismissNotice' | 'saveSettings' | 'chooseVaultRoot'
-	 *   | 'reportProblem' | 'openIncidents' | 'sendFeedback'} PageMessageType
+	 *   | 'reportProblem' | 'openIncidents' | 'sendFeedback' | 'takeBackAll'} PageMessageType
 	 */
 
 	/**
@@ -302,7 +303,7 @@
 	/* ------------------------------------------------------- Message lists */
 
 	/** Page to host message types (BRIDGE.md, "Page to host"). */
-	var PAGE_TO_HOST = ['ready', 'connect', 'cancelConnect', 'signOut', 'pause', 'resume', 'openVault', 'openFile', 'launchFile', 'showInFolder', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'dismissNotice', 'saveSettings', 'chooseVaultRoot', 'reportProblem', 'openIncidents', 'sendFeedback'];
+	var PAGE_TO_HOST = ['ready', 'connect', 'cancelConnect', 'signOut', 'pause', 'resume', 'openVault', 'openFile', 'launchFile', 'showInFolder', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'dismissNotice', 'saveSettings', 'chooseVaultRoot', 'reportProblem', 'openIncidents', 'sendFeedback', 'takeBackAll'];
 
 	/** Host to page message types (BRIDGE.md, "Host to page"). */
 	var HOST_TO_PAGE = ['view', 'fileDetail', 'activity', 'actionResult'];
@@ -316,6 +317,7 @@
 		checkIn: ['paths'],
 		undoCheckOut: ['paths'],
 		takeBack: ['fileId'],
+		takeBackAll: ['fileIds'],
 		createFolder: ['projectId', 'parent', 'name'],
 		renameFolder: ['projectId', 'folder', 'newName'],
 		deleteFolder: ['projectId', 'folder'],
@@ -329,7 +331,7 @@
 	};
 
 	/** Actions: each carries a requestId, and the host answers it with one actionResult. */
-	var ACTIONS = ['launchFile', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'reportProblem', 'sendFeedback'];
+	var ACTIONS = ['launchFile', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'reportProblem', 'sendFeedback', 'takeBackAll'];
 
 	/* ----------------------------------------------------------- Plumbing */
 
@@ -639,6 +641,24 @@
 						message,
 						!!taken,
 						taken ? 'Force checked in ' + taken.row.name + ' from ' + taken.from + '. Anything they hadn\'t checked in is kept as their own copy.' : 'That file isn\'t checked out.'
+					);
+					break;
+				case 'takeBackAll':
+					var forced = 0;
+					eachRow(function (r) {
+						if (message.fileIds.indexOf(r.fileId) >= 0 && r.checkout.state !== 'available' && r.checkout.state !== 'mine') {
+							forced++;
+							r.checkout = demo.checkoutAvailable();
+						}
+					});
+					refreshMine();
+					postView();
+					result(
+						message,
+						forced > 0,
+						forced > 0
+							? 'Force checked in ' + words(forced, 'file', 'files') + '. Anything that wasn\'t checked in is kept as its holder\'s own copy.'
+							: 'None of those files is checked out by someone else now.'
 					);
 					break;
 				case 'createFolder':

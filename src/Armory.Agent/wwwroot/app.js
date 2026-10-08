@@ -1897,10 +1897,10 @@
 			}
 		} else if (a.kind === 'checkOutAll') act('checkOut', { paths: [c.path], open: false }, { key: a.returnKey });
 		else if (a.kind === 'deleteFolder') act('deleteFolder', { projectId: c.projectId, folder: c.folder }, { key: a.returnKey });
-		else
-			c.fileIds.forEach(function (id) {
-				act('takeBack', { fileId: id }, { key: a.returnKey, words: c.count === 1 ? null : 'Force checking in ' + plural(c.count, 'file', 'files') + '...' });
-			});
+		// One file is takeBack; more go in ONE takeBackAll, so the host forces them in one action
+		// and one pass (one message per file ran a whole pass for each).
+		else if (c.count === 1) act('takeBack', { fileId: c.fileIds[0] }, { key: a.returnKey });
+		else act('takeBackAll', { fileIds: c.fileIds }, { key: a.returnKey });
 		ask.close();
 	}
 
@@ -2121,6 +2121,8 @@
 				return { line: 'Opening ' + leaf(f.path) + '...', row: null };
 			case 'takeBack':
 				return { line: 'Force checking in ' + (row ? row.row.name : 'the file') + '...', row: 'Force checking in...' };
+			case 'takeBackAll':
+				return { line: 'Force checking in ' + plural(f.fileIds.length, 'file', 'files') + '...', row: 'Force checking in...' };
 			case 'renameFile':
 				return { line: 'Renaming ' + leaf(f.path) + ' to ' + f.newName + '...', row: 'Renaming...' };
 			case 'createFolder':
@@ -2152,7 +2154,7 @@
 			type: type,
 			key: how.key || null,
 			paths: (fields && (fields.paths || (fields.path ? [fields.path] : []))) || [],
-			fileIds: fields && fields.fileId ? [fields.fileId] : [],
+			fileIds: fields && fields.fileId ? [fields.fileId] : (fields && fields.fileIds) || [],
 			row: w.row
 		};
 		showWorking(how.words || w.line);

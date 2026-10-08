@@ -132,6 +132,7 @@ internal sealed class AgentHost : IAsyncDisposable
     internal Task<ActionResult> CheckInAsync(IReadOnlyList<string> paths) => OnEngineAsync("check in", e => e.CheckInAsync(paths));
     internal Task<ActionResult> UndoCheckOutAsync(IReadOnlyList<string> paths) => OnEngineAsync("undo check out", e => e.UndoCheckOutAsync(paths));
     internal Task<ActionResult> TakeBackAsync(Guid fileId) => OnEngineAsync("take back", e => e.TakeBackAsync(fileId));
+    internal Task<ActionResult> TakeBackAsync(IReadOnlyList<Guid> fileIds) => OnEngineAsync("take back " + fileIds.Count + " files", e => e.TakeBackAsync(fileIds));
     // One file, in the same folder: a file Armory doesn't have yet is renamed on disk; a file in
     // Armory is renamed for everyone (refused while someone else has it checked out).
     internal Task<ActionResult> RenameFileAsync(string path, string newName) => OnEngineAsync("rename a file", e => e.RenameFileAsync(path, newName));

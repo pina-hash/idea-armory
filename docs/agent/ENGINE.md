@@ -639,6 +639,13 @@ hold the new paths; the client half is in docs/agent/CLIENT.md section 6.
   `armory_break_lock` is sent exactly as before (this computer's device); its refusal is still
   P0001 "only a mentor or cad_lead may break a lock", answered "Only a mentor or CAD lead can
   force a check in."
+- **Force check in of many files** (0.3.1; `TakeBackAsync(IReadOnlyList<Guid>)`, the bridge's
+  `takeBackAll`) is one action: the files someone else has checked out are sorted from the rest
+  once, each lock is broken with its own `armory_break_lock` and the same operation id as one
+  file's Force check in, `TakeBackConcurrency` (16) calls at a time, and ONE pass follows for
+  every file broken (and any the server would not take back as asked, to read them again).
+  Before, the window sent one action per file and each ran a whole pass, so a few hundred files
+  took the better part of an hour.
 - **No longer a member.** A project gone from `armory_my_projects`, or whose change feed or
   files answer "not a project member" (P0001 or 42501, read alike), is asked about once with
   `armory_project_purged`. The same answer from any other call (a lock, a side version, a
