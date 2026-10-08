@@ -7,8 +7,11 @@ public enum MemberRole { Student, CadLead, Mentor, Instructor }
 public enum ProjectReleaseGate { Warn, Enforce }
 
 // Season is null for a project made without one (contract v2, C1). Archived is false when the
-// server does not send the flag (a server older than 0232).
-public sealed record RemoteProject(Guid Id, string Name, int? Season, MemberRole Role, int PinnedRelease, ProjectReleaseGate ReleaseGate, bool Archived);
+// server does not send the flag (a server older than 0232). CanTakeBack is the server's
+// can_take_back (v0.3, 0233: mentor, CAD lead or site admin), or null from a server older than
+// 0233, which never sends it.
+public sealed record RemoteProject(Guid Id, string Name, int? Season, MemberRole Role, int PinnedRelease, ProjectReleaseGate ReleaseGate, bool Archived,
+    bool? CanTakeBack = null);
 public sealed record RemoteVersion(Guid Id, string Hash, long Bytes, string Author, DateTimeOffset CreatedAt, int? SavedRelease, bool? ReleaseChecked);
 public sealed record RemoteLock(string HolderEmail, Guid HolderDeviceId, string? HolderDeviceName, DateTimeOffset AcquiredAt,
     DateTimeOffset? BrokenAt, string? BrokenBy, string? BrokenHolderEmail, Guid? BrokenHolderDeviceId)
@@ -23,6 +26,31 @@ public sealed record CommitResult(Guid VersionId, bool Advanced);
 // One live check out (contract v2, C7). HolderName is the holder's profile name, or null when
 // they have none; DeviceName is null only when the device row is gone.
 public sealed record RemoteCheckout(Guid FileId, string Folder, string Name, string HolderEmail, string? HolderName, string? DeviceName, DateTimeOffset Since);
+// One file of a batch (v0.3, armory_lock_files and armory_release_locks). Ok with Done (acquired
+// or released), or not Ok with the SQLSTATE and message the per-file call refused with.
+public sealed record BatchFileResult(Guid FileId, bool Ok, bool Done, string? Code, string? Message);
+// {total, succeeded, refused, results}. Some files can land while others are refused: a batch is
+// never all or nothing, so callers report each file.
+public sealed record BatchResult(int Total, int Succeeded, int Refused, IReadOnlyList<BatchFileResult> Results);
+// The payload of a folder_purged change (v0.3, armory_purge_folder): those files and their
+// history are gone from the server.
+public sealed record FolderPurge(string Folder, int Files, IReadOnlyList<Guid> FileIds, string? By)
+{
+    public const string Kind = "folder_purged";
+
+    public static FolderPurge? From(RemoteChange change)
+    {
+        if (change.Kind != Kind) return null;
+        var ids = new List<Guid>();
+        if (change.Payload["file_ids"] is JsonArray list)
+            foreach (var item in list)
+                if (item is JsonValue v && v.TryGetValue<string>(out var text) && Guid.TryParse(text, out var id)) ids.Add(id);
+        var folder = change.Payload["folder"] is JsonValue f && f.TryGetValue<string>(out var name) ? name : "";
+        var files = change.Payload["files"] is JsonValue n && n.TryGetValue<int>(out var count) ? count : ids.Count;
+        var by = change.Payload["by"] is JsonValue b && b.TryGetValue<string>(out var who) ? who : null;
+        return new(folder, files, ids, by);
+    }
+}
 
 // Typed calls for every RPC in docs/agent/CONTRACT.md, server/sql/001-005. Every write
 // takes the caller's operation id; replaying the same id returns the stored receipt.
@@ -107,7 +135,34 @@ public sealed class ArmoryApi(PostgrestClient rest)
         => Array(await rest.CallAsync("armory_my_projects", Args(), ct)).Select(p => new RemoteProject(
             Guid.Parse(p["id"]!.GetValue<string>()), p["name"]!.GetValue<string>(), p["season"]?.GetValue<int>(), ParseRole(p["role"]!.GetValue<string>()),
             p["pinned_release"]!.GetValue<int>(), p["release_gate"]!.GetValue<string>() == "enforce" ? ProjectReleaseGate.Enforce : ProjectReleaseGate.Warn,
-            p["archived"]?.GetValue<bool>() ?? false)).ToArray();
+            p["archived"]?.GetValue<bool>() ?? false, p["can_take_back"] is JsonValue take ? take.GetValue<bool>() : null)).ToArray();
+
+    // v0.3 (0233). When the project was deleted forever, or null (it exists, or it never did,
+    // or the caller was only removed from it). Any signed-in user may ask.
+    public async Task<DateTimeOffset?> ProjectPurgedAsync(Guid project, CancellationToken ct = default)
+        => Time(await rest.CallAsync("armory_project_purged", Args(("p_project", project)), ct));
+
+    // v0.3 (0233). Stamps this computer's last_seen, and its version and state when given (null
+    // or empty keeps what the server has). A call within 20 seconds that changes nothing writes
+    // nothing on the server, so callers add no suppression of their own.
+    public async Task HeartbeatAsync(Guid device, string? appVersion, string? state, CancellationToken ct = default)
+        => await rest.CallAsync("armory_heartbeat", Args(("p_device", device), ("p_app_version", appVersion), ("p_state", state)), ct);
+
+    // v0.3 (0233): at most this many distinct files per armory_lock_files or armory_release_locks.
+    public const int MaximumBatchFiles = 500;
+
+    // v0.3 (0233). armory_acquire_lock per file, in id order, in one call. 1 to 500 distinct
+    // files (Chunk anything larger); a replayed operation answers the first time.
+    public async Task<BatchResult> LockFilesAsync(IReadOnlyCollection<Guid> files, Guid device, Guid operation, CancellationToken ct = default)
+        => BatchOf(await rest.CallAsync("armory_lock_files", Args(("p_files", BatchFiles(files)), ("p_device", device), ("p_operation", operation)), ct), "acquired");
+
+    // v0.3 (0233). The same over armory_release_lock.
+    public async Task<BatchResult> ReleaseLocksAsync(IReadOnlyCollection<Guid> files, Guid device, Guid operation, CancellationToken ct = default)
+        => BatchOf(await rest.CallAsync("armory_release_locks", Args(("p_files", BatchFiles(files)), ("p_device", device), ("p_operation", operation)), ct), "released");
+
+    // Files in batches the server takes: distinct, in id order, at most MaximumBatchFiles each.
+    public static IReadOnlyList<Guid[]> Chunk(IEnumerable<Guid> files)
+        => files.Distinct().Order().Chunk(MaximumBatchFiles).ToArray();
     // Contract v2 (C7): every live, unbroken check out on a live file of the project, for members.
     public async Task<IReadOnlyList<RemoteCheckout>> ProjectCheckoutsAsync(Guid project, CancellationToken ct = default)
         => Array(await rest.CallAsync("armory_project_checkouts", Args(("p_project", project)), ct)).Select(c => new RemoteCheckout(
@@ -138,6 +193,27 @@ public sealed class ArmoryApi(PostgrestClient rest)
         _ => throw new InvalidDataException($"Unknown member role {role}."),
     };
     private static Dictionary<string, object?> Args(params (string Name, object? Value)[] values) => values.ToDictionary(v => v.Name, v => v.Value);
+    private static Guid[] BatchFiles(IReadOnlyCollection<Guid> files)
+    {
+        var distinct = files.Distinct().Order().ToArray();
+        if (distinct.Length == 0 || distinct.Length != files.Count || distinct.Length > MaximumBatchFiles)
+            throw new ArgumentException($"A batch takes 1 to {MaximumBatchFiles} distinct files; use ArmoryApi.Chunk.", nameof(files));
+        return distinct;
+    }
+    private static BatchResult BatchOf(JsonNode? node, string done)
+    {
+        var o = node as JsonObject ?? throw new InvalidDataException("Armory answered a batch without a result.");
+        var results = new List<BatchFileResult>();
+        if (o["results"] is JsonArray list)
+            foreach (var r in list.OfType<JsonObject>())
+            {
+                var ok = r["ok"] is JsonValue okValue && okValue.GetValue<bool>();
+                results.Add(new(Guid.Parse(r["file_id"]!.GetValue<string>()), ok, ok && r[done] is JsonValue d && d.GetValue<bool>(),
+                    r["code"]?.ToString(), r["message"] is JsonValue m && m.TryGetValue<string>(out var text) ? text : null));
+            }
+        return new(Number(o, "total") ?? results.Count, Number(o, "succeeded") ?? results.Count(r => r.Ok), Number(o, "refused") ?? results.Count(r => !r.Ok), results);
+        static int? Number(JsonObject o, string name) => o[name] is JsonValue v && v.TryGetValue<int>(out var n) ? n : null;
+    }
     private static Guid GuidOf(JsonNode? node) => node is JsonValue v && Guid.TryParse(v.GetValue<string>(), out var id) ? id : throw new InvalidDataException("Armory answered without an id.");
     private static bool BoolOf(JsonNode? node) => node is JsonValue v ? v.GetValue<bool>() : throw new InvalidDataException("Armory answered without a result.");
     private static int IntOf(JsonNode? node) => node is JsonValue v ? v.GetValue<int>() : throw new InvalidDataException("Armory answered without a count.");

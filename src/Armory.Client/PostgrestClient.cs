@@ -75,7 +75,11 @@ public sealed class PostgrestClient(HttpClient http, SessionManager sessions, Fl
                     session = await sessions.GetFreshAsync(forceRefresh: true, cancellationToken);
                     continue;
                 }
-                if (response.StatusCode is HttpStatusCode.BadGateway or HttpStatusCode.ServiceUnavailable or HttpStatusCode.GatewayTimeout or HttpStatusCode.TooManyRequests)
+                // A PT429 is Armory's own per-account limit, an answer with a DETAIL saying when to
+                // send again (ArmoryRpcException.IsRateLimited); only a 429 without that code (a
+                // gateway's) is a busy site.
+                if (response.StatusCode is HttpStatusCode.BadGateway or HttpStatusCode.ServiceUnavailable or HttpStatusCode.GatewayTimeout ||
+                    (response.StatusCode == HttpStatusCode.TooManyRequests && error.Code != ArmoryRpcException.RateLimitedState))
                     throw new ArmoryOfflineException($"Armory is busy or unavailable ({function}, {(int)response.StatusCode}).");
                 // A deadlock or serialization failure rolled the whole call back, receipt included, so
                 // the same body (the same operation id) is sent again. 0232's folder rename and delete
