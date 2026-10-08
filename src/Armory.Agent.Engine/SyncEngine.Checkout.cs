@@ -12,7 +12,9 @@ namespace Armory.Agent.Engine;
 // action runs on the engine thread: called from any other thread, it marshals there first.
 public sealed partial class SyncEngine
 {
-    private enum CheckOutOutcome { Unknown, Done, AlreadyMine, Held, Waiting, ChangedHere, CloseFirst, Removed, NotShared, CantRead }
+    private enum CheckOutOutcome { Unknown, Done, AlreadyMine, Held, Waiting, ChangedHere, CloseFirst, Removed, NotShared, CantRead, Refused }
+    // armory_break_lock's refusal for a caller who may not (P0001, unchanged in 0233).
+    internal const string TakeBackRefused = "only a mentor or cad_lead may break a lock";
     private enum ReleaseOutcome { Unknown, Released, TakenBack, Refused }
     private readonly Dictionary<FileState, CheckOutOutcome> checkOutResults = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<FileState, ReleaseOutcome> releaseResults = new(ReferenceEqualityComparer.Instance);
@@ -52,6 +54,7 @@ public sealed partial class SyncEngine
             }
             await FlushAsync(); // the requests are durable before any server call
             checkOutResults.Clear();
+            checkOutRefusals.Clear();
             // Only these files move in this pass; the loop moves everything else.
             var scope = PassScope.Of(targets.Select(t => t.State));
             await PassLockedAsync(cancellationToken, scope);
@@ -94,6 +97,7 @@ public sealed partial class SyncEngine
                 CheckOutOutcome.Removed => $"{path.Name} was removed on this computer, so it can't be checked out.",
                 CheckOutOutcome.NotShared => $"{path.Name} isn't in Armory.",
                 CheckOutOutcome.CantRead => $"Armory couldn't read {path.Name}. Close any program using it, then try again.",
+                CheckOutOutcome.Refused => $"Armory couldn't check out {path.Name}. {checkOutRefusals.GetValueOrDefault(st) ?? "The server refused it."}",
                 _ => $"Armory couldn't bring {path.Name} up to date to check it out. Try again in a moment.",
             };
         }
@@ -101,7 +105,9 @@ public sealed partial class SyncEngine
         {
             message = mine.Count == targets.Count ? $"Checked out {Count(targets.Count, "file", "files")}." : $"Checked out {mine.Count:N0} of {Count(targets.Count, "file", "files")}.";
             message += HeldBy(outcomes.Where(o => o.Outcome == CheckOutOutcome.Held).Select(o => o.State).ToList());
-            var rest = outcomes.Count(o => o.Outcome is not (CheckOutOutcome.Done or CheckOutOutcome.AlreadyMine or CheckOutOutcome.Held));
+            // Each file a batch refused says why (v0.3): what landed is never reported as failed.
+            message += RefusedWords(targets);
+            var rest = outcomes.Count(o => o.Outcome is not (CheckOutOutcome.Done or CheckOutOutcome.AlreadyMine or CheckOutOutcome.Held or CheckOutOutcome.Refused));
             if (rest > 0)
                 message += wasOnline ? $" {Count(rest, "file needs", "files need")} you first: open {(rest == 1 ? "it" : "them")} here to see why."
                     : $" The {(rest == 1 ? "other one" : "others")} can be checked out once this computer is back online.";
@@ -250,7 +256,8 @@ public sealed partial class SyncEngine
         return new(done.Count > 0 || pending.Count > 0, message);
     }
 
-    // Force check in (armory_break_lock; "take back" until v0.2.1), for a mentor or CAD lead.
+    // Force check in (armory_break_lock; "take back" until v0.2.1), when the server says can_take_back
+    // (v0.3: a mentor, a CAD lead or a site admin).
     // The holder's computer keeps anything not checked in as their own copy (a kept copy), as
     // for any check out taken back.
     public async Task<ActionResult> TakeBackAsync(Guid fileId, CancellationToken cancellationToken = default)
@@ -276,7 +283,14 @@ public sealed partial class SyncEngine
             projectsWritten.Add(remote.Project.Id);
             try { broke = await deps.Api.BreakLockAsync(fileId, state.DeviceId!.Value, operation, cancellationToken); }
             catch (ArmoryOfflineException) { online = false; return Offline("A check in can be forced once this computer is back online."); }
-            catch (ArmoryRpcException error) when (error.IsForbidden) { return new(false, "Only a mentor or CAD lead can force a check in."); }
+            catch (ArmoryRpcException error) when (error.IsNotMember)
+            {
+                NoteNotMember(remote.Project.Id, error);
+                return new(false, $"You may no longer be in {remote.Project.Name}, so {name} can't be force checked in.");
+            }
+            // P0001 "only a mentor or cad_lead may break a lock" (unchanged in 0233), or a 42501.
+            catch (ArmoryRpcException error) when (error.IsForbidden || (error.SqlState == "P0001" && error.Message == TakeBackRefused))
+            { return new(false, "Only a mentor or CAD lead can force a check in."); }
             catch (ArmoryRpcException)
             {
                 // The server would not take it back as asked (someone else already did, or the
@@ -477,17 +491,24 @@ public sealed partial class SyncEngine
             catch (Exception error) when (error is ArmoryClientException or IOException or UnauthorizedAccessException)
             { FileProblem(st.Path, error); }
         }
+        // Several check outs at once take their locks in batches (v0.3, armory_lock_files): one
+        // call per 500 files, each file answered on its own.
+        List<(FileState State, VaultPath Path)>? toLock = checkOuts.Count > 1 && BatchesAvailable ? [] : null;
         await RunConcurrentlyAsync(checkOuts, async (st, token) =>
         {
-            try { await FinishCheckOutAsync(st, token); }
+            try { await FinishCheckOutAsync(st, token, toLock); }
             catch (ArmoryOfflineException) { online = false; }
             catch (Exception error) when (error is ArmoryClientException or IOException or UnauthorizedAccessException)
             { FileProblem(st.Path, error); }
             catch (Exception error) when (StopSaving(error)) { throw; }
         }, notStarted: null, ct);
+        if (toLock is { Count: > 0 } && online == true) await LockBatchAsync(toLock, ct);
         foreach (var (st, _) in releases)
             if (st.Request == CheckoutRequest.CheckIn || (st.AutoCheckIn && st.Request == CheckoutRequest.None && !st.TransientLock)) activity.Expect(ActivityTracker.CheckIn, st.Path, 0);
         if (releases.Count > 0 && online == true) await FlushAsync();
+        // Several releases at once go in batches too (armory_release_locks); what a batch can't
+        // send (a site without it) goes file by file below.
+        if (releases.Count > 1 && online == true && BatchesAvailable) releases = await ReleaseBatchAsync(releases, ct);
         await RunConcurrentlyAsync(releases, async (release, token) =>
         {
             var (st, flight) = release;
@@ -569,7 +590,8 @@ public sealed partial class SyncEngine
         return true;
     }
 
-    private async Task FinishCheckOutAsync(FileState st, CancellationToken ct)
+    // toLock: the files to take in one batch (FinishRequestsAsync); null takes this one's lock now.
+    private async Task FinishCheckOutAsync(FileState st, CancellationToken ct, List<(FileState State, VaultPath Path)>? toLock = null)
     {
         if (st.Inflight is not null) return; // the resumed lock answers on the next pass
         if (!VaultPath.TryCreate(st.Path, out var path, out _, options.VaultRoot) || st.FileId is not { } id ||
@@ -603,6 +625,7 @@ public sealed partial class SyncEngine
         switch (CheckoutRules.NextCheckOutStep(st.Base, hash, RevisionOf(remote.File), IsOpenNow(disk)))
         {
             case CheckOutStep.TakeLock:
+                if (toLock is not null) { toLock.Add((st, path)); break; }
                 if (await AcquireAsync(st, st.CheckOut!, ct))
                 {
                     SetAttribute(path, st, LockOwnership.ThisDevice);

@@ -260,11 +260,11 @@ public sealed partial class SyncEngine
         catch (UnauthorizedAccessException) { return true; }
     }
 
-    private async Task<bool> AcquireAsync(FileState st, string entryId, CancellationToken ct)
-    {
-        var flight = new Inflight("lock", OperationIds.Derive(entryId, "lock", Text(st.Attempt)), entryId, st.ProjectId, st.FileId);
-        return await SendAsync(st, flight, ct);
-    }
+    private async Task<bool> AcquireAsync(FileState st, string entryId, CancellationToken ct) => await SendAsync(st, LockFlight(st, entryId), ct);
+
+    // A lock's in-flight record: its id derives from the request and the attempt (every answer
+    // spends the attempt), alone or in a batch (SyncEngine.Batches.cs).
+    private static Inflight LockFlight(FileState st, string entryId) => new("lock", OperationIds.Derive(entryId, "lock", Text(st.Attempt)), entryId, st.ProjectId, st.FileId);
 
     // The bytes behind a hash: the newest capture of this file with that hash, or a fresh
     // capture if the disk still holds those bytes (a download that was never a save).
@@ -410,6 +410,7 @@ public sealed partial class SyncEngine
         catch (Exception error) when (error is ArmoryClientException or HashMismatchException or InvalidDataException or IOException or UnauthorizedAccessException)
         {
             st.Inflight = null;
+            NoteNotMember(st.ProjectId, error);
             if (error is StorageTransferException) { FileProblem(st.Path, error); result = false; } // this file waits for the next try
             else if (flight.Kind == "create" && error is ArmoryRpcException { IsNameTaken: true } taken) result = AdoptOrRefuseName(st, flight, taken);
             else if (flight.Kind is "lock" or "release" or "move")
@@ -434,7 +435,7 @@ public sealed partial class SyncEngine
     {
         BlobRefusedException { Status: 403 } => "Armory wouldn't take this file: you may no longer be in this project. Ask your CAD lead.",
         BlobRefusedException => "Armory wouldn't take this file. It stays on this computer.",
-        ArmoryRpcException { IsForbidden: true } => "Armory wouldn't take this file: you may no longer be in this project. Ask your CAD lead.",
+        ArmoryRpcException { IsNotMember: true } or ArmoryRpcException { IsForbidden: true } => "Armory wouldn't take this file: you may no longer be in this project. Ask your CAD lead.",
         ArmoryRpcException rpc when rpc.Message.Contains("SolidWorks", StringComparison.Ordinal) && project is not null =>
             $"It was saved in a SolidWorks year {project.Name} can't take. In SolidWorks, use Save As and pick {project.PinnedRelease}, then it uploads by itself.",
         ArmoryRpcException rpc when rpc.Message.Contains("SolidWorks", StringComparison.Ordinal) =>

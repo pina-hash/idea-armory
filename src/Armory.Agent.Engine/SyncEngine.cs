@@ -54,6 +54,10 @@ public sealed class EngineDependencies
     // failures, exceptions, read-only breaks and repaired check outs. Recording is a few dozen
     // nanoseconds and never touches the disk; null records nothing.
     public Armory.Telemetry.FlightRecorder? Recorder { get; init; }
+    // Live updates (v0.3): Supabase Realtime on armory_change_feed, one channel per synced
+    // project, each filtered by project_id. An event only wakes the loop to read the server
+    // again; the poll stays the floor. Null: the poll alone.
+    public RealtimeFeed? Live { get; init; }
 }
 
 public sealed record SyncReport(bool SignedIn, bool Online, int Uploaded, int Downloaded, int SideVersions, int Refused, IReadOnlyList<string> Problems);
@@ -160,14 +164,36 @@ public sealed partial class SyncEngine : IAsyncDisposable
     public void Resume() => engineThread.Enqueue(() => { paused = false; RequestPublish(); wake.Release(); });
     public void Wake() => engineThread.Enqueue(() => wake.Release());
 
-    public void Start() => engineThread.Enqueue(() => loop ??= LoopAsync(stopping.Token));
+    public void Start() => engineThread.Enqueue(() =>
+    {
+        if (loop is not null) return;
+        loop = LoopAsync(stopping.Token);
+        // Live updates (v0.3) run beside the loop, off the engine thread: an event only wakes it.
+        if (deps.Live is { } live)
+        {
+            live.Changed += OnLiveChange;
+            liveRun = Task.Run(() => live.RunAsync(stopping.Token));
+        }
+    });
 
     public Task StopAsync() => engineThread.InvokeAsync(async () =>
     {
         await stopping.CancelAsync();
         if (loop is not null) { try { await loop; } catch (OperationCanceledException) { } }
+        if (deps.Live is { } live) live.Changed -= OnLiveChange;
+        if (liveRun is not null) { try { await liveRun; } catch (OperationCanceledException) { } }
         return true;
     });
+
+    private Task? liveRun;
+    // A project's change feed has a new row (Realtime): a reason to read the server again now,
+    // never a change of local state by itself.
+    private void OnLiveChange(Guid project) => engineThread.Enqueue(() =>
+    {
+        liveEvents++;
+        wake.Release();
+    });
+    private long liveEvents;
 
     public async ValueTask DisposeAsync()
     {
@@ -395,8 +421,8 @@ public sealed partial class SyncEngine : IAsyncDisposable
         state.Remembered.RemoveAll(n => deps.Clock.GetUtcNow() - n.At > TimeSpan.FromMinutes(30));
         state.Imports.RemoveAll(i => deps.Clock.GetUtcNow() - i.At > ImportShownFor);
         var session = deps.Sessions.Current;
-        if (session is null) return Report(false);
-        if (state.Email is not null && !string.Equals(state.Email, session.Email, StringComparison.OrdinalIgnoreCase)) return Report(true);
+        if (session is null) { deps.Live?.SetProjects([]); return Report(false); }
+        if (state.Email is not null && !string.Equals(state.Email, session.Email, StringComparison.OrdinalIgnoreCase)) { deps.Live?.SetProjects([]); return Report(true); }
         if (state.Email is null || state.DeviceId != session.DeviceId)
         {
             // A reconnect of the same person registers a new device; its work and the locks
@@ -446,6 +472,8 @@ public sealed partial class SyncEngine : IAsyncDisposable
         Phase("scan");
 
         online = await RefreshAsync(ct);
+        // What was deleted forever leaves this computer (v0.3), before anything is planned.
+        DropPurged();
         if (online == true)
         {
             lastOnline = deps.Clock.GetUtcNow();
@@ -585,7 +613,13 @@ public sealed partial class SyncEngine : IAsyncDisposable
         try
         {
             var names = projects.GroupBy(p => p.Name, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
-            foreach (var gone in state.Projects.Keys.Except(projects.Select(p => p.Id)).ToArray()) state.Projects[gone].Usable = false;
+            // Gone from the list (v0.3): deleted forever, or this person removed? Asked below.
+            var listed = projects.Select(p => p.Id).ToHashSet();
+            var unlisted = state.Projects.Values.Where(p => !listed.Contains(p.Id)).ToList();
+            foreach (var ps in unlisted) ps.Usable = false;
+            // A "not a project member" answer is asked about through this read: a project still
+            // listed is still this person's.
+            notMember.Clear();
             foreach (var project in projects)
             {
                 if (!state.Projects.TryGetValue(project.Id, out var ps)) state.Projects[project.Id] = ps = new ProjectState { Id = project.Id };
@@ -594,6 +628,9 @@ public sealed partial class SyncEngine : IAsyncDisposable
                 ps.Enforce = project.ReleaseGate == ProjectReleaseGate.Enforce;
                 ps.Role = RoleName(project.Role);
                 ps.Archived = project.Archived;
+                // Force check in shows exactly when the server says so (v0.3, can_take_back).
+                ps.TakeBack = project.CanTakeBack;
+                if (ps.Departed) { ps.Departed = false; purgeAsked.Remove(ps.Id); }
                 ps.Usable = VaultPath.TryValidateName(project.Name, out _) && names[project.Name] == 1;
                 if (!ps.Usable)
                 {
@@ -604,7 +641,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
                 {
                     // New to this computer: its folder is its name, unless another project's folder
                     // still has that name (its rename waits for a file to close).
-                    if (state.Projects.Values.Any(p => !ReferenceEquals(p, ps) && p.Usable && string.Equals(p.Folder, project.Name, StringComparison.OrdinalIgnoreCase)))
+                    if (state.Projects.Values.Any(p => !ReferenceEquals(p, ps) && (p.Usable || p.PurgedAt is not null) && string.Equals(p.Folder, project.Name, StringComparison.OrdinalIgnoreCase)))
                     {
                         ps.Usable = false;
                         continue;
@@ -626,6 +663,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
             HashSet<Guid> read = [];
             try
             {
+                foreach (var ps in unlisted) await CheckGoneAsync(ps, ct);
                 foreach (var ps in state.Projects.Values.Where(p => p.Usable).ToArray())
                 {
                     // An archived project is not read, unless this computer still has check outs
@@ -634,9 +672,18 @@ public sealed partial class SyncEngine : IAsyncDisposable
                     var moved = ps.Archived;
                     if (!ps.Archived)
                     {
-                        var changes = await deps.Api.ListChangesAsync(ps.Id, ps.Cursor, ct);
+                        IReadOnlyList<RemoteChange> changes;
+                        try { changes = await deps.Api.ListChangesAsync(ps.Id, ps.Cursor, ct); }
+                        catch (ArmoryRpcException error) when (error.IsNotMember)
+                        {
+                            // P0001 "not a project member" (v0.3): no longer this person's.
+                            await CheckGoneAsync(ps, ct);
+                            continue;
+                        }
                         foreach (var change in changes)
                         {
+                            // Deleted forever (v0.3): those files and their history are gone.
+                            if (FolderPurge.From(change) is { } purge) FolderPurged(ps, purge);
                             if (change.Kind == "lock_broken" && change.Payload["former_device_id"]?.GetValue<string>() is { } former &&
                                 Guid.TryParse(former, out var device) && state.IsMine(device))
                                 foreach (var st in state.WithFileId(change.EntityId)) st.BreakNotice = true;
@@ -650,10 +697,21 @@ public sealed partial class SyncEngine : IAsyncDisposable
                         if (changes.Count > 0) lastActivity = deps.Clock.GetUtcNow();
                         moved = changes.Count > 0;
                     }
+                    if (!moved && FilesStillKnown(ps)) { read.Add(ps.Id); continue; }
+                    IReadOnlyList<RemoteFile> files;
+                    try { files = await deps.Api.ProjectFilesAsync(ps.Id, ct); }
+                    catch (ArmoryRpcException error) when (error.IsNotMember)
+                    {
+                        // 42501 "not a project member" (v0.3): treated as the P0001 above.
+                        await CheckGoneAsync(ps, ct);
+                        continue;
+                    }
                     read.Add(ps.Id);
-                    if (!moved && FilesStillKnown(ps)) continue;
-                    KnowProject(ps, await deps.Api.ProjectFilesAsync(ps.Id, ct));
+                    KnowProject(ps, files);
                 }
+                // Live updates follow the projects read now (never an archived one): each channel
+                // is filtered to its project, and an event only wakes the loop to read again.
+                deps.Live?.SetProjects(read.Where(id => state.Projects.TryGetValue(id, out var p) && p.Usable && !p.Archived));
                 // A project not read now (no longer a member, archived, unusable): nothing of its is known.
                 foreach (var gone in remoteProjects.Keys.Where(id => !read.Contains(id)).ToArray()) ForgetProject(gone);
                 staleProjects.IntersectWith(read);
@@ -807,10 +865,13 @@ public sealed partial class SyncEngine : IAsyncDisposable
             var project = ProjectOf(file.Path);
             if (project is null)
             {
-                if (notify) Notice(NoticeKinds.CantSend, null, key, "It is outside every project. Move it into one of your project folders so Armory can keep it.");
+                // A project deleted forever: its files are on their way to the recovery folder.
+                if (notify && !InPurgedProject(key)) Notice(NoticeKinds.CantSend, null, key, "It is outside every project. Move it into one of your project folders so Armory can keep it.");
                 continue;
             }
             var known = state.Files.TryGetValue(key, out var existing);
+            // Deleted forever (v0.3): never kept as work to send again.
+            if (known && existing!.Purged) continue;
             // Archived (decision D8): only this computer's own check outs there are kept up.
             if (project.Archived && !MineToFinish(existing)) continue;
             if (!known) createdThisPass.Add(key);
@@ -935,6 +996,8 @@ public sealed partial class SyncEngine : IAsyncDisposable
         if (Held(key)) return null;
         local.TryGetValue(key, out var localFile);
         state.Files.TryGetValue(key, out var st);
+        // Deleted forever (v0.3): nothing of it is planned; DropPurged moves its copy aside.
+        if (st?.Purged == true) return null;
         // Archived (decision D8): only this computer's own check outs there are finished.
         if (project.Archived && !MineToFinish(st)) return null;
         // A file this computer already tracks is planned against its own server record
@@ -1273,6 +1336,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
     // server's refusals are things Armory can't send, the disk's are things it can't read.
     private void FileProblem(string path, Exception error)
     {
+        if (VaultPath.TryCreate(path, out var where, out _, options.VaultRoot)) NoteNotMember(ProjectOf(where)?.Id, error);
         if (flight is not null)
         {
             flight.FileFailed(path, error);

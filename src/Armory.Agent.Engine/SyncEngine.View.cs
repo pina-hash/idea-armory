@@ -16,7 +16,7 @@ public sealed partial class SyncEngine
     private static readonly string[] NoticeOrder =
     [
         NoticeKinds.CantSend, NoticeKinds.CantRead, NoticeKinds.NameShared, NoticeKinds.TakenBack, NoticeKinds.FolderPutBack, NoticeKinds.ProjectPutBack,
-        NoticeKinds.ProjectRenaming, NoticeKinds.CheckInPartial, NoticeKinds.KeptCopy, NoticeKinds.NewerWaiting, NoticeKinds.Import,
+        NoticeKinds.ProjectRenaming, NoticeKinds.ProjectDeleted, NoticeKinds.CheckInPartial, NoticeKinds.KeptCopy, NoticeKinds.NewerWaiting, NoticeKinds.Import,
     ];
     private IReadOnlyCollection<string> openWithoutCheckOut = [];
 
@@ -32,7 +32,8 @@ public sealed partial class SyncEngine
             : state.Email is not null && !string.Equals(state.Email, session.Email, StringComparison.OrdinalIgnoreCase) ? Connections.VaultOwnedByOther
             : Connections.SignedIn;
         var account = session is null ? null : new AccountView(session.Email, session.DeviceName);
-        var files = state.Files.Values.ToArray();
+        // A record of something deleted forever (v0.3) is on its way out: never shown.
+        var files = state.Files.Values.Where(f => !f.Purged).ToArray();
         var pending = files.Count(Unsent);
         var notices = Notices(files);
         var moving = Activity(files, pending);
@@ -267,6 +268,10 @@ public sealed partial class SyncEngine
             NoticeKinds.ProjectPutBack => (NoticeTones.Info,
                 n == 1 ? first.Title ?? $"The {name} folder was put back" : $"{n:N0} project folders were put back",
                 n == 1 ? first.Detail ?? "" : ProjectNamesWords, new NoticeActionView("OK", BridgeMessages.DismissNotice, [])),
+            // One line (v0.3): the project is gone from the website, so it is gone from here.
+            NoticeKinds.ProjectDeleted => (NoticeTones.Info,
+                n == 1 ? first.Title ?? $"{name} was deleted forever" : $"{n:N0} projects were deleted forever on ideabosco.com, so Armory took them off this computer.",
+                "", new NoticeActionView("OK", BridgeMessages.DismissNotice, [])),
             NoticeKinds.ProjectRenaming => (NoticeTones.Info,
                 n == 1 ? first.Title ?? $"{name} is being renamed" : $"{n:N0} projects are being renamed",
                 n == 1 ? first.Detail ?? "" : "A mentor renamed them on ideabosco.com. Armory renames their folders on this computer as soon as nothing in them is open.", null),

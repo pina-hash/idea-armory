@@ -104,7 +104,14 @@ public sealed partial class SyncEngine
                 ["archived"] = p.Archived,
                 ["usable"] = p.Usable,
                 ["putBackFrom"] = p.PutBackFrom,
+                ["canTakeBack"] = p.CanTakeBack,
+                ["departed"] = p.Departed,
+                ["purgedAt"] = p.PurgedAt is { } purged ? FlightJson.Time(purged) : null,
             }).ToArray()),
+            ["purgedRecords"] = state.Files.Values.Count(f => f.Purged),
+            // v0.3 live updates: events that woke the loop, and the channels joined now.
+            ["live"] = deps.Live is { } live ? new JsonObject { ["events"] = liveEvents, ["connections"] = live.Connections, ["joined"] = live.Joined.Count } : null,
+            ["batchesMissingUntil"] = batchesMissingUntil > DateTimeOffset.MinValue ? FlightJson.Time(batchesMissingUntil) : null,
         };
         described["pendingRequests"] = requests;
         described["lastPasses"] = new JsonArray(recentPasses.Select(p => (JsonNode)p.DeepClone()).ToArray());

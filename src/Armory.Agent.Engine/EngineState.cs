@@ -249,9 +249,20 @@ internal sealed class ProjectState
     public string Role { get; set; } = "student";
     public bool Usable { get; set; } = true;
     public bool Archived { get; set; }
+    // The server's can_take_back (v0.3, 0233: mentor, CAD lead, or site admin), or null from a
+    // server that does not send it.
+    public bool? TakeBack { get; set; }
+    // v0.3: when the project was deleted forever (armory_project_purged). Its folder and records
+    // leave this computer (its files to Armory's recovery folder), then the project is forgotten.
+    public DateTimeOffset? PurgedAt { get; set; }
+    // No longer in armory_my_projects, and armory_project_purged answered null: this person was
+    // removed from it. Handled as before 0.3 (not synced, its folder left as it is); asked again
+    // once per start, in case it is deleted forever later.
+    public bool Departed { get; set; }
 
-    // A mentor or CAD lead may take a file back (armory_break_lock).
-    [JsonIgnore] public bool CanTakeBack => Role is "mentor" or "cad_lead";
+    // Who may force a check in (armory_break_lock): exactly what the server says, or, from a
+    // server older than 0233, a mentor or CAD lead.
+    [JsonIgnore] public bool CanTakeBack => TakeBack ?? Role is "mentor" or "cad_lead";
 
     // The server's words for a role; 0.1.0 stored the client's enum names.
     internal static string RoleName(string? role) => role switch
@@ -318,6 +329,7 @@ internal sealed class FileState
     private CheckoutRequest request;
     private bool autoCheckIn;
     private bool transientLock;
+    private bool purged;
 
     private void Set<T>(ref T field, T value)
     {
@@ -398,6 +410,10 @@ internal sealed class FileState
     public bool AutoCheckIn { get => autoCheckIn; set => Set(ref autoCheckIn, value); }
     // The lock was taken only for a move or a removal, and is let go once that is done.
     public bool TransientLock { get => transientLock; set => Set(ref transientLock, value); }
+    // v0.3: the server deleted this file and its history forever (folder_purged, or its project
+    // deleted forever). Never planned or sent again; its copy here goes to Armory's recovery
+    // folder once closed, then the record is dropped (SyncEngine.Purge.cs).
+    public bool Purged { get => purged; set => Set(ref purged, value); }
 
     [JsonIgnore] public Revision? Base => BaseId is null ? null : new(BaseId, BaseHash, "");
     public void SetBase(Revision? revision) { BaseId = revision?.Id; BaseHash = revision?.Hash; }
