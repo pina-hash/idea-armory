@@ -29,7 +29,8 @@ internal sealed class AgentTelemetry : IAsyncDisposable
         this.paths = paths;
         this.log = log;
         Recorder = new FlightRecorder(clock: clock);
-        Scrubber = new Scrubber(Redactor.Scrub, Secrets);
+        // Other people's addresses are masked too: a site admin reads these reports (v0.3).
+        Scrubber = new Scrubber(Redactor.Scrub, Secrets, () => session()?.Email);
         LastFlight = new LastFlight(paths.LastFlightFile, Recorder, Scrubber, log.Info);
         Reporter = new IncidentReporter(Recorder, new IncidentStore(paths.IncidentsFolder), new IncidentSources
         {
@@ -116,6 +117,41 @@ internal sealed class AgentTelemetry : IAsyncDisposable
             UploadOutcome.Sent => (true, "Sent. Thank you for telling us."),
             UploadOutcome.NotLive or UploadOutcome.Waiting => (true, "Saved. It will be sent when the website is ready."),
             UploadOutcome.Offline => (true, "Saved. It will be sent when this computer is back online."),
+            UploadOutcome.RateLimited => (true, "Saved. You've sent a lot today, so it will be sent in a little while."),
+            _ => (true, "Saved. It will be sent a little later."),
+        };
+    }
+
+    // "Send feedback" (v0.3): the person's words as a note on its own (armory_submit_app_feedback),
+    // with Armory's version and what it was doing as its context, never file contents. Saved here
+    // first, so a note that can't go now is sent later; the answer is one plain sentence.
+    internal async Task<(bool Ok, string Message)> SendFeedbackAsync(string? kind, string? body)
+    {
+        var words = (body ?? "").Trim();
+        if (words.Length == 0) return (false, "Write a few words first.");
+        if (words.Length > MaximumReportCharacters) words = words[..MaximumReportCharacters];
+        var normalized = ReportKinds.Contains(kind ?? "") ? kind! : "other";
+        var path = await Reporter.SaveNoteAsync(normalized, words).ConfigureAwait(false);
+        if (path is null) return (false, "Armory couldn't save your feedback. Try again in a moment.");
+        var outcome = UploadOutcome.Offline;
+        if (uploader is { } sending)
+        {
+            try { outcome = await sending.SendFeedbackNowAsync(path, stopping.Token).ConfigureAwait(false); }
+            catch (Exception error) when (error is not OutOfMemoryException)
+            {
+                log.Error("send feedback: the note was saved and waits to be sent", error);
+                outcome = UploadOutcome.Failed;
+            }
+            sending.Wake();
+        }
+        log.Info("send feedback: " + normalized + ", " + outcome);
+        return outcome switch
+        {
+            UploadOutcome.Sent => (true, "Sent. Thank you for the feedback."),
+            UploadOutcome.NotLive or UploadOutcome.Waiting => (true, "Saved. It will be sent when the website is ready."),
+            UploadOutcome.Offline => (true, "Saved. It will be sent when this computer is back online."),
+            UploadOutcome.RateLimited => (true, "Saved. You've sent a lot today, so it will be sent in a little while."),
+            UploadOutcome.Held => (false, "Armory couldn't send that feedback. It is kept in the incidents folder."),
             _ => (true, "Saved. It will be sent a little later."),
         };
     }

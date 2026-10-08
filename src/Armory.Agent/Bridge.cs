@@ -24,6 +24,8 @@ internal sealed record DismissNoticeMessage(string? Key);
 internal sealed record SaveSettingsMessage(string? VaultRoot, bool? StartAtSignIn, string? Theme);
 // Report a problem: kind is bug, idea or other; body is what the person wrote.
 internal sealed record ReportProblemMessage(string? Kind, string? Body, string? RequestId);
+// Send feedback (v0.3): kind is bug, idea or other; body is what the person wrote. A note on its own.
+internal sealed record SendFeedbackMessage(string? Kind, string? Body, string? RequestId);
 
 // What the bridge needs from the window it lives in. Every member runs on the UI thread.
 internal interface IBridgeWindow
@@ -72,6 +74,7 @@ internal sealed class Bridge(AgentHost host, IBridgeWindow window, AgentLog log)
         [BridgeMessages.ChooseVaultRoot] = null,
         [BridgeMessages.ReportProblem] = typeof(ReportProblemMessage),
         [BridgeMessages.OpenIncidents] = null,
+        [BridgeMessages.SendFeedback] = typeof(SendFeedbackMessage),
     };
 
     // The answer to an action the window sent with something unusable in it.
@@ -241,6 +244,10 @@ internal sealed class Bridge(AgentHost host, IBridgeWindow window, AgentLog log)
                 case BridgeMessages.ReportProblem:
                     var report = Read<ReportProblemMessage>(message);
                     await AnswerAsync(type, 0, asked, report?.RequestId, host.ReportProblemAsync(report?.Kind, report?.Body));
+                    break;
+                case BridgeMessages.SendFeedback:
+                    var note = Read<SendFeedbackMessage>(message);
+                    await AnswerAsync(type, 0, asked, note?.RequestId, host.SendFeedbackAsync(note?.Kind, note?.Body));
                     break;
                 case BridgeMessages.OpenIncidents:
                     // The incidents folder, so a person can hand the files over by hand today.

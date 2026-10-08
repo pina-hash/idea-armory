@@ -95,6 +95,7 @@
 		folderPutBack: 'folder-back',
 		projectPutBack: 'folder-back',
 		projectRenaming: 'rename',
+		projectDeleted: 'trash',
 		cantSend: 'cant',
 		cantRead: 'cant',
 		checkInPartial: 'person'
@@ -530,13 +531,19 @@
 		updateCues();
 	}
 
-	/** The header's two keys. In a narrow window they keep only their icons; the words
-	 *  stay for screen readers and the tooltip says where each one goes. */
+	/** The header's keys. In a narrow window they keep only their icons; the words stay
+	 *  for screen readers and the tooltip says where each one goes. Send feedback (v0.3) is
+	 *  there once the computer is signed in, on every screen but Connect. */
 	function headerHtml(v) {
 		return (
 			'<button class="key hdr-key" type="button" data-action="openVault" data-key="hdr-vault" title="Open ' + esc(v.vaultRoot) + ' in File Explorer">' +
 			icon('folder') +
 			'<span class="key-word">Open Armory folder</span></button>' +
+			(v.connection === 'signedIn'
+				? '<button class="key hdr-key" type="button" data-action="askFeedback" data-key="feedback" aria-haspopup="dialog" title="Send feedback to the IDEA team">' +
+					icon('feedback') +
+					'<span class="key-word">Send feedback</span></button>'
+				: '') +
 			'<button class="key hdr-key" type="button" data-action="openSettings" data-key="hdr-settings" aria-haspopup="dialog" title="Settings">' +
 			icon('settings') +
 			'<span class="key-word">Settings</span></button>'
@@ -974,7 +981,7 @@
 		var items = n.items || [];
 		// A list is for two files or more: one file is named in the card and gets its own
 		// key, never a list of one.
-		var hasItems = items.length > 1;
+		var hasItems = items.length > 1 && n.kind !== 'projectDeleted';
 		var open = hasItems && !!ui.expanded[n.key];
 		var keys = '';
 		var a = n.action;
@@ -1651,9 +1658,10 @@
 		html += '<h3 class="section-label" id="set-report-label">Something not working?</h3>';
 		html += '<div class="setting-row">';
 		html += '<button class="key" type="button" data-action="askReport" data-key="set-report" aria-haspopup="dialog">Report a problem</button>';
+		html += '<button class="key" type="button" data-action="askFeedback" data-key="set-feedback" aria-haspopup="dialog">Send feedback</button>';
 		html += '<button class="textlink" type="button" data-action="openIncidents" data-key="set-incidents">' + icon('folder') + '<span>Open incidents folder</span></button>';
 		html += '</div>';
-		html += '<p class="setting-help">Armory keeps a short record of what it was doing when something goes wrong: file names, never what is in your files. A report sends your words with it.</p>';
+		html += '<p class="setting-help">Armory keeps a short record of what it was doing when something goes wrong: file names, never what is in your files. A report sends your words with it. Feedback sends just your words, with Armory\'s version and what it was doing.</p>';
 		html += '</section>';
 		return html;
 	}
@@ -1719,6 +1727,12 @@
 			body = 'Tell us what went wrong, or what would make Armory better. Your words go with a short record of what Armory was doing: file names, never what is in your files.';
 			extra = reportKindsHtml(c.kind);
 			field = areaHtml('What happened?');
+			ok = 'Send';
+		} else if (kind === 'feedback') {
+			title = 'Send feedback';
+			body = 'Tell us what would make Armory better, or what got in your way. Your words go to the IDEA team with Armory\'s version and what it was doing: file names, never what is in your files.';
+			extra = reportKindsHtml(c.kind);
+			field = areaHtml('Your feedback');
 			ok = 'Send';
 		} else if (kind === 'checkOutAll') {
 			title = 'Check out all';
@@ -1844,6 +1858,16 @@
 				return;
 			}
 			act('reportProblem', { kind: c.kind, body: words }, { key: a.returnKey });
+		} else if (a.kind === 'feedback') {
+			var feedbackArea = ask.querySelector('#ask-report');
+			var feedbackWords = feedbackArea.value.trim();
+			if (!feedbackWords) {
+				ask.querySelector('#ask-error').textContent = 'Write a few words first.';
+				feedbackArea.setAttribute('aria-invalid', 'true');
+				feedbackArea.focus();
+				return;
+			}
+			act('sendFeedback', { kind: c.kind, body: feedbackWords }, { key: a.returnKey });
 		} else if (a.kind === 'renameFile') {
 			var fileInput = ask.querySelector('#ask-name');
 			var newName = fileInput.value.trim();
@@ -2111,6 +2135,8 @@
 				return { line: 'Adding files...', row: null };
 			case 'reportProblem':
 				return { line: 'Sending your report...', row: null };
+			case 'sendFeedback':
+				return { line: 'Sending your feedback...', row: null };
 		}
 		return { line: null, row: null };
 	}
@@ -2726,8 +2752,14 @@
 				sheet.close();
 				openAsk('report', { kind: 'bug' }, 'hdr-settings');
 				break;
+			case 'askFeedback':
+				// Send feedback opens over Home, from the account panel or from Settings.
+				var fromSettings = sheet.open;
+				if (fromSettings) sheet.close();
+				openAsk('feedback', { kind: 'idea' }, fromSettings ? 'hdr-settings' : 'feedback');
+				break;
 			case 'reportKind':
-				if (ui.ask && ui.ask.kind === 'report') {
+				if (ui.ask && (ui.ask.kind === 'report' || ui.ask.kind === 'feedback')) {
 					ui.ask.ctx.kind = el.getAttribute('data-value');
 					Array.prototype.forEach.call(ask.querySelectorAll('[data-action="reportKind"]'), function (b) {
 						b.setAttribute('aria-pressed', String(b === el));
@@ -2915,6 +2947,7 @@
 	function routeDialog(r) {
 		if (!r || !r.dialog) return;
 		if (r.dialog === 'report') openAsk('report', { kind: 'bug' }, 'hdr-settings');
+		if (r.dialog === 'feedback') openAsk('feedback', { kind: 'idea' }, 'feedback');
 		if (r.dialog === 'takeBack' && ui.detail) askTakeBack([findRow(ui.detail.fileId)], 'd-takeback');
 		if (r.dialog === 'forceAll') {
 			var here = browserPlace();

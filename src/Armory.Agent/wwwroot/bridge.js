@@ -45,7 +45,7 @@
 	 * @typedef {'upload' | 'download' | 'move'} Direction
 	 * @typedef {'info' | 'look' | 'bad'} NoticeTone
 	 * @typedef {'import' | 'nameShared' | 'newerWaiting' | 'keptCopy' | 'takenBack' | 'folderPutBack'
-	 *   | 'projectPutBack' | 'projectRenaming' | 'cantSend' | 'cantRead' | 'checkInPartial'} NoticeKind
+	 *   | 'projectPutBack' | 'projectRenaming' | 'projectDeleted' | 'cantSend' | 'cantRead' | 'checkInPartial'} NoticeKind
 	 * @typedef {'version' | 'keptCopy' | 'removed'} HistoryKind
 	 * @typedef {'system' | 'idea' | 'spaceWhite'} ThemeSetting
 	 * @typedef {'idea' | 'spaceWhite'} EffectiveTheme
@@ -273,12 +273,14 @@
 	 *   saveSettings: { vaultRoot, startAtSignIn, theme }
 	 *   reportProblem: { kind, body }         (kind: bug, idea or other; the host saves it with a
 	 *                                          fresh incident and answers in one sentence)
+	 *   sendFeedback: { kind, body }          (kind: bug, idea or other; a note on its own, no
+	 *                                          incident: armory_submit_app_feedback, one sentence back)
 	 *   openIncidents: none                   (opens the incidents folder in File Explorer)
 	 * @typedef {'ready' | 'connect' | 'cancelConnect' | 'signOut' | 'pause' | 'resume'
 	 *   | 'openVault' | 'openFile' | 'launchFile' | 'showInFolder' | 'checkOut' | 'checkIn'
 	 *   | 'undoCheckOut' | 'takeBack' | 'createFolder' | 'renameFolder' | 'deleteFolder' | 'renameFile'
 	 *   | 'addFiles' | 'dropFiles' | 'dismissNotice' | 'saveSettings' | 'chooseVaultRoot'
-	 *   | 'reportProblem' | 'openIncidents'} PageMessageType
+	 *   | 'reportProblem' | 'openIncidents' | 'sendFeedback'} PageMessageType
 	 */
 
 	/**
@@ -291,7 +293,7 @@
 	 * @property {string | null} folder    a folder path in that project
 	 * @property {string[]} select         file names in that folder
 	 * @property {string | null} expand    a notice key
-	 * @property {string | null} dialog    newFolder, renameFolder, deleteFolder, checkOutAll, takeBack, forceAll, renameFile or report
+	 * @property {string | null} dialog    newFolder, renameFolder, deleteFolder, checkOutAll, takeBack, forceAll, renameFile, report or feedback
 	 * @property {boolean} drag
 	 * @property {string | null} at        a part of Home to scroll into view: browser
 	 * @property {string | null} press     a control key the page presses once it is drawn
@@ -300,7 +302,7 @@
 	/* ------------------------------------------------------- Message lists */
 
 	/** Page to host message types (BRIDGE.md, "Page to host"). */
-	var PAGE_TO_HOST = ['ready', 'connect', 'cancelConnect', 'signOut', 'pause', 'resume', 'openVault', 'openFile', 'launchFile', 'showInFolder', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'dismissNotice', 'saveSettings', 'chooseVaultRoot', 'reportProblem', 'openIncidents'];
+	var PAGE_TO_HOST = ['ready', 'connect', 'cancelConnect', 'signOut', 'pause', 'resume', 'openVault', 'openFile', 'launchFile', 'showInFolder', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'dismissNotice', 'saveSettings', 'chooseVaultRoot', 'reportProblem', 'openIncidents', 'sendFeedback'];
 
 	/** Host to page message types (BRIDGE.md, "Host to page"). */
 	var HOST_TO_PAGE = ['view', 'fileDetail', 'activity', 'actionResult'];
@@ -322,11 +324,12 @@
 		dropFiles: ['projectId', 'folder'],
 		dismissNotice: ['key'],
 		saveSettings: ['vaultRoot', 'startAtSignIn', 'theme'],
-		reportProblem: ['kind', 'body']
+		reportProblem: ['kind', 'body'],
+		sendFeedback: ['kind', 'body']
 	};
 
 	/** Actions: each carries a requestId, and the host answers it with one actionResult. */
-	var ACTIONS = ['launchFile', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'reportProblem'];
+	var ACTIONS = ['launchFile', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'reportProblem', 'sendFeedback'];
 
 	/* ----------------------------------------------------------- Plumbing */
 
@@ -732,8 +735,10 @@
 					postView();
 					break;
 				case 'reportProblem':
-					// The website's side is not live yet: the app saves the report and says so.
-					result(message, true, 'Saved. It will be sent when the website is ready.');
+					result(message, true, 'Sent. Thank you for telling us.');
+					break;
+				case 'sendFeedback':
+					result(message, true, 'Sent. Thank you for the feedback.');
 					break;
 				case 'openVault':
 				case 'showInFolder':

@@ -1099,7 +1099,7 @@ for (const size of SIZES) {
 		await page.click('[data-key="ask-ok"]');
 		await settle(page);
 		expect(!(await page.evaluate(() => document.getElementById('ask').open)), 'Send left the dialog open');
-		expect((await text(page, '#result-word')) === 'Saved. It will be sent when the website is ready.', `the answer says "${await text(page, '#result-word')}"`);
+		expect((await text(page, '#result-word')) === 'Sent. Thank you for telling us.', `the answer says "${await text(page, '#result-word')}"`);
 		expect((await page.evaluate(() => document.activeElement && document.activeElement.getAttribute('data-key'))) === 'hdr-settings', 'focus did not come back to Settings');
 	});
 	await flow('settings sheet', size, 'synced', async (page, expect) => {
@@ -1108,7 +1108,7 @@ for (const size of SIZES) {
 		expect(await page.evaluate(() => document.getElementById('settings').open), 'Settings did not open');
 		// A theme pad says its name and, under it, what it is ("Dark", "Light"); the name is the setting.
 		const keys = await page.$$eval('#settings button', (b) => b.map((x) => (x.querySelector('.seg-name') || x).textContent.trim()));
-		expect(keys.join('|') === 'Done|Change|On|Match Windows|IDEA|Space White|Report a problem|Open incidents folder', `sheet holds ${keys.join(', ')}`);
+		expect(keys.join('|') === 'Done|Change|On|Match Windows|IDEA|Space White|Report a problem|Send feedback|Open incidents folder', `sheet holds ${keys.join(', ')}`);
 		await page.click('[data-key="set-theme-spaceWhite"]');
 		await settle(page);
 		expect((await page.getAttribute('html', 'data-theme')) === 'spaceWhite', 'Space White did not apply');
@@ -1262,7 +1262,8 @@ const CONTRACT = {
 	saveSettings: ['vaultRoot', 'startAtSignIn', 'theme'],
 	chooseVaultRoot: [],
 	reportProblem: ['kind', 'body', ...ACT],
-	openIncidents: []
+	openIncidents: [],
+	sendFeedback: ['kind', 'body', ...ACT]
 };
 tally.bridgeFailures = 0;
 tally.bridgeTypes = 0;
@@ -1551,6 +1552,20 @@ tally.bridgeTypes = 0;
 		expect(m.type === 'reportProblem' && m.kind === 'idea' && m.body === 'A button to check in every file I have.', 'Send sent ' + JSON.stringify(m));
 		await host({ type: 'actionResult', requestId: m.requestId, ok: true, message: 'Saved. It will be sent when the website is ready.' });
 		expect((await page.textContent('#result-word')) === 'Saved. It will be sent when the website is ready.', 'the report\'s answer was not shown');
+		// Send feedback (v0.3), from Settings and from the header: a note on its own.
+		await click('[data-key="hdr-settings"]');
+		m = await click('[data-key="set-feedback"]');
+		expect(!m.type && (await page.evaluate(() => document.getElementById('ask').open)), 'Send feedback (Settings) did not open its dialog: ' + JSON.stringify(m));
+		await page.keyboard.press('Escape');
+		m = await click('[data-key="feedback"]');
+		expect(!m.type && (await page.evaluate(() => document.getElementById('ask').open)), 'Send feedback did not open its dialog: ' + JSON.stringify(m));
+		m = await click('[data-key="ask-ok"]');
+		expect(!m.type && /Write a few words/.test(await page.textContent('#ask-error')), 'empty feedback was sent: ' + JSON.stringify(m));
+		await page.fill('#ask-report', 'Show who is online on the team page.');
+		m = await click('[data-key="ask-ok"]');
+		expect(m.type === 'sendFeedback' && m.kind === 'idea' && m.body === 'Show who is online on the team page.', 'Send feedback sent ' + JSON.stringify(m));
+		await host({ type: 'actionResult', requestId: m.requestId, ok: true, message: 'Sent. Thank you for the feedback.' });
+		expect((await page.textContent('#result-word')) === 'Sent. Thank you for the feedback.', 'the feedback\'s answer was not shown');
 		await click('[data-key="hdr-settings"]');
 		await page.keyboard.press('Escape');
 		m = await click('[data-key="signout"]');

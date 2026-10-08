@@ -36,6 +36,10 @@ internal sealed class AgentHost : IAsyncDisposable
     private long lastHints = -1;
     private bool engineFailureLogged;
     private bool disposed;
+    // Team status (v0.3): armory_heartbeat on its own task while the app runs.
+    private readonly CancellationTokenSource running = new();
+    private Task? beating;
+    private static readonly TimeSpan GoodbyeDeadline = TimeSpan.FromSeconds(3);
 
     internal AgentHost(AgentPaths paths, AgentLog log, Uri site, AgentTelemetry telemetry)
     {
@@ -59,6 +63,7 @@ internal sealed class AgentHost : IAsyncDisposable
         Api = new ArmoryApi(new PostgrestClient(restHttp, Sessions, telemetry.Recorder));
         Blobs = new BlobClient(siteHttp, storageHttp, site, Sessions, telemetry.Recorder);
         Connector = new ConnectFlow(siteHttp, site, new DefaultBrowserLauncher(), Sessions);
+        Heartbeat = new TeamHeartbeat(Api, Sessions, AgentPaths.Version, log: log.Info);
         Sessions.SignedOut += () => { log.Info("signed out"); Wake(); };
         hintTimer = new System.Threading.Timer(_ => PollHints(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         telemetry.Attach(() => Sessions.Current, DescribeAsync, DescribeNow, Api, () => Blobs.ActiveTransfers > 0);
@@ -69,6 +74,7 @@ internal sealed class AgentHost : IAsyncDisposable
     internal ArmoryApi Api { get; }
     internal BlobClient Blobs { get; }
     internal ConnectFlow Connector { get; }
+    internal TeamHeartbeat Heartbeat { get; }
     internal AgentSettings Settings { get { lock (gate) return settings; } }
     internal string EffectiveTheme { get { lock (gate) return effectiveTheme; } }
     internal bool IsPaused
@@ -109,6 +115,8 @@ internal sealed class AgentHost : IAsyncDisposable
         { log.Error("could not update the sign-in start entry", error); }
         await RestartRuntimeAsync(settings);
         hintTimer.Change(HintPoll, HintPoll);
+        // Beats until a clean stop; a failed beat is logged and never touches a sync pass.
+        beating = Task.Run(() => Heartbeat.RunAsync(running.Token));
     }
 
     internal void Pause() => OnEngine("pause", e => e.Pause());
@@ -149,6 +157,22 @@ internal sealed class AgentHost : IAsyncDisposable
         {
             log.Error("report a problem failed", error);
             return new ActionResult(false, "Armory couldn't save your report. Try again in a moment.");
+        }
+    }
+
+    // "Send feedback" (v0.3): the words as a note on its own, saved here and sent when the site
+    // can take them. One sentence back, never an error for a site that isn't ready.
+    internal async Task<ActionResult> SendFeedbackAsync(string? kind, string? body)
+    {
+        try
+        {
+            var (ok, message) = await Telemetry.SendFeedbackAsync(kind, body).ConfigureAwait(false);
+            return new ActionResult(ok, message);
+        }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            log.Error("send feedback failed", error);
+            return new ActionResult(false, "Armory couldn't save your feedback. Try again in a moment.");
         }
     }
 
@@ -342,6 +366,13 @@ internal sealed class AgentHost : IAsyncDisposable
     {
         hintTimer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         CancelConnect();
+        // A clean stop says so to the team ("offline-soon"), within a few seconds at most.
+        if (!running.IsCancellationRequested)
+        {
+            await running.CancelAsync();
+            if (beating is not null) { try { await beating.ConfigureAwait(false); } catch (OperationCanceledException) { } }
+            if (beating is not null) await Heartbeat.SayGoodbyeAsync(GoodbyeDeadline).ConfigureAwait(false);
+        }
         await lifecycle.WaitAsync();
         try
         {
@@ -365,7 +396,7 @@ internal sealed class AgentHost : IAsyncDisposable
             try
             {
                 // Opening the journal, snapshots and read-only intents touches the disk: off the UI thread.
-                created = await Task.Run(() => VaultRuntime.Create(target.VaultRoot, Sessions, Api, Blobs, log, Telemetry.Recorder));
+                created = await Task.Run(() => VaultRuntime.Create(target.VaultRoot, Sessions, Api, Blobs, log, Telemetry.Recorder, new RealtimeFeed(Sessions, log: log.Info)));
                 created.Engine.ViewChanged += OnEngineView;
                 created.Engine.ActivityChanged += OnEngineActivity;
                 ApplySettingsTo(created.Engine);
@@ -409,10 +440,22 @@ internal sealed class AgentHost : IAsyncDisposable
         TaskCompletionSource? settled;
         lock (gate) settled = firstSignedInView;
         if (settled is not null && view.Connection is Connections.SignedIn or Connections.VaultOwnedByOther) settled.TrySetResult();
+        TeamState(view.Activity);
         ViewChanged?.Invoke(view);
     }
 
-    private void OnEngineActivity(ActivityView activity) => ActivityChanged?.Invoke(activity);
+    private void OnEngineActivity(ActivityView activity)
+    {
+        TeamState(activity);
+        ActivityChanged?.Invoke(activity);
+    }
+
+    // "syncing" while files move, "idle" otherwise: a change goes to the team at once.
+    private void TeamState(ActivityView activity)
+    {
+        if (running.IsCancellationRequested) return;
+        Heartbeat.SetState(TeamHeartbeat.StateFor(activity.Upload is not null || activity.Download is not null || activity.Move is not null));
+    }
 
     private void RaiseView()
     {
@@ -520,6 +563,7 @@ internal sealed class AgentHost : IAsyncDisposable
         await StopAsync();
         disposed = true;
         await hintTimer.DisposeAsync();
+        running.Dispose();
         restHttp.Dispose();
         siteHttp.Dispose();
         storageHttp.Dispose();
@@ -544,7 +588,7 @@ internal sealed class VaultRuntime
     internal SyncEngine Engine { get; }
 
     internal static VaultRuntime Create(string vaultRoot, SessionManager sessions, ArmoryApi api, BlobClient blobs, AgentLog? log = null,
-        Armory.Telemetry.FlightRecorder? recorder = null)
+        Armory.Telemetry.FlightRecorder? recorder = null, RealtimeFeed? live = null)
     {
         var disposables = new Stack<IDisposable>();
         try
@@ -570,6 +614,8 @@ internal sealed class VaultRuntime
                 // The raw text of a sync problem; the window shows it in plain words.
                 Log = log is null ? null : log.Info,
                 Recorder = recorder,
+                // Live updates (v0.3): each synced project's change feed, filtered by project.
+                Live = live,
             });
             return new VaultRuntime(files, journal, snapshots, engine);
         }
