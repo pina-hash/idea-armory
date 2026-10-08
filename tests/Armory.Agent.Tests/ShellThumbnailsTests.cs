@@ -32,6 +32,46 @@ public sealed class ShellThumbnailsTests
         Assert.Null(files.ExistingFile("Robot 2027/Missing.bmp"));
     }
 
+    // The PNG is written here, nothing else loaded: its chunks carry their CRCs and its pixels
+    // come back exactly, a row at a time, each with no filter.
+    [Fact]
+    public void The_png_written_carries_the_pixels_exactly()
+    {
+        byte[] rgba = [255, 0, 0, 255, 0, 255, 0, 128, 0, 0, 255, 0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120];
+        var png = ShellThumbnails.Encode(3, 2, rgba);
+        Assert.Equal(new byte[] { 0x89, (byte)'P', (byte)'N', (byte)'G', 0x0D, 0x0A, 0x1A, 0x0A }, png[..8]);
+        var at = 8;
+        var chunks = new List<(string Type, byte[] Data)>();
+        while (at < png.Length)
+        {
+            var length = BinaryPrimitives.ReadInt32BigEndian(png.AsSpan(at));
+            var type = System.Text.Encoding.ASCII.GetString(png, at + 4, 4);
+            var data = png.AsSpan(at + 8, length).ToArray();
+            var crc = BinaryPrimitives.ReadUInt32BigEndian(png.AsSpan(at + 8 + length));
+            Assert.Equal(Crc32(png.AsSpan(at + 4, 4 + length)), crc);
+            chunks.Add((type, data));
+            at += 12 + length;
+        }
+        Assert.Equal(["IHDR", "IDAT", "IEND"], chunks.Select(c => c.Type));
+        Assert.Equal(new byte[] { 0, 0, 0, 3, 0, 0, 0, 2, 8, 6, 0, 0, 0 }, chunks[0].Data);
+        using var inflate = new System.IO.Compression.ZLibStream(new MemoryStream(chunks[1].Data), System.IO.Compression.CompressionMode.Decompress);
+        using var raw = new MemoryStream();
+        inflate.CopyTo(raw);
+        Assert.Equal([0, .. rgba[..12], 0, .. rgba[12..]], raw.ToArray());
+    }
+
+    // PNG's CRC-32, a bit at a time (the encoder uses a table).
+    private static uint Crc32(ReadOnlySpan<byte> bytes)
+    {
+        var crc = 0xFFFFFFFFu;
+        foreach (var b in bytes)
+        {
+            crc ^= b;
+            for (var k = 0; k < 8; k++) crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1)));
+        }
+        return ~crc;
+    }
+
     // A plain 24-bit bitmap, a blue gradient.
     private static byte[] Bitmap24(int width, int height)
     {
