@@ -54,6 +54,18 @@ public sealed class AgentTelemetryTests
         return (telemetry, paths, network);
     }
 
+    // PostgREST after 0233: every armory_submit_app_feedback answers with a new id.
+    private sealed class Live : HttpMessageHandler
+    {
+        public List<(string Path, JsonObject Body)> Calls { get; } = [];
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var body = (JsonObject)JsonNode.Parse(await request.Content!.ReadAsStringAsync(cancellationToken))!;
+            lock (Calls) Calls.Add((request.RequestUri!.AbsolutePath, body));
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("\"" + Guid.NewGuid() + "\"", Encoding.UTF8, "application/json") };
+        }
+    }
+
     private static string AllIncidentText(AgentPaths paths)
         => string.Join("\n", Directory.EnumerateFiles(paths.IncidentsFolder, "*.json.gz")
             .Select(f => JsonSerializer.Serialize(IncidentDocument.Read(File.ReadAllBytes(f)))));
@@ -121,5 +133,40 @@ public sealed class AgentTelemetryTests
             Assert.Equal(2, Directory.EnumerateFiles(paths.IncidentsFolder, "*-userReport.json.gz").Count());
             Assert.Contains(AgentTelemetry.ReportKinds, k => k == "idea");
         }
+    }
+
+    // Send feedback (v0.3): the words go as a note on their own, with Armory's version and what it
+    // was doing, never an incident after them, and never another person's address.
+    [Fact]
+    public async Task Send_feedback_sends_a_note_on_its_own_with_no_other_persons_address()
+    {
+        using var temp = new TempFolder();
+        var paths = new AgentPaths(temp.Root, true);
+        Directory.CreateDirectory(paths.LogFolder);
+        File.WriteAllLines(paths.LogFile, ["2026-10-08T18:00:00.000Z started 0.3.0", "2026-10-08T18:00:01.000Z check out: Plate.SLDPRT is held by maria.lopez@students.test"]);
+        var log = new AgentLog(paths.LogFile, paths.CrashFile);
+        var network = new Live();
+        var http = new HttpClient(network);
+        var sessions = new SessionManager(http, new InMemorySecretStore());
+        sessions.SignIn(new ArmorySession("https://project.supabase.test", Anon, Access, Refresh, DateTimeOffset.UtcNow.AddHours(1), "alex.kim@students.test", Guid.NewGuid(), "LAB-PC-07"));
+        await using var telemetry = new AgentTelemetry(paths, log);
+        telemetry.Attach(() => sessions.Current, _ => Task.FromResult<JsonNode?>(new JsonObject { ["online"] = true, ["holder"] = "sam.lee@students.test" }),
+            () => new JsonObject { ["quick"] = true }, new ArmoryApi(new PostgrestClient(http, sessions, telemetry.Recorder)), () => false);
+        Assert.Equal((false, "Write a few words first."), await telemetry.SendFeedbackAsync("idea", "  "));
+        Assert.Empty(network.Calls);
+        Assert.Equal((true, "Sent. Thank you for the feedback."), await telemetry.SendFeedbackAsync("idea", "Show who is online on the team page."));
+        var (path, note) = Assert.Single(network.Calls);
+        Assert.Equal("/rest/v1/rpc/armory_submit_app_feedback", path);
+        Assert.Equal(("idea", "Show who is online on the team page.", AgentPaths.Version, "LAB-PC-07"),
+            (note["p_kind"]!.GetValue<string>(), note["p_body"]!.GetValue<string>(), note["p_app_version"]!.GetValue<string>(), note["p_device_name"]!.GetValue<string>()));
+        var context = note["p_context"]!.ToJsonString();
+        Assert.Contains("check out: Plate.SLDPRT is held by [address]", context);
+        Assert.DoesNotContain("maria.lopez@students.test", context);
+        Assert.DoesNotContain("sam.lee@students.test", context);
+        Assert.DoesNotContain(Access, context);
+        // Kept as sent; no incident follows a note.
+        var file = Assert.Single(Directory.EnumerateFiles(paths.IncidentsFolder, "*-note.sent.json.gz"));
+        Assert.True(IncidentDocument.Read(File.ReadAllBytes(file))[IncidentDocument.NoteOnlyField]!.GetValue<bool>());
+        Assert.DoesNotContain(network.Calls, c => c.Path.EndsWith("armory_submit_app_incident", StringComparison.Ordinal));
     }
 }

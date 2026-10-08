@@ -101,6 +101,7 @@ public abstract class FakeHttpServer : IAsyncDisposable
         builder.Logging.ClearProviders();
         builder.WebHost.ConfigureKestrel(options => options.Listen(IPAddress.Loopback, 0));
         var app = builder.Build();
+        app.UseWebSockets();
         app.Run(DispatchAsync);
         await app.StartAsync(cancellationToken);
         var address = app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()?.Addresses.FirstOrDefault()
@@ -125,6 +126,9 @@ public abstract class FakeHttpServer : IAsyncDisposable
     /// <summary>Handles one request and describes the answer; the base class decides whether it is sent.</summary>
     private protected abstract Task<FakeResponse> HandleAsync(HttpContext context);
 
+    /// <summary>A websocket upgrade the fake serves itself, for as long as the socket lives. False: not one of its sockets.</summary>
+    private protected virtual Task<bool> HandleWebSocketAsync(HttpContext context) => Task.FromResult(false);
+
     private async Task DispatchAsync(HttpContext context)
     {
         var path = context.Request.Path.Value ?? "/";
@@ -143,6 +147,8 @@ public abstract class FakeHttpServer : IAsyncDisposable
                 await FakeResponse.Json(fault.StatusCode, new JsonObject { ["message"] = "injected failure" }).WriteAsync(context);
                 return;
         }
+
+        if (context.WebSockets.IsWebSocketRequest && await HandleWebSocketAsync(context)) return;
 
         FakeResponse response;
         try

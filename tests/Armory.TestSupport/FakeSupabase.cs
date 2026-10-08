@@ -78,6 +78,13 @@ public sealed partial class FakeSupabase : FakeHttpServer
     /// <summary>The base URL a client is given (<c>supabase_url</c>), without a trailing slash.</summary>
     public string SupabaseUrl => BaseUri.ToString().TrimEnd('/');
 
+    /// <summary>When true, every RPC's caller and arguments are kept in <see cref="RpcArguments"/> (arguments only, never a token).</summary>
+    public bool RecordRpcArguments { get; set; }
+
+    /// <summary>What each RPC was called with, by whom, while <see cref="RecordRpcArguments"/> was on.</summary>
+    public IReadOnlyList<(string Function, string? Email, JsonElement Arguments)> RpcArguments => _rpcArguments.ToArray();
+    private readonly ConcurrentQueue<(string Function, string? Email, JsonElement Arguments)> _rpcArguments = new();
+
     /// <summary>Requests to <c>/rest/v1/rpc/{function}</c> so far.</summary>
     public int RpcCount(string function) => RequestCount(RpcPathPrefix + function);
 
@@ -136,6 +143,9 @@ public sealed partial class FakeSupabase : FakeHttpServer
     {
         ArgumentNullException.ThrowIfNull(sqlState);
         var group = sqlState.Length >= 2 ? sqlState[..2] : sqlState;
+        // PostgREST answers a PTxyz SQLSTATE with HTTP xyz (Armory's PT429: 429).
+        if (sqlState.Length == 5 && group == "PT" && int.TryParse(sqlState[2..], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var custom) && custom is >= 100 and <= 599)
+            return custom;
         return sqlState switch
         {
             "42501" => anonymous ? 401 : 403,
@@ -274,6 +284,7 @@ public sealed partial class FakeSupabase : FakeHttpServer
         else if (json is { ValueKind: JsonValueKind.Object } parsed) body = parsed;
         else return PostgrestError(400, "PGRST102", "Empty or invalid json", null, null);
 
+        if (RecordRpcArguments) _rpcArguments.Enqueue((function, email, body.Clone()));
         var arguments = body.EnumerateObject().ToList();
         var names = arguments.Select(a => a.Name).ToList();
         if (!FunctionNamePattern().IsMatch(function) || names.Any(n => !ArgumentNamePattern().IsMatch(n)))
@@ -297,6 +308,8 @@ public sealed partial class FakeSupabase : FakeHttpServer
                 var value = await command.ExecuteScalarAsync(cancellationToken);
                 return value is string text ? text : null;
             });
+            // Realtime delivers what this call wrote to the change feed (FakeSupabase.Realtime.cs).
+            await PushRealtimeChangesAsync();
             if (target.ReturnsVoid) return FakeResponse.Empty(204);
             return FakeResponse.RawJson(200, result ?? "null");
         }

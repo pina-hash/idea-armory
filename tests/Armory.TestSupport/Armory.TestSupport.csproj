@@ -14,5 +14,7 @@
  <ItemGroup>
   <None Include="../../server/sql/*.sql" Link="server-sql/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   <None Include="../Armory.Server.Tests/sql/*.sql" Link="test-sql/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  <!-- Opt-in stand-ins for idea-app 0233 (ArmoryV3StandIn); never applied by CreateAsync itself. -->
+  <None Include="sql-v3/*.sql" CopyToOutputDirectory="PreserveNewest" />
  </ItemGroup>
 </Project>

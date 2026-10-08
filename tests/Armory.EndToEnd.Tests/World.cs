@@ -118,6 +118,8 @@ internal sealed class Person(World world, string email)
 {
     public string Email { get; } = email;
     public ArmoryApi Api { get; private set; } = null!;
+    // Raw RPCs the app itself never makes (the website's reads), for tests.
+    public PostgrestClient Rest { get; private set; } = null!;
     public BlobClient Blobs { get; private set; } = null!;
     public Guid Device { get; private set; }
     public async Task SignInAsync()
@@ -126,7 +128,8 @@ internal sealed class Person(World world, string email)
         var http = new HttpClient(new FakeNetworkHandler(world.S3));
         var sessions = new SessionManager(http, new InMemorySecretStore());
         sessions.SignIn(new ArmorySession(world.Supabase.SupabaseUrl, world.Supabase.AnonKey, issued.AccessToken, issued.RefreshToken, issued.ExpiresAt, Email, Guid.Empty, "website"));
-        Api = new ArmoryApi(new PostgrestClient(http, sessions));
+        Rest = new PostgrestClient(http, sessions);
+        Api = new ArmoryApi(Rest);
         Blobs = new BlobClient(http, http, world.Site.BaseUri, sessions);
         Device = await Api.RegisterDeviceAsync("mentor laptop", Guid.NewGuid());
     }
@@ -179,6 +182,12 @@ internal sealed class Computer : IAsyncDisposable
     public int EngineStackBytes { get; set; }
     // A loop pass's slice (EngineOptions.PassSlice); null is the default.
     public TimeSpan? PassSlice { get; set; }
+    // The loop's poll, active and idle alike (null: the engine's defaults). A long one shows that
+    // only live updates could have brought a change sooner.
+    public TimeSpan? Poll { get; set; }
+    // Live updates (v0.3): a RealtimeFeed on the fake Supabase's websocket, made at each restart.
+    public bool Live { get; set; }
+    public RealtimeFeed? Feed { get; private set; }
     public SyncEngine Engine { get; private set; } = null!;
     public SessionManager Sessions { get; private set; } = null!;
     public bool Offline { get => network.Offline; set => network.Offline = value; }
@@ -208,17 +217,21 @@ internal sealed class Computer : IAsyncDisposable
     {
         Sessions = new SessionManager(http, Secrets);
         var api = new ArmoryApi(new PostgrestClient(http, Sessions, Flight));
+        Feed = Live ? new RealtimeFeed(Sessions, ConnectLiveAsync, line => { lock (Logged) Logged.Add(line); }) : null;
+        var defaults = new EngineOptions { VaultRoot = World.Root };
         Engine = new SyncEngine(new EngineOptions
         {
             VaultRoot = World.Root, MaximumFileBytes = MaximumFileBytes,
             TransferConcurrency = TransferConcurrency ?? EngineOptions.DefaultTransferConcurrency,
             EngineStackBytes = EngineStackBytes,
-            PassSlice = PassSlice ?? new EngineOptions { VaultRoot = World.Root }.PassSlice,
+            PassSlice = PassSlice ?? defaults.PassSlice,
+            ActivePollInterval = Poll ?? defaults.ActivePollInterval,
+            IdlePollInterval = Poll ?? defaults.IdlePollInterval,
         }, new EngineDependencies
         {
             Files = Disk, Journal = Journal, Snapshots = Snapshots, State = State, Sessions = Sessions, Api = api,
             Blobs = new BlobClient(http, http, world.Site.BaseUri, Sessions, Flight), ReleaseReader = ReleaseReader, Clock = Clock,
-            Log = line => { lock (Logged) Logged.Add(line); }, Recorder = Flight,
+            Log = line => { lock (Logged) Logged.Add(line); }, Recorder = Flight, Live = Feed,
         })
         { CrashPoint = CrashPoint };
         Engine.ViewChanged += view => Views?.Invoke(view);
@@ -281,6 +294,15 @@ internal sealed class Computer : IAsyncDisposable
     }
     public void Open(string path) => Disk.Open(path);
     public void Close(string path) => Disk.Close(path);
+
+    // The fake Supabase's websocket, straight to the loopback port (no proxy).
+    private static async Task<System.Net.WebSockets.WebSocket> ConnectLiveAsync(Uri uri, CancellationToken ct)
+    {
+        var socket = new System.Net.WebSockets.ClientWebSocket();
+        socket.Options.Proxy = null;
+        await socket.ConnectAsync(uri, ct);
+        return socket;
+    }
 
     // A loop a test started stops before the world goes away.
     public async ValueTask DisposeAsync()
