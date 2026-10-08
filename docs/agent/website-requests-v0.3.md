@@ -1,5 +1,13 @@
 # Website requests for Armory v0.3
 
+**Shipped.** These requests became idea-app migration 0233, applied to production on 2026-10-08.
+What was built differs in places from what is asked below (for example `armory_my_projects`
+stays membership-only and gains `can_take_back`; a project purge writes no change and leaves a
+receipt read with `armory_project_purged`; a note's context is capped at 128 KiB). The binding
+spec is idea-app `docs/ARMORY.md`, "The v0.3 server contract (migration 0233)"; this file is the
+request as it was sent, kept for the record. The app half is in Armory 0.3.0
+(docs/agent/ENGINE.md "v0.3", docs/agent/CLIENT.md section 6, docs/agent/TELEMETRY.md).
+
 For lane W's next ideabosco.com (idea-app) update pass. Each item names what the Armory
 app needs from the site. The app side of each is built in pina-hash/idea-armory once the
 migration is live. Migration number: the next free one after 0232.

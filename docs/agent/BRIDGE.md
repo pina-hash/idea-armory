@@ -131,7 +131,7 @@ ActiveTransferView { path: string, name: string, direction: "upload" | "download
 NoticeGroupView {
   key: string,                      // dismissNotice sends it back
   kind: "import" | "nameShared" | "newerWaiting" | "keptCopy" | "takenBack" | "folderPutBack"
-      | "projectPutBack" | "projectRenaming" | "cantSend" | "cantRead" | "checkInPartial",
+      | "projectPutBack" | "projectRenaming" | "projectDeleted" | "cantSend" | "cantRead" | "checkInPartial",
   tone: "info" | "look" | "bad",    // the page shows info green, look amber, bad red
   title: string,                    // e.g. "14 files share a name with other files in this project"
   detail: string,
@@ -165,7 +165,7 @@ ProjectView {
   id: string, name: string,
   archived: boolean,                // shown as "Archived. It no longer updates." with no keys
   role: string,                     // student, cad_lead, mentor, instructor
-  canTakeBack: boolean,             // a mentor or CAD lead
+  canTakeBack: boolean,             // the server's can_take_back (v0.3: mentor, CAD lead or site admin); a role check before 0233
   folders: FolderView[]             // flat: every folder once, empty ones too; "" is the project's top
 }
 FolderView { path: string, name: string, fileCount: number, files: FileRowView[] }
@@ -228,7 +228,8 @@ answers it with exactly one `actionResult` carrying the same id and a plain sent
 ("Checked out 12 of 14 files. Maria Lopez has 2 of them checked out.", "Checked in
 Plate.SLDPRT.", "Close Plate.SLDPRT in SolidWorks first."). The actions are
 `launchFile`, `checkOut`, `checkIn`, `undoCheckOut`, `takeBack`, `createFolder`,
-`renameFolder`, `deleteFolder`, `renameFile`, `addFiles` and `dropFiles`.
+`renameFolder`, `deleteFolder`, `renameFile`, `addFiles`, `dropFiles`, `reportProblem` and
+`sendFeedback`.
 
 The page shows an action is under way from the moment it is sent until its
 `actionResult` arrives (v0.2.1): the pressed key gets `aria-busy="true"` and
@@ -263,7 +264,8 @@ replaces all of it. The spinner holds still under `prefers-reduced-motion`.
 | `dismissNotice` | `key` | a notice's Done or OK (`dismissNotice` action); Not now or OK on the check-out question (its `PromptView.key`) | the host drops that notice card, or that one question and asks about the next file SolidWorks has open without a check out |
 | `saveSettings` | `vaultRoot`, `startAtSignIn`, `theme` | a setting, Use (a folder of my own) | saves settings; host answers with `view` |
 | `chooseVaultRoot` | | Change, Choose another folder | host shows a folder picker, then answers with `view` |
-| `reportProblem` | `kind`, `body`, `requestId` | Send in Report a problem (Settings), after the page refuses empty words | `kind` is `bug`, `idea` or `other`; the host saves the words with a fresh `userReport` incident and sends them when the website can take them (docs/agent/TELEMETRY.md); the answer is one sentence, "Saved. It will be sent when the website is ready." while the site's half is not live |
+| `reportProblem` | `kind`, `body`, `requestId` | Send in Report a problem (Settings), after the page refuses empty words | `kind` is `bug`, `idea` or `other`; the host saves the words with a fresh `userReport` incident and sends them (docs/agent/TELEMETRY.md); the answer is one sentence: "Sent. Thank you for telling us.", or "Saved. It will be sent ..." when it can't go yet |
+| `sendFeedback` | `kind`, `body`, `requestId` | Send in Send feedback (the header's key, or Settings), after the page refuses empty words | v0.3: `kind` is `bug`, `idea` or `other`; a note on its own (`armory_submit_app_feedback`), saved first and sent at once when it can be, with Armory's version and what it was doing as its context, and no incident after it; the answer is one sentence, "Sent. Thank you for the feedback." or "Saved. It will be sent ..." |
 | `openIncidents` | | Open incidents folder (Settings) | opens `%LOCALAPPDATA%\IDEA Armory\incidents` in File Explorer, so the files can be handed over by hand |
 
 ## The demo
@@ -273,9 +275,9 @@ Outside WebView2, `?state=<name>` picks a demo state (`demo/states.js`), `theme=
 screen and `file=<fileId>` the file on File detail. The page-only places, so every
 state can be drawn without a click, are `project=<projectId>`, `folder=<path in the
 project>`, `select=<name>,<name>` (files in that folder), `expand=<notice key>`,
-`dialog=newFolder|renameFolder|deleteFolder|checkOutAll|takeBack|forceAll|renameFile|report`
+`dialog=newFolder|renameFolder|deleteFolder|checkOutAll|takeBack|forceAll|renameFile|report|feedback`
 (renameFile asks about the first file of the open notice list; forceAll is Force check in
-all for the open folder; report is Report a problem), `drag=1` (files held over the list), `at=browser` (Home
+all for the open folder; report is Report a problem; feedback is Send feedback), `drag=1` (files held over the list), `at=browser` (Home
 scrolled to Team files) and `press=<control key>` (the page presses that key once it is
 drawn, and the demo holds every answer, so the working state stays in view); `result=<words>` (with
 `resultOk=0` for a refusal) has the demo answer as if an action had just come back.

@@ -2,9 +2,9 @@
 
 When something glitches on a student's computer, the instance is kept as data a developer
 (a Claude Code session in this repository) can read directly, with no strain on the app. The
-app half is built and works on its own today; the website half (sections 4 and 4b of
-[website-requests-v0.3.md](website-requests-v0.3.md)) is pending, and until it is live the
-incidents simply wait on the computer.
+website half is live since idea-app migration 0233 (applied 2026-10-08): notes land at
+`/admin/feedback/armory` and incidents at `/admin/feedback/incidents`, read only by a site admin.
+The binding spec is idea-app `docs/ARMORY.md`, "The v0.3 server contract", item 4.
 
 | Piece | Where |
 |---|---|
@@ -41,7 +41,8 @@ ring unless an incident is saved.
 | `repairedCheckout` | the engine (`AdoptMyLocks`, cfb37e2) | a lock this computer holds that had no record here, now shown as checked out by you |
 
 **Never collected:** file contents, tokens (access, refresh, the anon key), signed storage
-URLs, request or response bodies. File names and vault paths are kept: they are what makes an
+URLs, request or response bodies, passwords, and other people's email addresses (every
+address but the signed-in person's own reads `[address]`, v0.3: a site admin reads these). File names and vault paths are kept: they are what makes an
 incident readable. Every string an incident or the last flight keeps passes the agent's
 `Redactor` (JWTs, Bearer values, token parameters, long random runs) and loses this computer's
 own tokens and anon key by exact match. `AgentTelemetryTests` signs in with known tokens,
@@ -117,8 +118,21 @@ ended without "stopped", the next start saves a `crash` incident from it (trigge
 `IncidentUploader` runs in the background: one incident at a time, oldest first, at most one a
 minute, and only while no upload or download is running. A report a person wrote goes first
 through `armory_submit_app_feedback`, then its incident through `armory_submit_app_incident`
-with `p_feedback` set to the feedback's id. A report over 900 KB as JSON is trimmed (oldest
-events first) under the site's 1 MB limit.
+with `p_feedback` set to the feedback's id. The site measures as sent (`pg_column_size` of the
+jsonb, larger than its JSON text for many small objects), so the uploader trims well under its
+limits: a report to 640 KiB of JSON (oldest events first) under the 1 MiB limit, and a note's
+context to 96 KiB (oldest log lines first, then the snapshot) under the 128 KiB limit.
+
+The site's answers (ARMORY.md item 4), read by SQLSTATE and DETAIL.reason, never by the status:
+
+| Answer | What the uploader does |
+|---|---|
+| `PT429` `{reason: rate_limited, limit, window_seconds, retry_after_seconds}` (20 notes, 30 incidents an hour per account) | keeps the file and sends nothing more for that RPC until `retry_after_seconds` have passed (remembered in `upload-wait.json` across restarts); Report a problem and Send feedback say "Saved. ... it will be sent in a little while." |
+| `22023` `too_large` or `too_long` | shortens (a 24 KiB context, a 128 KiB report, a shorter summary and body) and sends once more; the file remembers it, so only the shortened payload is ever sent again; a second such answer holds the file |
+| any other `22023` (`kind`, `empty`, `not_object`, `feedback_not_found`) | a bug in this app: logged here with its reason and field, the file kept as `.held`, never sent again |
+| any other SQLSTATE | a refusal for good: logged, `.held` |
+| 404 `PGRST202` | the RPC is not on the site: kept, asked again in 6 hours |
+| offline, signed out, 502/503/504, a gateway's 429 | tried again on the next round |
 
 The RPCs, exactly as the website request names them:
 
@@ -134,6 +148,15 @@ stays queued, the uploader does not ask for that RPC again for 6 hours (remember
 Offline, signed out or a busy site: tried again on the next round. A refusal for good (400,
 413, invalid input): the file is kept as `.held` and never sent again.
 
+## Send feedback (v0.3)
+
+"Send feedback" (a key in the window's header, and in Settings) opens the same small dialog: Bug, Idea or
+Other (Idea first), the words, Send. The window sends `sendFeedback { kind, body }`; the host
+saves a note (`<utc>-note.json.gz`, `noteOnly: true`: the words, the snapshot and the log's last
+lines, no flight events) and sends it at once through `armory_submit_app_feedback`, with the
+app's version and the computer's name. Nothing follows a note: no incident. A note that can't go
+now waits in the incidents folder like an incident and goes on a later round.
+
 ## Report a problem
 
 Settings, "Something not working?": **Report a problem** opens a small dialog over Home: Bug,
@@ -143,9 +166,10 @@ with the words in it, then tries to send the words at once. The answer at the wi
 
 | What happened | The sentence |
 |---|---|
-| the site took the words | Sent. Thank you for telling us. |
-| the site's RPC is not live yet | Saved. It will be sent when the website is ready. |
+| the site took the words | Sent. Thank you for telling us. (Send feedback: Sent. Thank you for the feedback.) |
+| the site's RPC is not live | Saved. It will be sent when the website is ready. |
 | offline or signed out | Saved. It will be sent when this computer is back online. |
+| PT429, this account's limit for the hour | Saved. You've sent a lot today, so it will be sent in a little while. |
 
 The incident follows on the uploader's next round, linked to the words.
 
@@ -163,15 +187,13 @@ trigger (the trigger marked `>>`), the slowest calls, transfers, window actions 
 every error with its stack and every repair, the snapshot, and the end of agent.log. Python 3
 standard library only. `ReadIncidentToolTests` runs it on what the app writes.
 
-## The server half (pending)
+## The server half
 
-Specified in [website-requests-v0.3.md](website-requests-v0.3.md), sections 4 (app feedback)
-and 4b (automatic incidents): the two tables, the two RPCs above with their rate limits, admin
-only reads, an "Armory app" tab and an "Armory incidents" tab on the site's feedback page, the
-Markdown and zip exports `read_incident.py` reads, and 90 days of keeping. Nothing in the app
-changes when it ships: the next round after the 6-hour wait finds the RPCs and sends what
-waited. `ClientTests` plays that moment against the fake Supabase with a stand-in migration in
-the test database.
+Live since idea-app 0233 (2026-10-08): `armory_app_feedback` and `armory_app_incidents`, the two
+RPCs above with their limits, admin-only reads, the console's "Armory app" and "Armory
+incidents" tabs, the per-incident `.json` export (`{format: "idea-armory-incident/1", ...,
+report}`, which `read_incident.py` reads) and 90 days of keeping (every submit deletes incidents
+older than that). Files that waited on a computer before 0.3 go on the uploader's next round.
 
 ## Tests
 

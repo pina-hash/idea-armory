@@ -26,6 +26,7 @@ var engine = new SyncEngine(new EngineOptions { VaultRoot = @"C:\IDEA\Armory", T
     ReleaseReader = null,             // no standalone saved-release reader exists yet
     Log = log.Info,                   // the raw text of each problem, once; the window gets plain words
     Recorder = telemetry.Recorder,    // the flight recorder (docs/agent/TELEMETRY.md); null records nothing
+    Live = new RealtimeFeed(sessions),// v0.3 live updates (below); null: the poll alone
 });
 engine.ViewChanged += view => bridge.Post(BridgeMessages.ViewMessage(view));
 engine.ActivityChanged += activity => bridge.Post(BridgeMessages.ActivityMessage(activity)); // at most 4 a second
@@ -39,7 +40,7 @@ await engine.GetFileDetailAsync(fileId);
 await engine.CheckOutAsync(paths, open: false); // "Check out" / "Check out and open"
 await engine.CheckInAsync(paths);
 await engine.UndoCheckOutAsync(paths);
-await engine.TakeBackAsync(fileId);   // a mentor or CAD lead: armory_break_lock
+await engine.TakeBackAsync(fileId);   // when the server says can_take_back (v0.3): armory_break_lock
 await engine.LaunchAsync(path);       // "Open": the file's own program (never programs or scripts, D14);
                                       // a file not here yet downloads first (a pass scoped to it) and opens when it arrives
 await engine.RenameFileAsync(path, newName);
@@ -621,6 +622,55 @@ operation too, so a lost answer or a stop is finished by the next pass with the 
 (`before-folder` and `after-folder` are their crash points, as for a folder renamed or
 removed on this disk).
 
+## v0.3 (idea-app 0233)
+
+The binding spec is idea-app `docs/ARMORY.md`, "The v0.3 server contract (migration 0233)",
+especially "What the Windows app must do". `SyncEngine.Purge.cs` and `SyncEngine.Batches.cs`
+hold the new paths; the client half is in docs/agent/CLIENT.md section 6.
+
+- **Live updates.** After every read of the server the engine tells `EngineDependencies.Live`
+  (a `RealtimeFeed`) which projects it read (usable, not archived); the feed keeps one channel
+  per project, each filtered by `project_id=eq.<id>`. An event wakes the loop
+  (`OnLiveChange`), which then reads the server as it always does: an event never changes local
+  state by itself. The poll (2 and 10 seconds) stays the floor, so a dropped socket costs only
+  latency. The feed runs beside the loop, off the engine thread, and stops with it.
+- **Force check in** shows exactly when the server's `can_take_back` is true
+  (`ProjectState.TakeBack`; a server older than 0233 falls back to mentor or CAD lead).
+  `armory_break_lock` is sent exactly as before (this computer's device); its refusal is still
+  P0001 "only a mentor or cad_lead may break a lock", answered "Only a mentor or CAD lead can
+  force a check in."
+- **No longer a member.** A project gone from `armory_my_projects`, or whose change feed or
+  files answer "not a project member" (P0001 or 42501, read alike), is asked about once with
+  `armory_project_purged`. The same answer from any other call (a lock, a side version, a
+  create, a move) wakes the loop so the next read asks. Null: this person was removed, handled
+  as before 0.3 (not synced, its folder left as it is, `ProjectState.Departed`), asked again
+  once per start in case it is deleted forever later.
+- **Deleted forever.** A time from `armory_project_purged`: every record of the project is
+  marked `Purged` (unsent saves are done with: there is nothing left to send them to), pending
+  moves and folder operations for it go, and one line says so (notice `projectDeleted`, info:
+  "Robot 2027 was deleted forever on ideabosco.com, so Armory took it off this computer.").
+  Then, every pass (`DropPurged`, right after the first read of the server, offline too), each
+  file in the project's folder goes to Armory's recovery folder once it is closed (moved, never
+  deleted), then the empty folders, then the project. A `folder_purged` change
+  (`{folder, files, file_ids, by}`) marks those files' records `Purged` the same way, quietly
+  (the log says so). A purged record is never captured, planned, shown or sent: a file still
+  open, even saved again, stays as it is until closed, and a new file at the same path later is
+  a new file. A file of a purged project is never called "outside every project".
+- **Batches.** Several check outs at once take their locks with `armory_lock_files`, and several
+  releases (check ins, undos, adds) go with `armory_release_locks`, one device at a time, at
+  most 500 files a call. Every file keeps its own in-flight record (its own operation id), all
+  saved together before the call; the batch's id derives from them, so it is minted once per
+  action and a resend (40P01 and 40001 are resent by `PostgrestClient`, up to 3 times, with the
+  same body) answers from the receipt. Each file's answer is applied on its own: acquired is
+  checked out, not acquired is held by someone else, refused is answered in the window with its
+  message (plainer words for "not a project member" and "device is not registered to caller")
+  and a `cantSend` notice, and what landed is never reported as failed. A stop before the
+  answers are applied re-sends each lock alone with its own id (taking a lock this device holds
+  answers true); a release in flight is dropped and decided again, as always. A site without the
+  batch RPCs (404 PGRST202) gets the files one by one and is asked again in an hour. A single
+  file still uses `armory_acquire_lock` and `armory_release_lock`. Crash points:
+  `before-lock-batch`, `after-lock-batch`, `before-release-batch`, `after-release-batch`.
+
 ## Schedule (contract section 4)
 
 The loop looks for the team's changes every 2 seconds while online and active
@@ -629,9 +679,9 @@ change (`IdlePollInterval`). It was 5 and 60 seconds until v0.2.1; students saw 
 or a new version take up to a minute to reach another computer, and the requirement now is
 no dead zones. A look that finds nothing new costs two small server calls
 (`armory_my_projects` and one `armory_list_changes` per project); a project's files are read
-again only when its change feed moved. Realtime push (Supabase Realtime on the change feed)
-is requested from the website in docs/agent/website-requests-v0.3.md and would replace the
-active poll. A disk hint (`Wake`) runs a pass at once. Offline, it retries on the idle
+again only when its change feed moved. Since v0.3 Supabase Realtime on the change feed wakes
+the loop the moment a row is written (see v0.3 above); the poll stays as the floor. A disk hint
+(`Wake`) runs a pass at once. Offline, it retries on the idle
 interval. While paused, no pass runs and the window's actions say so.
 
 ## The loop and the window's actions (v0.2.1)
