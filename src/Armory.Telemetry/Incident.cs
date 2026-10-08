@@ -12,10 +12,12 @@ public sealed record IncidentFeedback(string Kind, string Body);
 
 // Takes every secret out of the text an incident keeps: the exact strings this computer knows
 // are secret (its tokens and keys), then the patterns (the agent's Redactor: JWTs, Bearer
-// values, token parameters, long random runs). Applied to every string in the document.
-public sealed class Scrubber(Func<string, string>? patterns = null, Func<IEnumerable<string?>>? secrets = null)
+// values, token parameters, long random runs). Applied to every string in the document. With
+// ownEmail, every email address but the signed-in person's own is masked too: a site admin reads
+// these reports, and other people's addresses are not the app's to send (ARMORY.md v0.3, item 4).
+public sealed partial class Scrubber(Func<string, string>? patterns = null, Func<IEnumerable<string?>>? secrets = null, Func<string?>? ownEmail = null)
 {
-    public const string Mask = "[redacted]";
+    public const string Mask = "[redacted]", AddressMask = "[address]";
     public static Scrubber None { get; } = new();
 
     public string Scrub(string text)
@@ -24,8 +26,16 @@ public sealed class Scrubber(Func<string, string>? patterns = null, Func<IEnumer
         if (secrets is not null)
             foreach (var secret in secrets())
                 if (secret is { Length: >= 8 } && text.Contains(secret, StringComparison.Ordinal)) text = text.Replace(secret, Mask, StringComparison.Ordinal);
+        if (ownEmail is not null && text.Contains('@'))
+        {
+            var own = ownEmail();
+            text = Address().Replace(text, m => own is not null && string.Equals(m.Value, own, StringComparison.OrdinalIgnoreCase) ? m.Value : AddressMask);
+        }
         return patterns is null ? text : patterns(text);
     }
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")]
+    private static partial System.Text.RegularExpressions.Regex Address();
 
     // Every string value in the tree, scrubbed in place.
     public void ScrubTree(JsonNode? node)
@@ -59,6 +69,9 @@ public static class IncidentDocument
     public const int SchemaVersion = 1;
     public const int MaximumFileBytes = 200 * 1024;
     public const int LogLines = 300;
+    // A note sent on its own from "Send feedback" is kept in the same folder as an incident, of
+    // this kind, with noteOnly true: the uploader sends its words and nothing after them.
+    public const string NoteKind = "note", NoteOnlyField = "noteOnly";
 
     public static JsonObject Build(Glitch glitch, IncidentHeader header, DateTimeOffset createdAt, JsonObject? trigger, JsonArray events,
         long recorded, int capacity, JsonNode? snapshot, IReadOnlyList<string> log, IncidentFeedback? feedback = null, Guid? projectId = null)

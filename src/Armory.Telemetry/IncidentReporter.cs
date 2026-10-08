@@ -59,6 +59,10 @@ public sealed class IncidentReporter : IFlightObserver
 
     // Builds and saves one incident now, with the engine's snapshot if it comes in time.
     public async Task<string?> WriteAsync(Glitch glitch, IncidentFeedback? feedback = null)
+        => Write(glitch, await SnapshotAsync().ConfigureAwait(false), feedback);
+
+    // The engine's snapshot if it answers within the deadline; what can be said at once otherwise.
+    private async Task<JsonNode?> SnapshotAsync()
     {
         JsonNode? snapshot = null;
         if (sources.Snapshot is { } take)
@@ -77,7 +81,7 @@ public sealed class IncidentReporter : IFlightObserver
             else snapshot ??= new JsonObject { ["unavailable"] = "the engine did not answer within 3 seconds" };
         }
         else snapshot = Quick();
-        return Write(glitch, snapshot, feedback);
+        return snapshot;
     }
 
     // A crash the process will not survive: recorded and saved on this thread, before it ends.
@@ -119,13 +123,21 @@ public sealed class IncidentReporter : IFlightObserver
     // "Report a problem": always saved (no throttle), with the person's words in it.
     public Task<string?> ReportUserAsync(string kind, string body) => WriteAsync(GlitchRules.UserReport(kind, body), new IncidentFeedback(kind, body));
 
+    // "Send feedback": a note on its own, always saved (no throttle), queued here like an incident
+    // until the site has it. No incident follows it (IncidentDocument.NoteKind, noteOnly), and it
+    // carries no flight events: its context is the snapshot and the log's last lines.
+    public async Task<string?> SaveNoteAsync(string kind, string body)
+        => Write(new Glitch(IncidentDocument.NoteKind, GlitchRules.Clip($"A note from the window ({kind}): {body.ReplaceLineEndings(" ").Trim()}"), null),
+            await SnapshotAsync().ConfigureAwait(false), new IncidentFeedback(kind, body), events: [], recorded: 0, noteOnly: true);
+
     private JsonNode? Quick()
     {
         try { return sources.QuickSnapshot?.Invoke(); }
         catch (Exception error) when (error is not OutOfMemoryException) { return new JsonObject { ["unavailable"] = error.GetType().Name }; }
     }
 
-    private string? Write(Glitch glitch, JsonNode? snapshot, IncidentFeedback? feedback, JsonObject? trigger = null, JsonArray? events = null, long recorded = -1)
+    private string? Write(Glitch glitch, JsonNode? snapshot, IncidentFeedback? feedback, JsonObject? trigger = null, JsonArray? events = null, long recorded = -1,
+        bool noteOnly = false)
     {
         try
         {
@@ -141,6 +153,7 @@ public sealed class IncidentReporter : IFlightObserver
             catch (Exception error) when (error is IOException or UnauthorizedAccessException) { log = ["(agent.log could not be read: " + error.Message + ")"]; }
             var header = sources.Header();
             var incident = IncidentDocument.Build(glitch, header, now, trigger, events, recorded, recorder.Capacity, snapshot, log, feedback);
+            if (noteOnly) incident[IncidentDocument.NoteOnlyField] = true;
             var path = Store.Save(now, glitch.Kind, IncidentDocument.Render(incident, sources.Scrubber));
             sources.Log?.Invoke($"incident: saved {Path.GetFileName(path)} ({glitch.Kind})");
             Saved?.Invoke(path);

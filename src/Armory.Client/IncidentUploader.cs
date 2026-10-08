@@ -19,11 +19,14 @@ public enum UploadOutcome
     NotLive,
     // Offline, signed out, or the site was busy: tried again on the next round.
     Offline,
-    // The site refused this one for good (a bad field, too large): kept here as ".held" for a
-    // person to hand over, never sent again.
+    // The site refused this one for good (a bad field, too large even after shortening): kept here
+    // as ".held" for a person to hand over, never sent again.
     Held,
     // Anything else: tried again on the next round.
     Failed,
+    // PT429: this account sent its limit for the hour. Kept here and sent again once the site's
+    // retry_after_seconds have passed (remembered across restarts).
+    RateLimited,
 }
 
 // Sends the incidents folder to the site in the background (docs/agent/TELEMETRY.md, "Upload"):
@@ -35,9 +38,18 @@ public sealed class IncidentUploader
 {
     public static readonly TimeSpan Every = TimeSpan.FromMinutes(1);
     public static readonly TimeSpan NotLiveRetry = TimeSpan.FromHours(6);
-    // The site refuses a report over 1 MB; the uploader trims the oldest events to fit under this.
-    public const int MaximumReportBytes = 900 * 1024;
+    // A PT429 without a readable retry_after_seconds waits this long.
+    public static readonly TimeSpan RateLimitedRetry = TimeSpan.FromMinutes(5);
+    // The site refuses a report over 1 MiB and a note's context over 128 KiB, measured as sent
+    // (pg_column_size of the jsonb, which can be larger than its JSON text). The uploader trims
+    // to these JSON sizes, well under, and to the shortened ones after a too_large answer.
+    public const int MaximumReportBytes = 640 * 1024, ShortenedReportBytes = 128 * 1024;
+    public const int MaximumContextBytes = 96 * 1024, ShortenedContextBytes = 24 * 1024;
+    public const int MaximumBodyCharacters = 8000, MaximumVersionCharacters = 64;
     public const int FeedbackLogLines = 200;
+    // The calls already answered too_large or too_long for this file: from then on only the
+    // shortened payload is sent, once, never the same payload again.
+    private const string ShortenedField = "shortened";
     private readonly ArmoryApi api;
     private readonly IncidentStore store;
     private readonly Func<bool> transferring;
@@ -58,8 +70,9 @@ public sealed class IncidentUploader
         waits = store.ReadWaits();
     }
 
-    // True while the site is known not to have this RPC yet (until its 6-hour wait is over).
-    public bool IsWaiting(string rpc) => waits.TryGetValue(rpc, out var until) && clock.GetUtcNow() < until;
+    // True while this RPC is not asked: the site lacks it (for 6 hours after a 404 PGRST202), or
+    // this account reached its limit (until the PT429's retry_after_seconds have passed).
+    public bool IsWaiting(string rpc) => (waits.TryGetValue(rpc, out var until) && clock.GetUtcNow() < until) || IsRateLimitWait(rpc);
 
     // One round: sends at most one incident (with its feedback first, when it has some).
     public async Task<UploadOutcome> StepAsync(CancellationToken ct = default)
@@ -93,7 +106,7 @@ public sealed class IncidentUploader
         {
             if (!TryRead(file, out var incident)) return UploadOutcome.Held;
             if (!NeedsFeedback(incident)) return UploadOutcome.Sent;
-            if (IsWaiting(ArmoryApi.SubmitFeedbackRpc)) return UploadOutcome.NotLive;
+            if (IsWaiting(ArmoryApi.SubmitFeedbackRpc)) return IsRateLimitWait(ArmoryApi.SubmitFeedbackRpc) ? UploadOutcome.RateLimited : UploadOutcome.NotLive;
             return await SendAsync(file, incident, feedbackOnly: true, ct);
         }
         finally { gate.Release(); }
@@ -121,6 +134,10 @@ public sealed class IncidentUploader
     public void Wake() => wake.Release();
 
     private static bool NeedsFeedback(JsonObject incident) => incident["feedback"] is JsonObject && incident["feedbackId"] is null;
+    private static bool NoteOnly(JsonObject incident) => incident[IncidentDocument.NoteOnlyField] is JsonValue v && v.TryGetValue<bool>(out var only) && only;
+    // A wait a PT429 set (remembered under its own key), not a site without the RPC.
+    private const string RateLimitedKey = "#rate-limited";
+    private bool IsRateLimitWait(string rpc) => waits.TryGetValue(rpc + RateLimitedKey, out var until) && clock.GetUtcNow() < until;
 
     private bool TryRead(string file, out JsonObject incident)
     {
@@ -145,43 +162,60 @@ public sealed class IncidentUploader
         var rpc = ArmoryApi.SubmitFeedbackRpc;
         try
         {
-            var appVersion = Text(incident, "appVersion") ?? "unknown";
             var device = Text(incident, "deviceName");
             if (NeedsFeedback(incident))
             {
                 var feedback = (JsonObject)incident["feedback"]!;
-                var id = await api.SubmitAppFeedbackAsync(Text(feedback, "kind") ?? "other", Text(feedback, "body") ?? "", appVersion, device, FeedbackContext(incident), ct);
+                var id = await SendShortenedOnceAsync(file, incident, rpc, shortened => api.SubmitAppFeedbackAsync(Text(feedback, "kind") ?? "other",
+                    Body(Text(feedback, "body") ?? "", shortened), Version(incident, shortened), device, FeedbackContext(incident, shortened ? ShortenedContextBytes : MaximumContextBytes), ct));
                 incident["feedbackId"] = id.ToString();
                 store.Rewrite(file, incident);
                 log?.Invoke($"incident upload: the report in {name} was sent ({id})");
             }
+            if (NoteOnly(incident))
+            {
+                // A note sent on its own: nothing follows it.
+                store.Mark(file, IncidentStore.SentMark);
+                return UploadOutcome.Sent;
+            }
             if (feedbackOnly) return UploadOutcome.Sent;
             rpc = ArmoryApi.SubmitIncidentRpc;
-            if (IsWaiting(rpc)) return UploadOutcome.NotLive;
-            var report = IncidentDocument.FitJson(incident, MaximumReportBytes);
-            var sent = await api.SubmitAppIncidentAsync(Text(incident, "kind") ?? GlitchKinds.UserReport, GlitchRules.Clip(Text(incident, "summary") ?? ""),
-                appVersion, device, Id(incident, "projectId"), report, Id(incident, "feedbackId"), ct);
+            if (IsWaiting(rpc)) return IsRateLimitWait(rpc) ? UploadOutcome.RateLimited : UploadOutcome.NotLive;
+            var sent = await SendShortenedOnceAsync(file, incident, rpc, shortened => api.SubmitAppIncidentAsync(Text(incident, "kind") ?? GlitchKinds.UserReport,
+                Summary(Text(incident, "summary") ?? "", shortened), Version(incident, shortened), device, Id(incident, "projectId"),
+                IncidentDocument.FitJson(incident, shortened ? ShortenedReportBytes : MaximumReportBytes), Id(incident, "feedbackId"), ct));
             store.Mark(file, IncidentStore.SentMark);
             log?.Invoke($"incident upload: {name} was sent ({sent})");
             return UploadOutcome.Sent;
         }
         catch (ArmoryRpcException error) when (error.IsFunctionMissing)
         {
-            waits[rpc] = clock.GetUtcNow() + NotLiveRetry;
-            try { store.WriteWaits(waits); }
-            catch (Exception write) when (write is IOException or UnauthorizedAccessException) { }
+            Wait(rpc, NotLiveRetry);
             log?.Invoke($"incident upload: the site has no {rpc} yet; {name} waits here, tried again in {NotLiveRetry.TotalHours:0} hours");
             return UploadOutcome.NotLive;
+        }
+        catch (ArmoryRpcException error) when (error.IsRateLimited)
+        {
+            // PT429: the account's hourly limit. The DETAIL says when to send again.
+            var wait = error.RetryAfter ?? RateLimitedRetry;
+            Wait(rpc + RateLimitedKey, wait);
+            log?.Invoke($"incident upload: the site's limit for {rpc} was reached; {name} waits here, sent again in {Math.Ceiling(wait.TotalSeconds):0} s");
+            return UploadOutcome.RateLimited;
         }
         catch (Exception error) when (error is ArmoryOfflineException or ArmorySignedOutException)
         {
             return UploadOutcome.Offline;
         }
-        catch (ArmoryRpcException error) when (error.IsInvalidInput || error.Status is 400 or 413)
+        catch (ArmoryRpcException error) when (error.SqlState is { Length: 5 })
         {
-            log?.Invoke($"incident upload: the site refused {name} ({error.Status} {error.SqlState}); it is kept as held");
-            try { store.Mark(file, IncidentStore.HeldMark); }
-            catch (Exception mark) when (mark is IOException or UnauthorizedAccessException) { }
+            // 22023 other than a first too_large or too_long (kind, empty, not_object,
+            // feedback_not_found, or too large even shortened) is a bug in this app; any other
+            // SQLSTATE is a refusal for good. Logged here and never sent again. (PostgREST's own
+            // codes, PGRSTxxx, are not the database's answer: they go again on a later round.)
+            var why = error.SqlState == ArmoryRpcException.InvalidValueState ? "a bug in this app" : "a refusal";
+            log?.Invoke($"incident upload: the site refused {name} ({error.SqlState}{(error.Reason is { } reason ? " " + reason : "")}" +
+                $"{(error.Detail?.Field is { } field ? " " + field : "")}: {error.Message}), {why}; it is kept as held");
+            Hold(file);
             return UploadOutcome.Held;
         }
         catch (Exception error) when (error is ArmoryClientException or IOException or UnauthorizedAccessException or InvalidDataException)
@@ -191,20 +225,82 @@ public sealed class IncidentUploader
         }
     }
 
+    // Sends one call. An answer of 22023 too_large or too_long is shortened (trimmed log lines and
+    // events, a capped context) and sent once more; the file remembers it, so a later round sends
+    // only the shortened payload, and a second such answer is thrown (the file is then held).
+    private async Task<T> SendShortenedOnceAsync<T>(string file, JsonObject incident, string rpc, Func<bool, Task<T>> send)
+    {
+        var shortened = incident[ShortenedField] is JsonObject done && done[rpc] is not null;
+        if (shortened) return await send(true);
+        try { return await send(false); }
+        catch (ArmoryRpcException error) when (error.IsTooLarge)
+        {
+            log?.Invoke($"incident upload: {rpc} answered {error.Reason} for {error.Detail?.Field ?? "a field"} " +
+                $"({error.Detail?.Size?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "?"} of {error.Detail?.Limit?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "?"}); it is shortened and sent once more");
+            if (incident[ShortenedField] is not JsonObject marks) incident[ShortenedField] = marks = new JsonObject();
+            marks[rpc] = true;
+            store.Rewrite(file, incident);
+            return await send(true);
+        }
+    }
+
+    private void Wait(string rpc, TimeSpan wait)
+    {
+        waits[rpc] = clock.GetUtcNow() + wait;
+        try { store.WriteWaits(waits); }
+        catch (Exception write) when (write is IOException or UnauthorizedAccessException) { }
+    }
+
+    private void Hold(string file)
+    {
+        try { store.Mark(file, IncidentStore.HeldMark); }
+        catch (Exception mark) when (mark is IOException or UnauthorizedAccessException) { }
+    }
+
+    private static string Body(string body, bool shortened)
+    {
+        var words = body.Trim();
+        var limit = shortened ? MaximumBodyCharacters / 2 : MaximumBodyCharacters;
+        return words.Length <= limit ? words : words[..limit];
+    }
+
+    private static string Summary(string summary, bool shortened)
+    {
+        var clipped = GlitchRules.Clip(summary);
+        return shortened && clipped.Length > 250 ? clipped[..247] + "..." : clipped;
+    }
+
+    private static string Version(JsonObject incident, bool shortened)
+    {
+        var version = Text(incident, "appVersion") is { Length: > 0 } v ? v : "unknown";
+        var limit = shortened ? 32 : MaximumVersionCharacters;
+        return version.Length <= limit ? version : version[..limit];
+    }
+
     // What a person's report carries besides their words: what the app was doing and its last
-    // log lines (paths, never file contents), from the incident saved with it.
-    private static JsonObject FeedbackContext(JsonObject incident)
+    // log lines (paths, never file contents), from the incident saved with it, within maximumBytes
+    // as JSON (the site's limit is 128 KiB as sent): the oldest log lines go first, then the
+    // snapshot.
+    internal static JsonObject FeedbackContext(JsonObject incident, int maximumBytes = MaximumContextBytes)
     {
         var lines = new JsonArray();
         if (incident["log"] is JsonArray log)
             foreach (var line in log.Skip(Math.Max(0, log.Count - FeedbackLogLines))) lines.Add(line?.DeepClone());
-        return new JsonObject
+        var context = new JsonObject
         {
             ["incidentId"] = incident["id"]?.DeepClone(),
             ["osVersion"] = incident["osVersion"]?.DeepClone(),
             ["snapshot"] = incident["snapshot"]?.DeepClone(),
             ["log"] = lines,
         };
+        while (JsonSerializer.SerializeToUtf8Bytes(context).Length > maximumBytes)
+        {
+            if (lines.Count > 20) { for (var drop = lines.Count / 2; drop > 0; drop--) lines.RemoveAt(0); continue; }
+            if (context["snapshot"] is JsonObject snapshot && snapshot.Count > 1) { context["snapshot"] = new JsonObject { ["trimmed"] = true }; continue; }
+            if (lines.Count > 0) { lines.RemoveAt(0); continue; }
+            break;
+        }
+        return context;
     }
 
     private static string? Text(JsonObject o, string name) => o[name] is JsonValue v && v.TryGetValue<string>(out var s) ? s : null;
