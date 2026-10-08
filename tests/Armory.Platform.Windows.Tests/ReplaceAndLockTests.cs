@@ -287,6 +287,26 @@ public sealed class ReplaceAndLockTests
         Assert.Contains(status.Processes, p => p.Id == child.Process.Id);
     }
 
+    // Many files at once (a pass asks this for every file): each answered as Inspect answers
+    // it, a missing file is not open, and nothing is a Restart Manager session per file.
+    [WindowsFact]
+    public async Task One_question_for_many_files_answers_each_as_inspect_does()
+    {
+        using var vault = new TestVault();
+        Directory.CreateDirectory(vault.File("Fonts"));
+        var files = Enumerable.Range(0, 40).Select(i => vault.File($"Fonts/font-{i:D2}.ttf")).ToArray();
+        foreach (var file in files) File.WriteAllBytes(file, [1]);
+        var detector = new OpenFileDetector();
+        Assert.Empty(detector.OpenAmong([.. files, vault.File("Fonts/missing.ttf")], TimeSpan.FromSeconds(30), out _));
+        using var first = new ChildProcess("hold", files[17]);
+        Assert.Equal("READY", await first.ReadLine());
+        using var second = new ChildProcess("hold", files[31]);
+        Assert.Equal("READY", await second.ReadLine());
+        var open = detector.OpenAmong(files, TimeSpan.FromSeconds(30), out _);
+        Assert.Equal(new[] { files[17], files[31] }, open.Order(StringComparer.OrdinalIgnoreCase));
+        Assert.All(files, f => Assert.Equal(detector.Inspect(f).IsOpen, open.Contains(f)));
+    }
+
     [WindowsFact]
     public async Task Crash_mid_attribute_update_recovers_to_current_users_lock()
     {

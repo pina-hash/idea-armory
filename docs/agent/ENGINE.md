@@ -70,7 +70,14 @@ A pass has four phases. A, B and D run one step at a time; C moves files several
 
 1. **Identity.** No session: the view says signed out. The state document is bound to the
    first email and device that sync into it; another account sees "this vault belongs to
-   someone else" and nothing syncs.
+   someone else" and nothing syncs. Since 0.3.2 that account can take the folder over
+   (`TakeOverFolderAsync`, SyncEngine.Accounts.cs) when the account it belongs to has nothing
+   waiting in it: no file checked out here, no save not completed, no file on disk that
+   differs from its base, no new file not in Armory yet, no move or folder change not sent.
+   The state document then forgets its email, device, former devices, notices and kept-copy
+   records, and the next pass binds it to the new account; the files are the team's versions,
+   so nothing is downloaded again. Anything waiting keeps the folder with its account (it is
+   that person's work). Two accounts in one folder at once is never allowed.
 2. **Scan, folders, capture.** The platform scan (ignore list applied) gives every file's hash,
    its read-only bit, the folders, the folder moves it proved and SolidWorks' `~$` markers.
    Folder changes on this disk are read first (see Folders and projects): a folder move this
@@ -117,7 +124,11 @@ A pass has four phases. A, B and D run one step at a time; C moves files several
 **Phase B. Plan with Core, Explicit mode.** For every path, in path order:
    `Reconciler.Plan(SyncInput)` with base,
    local hash, remote revision, lock ownership, open state (`IsOpenNow`: the platform's check
-   or a `~$` marker), online state, the break obligation, the saved release, the project's
+   or a `~$` marker; since 0.3.2 asked once for every file on disk before planning,
+   `IVaultFileSystem.OpenAmong`, never once per file: on Windows each question was a Restart
+   Manager session of about 28 ms, so planning 1,500 files took 40 seconds every pass and every
+   click waited behind it; a batch of check outs and the `~$` markers are asked the same way,
+   and every write still asks again just before it), online state, the break obligation, the saved release, the project's
    pin and gate mode, the preserved hash, `CheckoutMode.Explicit` and the student's request
    (`CheckIn` or `Undo` from the file's state; a closed add counts as `CheckIn`). Offline
    plans only add journal intents (never a lock intent for a shared file). Online plans are
@@ -282,6 +293,13 @@ live files by name (for "shares a name", built once per read). Nothing per file 
 files.
 
 ## Activity (v2-design.md 4.4)
+
+Since 0.3.2 the tracker also keeps the running lines (`ActivityView.log`): the last 40 things
+Armory did, from the last 3 minutes, each one plain sentence ("Downloaded Plate.SLDPRT
+(612 KB)", "Getting 1,400 files ready to check out", "Asking the server to check out 1,400
+files", "Checked out 500 of 1,400 files", "Checked in 500 of 1,400 files", "Force checked in
+160 of 200 files", "Sync finished: 94 files downloaded.", going offline and back). The window
+shows them in Right now, the newest at the foot, so a long operation shows it is working.
 
 `ActivityTracker` keeps, per direction (Uploading, Downloading, Moving), files and bytes done
 and in all, the speed and the time left, the files moving now (at most 8 listed) and the

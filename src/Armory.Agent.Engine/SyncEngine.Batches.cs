@@ -48,6 +48,8 @@ public sealed partial class SyncEngine
         if (flights.Count == 0) return;
         await FlushAsync(); // every file's in-flight record is on disk before the call
         var chunks = ArmoryApi.Chunk(flights.Keys);
+        activity.Log($"Asking the server to check out {Count(flights.Count, "file", "files")}");
+        var answered = 0;
         for (var i = 0; i < chunks.Count; i++)
         {
             var chunk = chunks[i];
@@ -95,6 +97,8 @@ public sealed partial class SyncEngine
                 }
                 else Answer(st, CheckOutOutcome.Held); // someone else checked it out first
             }
+            answered += chunk.Length;
+            activity.Log($"Checked out {answered:N0} of {Count(flights.Count, "file", "files")}");
             // A file the answer left out keeps its record: its lock is re-sent alone on the next pass.
             MarkDirty();
         }
@@ -142,6 +146,9 @@ public sealed partial class SyncEngine
             var byFile = new Dictionary<Guid, (FileState State, Inflight Flight)>();
             foreach (var release in group) byFile.TryAdd(release.Flight.FileId!.Value, release);
             var chunks = ArmoryApi.Chunk(byFile.Keys);
+            // A check in, an undo, or a lock taken only for a move let go: one plain word for all.
+            var verb = byFile.Values.All(r => r.State.Request == CheckoutRequest.Undo) ? "Undid" : byFile.Values.Any(r => r.State.Request == CheckoutRequest.CheckIn) ? "Checked in" : "Let go of";
+            var released = 0;
             for (var i = 0; i < chunks.Count; i++)
             {
                 var chunk = chunks[i];
@@ -195,6 +202,8 @@ public sealed partial class SyncEngine
                     activity.Drop(st.Path);
                     MarkDirty();
                 }
+                released += chunk.Length;
+                activity.Log($"{verb} {released:N0} of {Count(byFile.Count, "file", "files")}");
                 // A file the answer left out is decided again on the next pass.
                 foreach (var id in chunk)
                     if (ReferenceEquals(byFile[id].State.Inflight, byFile[id].Flight)) { byFile[id].State.Inflight = null; activity.Drop(byFile[id].State.Path); MarkDirty(); }

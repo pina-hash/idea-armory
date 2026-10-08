@@ -26,6 +26,11 @@ internal sealed class ActivityTracker(TimeProvider clock)
     private readonly List<Transfer> active = [];
     private WaitingView? waiting;
     private long version;
+    // What Armory did lately, for the window's running lines (Snapshot keeps the last few
+    // minutes of them).
+    internal const int LogShown = 40;
+    internal static readonly TimeSpan LogFor = TimeSpan.FromMinutes(3);
+    private readonly Queue<(DateTimeOffset At, string Line)> log = new();
 
     // Moves whenever anything a snapshot shows may have changed.
     internal long Version => Interlocked.Read(ref version);
@@ -101,12 +106,25 @@ internal sealed class ActivityTracker(TimeProvider clock)
         }
     }
 
+    // One line of what Armory did, for the window's running lines.
+    internal void Log(string line)
+    {
+        lock (gate)
+        {
+            log.Enqueue((clock.GetUtcNow(), line));
+            while (log.Count > LogShown) log.Dequeue();
+            Changed();
+        }
+    }
+
     // The file is where it goes (or was already there): it counts as done.
     internal void Finish(Transfer transfer)
     {
         lock (gate)
         {
             if (!active.Remove(transfer)) return;
+            log.Enqueue((clock.GetUtcNow(), $"{(transfer.Direction == Directions.Upload ? "Uploaded" : "Downloaded")} {NameOf(transfer.Path)} ({Bytes(transfer.Bytes)})"));
+            while (log.Count > LogShown) log.Dequeue();
             if (lanes.TryGetValue(transfer.Direction, out var lane))
             {
                 lane.FilesDone++;
@@ -234,7 +252,9 @@ internal sealed class ActivityTracker(TimeProvider clock)
             // The locks let go after the uploads count in the upload direction.
             upload ??= checkIn;
             var files = active.Take(ActiveShown).Select(t => new ActiveTransferView(t.Path, NameOf(t.Path), t.Direction, t.Done, t.Bytes)).ToArray();
-            return new ActivityView(line, upload, download, move, waiting, files);
+            var since = clock.GetUtcNow() - LogFor;
+            var lines = log.Where(l => l.At >= since).Select(l => new ActivityLineView(l.At.UtcDateTime.ToString("O", CultureInfo.InvariantCulture), l.Line)).ToArray();
+            return new ActivityView(line, upload, download, move, waiting, files, lines);
         }
     }
 

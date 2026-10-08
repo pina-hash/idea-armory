@@ -1449,7 +1449,9 @@ public sealed partial class SyncEngine
     private string? OpenUnder(string folder)
     {
         foreach (var document in markerDocuments) if (Inside(document, folder)) return NameOf(document);
-        foreach (var file in local.Values) if (Inside(file.Path.Value, folder) && fs.IsOpen(file.Path)) return file.Path.Name;
+        var inside = local.Values.Where(f => Inside(f.Path.Value, folder)).Select(f => f.Path).ToList();
+        var open = inside.Count == 0 ? null : fs.OpenAmong(inside);
+        foreach (var path in inside) if (open!.Contains(path.Value)) return path.Name;
         return null;
     }
 

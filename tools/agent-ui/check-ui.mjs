@@ -70,6 +70,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { pathToFileURL } from 'node:url';
 import { loadPlaywright, combos, comboName, openPage, demoStates, WWWROOT, ROOT, THEMES, SIZES, walkFiles } from './lib.mjs';
 
@@ -411,7 +412,11 @@ function inspect(jargonSources) {
 		const cx = b.x + b.width / 2;
 		const cy = b.y + b.height / 2;
 		const underSheet = !!document.querySelector('dialog[open]') && !c.closest('dialog');
-		if (!underSheet && cx >= 0 && cy >= 0 && cx < innerWidth && cy < innerHeight) {
+		// A row scrolled out of a box that scrolls on its own (a long My files) is clipped by
+		// it: the mouse meets whatever is there instead, never this chip.
+		const box = c.closest('[data-scroll-own="true"]');
+		const clipped = !!box && (cy < box.getBoundingClientRect().top || cy > box.getBoundingClientRect().bottom);
+		if (!underSheet && !clipped && cx >= 0 && cy >= 0 && cx < innerWidth && cy < innerHeight) {
 			const top = document.elementFromPoint(cx, cy);
 			if (top && !c.contains(top) && getComputedStyle(top).cursor === 'pointer') why.push('covered by a pointer-cursor ' + top.tagName.toLowerCase());
 		}
@@ -1153,6 +1158,13 @@ for (const size of SIZES) {
 		expect(/Offline/i.test(await page.textContent('.status-group .screen')), 'the status does not say Offline');
 		expect(/waiting to upload/.test(await text(page, '#act-panel')), 'waiting files are not in Right now');
 	});
+	await flow('the folder taken over', size, 'vaultOwnedByOther', async (page, expect) => {
+		expect((await page.textContent('[data-key="cn-take"]')).trim() === 'Use this folder', 'the folder-taken screen does not offer Use this folder');
+		await page.click('[data-key="cn-take"]');
+		await settle(page);
+		const s = await where(page);
+		expect(s.screen === 'home', `taking the folder over went to ${s.screen}, not Home`);
+	});
 	await flow('a folder of my own', size, 'vaultOwnedByOther', async (page, expect) => {
 		const label = (await page.textContent('[data-key="cn-own"]')).trim();
 		expect(/C:\\IDEA\\Armory-jordan/.test(label), `the one-click folder key says "${label}"`);
@@ -1253,6 +1265,8 @@ const CONTRACT = {
 	undoCheckOut: ['paths', ...ACT],
 	takeBack: ['fileId', ...ACT],
 	takeBackAll: ['fileIds', ...ACT],
+	takeOverFolder: [...ACT],
+	switchAccount: [],
 	createFolder: ['projectId', 'parent', 'name', ...ACT],
 	renameFolder: ['projectId', 'folder', 'newName', ...ACT],
 	deleteFolder: ['projectId', 'folder', ...ACT],
@@ -1330,6 +1344,24 @@ tally.bridgeTypes = 0;
 		expect(m.type === 'launchFile' && m.path === GEARBOX && !!m.requestId, 'a My files Open key sent ' + JSON.stringify(m));
 		m = await click('[data-key="in-mine:f-gearbox"]');
 		expect(m.type === 'checkIn' && m.paths.join() === GEARBOX, 'a My files Check in key sent ' + JSON.stringify(m));
+
+		// Everything checked out: My files has its own keys for all of them on top, and its
+		// list scrolls in a box of its own, so Team files stays right under it.
+		await host({ type: 'view', view: view('manyMine') });
+		const mineBox = await page.evaluate(() => {
+			const well = document.getElementById('mine-well');
+			const team = document.getElementById('proj-label');
+			return { own: well.getAttribute('data-scroll-own') === 'true', tall: well.getBoundingClientRect().height, gap: team.getBoundingClientRect().top - well.getBoundingClientRect().bottom };
+		});
+		expect(mineBox.own && mineBox.tall <= 400 && mineBox.gap < 120, 'My files with 1,401 files did not scroll in its own box above Team files: ' + JSON.stringify(mineBox));
+		m = await click('[data-key="mk-in"]');
+		expect(m.type === 'checkIn' && m.paths.join() === 'Robot 2027', 'My files Check in all sent ' + JSON.stringify(m));
+		m = await click('[data-key="mk-undo"]');
+		expect(!m.type && (await page.evaluate(() => document.getElementById('ask').open)), 'Undo all did not ask first: ' + JSON.stringify(m));
+		expect(/^Undo all 1,401 check outs\?/.test((await page.textContent('#ask-words')).replace(/\u00a0/g, ' ')), 'Undo all asked: ' + (await page.textContent('#ask-words')));
+		m = await click('[data-key="ask-ok"]');
+		expect(m.type === 'undoCheckOut' && m.paths.join() === 'Robot 2027', 'Undo all sent ' + JSON.stringify(m));
+		await host({ type: 'view', view: view('synced') });
 
 		// Into Drivetrain: select a file, Check out; select mine, Undo check out.
 		await click('[data-key="row-dir:Drivetrain"]');
@@ -1555,6 +1587,16 @@ tally.bridgeTypes = 0;
 		expect(m.type === 'saveSettings' && m.startAtSignIn === false && m.theme === 'system' && m.vaultRoot === 'C:\\IDEA\\Armory', 'the switch sent ' + JSON.stringify(m));
 		m = await click('[data-key="set-theme-spaceWhite"]');
 		expect(m.type === 'saveSettings' && m.theme === 'spaceWhite' && m.startAtSignIn === true, 'a theme pad sent ' + JSON.stringify(m));
+		// Worn at once, before the host answers, and an older view never flips it back.
+		expect((await page.getAttribute('html', 'data-theme')) === 'spaceWhite', 'a picked theme waited for the host');
+		await host({ type: 'view', view: view('synced') });
+		expect((await page.getAttribute('html', 'data-theme')) === 'spaceWhite' && (await page.getAttribute('[data-key="set-theme-spaceWhite"]', 'aria-pressed')) === 'true',
+			'a view from before the theme was picked flipped it back');
+		const picked = view('synced', { effectiveTheme: 'spaceWhite' });
+		picked.settings = { ...picked.settings, theme: 'spaceWhite' };
+		await host({ type: 'view', view: picked });
+		await host({ type: 'view', view: view('synced') });
+		expect((await page.getAttribute('html', 'data-theme')) === 'idea', 'once a view carried the picked theme, the host\'s views did not decide again');
 		m = await click('[data-key="set-incidents"]');
 		expect(m.type === 'openIncidents', 'Open incidents folder sent ' + JSON.stringify(m));
 		// Report a problem: nothing goes until Send, and empty words are refused in the page.
@@ -1610,6 +1652,13 @@ tally.bridgeTypes = 0;
 		expect(m.type === 'chooseVaultRoot', 'Choose another folder sent ' + JSON.stringify(m));
 		m = await click('[data-key="cn-own"]');
 		expect(m.type === 'saveSettings', 'Use my own folder sent ' + JSON.stringify(m));
+		await host({ type: 'view', view: view('vaultOwnedByOther') });
+		m = await click('[data-key="cn-take"]');
+		expect(m.type === 'takeOverFolder' && typeof m.requestId === 'string', 'Use this folder sent ' + JSON.stringify(m));
+		await host({ type: 'view', view: view('synced') });
+		m = await click('[data-key="switch-account"]');
+		expect(m.type === 'switchAccount', 'Switch account sent ' + JSON.stringify(m));
+		await host({ type: 'view', view: view('vaultOwnedByOther') });
 		await host({ type: 'bogus' });
 		expect((await page.getAttribute('body', 'data-screen')) === 'connect', 'an unknown host message changed the screen');
 
@@ -1635,6 +1684,79 @@ tally.bridgeTypes = 0;
 	for (const f of fails) {
 		tally.bridgeFailures++;
 		problem('bridge', 'stand-in WebView2 host', f);
+	}
+}
+
+// Thumbnails, as the app serves the page (https://armory.local, here from a request route):
+// the rows in view ask for their file's picture and wear it, a file with none keeps its
+// glyph, File detail shows its one picture, and a folder of 5,000 files asks only for the
+// rows drawn. Off armory.local (the demo, every page above) nothing is asked for.
+{
+	const fails = [];
+	const asked = [];
+	// A small gray PNG stands in for File Explorer's picture.
+	const PNG = (() => {
+		const chunk = (type, data) => {
+			const head = Buffer.alloc(8);
+			head.writeUInt32BE(data.length, 0);
+			head.write(type, 4, 'latin1');
+			const crc = Buffer.alloc(4);
+			crc.writeUInt32BE(zlib.crc32(Buffer.concat([Buffer.from(type, 'latin1'), data])) >>> 0, 0);
+			return Buffer.concat([head, data, crc]);
+		};
+		const ihdr = Buffer.alloc(13);
+		ihdr.writeUInt32BE(8, 0);
+		ihdr.writeUInt32BE(8, 4);
+		ihdr[8] = 8; // 8 bits, RGB
+		ihdr[9] = 2;
+		const rows = Buffer.alloc(8 * (1 + 8 * 3), 0x90);
+		for (let y = 0; y < 8; y++) rows[y * 25] = 0; // no filter on each row
+		return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(rows)), chunk('IEND', Buffer.alloc(0))]);
+	})();
+	const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, colorScheme: 'dark', reducedMotion: 'reduce' });
+	await context.route('https://armory.local/**', async (route) => {
+		const u = new URL(route.request().url());
+		if (u.pathname.startsWith('/thumb/')) {
+			asked.push(decodeURIComponent(u.pathname));
+			// Parts have a picture, except Bearing-Block-0005 (Windows has none for it).
+			return /\.SLDPRT$/i.test(u.pathname) && !/-0005\.SLDPRT$/i.test(u.pathname) ? route.fulfill({ status: 200, contentType: 'image/png', body: PNG }) : route.fulfill({ status: 404, body: '' });
+		}
+		const file = path.join(WWWROOT, decodeURIComponent(u.pathname));
+		if (!file.startsWith(WWWROOT) || !fs.existsSync(file)) return route.fulfill({ status: 404, body: '' });
+		const type = file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.html') ? 'text/html' : 'application/octet-stream';
+		return route.fulfill({ status: 200, contentType: type, body: fs.readFileSync(file) });
+	});
+	const page = await context.newPage();
+	page.on('pageerror', (e) => fails.push('page error: ' + e.message));
+	try {
+		await page.goto('https://armory.local/index.html?state=bigProject&theme=idea&screen=home&folder=CopyDesignTemp&at=browser');
+		await page.waitForSelector('html[data-ready="true"]', { timeout: 15000 });
+		await page.waitForFunction(() => document.querySelector('#vl-browser .thumb-slot[data-thumb="on"]'), null, { timeout: 5000 }).catch(() => {});
+		const rows = await page.evaluate(() => ({
+			on: document.querySelectorAll('#vl-browser .thumb-slot[data-thumb="on"]').length,
+			slots: document.querySelectorAll('#vl-browser .thumb-slot').length,
+			drawn: document.querySelectorAll('#vl-browser li.row').length
+		}));
+		expect(rows.on > 0, 'no row wore its thumbnail: ' + JSON.stringify(rows));
+		expect(asked.length > 0 && asked.length <= rows.drawn + 10, `a 5,000-file folder asked for ${asked.length} thumbnails with ${rows.drawn} rows drawn`);
+		expect(asked.every((a) => a.startsWith('/thumb/Robot 2027/')), 'a thumbnail was asked for outside the project: ' + asked.slice(0, 3).join(', '));
+		const glyphs = await page.evaluate(() => [...document.querySelectorAll('#vl-browser .thumb-slot')].filter((s) => !s.querySelector('.thumb')).length);
+		expect(glyphs > 0, 'a file with no picture (404) lost its glyph or kept a broken image');
+		asked.length = 0;
+		await page.goto('https://armory.local/index.html?state=takeBack&theme=idea&screen=detail');
+		await page.waitForSelector('html[data-ready="true"]', { timeout: 15000 });
+		await page.waitForTimeout(300);
+		expect((await page.getAttribute('.detail-thumb', 'data-thumb')) === 'on' && asked.length === 1, 'File detail did not show its one picture: ' + asked.join(', '));
+	} catch (e) {
+		fails.push('threw ' + String(e.message || e).split('\n')[0]);
+	}
+	await context.close();
+	for (const f of fails) {
+		tally.bridgeFailures++;
+		problem('thumbs', 'armory.local', f);
+	}
+	function expect(ok, what) {
+		if (!ok) fails.push(what);
 	}
 }
 

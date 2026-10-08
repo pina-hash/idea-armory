@@ -126,7 +126,9 @@ public sealed partial class SyncEngine
         {
             // SolidWorks opened these read-only before they were checked out: it saves them only
             // once they are opened again.
-            var reopen = outcomes.Where(o => o.Outcome == CheckOutOutcome.Done && IsOpenNow(o.Path)).Select(o => o.Path).ToList();
+            var done = outcomes.Where(o => o.Outcome == CheckOutOutcome.Done).ToList();
+            using var known = KnowOpen(done.Select(o => o.Path));
+            var reopen = done.Where(o => IsOpenNow(o.Path)).Select(o => o.Path).ToList();
             if (reopen.Count == 1 && targets.Count == 1) message += " Close it in SolidWorks and open it again to save changes.";
             else if (reopen.Count == 1) message += $" Close {reopen[0].Name} in SolidWorks and open it again to save changes.";
             else if (reopen.Count > 1) message += $" Close {Count(reopen.Count, "file", "files")} in SolidWorks and open them again to save changes.";
@@ -208,7 +210,8 @@ public sealed partial class SyncEngine
             await EnsureKnownAsync(cancellationToken);
             var targets = MyCheckOuts(paths);
             if (targets.Count == 0) return new(false, "Nothing there is checked out by you.");
-            var open = targets.Where(t => IsOpenNow(t.Path)).ToList();
+            List<(FileState State, VaultPath Path)> open;
+            using (KnowOpen(targets.Select(t => t.Path))) open = targets.Where(t => IsOpenNow(t.Path)).ToList();
             if (open.Count == targets.Count)
                 return new(false, open.Count == 1 ? $"Close {open[0].Path.Name} in SolidWorks first." : "Close these files in SolidWorks first.");
             var closed = targets.Except(open).ToList();
@@ -307,6 +310,9 @@ public sealed partial class SyncEngine
         finally { LeaveAction(); }
     }
 
+    // How many check outs the running lines last said were being got ready (said once, not every pass).
+    private int checkOutsLogged;
+
     // How many armory_break_lock calls a Force check in of many files has in flight at once: each
     // is one small call, so several hundred files take seconds, not one pass per file.
     internal const int TakeBackConcurrency = 16;
@@ -338,6 +344,7 @@ public sealed partial class SyncEngine
             }
             if (targets.Count == 0)
                 return new(false, notAllowed > 0 && notOut + mine + notThere == 0 ? "Only a mentor or CAD lead can force a check in." : "None of those files is checked out by someone else now.");
+            activity.Log($"Force checking in {Count(targets.Count, "file", "files")}");
             List<Guid> broken = [], reread = [];
             int gone = 0, refusedRole = 0, failed = 0;
             var offline = false;
@@ -371,6 +378,7 @@ public sealed partial class SyncEngine
                             break;
                     }
                 }
+                activity.Log($"Force checked in {broken.Count:N0} of {Count(targets.Count, "file", "files")}");
                 if (offline) { online = false; break; }
             }
             foreach (var id in broken) KnowLock(id, null);
@@ -577,14 +585,23 @@ public sealed partial class SyncEngine
         // Several check outs at once take their locks in batches (v0.3, armory_lock_files): one
         // call per 500 files, each file answered on its own.
         List<(FileState State, VaultPath Path)>? toLock = checkOuts.Count > 1 && BatchesAvailable ? [] : null;
-        await RunConcurrentlyAsync(checkOuts, async (st, token) =>
+        // Whether each is open, asked once for all of them (never a Restart Manager session per file).
+        if (checkOuts.Count > 1 && checkOuts.Count != checkOutsLogged) activity.Log($"Getting {Count(checkOuts.Count, "file", "files")} ready to check out");
+        checkOutsLogged = checkOuts.Count;
+        List<VaultPath> onDisk = [];
+        foreach (var st in checkOuts) if (TryLocal(st.Path, out var here)) onDisk.Add(here.Path);
+        // Only while the check outs are decided: nothing after this writes on what it says.
+        using (KnowOpen(onDisk))
         {
-            try { await FinishCheckOutAsync(st, token, toLock); }
-            catch (ArmoryOfflineException) { online = false; }
-            catch (Exception error) when (error is ArmoryClientException or IOException or UnauthorizedAccessException)
-            { FileProblem(st.Path, error); }
-            catch (Exception error) when (StopSaving(error)) { throw; }
-        }, notStarted: null, ct);
+            await RunConcurrentlyAsync(checkOuts, async (st, token) =>
+            {
+                try { await FinishCheckOutAsync(st, token, toLock); }
+                catch (ArmoryOfflineException) { online = false; }
+                catch (Exception error) when (error is ArmoryClientException or IOException or UnauthorizedAccessException)
+                { FileProblem(st.Path, error); }
+                catch (Exception error) when (StopSaving(error)) { throw; }
+            }, notStarted: null, ct);
+        }
         if (toLock is { Count: > 0 } && online == true) await LockBatchAsync(toLock, ct);
         foreach (var (st, _) in releases)
             if (st.Request == CheckoutRequest.CheckIn || (st.AutoCheckIn && st.Request == CheckoutRequest.None && !st.TransientLock)) activity.Expect(ActivityTracker.CheckIn, st.Path, 0);

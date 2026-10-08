@@ -170,7 +170,20 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
         return new(files.OrderBy(f => f.Path).ToArray(), markers, problems, null, folders, ReportsFolderMoves ? moves : null);
     }
 
-    public bool IsOpen(VaultPath path) { lock (gate) return open.Contains(path.Value); }
+    public bool IsOpen(VaultPath path) { lock (gate) { IsOpenCalls++; return open.Contains(path.Value); } }
+    // Many files at once, answered as IsOpen answers each. The counts let a test see that a
+    // pass asks once for its files (on Windows a question per file cost a Restart Manager
+    // session each, 40 seconds a pass for 1,500 files).
+    public IReadOnlySet<string> OpenAmong(IReadOnlyCollection<VaultPath> paths)
+    {
+        lock (gate)
+        {
+            OpenAmongCalls++;
+            return paths.Where(p => open.Contains(p.Value)).Select(p => p.Value).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        }
+    }
+    public int IsOpenCalls { get; private set; }
+    public int OpenAmongCalls { get; private set; }
     public Stream OpenRead(VaultPath path) => new FileStream(Full(path.Value), FileMode.Open, FileAccess.Read, FileShare.Read);
 
     private string? HashOf(string full) => File.Exists(full) ? Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(full))) : null;

@@ -50,6 +50,11 @@ public interface IVaultFileSystem
     VaultScan Scan();
     // Whether an application has the file open right now (Restart Manager on Windows).
     bool IsOpen(VaultPath path);
+    // Which of many files are open (their VaultPath.Value), each answered as IsOpen answers it.
+    // A pass asks once for all its files: on Windows one Restart Manager session per file cost
+    // about 28 ms, 40 seconds a pass for 1,500 files (0.3.1's field reports).
+    IReadOnlySet<string> OpenAmong(IReadOnlyCollection<VaultPath> paths)
+        => paths.Where(IsOpen).Select(p => p.Value).ToHashSet(StringComparer.OrdinalIgnoreCase);
     Stream OpenRead(VaultPath path);
     // Writes content at path. expectedHash is the hash the destination must still have, or
     // null when the destination must not exist. Refuses an open or changed destination.

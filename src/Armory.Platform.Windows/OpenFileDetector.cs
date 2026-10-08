@@ -42,6 +42,50 @@ public sealed class OpenFileDetector
         return new(firstOpen is not null || processes.Length > 0, processes, diagnostic);
     }
 
+    // Which of many files are open, each answered as Inspect answers it: the exclusive-open probe
+    // on each file (cheap), then Restart Manager for the rest, one session per batch of 500, a
+    // batch with a holder split in halves until each held file is found (a few sessions per held
+    // file). One session per file cost about 28 ms, so a pass over 1,500 files spent 40 seconds
+    // here (the field reports of 0.3.1). Restart Manager has budget to answer; past it, the files
+    // it has not cleared are answered by the probe alone and diagnostic says so, so a hung query
+    // never holds the engine for minutes. The set holds the files as given.
+    public IReadOnlySet<string> OpenAmong(IReadOnlyList<string> files, TimeSpan budget, out string? diagnostic)
+    {
+        ArgumentNullException.ThrowIfNull(files);
+        diagnostic = null;
+        var open = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        List<string> rest = [];
+        foreach (var file in files)
+        {
+            if (!File.Exists(file)) continue;
+            if (IsBlocked(file, ref diagnostic)) open.Add(file);
+            else rest.Add(file);
+        }
+        if (rest.Count == 0) return open;
+        // Its own set: a query still running past the budget never touches the answer returned.
+        var held = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var attribute = Task.Run(() =>
+        {
+            foreach (var batch in rest.Chunk(500)) Attribute(batch, held);
+        });
+        if (!attribute.Wait(budget))
+        {
+            diagnostic ??= $"Restart Manager did not answer within {budget.TotalSeconds:0} s; exclusive-open probe used.";
+            return open;
+        }
+        open.UnionWith(held);
+        return open;
+    }
+
+    private static void Attribute(string[] batch, HashSet<string> held)
+    {
+        if (Holders(batch.Select(Path.GetFullPath).ToArray(), names: false).Holders.Count == 0) return;
+        if (batch.Length == 1) { held.Add(batch[0]); return; }
+        var half = batch.Length / 2;
+        Attribute(batch[..half], held);
+        Attribute(batch[half..], held);
+    }
+
     private static bool IsBlocked(string file, ref string? diagnostic)
     {
         try { using var probe = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.None); return false; }
@@ -51,7 +95,7 @@ public sealed class OpenFileDetector
         catch (UnauthorizedAccessException error) { diagnostic ??= error.Message; return true; }
     }
 
-    private static (IReadOnlyList<HoldingProcess> Holders, string? Diagnostic) Holders(string[] files)
+    private static (IReadOnlyList<HoldingProcess> Holders, string? Diagnostic) Holders(string[] files, bool names = true)
     {
         List<HoldingProcess> holders = [];
         string? diagnostic = null;
@@ -75,9 +119,12 @@ public sealed class OpenFileDetector
                             foreach (var process in processes.Take((int)count))
                             {
                                 var name = process.AppName;
-                                try { using var running = Process.GetProcessById(process.Process.Id); name = running.ProcessName; }
-                                catch (ArgumentException) { }
-                                catch (InvalidOperationException) { }
+                                if (names)
+                                {
+                                    try { using var running = Process.GetProcessById(process.Process.Id); name = running.ProcessName; }
+                                    catch (ArgumentException) { }
+                                    catch (InvalidOperationException) { }
+                                }
                                 holders.Add(new(process.Process.Id, name));
                             }
                     }

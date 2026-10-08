@@ -115,7 +115,12 @@ ActivityView {
   download: DirectionView | null,
   move: DirectionView | null,
   waiting: WaitingView | null,
-  active: ActiveTransferView[]      // at most 8, each drawn with its own progress track
+  active: ActiveTransferView[],     // at most 8, each drawn with its own progress track
+  log: ActivityLineView[]           // 0.3.2: what Armory did in the last 3 minutes, oldest first, at most 40
+}
+ActivityLineView {
+  at: string,                       // ISO-8601 UTC
+  line: string                      // e.g. "Downloaded Plate.SLDPRT (612 KB)", "Checked out 500 of 1,400 files"
 }
 DirectionView {
   filesDone: number, filesTotal: number, bytesDone: number, bytesTotal: number,
@@ -228,8 +233,8 @@ answers it with exactly one `actionResult` carrying the same id and a plain sent
 ("Checked out 12 of 14 files. Maria Lopez has 2 of them checked out.", "Checked in
 Plate.SLDPRT.", "Close Plate.SLDPRT in SolidWorks first."). The actions are
 `launchFile`, `checkOut`, `checkIn`, `undoCheckOut`, `takeBack`, `takeBackAll`, `createFolder`,
-`renameFolder`, `deleteFolder`, `renameFile`, `addFiles`, `dropFiles`, `reportProblem` and
-`sendFeedback`.
+`renameFolder`, `deleteFolder`, `renameFile`, `addFiles`, `dropFiles`, `reportProblem`,
+`sendFeedback` and `takeOverFolder`.
 
 The page shows an action is under way from the moment it is sent until its
 `actionResult` arrives (v0.2.1): the pressed key gets `aria-busy="true"` and
@@ -246,6 +251,8 @@ replaces all of it. The spinner holds still under `prefers-reduced-motion`.
 | `connect` | | Connect this computer, Try again, Open the browser again | starts the browser sign-in for this computer |
 | `cancelConnect` | | Cancel while waiting | stops waiting for the browser |
 | `signOut` | | Sign out of Armory | forgets this computer's sign-in (files stay) |
+| `switchAccount` | | Switch account (the account panel) | 0.3.2: signs out and starts the next person's browser sign-in at once; the Armory folder stays, and is handed over with `takeOverFolder` |
+| `takeOverFolder` | `requestId` | Use this folder, on the screen that says the folder is someone else's | 0.3.2: the account signed in now takes over this computer's Armory folder when the account it belongs to has nothing waiting in it (no check out, no save not sent, no change Armory hasn't kept, no new file not in Armory yet, no folder change not sent); otherwise the folder stays theirs and the answer says what is waiting, "Alex Kim still has 1 file checked out in this folder. ..." |
 | `pause` / `resume` | | Pause, Resume (the tray's Pause and Resume too) | stops or restarts uploading and downloading ("Paused. Nothing uploads or downloads until you resume.") |
 | `openVault` | | Open Armory folder | opens the Armory folder in File Explorer |
 | `openFile` | `fileId` | a file row, a notice item, a My files row | host answers with `fileDetail` (the page shows File detail) |
@@ -268,6 +275,21 @@ replaces all of it. The spinner holds still under `prefers-reduced-motion`.
 | `reportProblem` | `kind`, `body`, `requestId` | Send in Report a problem (Settings), after the page refuses empty words | `kind` is `bug`, `idea` or `other`; the host saves the words with a fresh `userReport` incident and sends them (docs/agent/TELEMETRY.md); the answer is one sentence: "Sent. Thank you for telling us.", or "Saved. It will be sent ..." when it can't go yet |
 | `sendFeedback` | `kind`, `body`, `requestId` | Send in Send feedback (the header's key, or Settings), after the page refuses empty words | v0.3: `kind` is `bug`, `idea` or `other`; a note on its own (`armory_submit_app_feedback`), saved first and sent at once when it can be, with Armory's version and what it was doing as its context, and no incident after it; the answer is one sentence, "Sent. Thank you for the feedback." or "Saved. It will be sent ..." |
 | `openIncidents` | | Open incidents folder (Settings) | opens `%LOCALAPPDATA%\IDEA Armory\incidents` in File Explorer, so the files can be handed over by hand |
+
+## Thumbnails (0.3.2)
+
+Not a message: inside the app (`https://armory.local`) a file row and File detail show the
+file's own picture as an image at `/thumb/<vault path>?v=<version>`, which the host answers
+from Windows' thumbnail handlers (`ShellThumbnails`, the pictures File Explorer shows;
+SolidWorks installs one for parts, assemblies and drawings) as PNG, or 404 when Windows has
+no picture for it (never the file type's icon). Only files on this computer that are parts,
+assemblies, drawings or pictures ask; rows ask as they are drawn (`loading="lazy"`), so a
+folder of 5,000 files asks only for the rows in view. The glyph stays until a picture
+arrives, and stays when there is none. The host serves only existing files inside the vault
+(never `.armory`), one at a time on an STA thread of its own, and keeps the last 600 answers
+by path, size and time written. The demo and the check pages are not on `armory.local` and
+ask for nothing (tools/agent-ui/check-ui.mjs serves the page there from a request route to
+check it).
 
 ## The demo
 

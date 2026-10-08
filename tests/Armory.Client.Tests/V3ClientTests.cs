@@ -414,6 +414,31 @@ public sealed class V3ClientTests
         finally { folder.Delete(recursive: true); }
     }
 
+    // The race in 0.3.1's field log: saving the note woke the background round, which sent it
+    // (and marked it sent) before Send feedback asked; Send feedback said "couldn't send". It
+    // went, once, and Send feedback says so.
+    [Fact]
+    public async Task A_note_the_background_round_already_sent_is_sent_not_held()
+    {
+        var folder = Directory.CreateTempSubdirectory("armory-v3-");
+        try
+        {
+            var clock = new TestClock(new DateTimeOffset(2026, 10, 8, 18, 0, 0, TimeSpan.Zero));
+            var store = new IncidentStore(folder.FullName);
+            var file = SaveReport(store, clock.GetUtcNow(), kind: IncidentDocument.NoteKind, noteOnly: true);
+            var recorded = new Recorded().Answer(ArmoryApi.SubmitFeedbackRpc, 200, "\"0f000000-0000-0000-0000-000000000005\"");
+            var (api, _) = Client(recorded);
+            var log = new List<string>();
+            var uploader = new IncidentUploader(api, store, () => false, clock, log.Add);
+            Assert.Equal(UploadOutcome.Sent, await uploader.StepAsync());
+            Assert.Equal(UploadOutcome.Sent, await uploader.SendFeedbackNowAsync(file));
+            Assert.Single(recorded.BodiesOf(ArmoryApi.SubmitFeedbackRpc));
+            Assert.DoesNotContain(log, l => l.Contains("held", StringComparison.Ordinal));
+            Assert.Empty(store.Pending());
+        }
+        finally { folder.Delete(recursive: true); }
+    }
+
     [Fact]
     public void Other_peoples_addresses_never_reach_a_report()
     {

@@ -207,7 +207,7 @@ public sealed class EngineUnitTests
         var available = new CheckoutView(CheckoutStates.Available, "Available", null, null, null, null);
         var view = new AgentView(Connections.SignedIn, new ConnectView("idle", null), new AccountView("a@b.c", "Lab PC"),
             new SyncView(SyncStates.Synced, "Everything is saved to Armory.", null, 0),
-            new ActivityView(null, null, null, null, new WaitingView(3, "3 files are waiting to upload. They upload when this computer is back online."), []),
+            new ActivityView(null, null, null, null, new WaitingView(3, "3 files are waiting to upload. They upload when this computer is back online."), [], []),
             @"C:\IDEA\Armory",
             [new NoticeGroupView(NoticeKinds.KeptCopy, NoticeKinds.KeptCopy, NoticeTones.Look, "Your change to Plate.SLDPRT was kept as your own copy", "Saved without a check out.", 1, null,
                 [new NoticeItemView("f", "Robot/Plate.SLDPRT", "Plate.SLDPRT", "Saved without a check out.")])],
@@ -264,11 +264,12 @@ public sealed class EngineUnitTests
             new DirectionView(1, 3, 30, 78, 2, 20, "Uploading 1 of 3 files, 48 MB left, about 20 sec"), null,
             new DirectionView(45, 120, 0, 0, 0, null, "Moving 120 files to Gearbox"),
             new WaitingView(2, "2 checked-out files have changes. Check them in to share them."),
-            [new ActiveTransferView("Robot/Gearbox.SLDASM", "Gearbox.SLDASM", Directions.Upload, 12, 14)]);
+            [new ActiveTransferView("Robot/Gearbox.SLDASM", "Gearbox.SLDASM", Directions.Upload, 12, 14)],
+            [new ActivityLineView("2026-10-08T18:24:58.0000000Z", "Checked out 500 of 1,400 files")]);
         using var a = JsonDocument.Parse(BridgeMessages.ActivityMessage(activity));
         Assert.Equal("activity", a.RootElement.GetProperty("type").GetString());
         var act = a.RootElement.GetProperty("activity");
-        foreach (var name in new[] { "line", "upload", "download", "move", "waiting", "active" })
+        foreach (var name in new[] { "line", "upload", "download", "move", "waiting", "active", "log" })
             Assert.True(act.TryGetProperty(name, out _), name);
         Assert.Equal(JsonValueKind.Null, act.GetProperty("download").ValueKind);
         foreach (var name in new[] { "filesDone", "filesTotal", "bytesDone", "bytesTotal", "bytesPerSecond", "secondsLeft", "line" })

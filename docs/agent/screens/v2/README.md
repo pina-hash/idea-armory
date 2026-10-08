@@ -13,7 +13,7 @@ Home exists only after a computer is connected, so `signedOut`, `connecting`, `c
 and `vaultOwnedByOther` appear on the Connect screen. File detail is shown where a file's own
 page tells the story best. The Settings sheet is shown once per theme, over Home in `synced`.
 
-180 images.
+184 images.
 
 ## Connect (first run)
 
@@ -160,6 +160,10 @@ page tells the story best. The Settings sheet is shown once per theme, over Home
 | [home-moreNotices-spaceWhite-1280x800.png](home-moreNotices-spaceWhite-1280x800.png) | `moreNotices` | The other notices: a file taken back, files Armory can't read, a check in that left two out |  | Space White | 1280x800 |
 | [home-moreNotices-idea-420x720.png](home-moreNotices-idea-420x720.png) | `moreNotices` | The other notices: a file taken back, files Armory can't read, a check in that left two out |  | IDEA | 420x720 |
 | [home-moreNotices-spaceWhite-420x720.png](home-moreNotices-spaceWhite-420x720.png) | `moreNotices` | The other notices: a file taken back, files Armory can't read, a check in that left two out |  | Space White | 420x720 |
+| [home-manyMine-idea-1280x800.png](home-manyMine-idea-1280x800.png) | `manyMine` | Everything checked out: 1,400 files in My files, in a box of their own with Check in all on top, so Team files stays right under it |  | IDEA | 1280x800 |
+| [home-manyMine-spaceWhite-1280x800.png](home-manyMine-spaceWhite-1280x800.png) | `manyMine` | Everything checked out: 1,400 files in My files, in a box of their own with Check in all on top, so Team files stays right under it |  | Space White | 1280x800 |
+| [home-manyMine-idea-420x720.png](home-manyMine-idea-420x720.png) | `manyMine` | Everything checked out: 1,400 files in My files, in a box of their own with Check in all on top, so Team files stays right under it |  | IDEA | 420x720 |
+| [home-manyMine-spaceWhite-420x720.png](home-manyMine-spaceWhite-420x720.png) | `manyMine` | Everything checked out: 1,400 files in My files, in a box of their own with Check in all on top, so Team files stays right under it |  | Space White | 420x720 |
 | [home-bigProject-idea-1280x800.png](home-bigProject-idea-1280x800.png) | `bigProject` | A folder of 5,000 files, drawn a screenful at a time | folder `CopyDesignTemp`, scrolled to the team files | IDEA | 1280x800 |
 | [home-bigProject-spaceWhite-1280x800.png](home-bigProject-spaceWhite-1280x800.png) | `bigProject` | A folder of 5,000 files, drawn a screenful at a time | folder `CopyDesignTemp`, scrolled to the team files | Space White | 1280x800 |
 | [home-bigProject-idea-420x720.png](home-bigProject-idea-420x720.png) | `bigProject` | A folder of 5,000 files, drawn a screenful at a time | folder `CopyDesignTemp`, scrolled to the team files | IDEA | 420x720 |

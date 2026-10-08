@@ -118,7 +118,13 @@ internal sealed class MainWindow : Form, IBridgeWindow
             // index.html is served from here, never cached, with ?v=<version> on its scripts and
             // style sheets. When anything fails the folder mapping above serves it as is.
             core.AddWebResourceRequestedFilter("https://" + HostName + "/index.html*", CoreWebView2WebResourceContext.Document);
-            core.WebResourceRequested += (_, args) => ServeStartPage(core, args);
+            // A file's thumbnail, as File Explorer shows it: https://armory.local/thumb/<vault path>.
+            core.AddWebResourceRequestedFilter("https://" + HostName + ThumbPrefix + "*", CoreWebView2WebResourceContext.Image);
+            core.WebResourceRequested += (_, args) =>
+            {
+                if (args.ResourceContext == CoreWebView2WebResourceContext.Image) ServeThumbnail(core, args);
+                else ServeStartPage(core, args);
+            };
             core.NavigationStarting += (_, args) => KeepInsideApp(args.Uri, () => args.Cancel = true);
             // A frame never leaves the app and never opens the browser by itself.
             core.FrameNavigationStarting += (_, args) => { if (!IsAppUri(args.Uri)) args.Cancel = true; };
@@ -201,6 +207,36 @@ internal sealed class MainWindow : Form, IBridgeWindow
         {
             log.Error("could not read the files sent with a window message", error);
             return [];
+        }
+    }
+
+    internal const string ThumbPrefix = "/thumb/";
+
+    // A thumbnail is made off the window's thread (ShellThumbnails); the request waits on a
+    // deferral. A file with no picture answers 404, and the page keeps its own glyph.
+    private async void ServeThumbnail(CoreWebView2 core, CoreWebView2WebResourceRequestedEventArgs args)
+    {
+        CoreWebView2Deferral? deferral = null;
+        try
+        {
+            if (!IsAppUri(args.Request.Uri) || !Uri.TryCreate(args.Request.Uri, UriKind.Absolute, out var uri) ||
+                !uri.AbsolutePath.StartsWith(ThumbPrefix, StringComparison.Ordinal)) return;
+            var vaultPath = Uri.UnescapeDataString(uri.AbsolutePath[ThumbPrefix.Length..]);
+            deferral = args.GetDeferral();
+            var png = await host.ThumbnailAsync(vaultPath);
+            args.Response = png is null
+                ? core.Environment.CreateWebResourceResponse(null, 404, "Not Found", "Cache-Control: no-store")
+                : core.Environment.CreateWebResourceResponse(new MemoryStream(png), 200, "OK", "Content-Type: image/png\r\nCache-Control: no-cache");
+        }
+        // An async void handler: nothing may escape it (it would end the app).
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            log.Error("could not serve a thumbnail", error);
+        }
+        finally
+        {
+            try { deferral?.Complete(); }
+            catch (Exception error) when (error is not OutOfMemoryException) { log.Error("could not finish a thumbnail answer", error); }
         }
     }
 

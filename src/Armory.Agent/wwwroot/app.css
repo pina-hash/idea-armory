@@ -1282,7 +1282,7 @@ dialog .plate-title::after {
 .row-main {
 	position: relative;
 	display: grid;
-	grid-template-columns: 20px minmax(0, 1fr) 16px;
+	grid-template-columns: var(--icon-col, 20px) minmax(0, 1fr) 16px;
 	grid-template-areas: 'icon body go';
 	align-items: center;
 	column-gap: 0.75rem;
@@ -1292,7 +1292,7 @@ dialog .plate-title::after {
 	color: var(--plate-ink);
 }
 .row-main.has-extra {
-	grid-template-columns: 20px minmax(0, 1fr) auto 16px;
+	grid-template-columns: var(--icon-col, 20px) minmax(0, 1fr) auto 16px;
 	grid-template-areas: 'icon body extra go';
 }
 .row-hit {
@@ -2284,6 +2284,54 @@ body[data-screen='connect'] .screen-root {
 	height: 20px;
 	color: var(--plate-ink-2);
 }
+/* A file's own picture (File Explorer's thumbnail), in a wider icon column; its glyph shows
+   until the picture arrives, and stays when there is none. */
+.row-main.has-thumb {
+	--icon-col: 44px;
+}
+.row-icon.thumb-slot {
+	position: relative;
+	display: grid;
+	place-items: center;
+	width: 44px;
+	height: 44px;
+}
+.thumb-glyph {
+	width: 20px;
+	height: 20px;
+	color: var(--plate-ink-2);
+}
+.thumb-slot .thumb,
+.detail-thumb .thumb {
+	position: absolute;
+	inset: 0;
+	width: 100%;
+	height: 100%;
+	object-fit: contain;
+	border-radius: var(--plate-r-small);
+	opacity: 0;
+}
+.thumb-slot[data-thumb='on'] .thumb,
+.detail-thumb[data-thumb='on'] .thumb {
+	opacity: 1;
+}
+.thumb-slot[data-thumb='on'] .thumb-glyph {
+	visibility: hidden;
+}
+.detail-thumb {
+	position: relative;
+	display: none;
+	width: 100%;
+	aspect-ratio: 4 / 3;
+	max-height: min(200px, 26vh);
+	border: 1px solid var(--plate-hair);
+	border-radius: var(--plate-r-panel);
+	background-color: var(--plate-list-face);
+	box-shadow: inset 0 1px 0 0 var(--plate-groove-dk);
+}
+.detail-thumb[data-thumb='on'] {
+	display: block;
+}
 .row-body {
 	grid-area: body;
 	display: flex;
@@ -3260,11 +3308,11 @@ dialog.housing > .title-bar {
    where a click goes. A folder row keeps the pick key's room, so every name in the list
    starts on one line. */
 .row-main.has-select {
-	grid-template-columns: 44px 20px minmax(0, 1fr) 16px;
+	grid-template-columns: 44px var(--icon-col, 20px) minmax(0, 1fr) 16px;
 	grid-template-areas: 'sel icon body go';
 }
 .row-main.has-select.has-extra {
-	grid-template-columns: 44px 20px minmax(0, 1fr) auto 16px;
+	grid-template-columns: 44px var(--icon-col, 20px) minmax(0, 1fr) auto 16px;
 	grid-template-areas: 'sel icon body extra go';
 }
 .sel-slot {
@@ -3517,6 +3565,29 @@ dialog.housing > .title-bar {
 	color: var(--plate-head-ink);
 }
 
+/* The open folder's place and keys stay at the top while a long folder scrolls under
+   them (a folder of thousands of files left them far above). The selection bar takes that
+   place while files are picked, with the keys for them. */
+.recess-scroll:not(:has(.sel-bar)) .browser-head {
+	position: sticky;
+	top: -19px;
+	z-index: 1;
+	background-color: var(--plate-list-face);
+}
+
+/* ---- My files: the keys for all of them, and a long list in a box of its own ---- */
+
+.mine-keys {
+	margin-bottom: var(--space-2);
+}
+.mine-well.mine-scroll {
+	max-height: min(352px, 44vh);
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	scrollbar-width: thin;
+	scrollbar-color: var(--plate-accent) transparent;
+}
+
 /* ---- Picked files: the bar ---- */
 
 /* It stays at the top of the column while the list scrolls under it, flush with the
@@ -3694,6 +3765,44 @@ dialog.housing > .title-bar {
 .act-file > .track {
 	grid-area: track;
 	height: 8px;
+}
+/* What Armory is doing: its last lines, the newest at the foot, in a small recessed box. */
+.act-log-wrap {
+	display: grid;
+	gap: var(--space-1);
+}
+.act-log {
+	max-height: 9.6rem;
+	margin: 0;
+	padding: var(--space-2) var(--space-3);
+	list-style: none;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	border: 1px solid var(--plate-hair);
+	border-radius: var(--plate-r-small);
+	background-color: var(--plate-list-face);
+	box-shadow: inset 0 1px 0 0 var(--plate-groove-dk);
+	scrollbar-width: thin;
+	scrollbar-color: var(--plate-accent) transparent;
+}
+.act-log li {
+	display: flex;
+	gap: 0.75rem;
+	font-size: 0.85rem;
+	line-height: 1.6;
+	color: var(--plate-ink);
+}
+.act-log-at {
+	flex: none;
+	font-family: var(--font-mono);
+	font-size: 0.75rem;
+	line-height: 1.85;
+	color: var(--plate-ink-2);
+	font-variant-numeric: tabular-nums;
+}
+.act-log-line {
+	min-width: 0;
+	overflow-wrap: anywhere;
 }
 .act-wait {
 	display: flex;
@@ -3933,12 +4042,14 @@ dialog.housing.ask {
 	.act-dirs {
 		grid-template-columns: minmax(0, 1fr);
 	}
-	.sel-bar.panel {
+	.sel-bar.panel,
+	.recess-scroll:not(:has(.sel-bar)) .browser-head {
 		top: calc(-1 * var(--space-3));
 	}
 }
 @media (max-width: 480px) {
-	.sel-bar.panel {
+	.sel-bar.panel,
+	.recess-scroll:not(:has(.sel-bar)) .browser-head {
 		top: calc(-1 * var(--space-2));
 	}
 }

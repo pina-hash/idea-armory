@@ -1,7 +1,8 @@
-# Website requests after Armory 0.3.1
+# Website requests after Armory 0.3.2
 
-**Not built yet.** These are optional. Armory 0.3.1 works fine without them. They make bulk
-work lighter on the server and give the site's own bulk controls the same fix the app got.
+**Not built yet.** Armory 0.3.2 works without any of them. Items 1 to 3 came with 0.3.1 (bulk
+work); items 4 and 5 come from the feedback sent from 0.3.1 (taking turns on a lab computer,
+and feedback that matches the website's).
 
 For the next ideabosco.com (idea-app) update pass. Migration number: the next free one after
 0233. The binding spec stays idea-app `docs/ARMORY.md`. Add these to it as a new contract
@@ -53,3 +54,36 @@ re-reads on a live event (it never applies the row itself) and already folds eve
 arrive together into one read, so nothing is needed for the app. If the site's own pages
 listen to the feed, they should fold a burst the same way (for example, wait 250 ms after the
 last event, then refetch once) instead of refetching per row.
+
+## 4. Choosing the account at Connect (taking turns on a lab computer)
+
+Armory 0.3.2 lets students take turns on one lab computer: Switch account signs one student
+out and starts the next one's sign-in at once, and the Armory folder is handed over when the
+last student has nothing waiting in it. The sign-in happens in the computer's browser, which
+on a shared computer is often still signed in to ideabosco.com as the last student, so the
+approval page can approve the wrong person with one click.
+
+- The page that approves "Connect this computer" (the app's ConnectFlow, idea-app's Armory
+  connect route) must say plainly who is being connected ("Connect LAB-PC-07 as Alex Kim?")
+  and offer "Not you? Use another account", which signs the browser out of ideabosco.com and
+  comes back to the same approval after the next sign-in.
+- Nothing changes in the connect protocol the app uses (the same code, the same answer);
+  only the page.
+
+## 5. Send feedback, the same as the website's
+
+A student asked for the app's Send feedback to have "the same features as the feedback
+function on the idea website". Today the app sends `armory_submit_app_feedback(p_kind,
+p_body, p_app_version, p_device_name, p_context)`: a kind (bug, idea, other), the words, the
+app's version, the computer's name and a small context (no file contents, no other person's
+address).
+
+- Write down in docs/ARMORY.md what the website's own feedback form offers that this lacks
+  (for example a screenshot or other attachment, a page or area the note is about, a way to
+  see your earlier notes and their status, replies), so the app can match it.
+- For each one the app should offer, extend the RPC (or add one) and give its limits,
+  SQLSTATEs and DETAIL reasons the way 0233 did. A screenshot would be the app window only,
+  PNG, at most 2 MB, with the same privacy rules (no other person's address, no file
+  contents; the app crops nothing out of the picture, so the person sees what is sent).
+- If the website lets a person see their notes and the team's answers, say which RPC lists
+  them for the signed-in person, so the app can show "Your feedback" with each note's status.

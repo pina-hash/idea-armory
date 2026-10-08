@@ -80,7 +80,8 @@ public sealed partial class AgentViewContractTests
         var activity = new ActivityView("Downloading 1 of 2 files, 10 KB left, less than a minute",
             null, new DirectionView(1, 2, 10240, 20480, 5120, null, "Downloading 1 of 2 files, 10 KB left, less than a minute"), null,
             new WaitingView(1, "1 file is waiting to upload. It uploads when this computer is back online."),
-            [new ActiveTransferView("Robot/Plate.SLDPRT", "Plate.SLDPRT", Directions.Download, 10240, 20480)]);
+            [new ActiveTransferView("Robot/Plate.SLDPRT", "Plate.SLDPRT", Directions.Download, 10240, 20480)],
+            [new ActivityLineView("2026-10-08T18:24:58.0000000Z", "Downloaded Plate.SLDPRT (20 KB)")]);
         foreach (var (type, json) in new[]
         {
             (BridgeMessages.Activity, BridgeMessages.ActivityMessage(activity)),

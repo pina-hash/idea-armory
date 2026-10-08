@@ -32,6 +32,7 @@
 	/** Page state the host does not own. */
 	var ui = {
 		/** @type {import('./bridge.js').AgentView | null} */ view: null,
+		themeWanted: null, // a theme just picked, worn until a view carries it
 		index: null, // lookups built once per view
 		screen: 'home', // 'home' | 'detail' (Connect is chosen by the view)
 		/** @type {any} */ detail: null,
@@ -497,10 +498,20 @@
 		if (el && el !== document.activeElement) el.focus({ preventScroll: true });
 	}
 
+	/** The theme a choice wears: System follows Windows (the page reads Windows' app mode as
+	 *  the browser's color scheme), until the host's view says what it decided. */
+	function effectiveOf(theme, fallback) {
+		if (theme === 'idea' || theme === 'spaceWhite') return theme;
+		if (window.matchMedia) return window.matchMedia('(prefers-color-scheme: light)').matches ? 'spaceWhite' : 'idea';
+		return fallback === 'spaceWhite' ? 'spaceWhite' : 'idea';
+	}
+
 	function render() {
 		var v = ui.view;
 		if (!v) return;
-		document.documentElement.setAttribute('data-theme', v.effectiveTheme === 'spaceWhite' ? 'spaceWhite' : 'idea');
+		// A theme just picked holds until a view carries it, so an older view never flips it back.
+		if (ui.themeWanted && v.settings && v.settings.theme === ui.themeWanted) ui.themeWanted = null;
+		document.documentElement.setAttribute('data-theme', ui.themeWanted ? effectiveOf(ui.themeWanted, v.effectiveTheme) : v.effectiveTheme === 'spaceWhite' ? 'spaceWhite' : 'idea');
 		var screen = v.connection === 'signedIn' ? ui.screen : 'connect';
 		var focus = activeKey();
 		// In a wide window Home's lists scroll inside the recessed column, and a new view
@@ -519,6 +530,7 @@
 		mountLists(true);
 		if (keepRecess !== null) setRecessTop(keepRecess);
 		applyBars(main);
+		logToEnd(main);
 		if (sheet.open) {
 			if (screen === 'connect') sheet.close();
 			else sheet.innerHTML = settingsHtml(v);
@@ -634,15 +646,17 @@
 		html += '<div class="connect plate-recess"><div class="connect-inner brackets">';
 		html += lcdPlate('look', ownerName ? 'This folder belongs to ' + ownerName : 'This folder belongs to someone else', null, false);
 		html +=
-			'<p class="lead"><span class="mono-inline">' + esc(v.vaultRoot) + '</span> already has ' + (ownerName ? esc(ownerName) + '\'s' : 'someone else\'s') +
-			' files in it. Use a folder of your own, so your files and theirs don\'t get mixed up.</p>';
+			'<p class="lead"><span class="mono-inline">' + esc(v.vaultRoot) + '</span> is ' + (ownerName ? esc(ownerName) + '\'s' : 'someone else\'s') + ' Armory folder. ' +
+			'If ' + (ownerName ? esc(ownerName.split(' ')[0]) : 'they') + ' saved everything to Armory, you can use it now: Armory checks first, and nothing of theirs changes. ' +
+			'If something of theirs is still waiting, use a folder of your own.</p>';
 		if (!owner && msg) html += '<p class="connect-where">' + esc(msg) + '</p>';
 		html += '<dl class="accounts">';
 		if (owner) html += '<div><dt class="label">This folder belongs to</dt><dd class="mono-plate">' + esc(owner) + '</dd></div>';
 		if (me) html += '<div><dt class="label">You\'re signed in as</dt><dd class="mono-plate">' + esc(me) + '</dd></div>';
 		html += '</dl>';
 		html += '<div class="connect-actions">';
-		html += '<button class="key primary" type="button" data-action="useFolder" data-path="' + esc(mine) + '" data-key="cn-own">Use <span class="key-path">' + esc(mine) + '</span></button>';
+		html += '<button class="key primary" type="button" data-action="takeOverFolder" data-key="cn-take">Use this folder</button>';
+		html += '<button class="key" type="button" data-action="useFolder" data-path="' + esc(mine) + '" data-key="cn-own">Use <span class="key-path">' + esc(mine) + '</span></button>';
 		html += '<button class="key" type="button" data-action="chooseVaultRoot" data-key="cn-choose">' + icon('folder') + '<span>Choose another folder</span></button>';
 		html += '</div>';
 		html += '<p class="connect-foot">Not sure? Ask your teacher. Not you? <button class="textlink" type="button" data-action="signOut" data-key="cn-signout">Sign out</button></p>';
@@ -794,6 +808,8 @@
 			'<div class="panel acct-panel">' +
 			ringHtml(v, a ? a.deviceName : 'this computer') +
 			(a ? '<dl class="acct"><div><dt class="label">Signed in as</dt><dd class="acct-email">' + esc(a.email) + '</dd></div></dl>' : '') +
+			// Switch account: the next student signs in now, on the same Armory folder.
+			(a ? '<button class="textlink acct-signout" type="button" data-action="switchAccount" data-key="switch-account">' + icon('person') + '<span>Switch account</span></button>' : '') +
 			'<button class="textlink acct-signout" type="button" data-action="signOut" data-key="signout">' + icon('signout') + '<span>Sign out of Armory</span></button>' +
 			'</div></section>'
 		);
@@ -847,7 +863,7 @@
 	/* ---- Right now: what is moving ---- */
 
 	function hasActivity(a) {
-		return !!(a && (a.upload || a.download || a.move || a.waiting || (a.active && a.active.length)));
+		return !!(a && (a.upload || a.download || a.move || a.waiting || (a.active && a.active.length) || (a.log && a.log.length)));
 	}
 
 	/** "Right now": each direction with its count, what is left, the speed, the time left
@@ -911,7 +927,32 @@
 			html += '</ul>';
 		}
 		if (a.waiting) html += '<p class="act-wait">' + icon('clock') + '<span>' + esc(glue(a.waiting.line)) + '</span></p>';
+		html += logHtml(a.log);
 		return html;
+	}
+
+	/** What Armory did in the last few minutes, a line each, the newest at the foot (kept in
+	 *  view), so a long check out or download shows it is working, not stuck. */
+	function logHtml(lines) {
+		if (!lines || !lines.length) return '';
+		var html = '<div class="act-log-wrap"><p class="act-head label">' + icon('note') + '<span class="act-word">What Armory is doing</span></p>';
+		html += '<ol class="act-log" id="act-log" tabindex="0" aria-label="What Armory did just now">';
+		lines.forEach(function (l) {
+			html += '<li><time class="act-log-at" datetime="' + esc(l.at) + '">' + esc(clockTime(l.at)) + '</time><span class="act-log-line">' + esc(glue(l.line)) + '</span></li>';
+		});
+		return html + '</ol></div>';
+	}
+
+	/** "3:41:05 PM" for a line's time. */
+	function clockTime(iso) {
+		var d = new Date(iso);
+		return isNaN(d.getTime()) ? '' : d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+	}
+
+	/** The running lines stay at their newest. */
+	function logToEnd(root) {
+		var log = (root || document).querySelector('#act-log');
+		if (log) log.scrollTop = log.scrollHeight;
 	}
 
 	/** Progress widths go in through CSSOM: the page's CSP refuses inline styles. */
@@ -933,6 +974,7 @@
 			if (lastActivity !== html) {
 				panel.innerHTML = html;
 				applyBars(panel);
+				logToEnd(panel);
 			}
 			lastActivity = html;
 			group.hidden = !hasActivity(a);
@@ -1078,7 +1120,7 @@
 		var t = o.active ? '0' : '-1';
 		var hit = o.hit;
 		var html =
-			'<li class="row vrow' + (o.cls ? ' ' + o.cls : '') + '" data-vkey="' + esc(o.vkey) + '" data-i="' + o.i + '"><div class="row-main' + (o.select !== undefined ? ' has-select' : '') + (o.extra ? ' has-extra' : '') + '">' +
+			'<li class="row vrow' + (o.cls ? ' ' + o.cls : '') + '" data-vkey="' + esc(o.vkey) + '" data-i="' + o.i + '"><div class="row-main' + (o.select !== undefined ? ' has-select' : '') + (o.extra ? ' has-extra' : '') + (o.thumb ? ' has-thumb' : '') + '">' +
 			'<button class="row-hit" type="button" data-rove="row" tabindex="' + t + '" data-action="' + hit.action + '"' +
 			(hit.fileId ? ' data-file-id="' + esc(hit.fileId) + '"' : '') +
 			(hit.path != null ? ' data-path="' + esc(hit.path) + '"' : '') +
@@ -1086,7 +1128,7 @@
 			' data-key="row-' + esc(o.k) + '" aria-labelledby="n-' + esc(o.k) + '"' + (hit.hint ? ' title="' + esc(hit.hint) + '"' : '') + '></button>';
 		if (o.select !== undefined) html += o.select ? o.select.replace('data-rove="sel"', 'data-rove="sel" tabindex="' + t + '"') : '<span class="sel-slot" aria-hidden="true"></span>';
 		html +=
-			icon(o.glyph || kindOf(o.name), 'row-icon') +
+			(o.thumb ? '<span class="row-icon thumb-slot">' + icon(o.glyph || kindOf(o.name), 'thumb-glyph') + thumbImg(o.thumb) + '</span>' : icon(o.glyph || kindOf(o.name), 'row-icon')) +
 			'<span class="row-body">' +
 			'<span class="row-name" id="n-' + esc(o.k) + '">' + nameHtml(o.name, o.glyph === 'folder') + '</span>' +
 			'<span class="row-line">' + (o.line || '') + '</span>' +
@@ -1095,6 +1137,30 @@
 			icon(o.go || 'chev-right', 'row-go') +
 			'</div></li>';
 		return html;
+	}
+
+	/* ---- Thumbnails: File Explorer's own picture of a file ---- */
+
+	// Only inside the app: the host answers /thumb/<vault path> on its own page address with the
+	// picture Windows has for the file (SolidWorks draws its parts', assemblies' and
+	// drawings'), or 404. The demo and the check pages have none, and ask for nothing.
+	var THUMBS = location.protocol === 'https:' && location.hostname === 'armory.local';
+	var THUMB_KINDS = /\.(sldprt|sldasm|slddrw|png|jpe?g|bmp|gif|webp|tiff?)$/i;
+
+	/** The picture's address for a file on this computer, or null. Its version is in the
+	 *  query, so a file checked in or saved since gets its new picture. */
+	function thumbAddress(r) {
+		if (!THUMBS || !r || !r.path || r.status === 'notOnThisComputer' || !THUMB_KINDS.test(r.name || r.path)) return null;
+		return (
+			'/thumb/' + String(r.path).split('/').map(encodeURIComponent).join('/') +
+			'?v=' + encodeURIComponent((r.updatedAt || '') + (r.changed || r.status === 'changed' ? '-' + (r.status || '') : ''))
+		);
+	}
+
+	// eager: File detail's one picture, in a box that stays hidden until it arrives (a lazy
+	// image in a hidden box is never asked for).
+	function thumbImg(url, eager) {
+		return '<img class="thumb" src="' + esc(url) + '" alt="" loading="' + (eager ? 'eager' : 'lazy') + '" decoding="async" draggable="false">';
 	}
 
 	/** A file's name that keeps its extension in sight: when the row is short of room the
@@ -1174,7 +1240,20 @@
 			html += '</div></div>';
 			return html + '</section>';
 		}
-		html += '<div class="list-well mine-well">' + registerList({
+		// More than one: the keys for all of them, first, where they are always in sight.
+		var mineIn = files.filter(function (f) {
+			return checkoutOf(f).state === 'mine';
+		}).length;
+		if (files.length > 1) {
+			html += '<div class="folder-keys mine-keys" role="group" aria-label="All my files">';
+			html += key({ action: 'mineCheckIn', key: 'mk-in', cls: 'tool keep-word', glyph: 'checkin', word: 'Check in all', title: 'Check in all ' + plural(mineIn, 'file', 'files') + ' you have checked out', disabled: !mineIn });
+			html += key({ action: 'askUndoMine', key: 'mk-undo', cls: 'tool keep-word', glyph: 'undo', word: 'Undo all', title: 'Undo all ' + plural(mineIn, 'check out', 'check outs') + ', keeping your changes as your own copies', disabled: !mineIn });
+			html += '</div>';
+		}
+		// A long list scrolls in a box of its own, so Team files (and its keys) stay right
+		// under it: a student with 1,400 files checked out found no keys below them (0.3.1).
+		var own = files.length > MINE_ROWS;
+		html += '<div class="list-well mine-well' + (own ? ' mine-scroll' : '') + '" id="mine-well"' + (own ? ' data-scroll-own="true"' : '') + '>' + registerList({
 			id: 'vl-mine',
 			label: 'My files',
 			items: files.map(function (f) {
@@ -1184,9 +1263,26 @@
 				return 'mine:' + (x.file.fileId || x.file.path);
 			},
 			row: mineRow,
-			scrollEl: homeScroller
+			scrollEl: own
+				? function () {
+						return document.getElementById('mine-well');
+					}
+				: homeScroller
 		}) + '</div>';
 		return html + '</section>';
+	}
+
+	// How many My files rows show before the list scrolls in its own box.
+	var MINE_ROWS = 6;
+
+	/** Every project folder with a file of mine in it: Check in all and Undo all send these
+	 *  (the host takes only the files this computer has checked out under them). */
+	function mineFolders(v) {
+		var tops = {};
+		(v.myFiles || []).forEach(function (f) {
+			if (checkoutOf(f).state === 'mine') tops[String(f.path).split('/')[0]] = true;
+		});
+		return Object.keys(tops);
 	}
 
 	function mineRow(x, i, active) {
@@ -1209,6 +1305,7 @@
 			name: f.name,
 			line: pendingHtml(f) + checkoutMark(checkoutOf(f)) + statusChip(f.status, r.changed) + kindChip(f.name) + '<span class="row-meta">' + esc(whereIs(f.path)) + '</span>',
 			extra: extra,
+			thumb: thumbAddress(found ? found.row : f),
 			go: f.fileId ? 'chev-right' : 'folder-go'
 		});
 	}
@@ -1386,6 +1483,7 @@
 			line: fileLine(r),
 			// The state key first, so Open keeps one column down the list.
 			extra: stateKey(r, k) + openKey(r.path, r.name, k),
+			thumb: thumbAddress(r),
 			go: r.fileId ? 'chev-right' : 'folder-go'
 		});
 	}
@@ -1540,6 +1638,8 @@
 		html += '<div class="detail-grid">';
 
 		html += '<div class="detail-side">';
+		var detailThumb = thumbAddress(findRow(d.fileId) ? findRow(d.fileId).row : d);
+		if (detailThumb) html += '<div class="detail-thumb">' + thumbImg(detailThumb, true) + '</div>';
 		html += '<section class="display" data-tone="' + w.tone + '" aria-labelledby="holder-line">';
 		html += '<p class="screen lcd"><span>' + esc(w.readout) + '</span></p>';
 		html += '<h2 class="holder-line" id="holder-line">' + esc(glue(w.line)) + '</h2>';
@@ -1647,7 +1747,7 @@
 		html += '<div class="segmented" role="group" aria-labelledby="set-theme-label">';
 		themes.forEach(function (t) {
 			html +=
-				'<button class="pad seg" type="button" data-action="theme" data-value="' + t[0] + '" data-key="set-theme-' + t[0] + '" aria-pressed="' + (s.theme === t[0]) + '">' +
+				'<button class="pad seg" type="button" data-action="theme" data-value="' + t[0] + '" data-key="set-theme-' + t[0] + '" aria-pressed="' + ((ui.themeWanted || s.theme) === t[0]) + '">' +
 				'<span class="swatch" data-swatch="' + t[0] + '" aria-hidden="true"></span>' +
 				'<span class="seg-words"><span class="seg-name">' + esc(t[1]) + '</span><span class="seg-sub">' + esc(t[2]) + '</span></span></button>';
 		});
@@ -1742,6 +1842,13 @@
 				'Nobody else can save ' + them + ' until you check ' + them + ' in.' +
 				(c.held ? ' ' + plural(c.held, 'other file is', 'other files are') + ' checked out by someone else, and ' + (c.held === 1 ? 'stays' : 'stay') + ' with them.' : '');
 			ok = 'Check out ' + plural(c.count, 'file', 'files');
+			cancelFirst = true;
+		} else if (kind === 'undoMine') {
+			title = 'Undo all';
+			body =
+				'Undo all ' + plural(c.count, 'check out', 'check outs') + '? Each file goes back to the version from before you checked it out, and anyone can check it out. ' +
+				'Changes you saved are kept as your own copies in each file\'s history, so nothing is lost.';
+			ok = 'Undo ' + plural(c.count, 'check out', 'check outs');
 			cancelFirst = true;
 		} else if (kind === 'renameFile') {
 			title = 'Rename file';
@@ -1896,6 +2003,7 @@
 				ui.follow = { projectId: c.projectId, from: c.folder, to: c.folder.split('/').slice(0, -1).concat([name]).join('/') };
 			}
 		} else if (a.kind === 'checkOutAll') act('checkOut', { paths: [c.path], open: false }, { key: a.returnKey });
+		else if (a.kind === 'undoMine') act('undoCheckOut', { paths: mineFolders(ui.view) }, { key: a.returnKey, words: 'Undoing ' + plural(c.count, 'check out', 'check outs') + '...' });
 		else if (a.kind === 'deleteFolder') act('deleteFolder', { projectId: c.projectId, folder: c.folder }, { key: a.returnKey });
 		// One file is takeBack; more go in ONE takeBackAll, so the host forces them in one action
 		// and one pass (one message per file ran a whole pass for each).
@@ -2734,6 +2842,15 @@
 				var here = browserPlace();
 				act('checkIn', { paths: [folderPathOf(here.pi, here.folder)] }, { key: from });
 				break;
+			case 'mineCheckIn':
+				act('checkIn', { paths: mineFolders(ui.view) }, { key: from });
+				break;
+			case 'askUndoMine':
+				var undoCount = (ui.view.myFiles || []).filter(function (f) {
+					return checkoutOf(f).state === 'mine';
+				}).length;
+				if (undoCount) openAsk('undoMine', { count: undoCount }, from);
+				break;
 			case 'askOk':
 				askOk();
 				break;
@@ -2778,7 +2895,21 @@
 				saveSettings({ startAtSignIn: !ui.view.settings.startAtSignIn });
 				break;
 			case 'theme':
-				saveSettings({ theme: el.getAttribute('data-value') });
+				// Worn at once: the host's answer only confirms it (0.3.1 waited for it, and
+				// a view still carrying the old theme flipped it back for a moment).
+				var picked = el.getAttribute('data-value');
+				ui.themeWanted = picked;
+				document.documentElement.setAttribute('data-theme', effectiveOf(picked, ui.view.effectiveTheme));
+				Array.prototype.forEach.call(document.querySelectorAll('[data-action="theme"]'), function (b) {
+					b.setAttribute('aria-pressed', String(b.getAttribute('data-value') === picked));
+				});
+				saveSettings({ theme: picked });
+				break;
+			case 'takeOverFolder':
+				act('takeOverFolder', {}, { key: from, words: 'Checking this folder...' });
+				break;
+			case 'switchAccount':
+				bridge.send('switchAccount');
 				break;
 			case 'useFolder':
 				// A folder of the student's own, next to the one that is taken. Saving it is
@@ -2860,6 +2991,25 @@
 	// Scrolling anywhere (the window, the recessed column, a notice's list) draws the rows
 	// now in view and updates the "more below" tags.
 	document.addEventListener('scroll', onScroll, { capture: true, passive: true });
+
+	// A thumbnail that arrived shows over its glyph; one Windows has no picture for goes, and
+	// the glyph stays. (Image events don't bubble: these listen on the way down.)
+	document.addEventListener(
+		'load',
+		function (e) {
+			var img = e.target;
+			if (img && img.classList && img.classList.contains('thumb') && img.parentNode) img.parentNode.setAttribute('data-thumb', 'on');
+		},
+		true
+	);
+	document.addEventListener(
+		'error',
+		function (e) {
+			var img = e.target;
+			if (img && img.classList && img.classList.contains('thumb') && img.parentNode) img.parentNode.removeChild(img);
+		},
+		true
+	);
 	window.addEventListener('resize', onScroll);
 
 	// A window the student can't see stops turning the gear.

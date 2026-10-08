@@ -58,6 +58,8 @@ public sealed class IncidentUploader
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly SemaphoreSlim wake = new(0, int.MaxValue);
     private readonly Dictionary<string, DateTimeOffset> waits;
+    // The files whose person's words went in this run (under the gate).
+    private readonly HashSet<string> feedbackSent = new(StringComparer.OrdinalIgnoreCase);
     private DateTimeOffset nextAttempt = DateTimeOffset.MinValue;
 
     public IncidentUploader(ArmoryApi api, IncidentStore store, Func<bool> transferring, TimeProvider? clock = null, Action<string>? log = null)
@@ -104,6 +106,10 @@ public sealed class IncidentUploader
         await gate.WaitAsync(ct);
         try
         {
+            // Saving the note woke the background round, which may have sent it already (and
+            // marked a note on its own sent, so it is not where it was): that is Sent, never
+            // Held (0.3.1 said "couldn't send" for feedback that had gone).
+            if (feedbackSent.Contains(file)) return UploadOutcome.Sent;
             if (!TryRead(file, out var incident)) return UploadOutcome.Held;
             if (!NeedsFeedback(incident)) return UploadOutcome.Sent;
             if (IsWaiting(ArmoryApi.SubmitFeedbackRpc)) return IsRateLimitWait(ArmoryApi.SubmitFeedbackRpc) ? UploadOutcome.RateLimited : UploadOutcome.NotLive;
@@ -169,6 +175,7 @@ public sealed class IncidentUploader
                 var id = await SendShortenedOnceAsync(file, incident, rpc, shortened => api.SubmitAppFeedbackAsync(Text(feedback, "kind") ?? "other",
                     Body(Text(feedback, "body") ?? "", shortened), Version(incident, shortened), device, FeedbackContext(incident, shortened ? ShortenedContextBytes : MaximumContextBytes), ct));
                 incident["feedbackId"] = id.ToString();
+                feedbackSent.Add(file);
                 store.Rewrite(file, incident);
                 log?.Invoke($"incident upload: the report in {name} was sent ({id})");
             }

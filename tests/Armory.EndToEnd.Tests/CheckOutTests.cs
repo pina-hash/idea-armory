@@ -222,10 +222,49 @@ public sealed class CheckOutTests
             Assert.Equal((locks, releases, 0), (after.Locks - before.Locks, after.Releases - before.Releases, after.One - before.One));
         }
 
+        // Each says what it is doing in the window's running lines (a long one shows it is working).
+        IReadOnlyList<string> Lines() => [.. t.A.Engine.View.Activity.Log.Select(l => l.Line)];
         await OneBatchAndOnePass(() => t.A.CheckOutAsync(Fonts), $"Checked out {many} files.", 1, 0);
+        Assert.Contains($"Asking the server to check out {many} files", Lines());
+        Assert.Contains($"Checked out {many} of {many} files", Lines());
         await OneBatchAndOnePass(() => t.A.CheckInAsync(Fonts), $"Checked in {many} files.", 0, 1);
+        Assert.Contains($"Checked in {many} of {many} files", Lines());
         await OneBatchAndOnePass(() => t.A.CheckOutAsync(Fonts), $"Checked out {many} files.", 1, 0);
         await OneBatchAndOnePass(() => t.A.UndoCheckOutAsync(Fonts), $"Undid {many} check outs.", 0, 1);
+        Assert.Contains($"Undid {many} of {many} files", Lines());
+        Assert.InRange(Lines().Count, 1, 40);
+        NoViolations(t.A);
+    }
+
+    // A pass asks whether its files are open once for all of them, never once per file: on
+    // Windows each question was a Restart Manager session (about 28 ms), so a quiet pass over
+    // 1,500 files took 40 seconds and every click waited behind it (0.3.1's field reports).
+    // Checking out a folder asks once for its files too. Open files are still found.
+    [PostgresFact]
+    public async Task A_pass_and_a_check_out_ask_whether_files_are_open_once_for_all_of_them()
+    {
+        await using var t = await TeamAsync();
+        await ArmoryV3StandIn.ApplyCoreAsync(t.World.Database);
+        const int many = 150;
+        const string Fonts = "Robot 2027/Fonts";
+        for (var i = 0; i < many; i++) t.A.Write($"{Fonts}/Font{i:000}.ttf", "font " + i);
+        await t.A.SyncAsync();
+        var disk = t.A.Disk;
+        (int One, int Batch) Asked() => (disk.IsOpenCalls, disk.OpenAmongCalls);
+
+        var before = Asked();
+        await t.A.SyncAsync();
+        var quiet = Asked();
+        Assert.InRange(quiet.One - before.One, 0, 2);
+        Assert.InRange(quiet.Batch - before.Batch, 1, 3);
+
+        t.A.Disk.Open($"{Fonts}/Font007.ttf");
+        // The open file is found through the batch: it is the one to open again.
+        Assert.Equal($"Checked out {many} files. Close Font007.ttf in SolidWorks and open it again to save changes.", (await t.A.CheckOutAsync(Fonts)).Message);
+        var checkedOut = Asked();
+        Assert.InRange(checkedOut.One - quiet.One, 0, 4);
+        Assert.InRange(checkedOut.Batch - quiet.Batch, 2, 8);
+        t.A.Disk.Close($"{Fonts}/Font007.ttf");
         NoViolations(t.A);
     }
 

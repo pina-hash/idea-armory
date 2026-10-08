@@ -107,6 +107,13 @@
 	 * @property {DirectionView | null} move
 	 * @property {WaitingView | null} waiting
 	 * @property {ActiveTransferView[]} active      at most 8
+	 * @property {ActivityLineView[]} log           what Armory did in the last few minutes, oldest first, at most 40
+	 */
+
+	/**
+	 * @typedef {object} ActivityLineView
+	 * @property {string} at     ISO-8601 UTC
+	 * @property {string} line   one plain sentence: "Downloaded Plate.SLDPRT (612 KB)", "Checked out 500 of 1,400 files"
 	 */
 
 	/**
@@ -266,6 +273,8 @@
 	 *   checkOut: { paths, open }             (files or folders, vault-relative)
 	 *   checkIn: { paths }    undoCheckOut: { paths }    takeBack: { fileId }
  *   takeBackAll: { fileIds }              (Force check in of more than one file: one action, one pass)
+ *   takeOverFolder: none                  (the folder is another account's: take it over when nothing of theirs waits)
+ *   switchAccount: none                   (sign out, and the next person signs in now)
 	 *   createFolder: { projectId, parent, name }    renameFolder: { projectId, folder, newName }
 	 *   deleteFolder: { projectId, folder }   renameFile: { path, newName }   (one file, in its folder)
 	 *   addFiles: { projectId, folder }
@@ -281,7 +290,7 @@
 	 *   | 'openVault' | 'openFile' | 'launchFile' | 'showInFolder' | 'checkOut' | 'checkIn'
 	 *   | 'undoCheckOut' | 'takeBack' | 'createFolder' | 'renameFolder' | 'deleteFolder' | 'renameFile'
 	 *   | 'addFiles' | 'dropFiles' | 'dismissNotice' | 'saveSettings' | 'chooseVaultRoot'
-	 *   | 'reportProblem' | 'openIncidents' | 'sendFeedback' | 'takeBackAll'} PageMessageType
+	 *   | 'reportProblem' | 'openIncidents' | 'sendFeedback' | 'takeBackAll' | 'takeOverFolder' | 'switchAccount'} PageMessageType
 	 */
 
 	/**
@@ -303,7 +312,7 @@
 	/* ------------------------------------------------------- Message lists */
 
 	/** Page to host message types (BRIDGE.md, "Page to host"). */
-	var PAGE_TO_HOST = ['ready', 'connect', 'cancelConnect', 'signOut', 'pause', 'resume', 'openVault', 'openFile', 'launchFile', 'showInFolder', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'dismissNotice', 'saveSettings', 'chooseVaultRoot', 'reportProblem', 'openIncidents', 'sendFeedback', 'takeBackAll'];
+	var PAGE_TO_HOST = ['ready', 'connect', 'cancelConnect', 'signOut', 'pause', 'resume', 'openVault', 'openFile', 'launchFile', 'showInFolder', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'dismissNotice', 'saveSettings', 'chooseVaultRoot', 'reportProblem', 'openIncidents', 'sendFeedback', 'takeBackAll', 'takeOverFolder', 'switchAccount'];
 
 	/** Host to page message types (BRIDGE.md, "Host to page"). */
 	var HOST_TO_PAGE = ['view', 'fileDetail', 'activity', 'actionResult'];
@@ -331,7 +340,7 @@
 	};
 
 	/** Actions: each carries a requestId, and the host answers it with one actionResult. */
-	var ACTIONS = ['launchFile', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'reportProblem', 'sendFeedback', 'takeBackAll'];
+	var ACTIONS = ['launchFile', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'reportProblem', 'sendFeedback', 'takeBackAll', 'takeOverFolder'];
 
 	/* ----------------------------------------------------------- Plumbing */
 
@@ -552,6 +561,16 @@
 					clearTimers();
 					useState('signedOut');
 					postView();
+					break;
+				case 'switchAccount':
+					clearTimers();
+					useState('connecting');
+					postView();
+					break;
+				case 'takeOverFolder':
+					useState('synced');
+					postView();
+					result(message, true, 'This Armory folder is yours now. Maria Lopez\'s files here were all saved to Armory, so nothing of theirs changes.');
 					break;
 				case 'pause':
 					if (view.sync.state !== 'paused') {

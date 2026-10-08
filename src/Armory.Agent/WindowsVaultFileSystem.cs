@@ -103,6 +103,33 @@ public sealed class WindowsVaultFileSystem : IVaultFileSystem, IDisposable
         return openFiles.Inspect(file!).IsOpen;
     }
 
+    // Many files at once, each answered as IsOpen answers it (OpenFileDetector.OpenAmong): the
+    // pass asks this for every file, never one Restart Manager session per file. A path that
+    // cannot be resolved is treated as open, as in IsOpen.
+    public IReadOnlySet<string> OpenAmong(IReadOnlyCollection<VaultPath> files)
+    {
+        ArgumentNullException.ThrowIfNull(files);
+        var open = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var byFile = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var path in files)
+        {
+            if (paths.TryResolve(path, out var file, out _)) byFile[file!] = path.Value;
+            else open.Add(path.Value);
+        }
+        var found = openFiles.OpenAmong([.. byFile.Keys], OpenBudget, out var diagnostic);
+        foreach (var file in found) open.Add(byFile[file]);
+        if (diagnostic is not null && OpenLog is { } log && clock.GetUtcNow() - lastOpenDiagnostic >= TimeSpan.FromMinutes(10))
+        {
+            lastOpenDiagnostic = clock.GetUtcNow();
+            log("open files: " + diagnostic);
+        }
+        return open;
+    }
+
+    internal static readonly TimeSpan OpenBudget = TimeSpan.FromSeconds(10);
+    internal Action<string>? OpenLog { get; set; }
+    private DateTimeOffset lastOpenDiagnostic = DateTimeOffset.MinValue;
+
     // Captures and reads share delete as the scan does: a student can rename the file, or a
     // folder above it, while Armory reads it. The open handle still reads the same bytes, and
     // nobody can write them meanwhile (write is not shared).
@@ -368,6 +395,15 @@ public sealed class WindowsVaultFileSystem : IVaultFileSystem, IDisposable
 
     // Decision D14: the plain path from VaultLocator, never a program or script, opened by the
     // shell with its default program (SolidWorks for SolidWorks files).
+    // The file on disk behind a vault path, for its thumbnail: only an existing file inside
+    // the vault (never the .armory folder), else null.
+    internal string? ExistingFile(string vaultPath)
+    {
+        if (!VaultPath.TryCreate(vaultPath, out var path, out _, Root) || !VaultLocator.TryResolve(Root, path.Value, out var file)) return null;
+        if (path.Value.StartsWith(".armory", StringComparison.OrdinalIgnoreCase)) return null;
+        return File.Exists(file) ? file : null;
+    }
+
     public ReplaceOutcome Launch(VaultPath path)
     {
         if (!VaultLocator.TryResolve(Root, path.Value, out var file)) return ReplaceOutcome.Refused($"Armory cannot open {path.Name}.");

@@ -99,7 +99,7 @@ internal sealed class AgentHost : IAsyncDisposable
         {
             var engine = Volatile.Read(ref runtime)?.Engine;
             if (engine is null) return Fallback(runtimeProblem ?? "Armory is starting.");
-            try { return engine.View; }
+            try { return WithSettings(engine.View); }
             catch (Exception error) when (error is not OutOfMemoryException)
             {
                 LogEngineFailure("view", error);
@@ -132,6 +132,10 @@ internal sealed class AgentHost : IAsyncDisposable
     internal Task<ActionResult> CheckInAsync(IReadOnlyList<string> paths) => OnEngineAsync("check in", e => e.CheckInAsync(paths));
     internal Task<ActionResult> UndoCheckOutAsync(IReadOnlyList<string> paths) => OnEngineAsync("undo check out", e => e.UndoCheckOutAsync(paths));
     internal Task<ActionResult> TakeBackAsync(Guid fileId) => OnEngineAsync("take back", e => e.TakeBackAsync(fileId));
+    // The picture File Explorer shows for a file in the vault (ShellThumbnails), or null.
+    internal Task<byte[]?> ThumbnailAsync(string vaultPath)
+        => Volatile.Read(ref runtime)?.Files.ExistingFile(vaultPath) is { } file ? thumbnails.GetAsync(file) : Task.FromResult<byte[]?>(null);
+    private readonly ShellThumbnails thumbnails = new();
     internal Task<ActionResult> TakeBackAsync(IReadOnlyList<Guid> fileIds) => OnEngineAsync("take back " + fileIds.Count + " files", e => e.TakeBackAsync(fileIds));
     // One file, in the same folder: a file Armory doesn't have yet is renamed on disk; a file in
     // Armory is renamed for everyone (refused while someone else has it checked out).
@@ -243,6 +247,16 @@ internal sealed class AgentHost : IAsyncDisposable
         Sessions.SignOut();
         RaiseView();
     }
+
+    // Switch account: this person signs out and the next one signs in at once, in the browser
+    // (the Armory folder stays; it is handed over when the last person has nothing waiting).
+    internal async Task SwitchAccountAsync()
+    {
+        SignOut();
+        await ConnectAsync();
+    }
+
+    internal Task<ActionResult> TakeOverFolderAsync() => OnEngineAsync("take over the folder", e => e.TakeOverFolderAsync());
 
     internal async Task<FileDetailView?> GetFileDetailAsync(Guid fileId)
     {
@@ -442,7 +456,18 @@ internal sealed class AgentHost : IAsyncDisposable
         lock (gate) settled = firstSignedInView;
         if (settled is not null && view.Connection is Connections.SignedIn or Connections.VaultOwnedByOther) settled.TrySetResult();
         TeamState(view.Activity);
-        ViewChanged?.Invoke(view);
+        ViewChanged?.Invoke(WithSettings(view));
+    }
+
+    // The settings and theme the window shows are the host's, saved this moment, never the
+    // engine's copy: the engine takes them on its own thread, which a long pass kept busy, so
+    // a theme picked in 0.3.1 came back as the old one until the pass ended (and flickered).
+    private AgentView WithSettings(AgentView view)
+    {
+        SettingsView current;
+        string theme;
+        lock (gate) { current = settings.ToView(); theme = effectiveTheme; }
+        return view.Settings == current && view.EffectiveTheme == theme ? view : view with { Settings = current, EffectiveTheme = theme };
     }
 
     private void OnEngineActivity(ActivityView activity)
@@ -528,7 +553,7 @@ internal sealed class AgentHost : IAsyncDisposable
             : phase is "waitingForBrowser" or "finishing" ? Connections.Connecting : Connections.SignedOut;
         return new AgentView(connection, new ConnectView(phase, message),
             session is null ? null : new AccountView(session.Email, session.DeviceName),
-            new SyncView(SyncStates.Attention, line, null, 0), new ActivityView(null, null, null, null, null, []), current.VaultRoot, [], null, [], [],
+            new SyncView(SyncStates.Attention, line, null, 0), new ActivityView(null, null, null, null, null, [], []), current.VaultRoot, [], null, [], [],
             current.ToView(), theme);
     }
 
@@ -564,6 +589,7 @@ internal sealed class AgentHost : IAsyncDisposable
         await StopAsync();
         disposed = true;
         await hintTimer.DisposeAsync();
+        thumbnails.Dispose();
         running.Dispose();
         restHttp.Dispose();
         siteHttp.Dispose();
@@ -594,7 +620,7 @@ internal sealed class VaultRuntime
         var disposables = new Stack<IDisposable>();
         try
         {
-            var files = new WindowsVaultFileSystem(vaultRoot) { LaunchLog = log is null ? null : log.Info };
+            var files = new WindowsVaultFileSystem(vaultRoot) { LaunchLog = log is null ? null : log.Info, OpenLog = log is null ? null : log.Info };
             disposables.Push(files);
             var journal = new DurableJournalStore(Path.Combine(files.Root, ".armory", "journal.bin"));
             disposables.Push(journal);

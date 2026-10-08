@@ -43,8 +43,12 @@ public sealed record CheckoutView(string State, string Label, string? Name, stri
 // SolidWorks opened a file this computer has not checked out. Key is one per open
 // ("prompt:<path>:<when the open was first seen>"); dismissNotice with it hides that one only.
 public sealed record PromptView(string Key, string? FileId, string Path, string Name, CheckoutView Checkout, bool CanCheckOut);
+// Log: what Armory did in the last few minutes, oldest first, at most 40 lines ("Downloaded
+// Plate.SLDPRT", "Checked out 500 of 1,400 files"), so a long operation shows it is working.
 public sealed record ActivityView(string? Line, DirectionView? Upload, DirectionView? Download, DirectionView? Move, WaitingView? Waiting,
-    IReadOnlyList<ActiveTransferView> Active);
+    IReadOnlyList<ActiveTransferView> Active, IReadOnlyList<ActivityLineView> Log);
+// At: ISO-8601 UTC. Line: one plain sentence.
+public sealed record ActivityLineView(string At, string Line);
 public sealed record DirectionView(int FilesDone, int FilesTotal, long BytesDone, long BytesTotal, long BytesPerSecond, int? SecondsLeft, string Line);
 public sealed record WaitingView(int Count, string Line);
 public sealed record ActiveTransferView(string Path, string Name, string Direction, long BytesDone, long BytesTotal);
@@ -105,10 +109,11 @@ public static class BridgeMessages
         OpenVault = "openVault", OpenFile = "openFile", LaunchFile = "launchFile", ShowInFolder = "showInFolder", CheckOut = "checkOut", CheckIn = "checkIn",
         UndoCheckOut = "undoCheckOut", TakeBack = "takeBack", CreateFolder = "createFolder", RenameFolder = "renameFolder", DeleteFolder = "deleteFolder",
         RenameFile = "renameFile", AddFiles = "addFiles", DropFiles = "dropFiles", DismissNotice = "dismissNotice", SaveSettings = "saveSettings",
-        ChooseVaultRoot = "chooseVaultRoot", ReportProblem = "reportProblem", OpenIncidents = "openIncidents", SendFeedback = "sendFeedback", TakeBackAll = "takeBackAll";
+        ChooseVaultRoot = "chooseVaultRoot", ReportProblem = "reportProblem", OpenIncidents = "openIncidents", SendFeedback = "sendFeedback", TakeBackAll = "takeBackAll",
+        TakeOverFolder = "takeOverFolder", SwitchAccount = "switchAccount";
     public static readonly IReadOnlyList<string> PageToHost = [Ready, Connect, CancelConnect, SignOut, Pause, Resume, OpenVault, OpenFile, LaunchFile, ShowInFolder,
         CheckOut, CheckIn, UndoCheckOut, TakeBack, CreateFolder, RenameFolder, DeleteFolder, RenameFile, AddFiles, DropFiles, DismissNotice, SaveSettings, ChooseVaultRoot,
-        ReportProblem, OpenIncidents, SendFeedback, TakeBackAll];
+        ReportProblem, OpenIncidents, SendFeedback, TakeBackAll, TakeOverFolder, SwitchAccount];
 
     public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
     {

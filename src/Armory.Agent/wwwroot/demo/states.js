@@ -114,6 +114,12 @@
 		return out;
 	}
 	var BIG = generated(5000, 'CopyDesignTemp', 'f-cdt');
+	// The first n of BIG checked out here (everything checked out at once).
+	function allMine(n) {
+		var changes = {};
+		for (var i = 1; i <= n; i++) changes['f-cdt-' + pad4(i)] = { checkout: mine(20 * MIN) };
+		return changes;
+	}
 	// An unzip of 5,000 files: 4,987 were added, 13 share a name with a file the project has.
 	var IMPORTED = generated(4987, 'CopyDesignTemp', 'f-imp');
 	// A new arm on its way to this computer: 1,276 files, with four of the team's files
@@ -242,7 +248,7 @@
 	/* ----------------------------------------------------------- Activity */
 
 	function idle() {
-		return { line: null, upload: null, download: null, move: null, waiting: null, active: [] };
+		return { line: null, upload: null, download: null, move: null, waiting: null, active: [], log: [] };
 	}
 	function direction(filesDone, filesTotal, bytesDone, bytesTotal, perSecond, secondsLeft, line) {
 		return { filesDone: filesDone, filesTotal: filesTotal, bytesDone: bytesDone, bytesTotal: bytesTotal, bytesPerSecond: perSecond, secondsLeft: secondsLeft, line: line };
@@ -383,6 +389,15 @@
 			active('f-intake-asm', 'download', 260000, 2210004),
 			active('f-gearbox', 'upload', 1210000, 1482113),
 			active('f-dt-drawing', 'upload', 120000, 951300)
+		],
+		// What Armory did in the last few minutes, the newest last.
+		log: [
+			{ at: ago(3), line: 'Downloaded Arm-Pivot.SLDPRT (1.2 MB)' },
+			{ at: ago(2), line: 'Downloaded Arm-Gusset-0408.SLDPRT (220 KB)' },
+			{ at: ago(2), line: 'Uploaded Gearbox.SLDASM (1.4 MB)' },
+			{ at: ago(1), line: 'Downloaded Arm-Gusset-0409.SLDPRT (218 KB)' },
+			{ at: ago(1), line: 'Downloaded Arm-Gusset-0410.SLDPRT (221 KB)' },
+			{ at: ago(0), line: 'Downloaded Arm-Spacer-0411.SLDPRT (64 KB)' }
 		]
 	};
 
@@ -461,7 +476,8 @@
 					download: null,
 					move: null,
 					waiting: { count: 2, line: '2 checked-out files have changes. Check them in to share them.' },
-					active: []
+					active: [],
+					log: []
 				},
 				changes: shared({
 					'f-gearbox': { checkout: mine(35 * MIN), changed: true, status: 'changed', releaseNotChecked: true },
@@ -513,7 +529,8 @@
 					download: null,
 					move: null,
 					waiting: { count: 3, line: '3 files are waiting to upload. They upload when this computer is back online.' },
-					active: []
+					active: [],
+					log: []
 				},
 				// Three waiting: two of my check outs with saves, and a new file not sent yet.
 				changes: shared({
@@ -535,7 +552,8 @@
 					download: null,
 					move: null,
 					waiting: { count: 2, line: '2 files are waiting to upload. They upload when you resume.' },
-					active: []
+					active: [],
+					log: []
 				},
 				changes: shared({
 					'f-gearbox': { checkout: mine(50 * MIN), status: 'waiting', changed: true },
@@ -847,6 +865,13 @@
 					'f-carriage': { checkout: mine(3 * HOUR), changed: true, status: 'changed' }
 				})
 			})
+		},
+
+		manyMine: {
+			label: 'Everything checked out: 1,400 files in My files, in a box of their own with Check in all on top, so Team files stays right under it',
+			screens: ['home'],
+			params: {},
+			view: signedIn({ sync: SYNCED, changes: shared(allMine(1400)), opts: { files: BIG, folders: { 'proj-robot-2027': ['CopyDesignTemp'] } } })
 		},
 
 		bigProject: {

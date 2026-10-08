@@ -571,10 +571,21 @@ public sealed partial class SyncEngine : IAsyncDisposable
     private void LogPass(bool failed, bool action)
     {
         var took = deps.Clock.GetElapsedTime(passStarted);
+        // The window's running lines: what a pass that moved anything did, and going offline.
+        List<string> did = [];
+        if (downloaded > 0) did.Add($"{Count(downloaded, "file", "files")} downloaded");
+        if (uploaded > 0) did.Add($"{Count(uploaded, "file", "files")} uploaded");
+        if (sideVersions > 0) did.Add(Count(sideVersions, "kept copy", "kept copies"));
+        if (did.Count > 0) activity.Log("Sync finished: " + string.Join(", ", did) + ".");
+        if (online == false && wasOnline) activity.Log("This computer is offline. Armory keeps trying by itself.");
+        if (online == true && !wasOnline && lastOnline != default) activity.Log("Back online.");
+        wasOnline = online != false;
         if (deps.Log is null || (!failed && passMoving == 0 && uploaded + downloaded + sideVersions + refused == 0 && took < TimeSpan.FromSeconds(10))) return;
         deps.Log($"pass: {(failed ? "failed" : "ended")} after {took.TotalMilliseconds:F0} ms ({(action ? "action" : PassKind())}), {downloaded:N0} downloaded, {uploaded:N0} uploaded, " +
             $"{sideVersions:N0} kept copies, {refused:N0} refused{(cutShort && loopPass ? ", the rest continues at once" : "")}");
     }
+
+    private bool wasOnline = true;
 
     private string PassKind() => passScope is not null ? "action" : loopPass ? "loop" : "whole";
 
@@ -950,8 +961,10 @@ public sealed partial class SyncEngine : IAsyncDisposable
         foreach (var st in state.Files.Values) if (st.LocalMoveTo is { } target) movingTo.Add(target);
         List<List<Planned>> units = [];
         var byName = new Dictionary<(Guid Project, string Name), List<Planned>>();
+        using var open = KnowOpen(local.Values.Select(f => f.Path));
         foreach (var key in AllPaths())
         {
+            ct.ThrowIfCancellationRequested();
             Planned? planned;
             try { planned = await PlanPathAsync(key, isOnline, ct); }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException)
@@ -1214,7 +1227,31 @@ public sealed partial class SyncEngine : IAsyncDisposable
     // or SolidWorks' ~$ lock file beside the document. Used for Core's input and again
     // immediately before any write to the file.
     private bool IsOpenNow(VaultPath path)
-        => fs.IsOpen(path) || markerDocuments.Contains(path.Value);
+        => (openKnown is { } known && known.Asked.Contains(path.Value) ? known.Open.Contains(path.Value) : fs.IsOpen(path)) || markerDocuments.Contains(path.Value);
+
+    // Open answers asked once for many files (IVaultFileSystem.OpenAmong), which IsOpenNow gives
+    // for those files while the scope lasts: a pass's plan, a batch of check outs. Asking file by
+    // file cost one Restart Manager session each, about 28 ms, so planning 1,500 files took 40
+    // seconds a pass and every click waited behind it (0.3.1's field reports). A scope never
+    // spans a write: each write asks again just before it, as it always did.
+    private sealed record OpenAnswers(HashSet<string> Asked, IReadOnlySet<string> Open);
+    private OpenAnswers? openKnown;
+
+    private OpenScope KnowOpen(IEnumerable<VaultPath> paths)
+    {
+        var asked = new Dictionary<string, VaultPath>(StringComparer.OrdinalIgnoreCase);
+        foreach (var path in paths) asked.TryAdd(path.Value, path);
+        var scope = new OpenScope(this, openKnown);
+        try { openKnown = new([.. asked.Keys], fs.OpenAmong(asked.Values)); }
+        // Each file is asked on its own instead.
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { deps.Log?.Invoke("open files: " + error.Message); }
+        return scope;
+    }
+
+    private readonly struct OpenScope(SyncEngine engine, OpenAnswers? before) : IDisposable
+    {
+        public void Dispose() => engine.openKnown = before;
+    }
 
     // SolidWorks' ~$ marker means "open" while the platform corroborates it (the document or
     // the marker itself is held open), and for a while after it first appears. A marker left
@@ -1224,12 +1261,20 @@ public sealed partial class SyncEngine : IAsyncDisposable
     {
         var now = deps.Clock.GetUtcNow();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        List<(string Document, VaultPath Doc, VaultPath? Marker)> markers = [];
         foreach (var marker in scan.Markers)
         {
             if (!LockMarkers.TryGetDocument(marker, out var document) || !VaultPath.TryCreate(document, out var doc, out _, options.VaultRoot)) continue;
+            markers.Add((document, doc, VaultPath.TryCreate(marker, out var markerPath, out _, options.VaultRoot) ? markerPath : null));
+        }
+        // Every document and marker asked at once (a SolidWorks that closed unexpectedly can
+        // leave hundreds of markers behind).
+        var open = markers.Count == 0 ? new HashSet<string>() : fs.OpenAmong([.. markers.SelectMany(m => m.Marker is { } x ? new[] { m.Doc, x } : [m.Doc])]);
+        foreach (var (document, doc, markerPath) in markers)
+        {
             seen.Add(document);
             if (!markerFirstSeen.ContainsKey(document)) markerFirstSeen[document] = now;
-            var live = fs.IsOpen(doc) || (VaultPath.TryCreate(marker, out var markerPath, out _, options.VaultRoot) && fs.IsOpen(markerPath));
+            var live = open.Contains(doc.Value) || (markerPath is { } m && open.Contains(m.Value));
             if (live) { markerSince.Remove(document); markerDocuments.Add(document); continue; }
             if (!markerSince.TryGetValue(document, out var since)) markerSince[document] = since = now;
             if (now - since < options.StaleMarkerAfter) markerDocuments.Add(document);

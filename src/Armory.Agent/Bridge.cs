@@ -16,6 +16,9 @@ internal sealed record UndoCheckOutMessage(IReadOnlyList<string>? Paths, string?
 internal sealed record TakeBackMessage(string? FileId, string? RequestId);
 // Force check in of many files in one action (0.3.1): Force check in all, the selection bar.
 internal sealed record TakeBackAllMessage(IReadOnlyList<string>? FileIds, string? RequestId);
+// The folder taken in turns: the account signed in now takes over this computer's Armory folder
+// when the account it belongs to has nothing waiting in it (SyncEngine.TakeOverFolderAsync).
+internal sealed record TakeOverFolderMessage(string? RequestId);
 internal sealed record CreateFolderMessage(string? ProjectId, string? Parent, string? Name, string? RequestId);
 internal sealed record RenameFolderMessage(string? ProjectId, string? Folder, string? NewName, string? RequestId);
 internal sealed record DeleteFolderMessage(string? ProjectId, string? Folder, string? RequestId);
@@ -78,6 +81,8 @@ internal sealed class Bridge(AgentHost host, IBridgeWindow window, AgentLog log)
         [BridgeMessages.OpenIncidents] = null,
         [BridgeMessages.SendFeedback] = typeof(SendFeedbackMessage),
         [BridgeMessages.TakeBackAll] = typeof(TakeBackAllMessage),
+        [BridgeMessages.TakeOverFolder] = typeof(TakeOverFolderMessage),
+        [BridgeMessages.SwitchAccount] = null,
     };
 
     // The answer to an action the window sent with something unusable in it.
@@ -148,6 +153,13 @@ internal sealed class Bridge(AgentHost host, IBridgeWindow window, AgentLog log)
                     break;
                 case BridgeMessages.SignOut:
                     host.SignOut();
+                    break;
+                case BridgeMessages.SwitchAccount:
+                    await host.SwitchAccountAsync();
+                    break;
+                case BridgeMessages.TakeOverFolder:
+                    var takeOver = Read<TakeOverFolderMessage>(message);
+                    await AnswerAsync(type, 0, asked, takeOver?.RequestId, host.TakeOverFolderAsync());
                     break;
                 case BridgeMessages.Pause:
                     host.Pause();
