@@ -92,7 +92,8 @@ internal sealed class ShellDesk(Action<string> log, TimeProvider? timeProvider =
                 return;
             }
         }
-        _ = RunAsync(batch, h, s);
+        // Off the inbox's thread at once: the inbox never waits on a batch.
+        _ = Task.Run(() => RunAsync(batch, h, s));
     }
 
     // The tray exists: everything waiting runs, and so does everything after it.
@@ -106,7 +107,7 @@ internal sealed class ShellDesk(Action<string> log, TimeProvider? timeProvider =
             waiting = early.ToArray();
             early.Clear();
         }
-        foreach (var batch in waiting) _ = RunAsync(batch, shellHost, shellSurface);
+        foreach (var batch in waiting) _ = Task.Run(() => RunAsync(batch, shellHost, shellSurface));
     }
 
     // Armory is quitting: nothing more runs, and no notification's token answers again.
