@@ -12,7 +12,7 @@ namespace Armory.Agent;
 // root change stops that runtime and starts a new one in-process. When the engine cannot
 // run (an unusable folder, or a failure while starting), the host still answers with a
 // plain view that says why, so the window and the tray keep working.
-internal sealed class AgentHost : IAsyncDisposable
+internal sealed partial class AgentHost : IAsyncDisposable
 {
     private static readonly TimeSpan HintPoll = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan StopTimeout = TimeSpan.FromSeconds(15);
