@@ -576,7 +576,7 @@ through the shell's property store). Any other copy (a test instance, a develope
 takes none of this and speaks through the tray balloon.
 
 **Links.** A notification's body and buttons open exactly
-`idea-armory:act?t=<token>&a=checkout|show` (`ProtocolLink`): the scheme in any case, a token of
+`idea-armory:act?t=<token>&a=checkout|show|savein|keeplocal` (`ProtocolLink`): the scheme in any case, a token of
 22 characters of `[A-Za-z0-9_-]` (128 random bits), at most 80 characters, no path and no name.
 Anything else (`idea-armory:` alone, a trailing slash, quotes, spaces, percent signs, another
 parameter, another action) only opens the window. Windows runs `"<app>\IdeaArmory.exe" "<link>"`:
@@ -584,12 +584,23 @@ a second launch forwards it (section 1.3) and exits; a first launch starts with 
 and hands the link to itself, where its token means nothing. `AgentCommandLine.Link` keeps the
 argument as Windows gave it; a link beside `--background` still opens the window.
 
-**Tokens** (`ToastTokens`, in memory only): each stands for one action (`checkout` or `show`) on
+**Tokens** (`ToastTokens`, in memory only): each stands for one action (`checkout`, `show`,
+`savein` or `keeplocal`) on
 the vault paths of one notification, answers once and only for 30 minutes, and at most 200 live
 (the oldest goes first); a token named with the other action answers nothing. Quit clears them,
 and Armory clears its notifications at start and at quit, so an old notification's button only
 opens the window. Only a `checkout` token of a notification Armory showed for those files ever
 checks anything out (`CheckOutAndReopenAsync`); nothing is checked out because it was opened.
+
+**The question before a save down** (`SaveDownAsks`, 0.3.3, docs/agent/SOLIDWORKS.md section 3):
+on a computer with a newer SolidWorks than the project's year, when a vault document's save in
+that year would drop something, a notification says "When you save Plate.SLDPRT, Armory saves it
+in SolidWorks 2025" with what 2025 can't keep, and two buttons: **Save in 2025** (`savein`, the
+team's rule, the same as no answer) and **Keep on this computer only** (`keeplocal`). Each
+`SaveDownPrompt` asks once and only while the window is hidden (its notice card asks otherwise);
+its tag is a hash, never a file name; it is withdrawn when the prompt no longer stands (answered,
+saved, or the file closed). Its tokens answer `AnswerSaveDownAsync` for the one file it named,
+and nothing while a shared computer's picker shows.
 
 **Which way a notification goes** (`Notifier`): a Windows notification (`WindowsToasts`, the only
 class that touches WinRT, through the Windows 10 1809 SDK projection of

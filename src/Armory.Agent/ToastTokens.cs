@@ -3,7 +3,7 @@ using System.Security.Cryptography;
 
 namespace Armory.Agent;
 
-// What one token of a notification stands for: its action (ProtocolLink.CheckOut or Show), the
+// What one token of a notification stands for: its action (ProtocolLink.CheckOut, Show, SaveIn or KeepLocal), the
 // vault-relative paths it acts on, and the notification it belongs to (its tag), if any.
 internal sealed record ToastTicket(string Action, IReadOnlyList<string> Paths, string? Tag, DateTimeOffset Issued);
 
@@ -29,7 +29,7 @@ internal sealed class ToastTokens(TimeProvider? timeProvider = null)
     // A new token for action on paths; the link to put on a button is ProtocolLink.Format(token, action).
     internal string Issue(string action, IReadOnlyList<string> paths, string? tag = null)
     {
-        if (action is not (ProtocolLink.CheckOut or ProtocolLink.Show)) throw new ArgumentException("Unknown notification action " + action + ".", nameof(action));
+        if (!ProtocolLink.IsAction(action)) throw new ArgumentException("Unknown notification action " + action + ".", nameof(action));
         var token = Base64Url.EncodeToString(RandomNumberGenerator.GetBytes(16));
         lock (gate)
         {

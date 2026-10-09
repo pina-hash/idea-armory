@@ -18,6 +18,8 @@ internal interface IShellHost
     Task<ActionResult> UndoCheckOutAsync(IReadOnlyList<string> paths);
     Task<ActionResult> TakeBackAsync(IReadOnlyList<Guid> fileIds);
     Task<ActionResult> CheckOutAndReopenAsync(IReadOnlyList<string> paths);
+    // The question before a save down: save in the project's year, or keep the file here only.
+    Task<ActionResult> AnswerSaveDownAsync(string path, bool keepLocal);
     // A shared computer's picker is showing (docs/agent/PROFILES.md, F7): nothing acts for the
     // student who was last in use until someone picks who they are.
     bool PickerShowing { get; }
@@ -255,6 +257,15 @@ internal sealed class ShellDesk(Action<string> log, TimeProvider? timeProvider =
         {
             s.OpenWindow();
             s.Answer(new ActionResult(false, ShellWords.ConnectFirst));
+            return;
+        }
+        if (ticket.Action is ProtocolLink.SaveIn or ProtocolLink.KeepLocal)
+        {
+            // The question before a save down, about the one file it named.
+            var keep = ticket.Action == ProtocolLink.KeepLocal;
+            var answered = await h.AnswerSaveDownAsync(ticket.Paths[0], keep).ConfigureAwait(false);
+            log("shell: " + (keep ? "keep on this computer" : "save in the project's year") + " from a notification" + (answered.Ok ? " done" : " refused"));
+            s.Answer(answered);
             return;
         }
         // Only ever from the button of a notification Armory showed for these files: nothing is

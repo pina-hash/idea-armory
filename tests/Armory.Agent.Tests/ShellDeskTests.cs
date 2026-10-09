@@ -80,6 +80,7 @@ internal sealed class FakeShellHost(AgentView view) : IShellHost
     public Task<ActionResult> UndoCheckOutAsync(IReadOnlyList<string> paths) => Call("undo", paths);
     public Task<ActionResult> TakeBackAsync(IReadOnlyList<Guid> fileIds) => Call("force check in", fileIds.Select(i => i.ToString()));
     public Task<ActionResult> CheckOutAndReopenAsync(IReadOnlyList<string> paths) => Call("check out and reopen", paths);
+    public Task<ActionResult> AnswerSaveDownAsync(string path, bool keepLocal) => Call(keepLocal ? "keep local" : "save in the pinned year", [path]);
     public bool PickerShowing { get; set; }
 }
 
@@ -309,6 +310,35 @@ public sealed class ShellDeskTests
         var (outHost, outSurface, _) = await Run(signedOut, ShellViews.Batch(ShellVerb.Uri, fresh), desk: desk);
         Assert.Empty(outHost.Calls);
         Assert.Equal("Connect this computer first.", Assert.Single(outSurface.Answers).Message);
+    }
+
+    // The question before a save down: its two buttons answer for the one file it named, once;
+    // a check out token never answers a save down, and nothing acts while the picker shows.
+    [Fact]
+    public async Task A_save_down_notification_answers_save_in_the_year_or_keep_here_once()
+    {
+        var desk = new ShellDesk(_ => { });
+        var view = ShellViews.View(ShellViews.Row(Plate, ShellViews.Mine));
+        var save = ProtocolLink.Format(desk.Tokens.Issue(ProtocolLink.SaveIn, [Plate], "s1"), ProtocolLink.SaveIn);
+        var (host, surface, _) = await Run(view, ShellViews.Batch(ShellVerb.Uri, save), desk: desk);
+        Assert.Equal(["save in the pinned year: " + Plate], host.Calls);
+        Assert.Single(surface.Answers);
+        var keep = ProtocolLink.Format(desk.Tokens.Issue(ProtocolLink.KeepLocal, [Plate], "s1"), ProtocolLink.KeepLocal);
+        var (kept, _, _) = await Run(view, ShellViews.Batch(ShellVerb.Uri, keep), desk: desk);
+        Assert.Equal(["keep local: " + Plate], kept.Calls);
+        // Used, or named with another action than it was made for: only the window.
+        var checkOutToken = desk.Tokens.Issue(ProtocolLink.CheckOut, [Plate]);
+        foreach (var again in new[] { save, keep, ProtocolLink.Format(checkOutToken, ProtocolLink.KeepLocal) })
+        {
+            var (none, noneSurface, _) = await Run(view, ShellViews.Batch(ShellVerb.Uri, again), desk: desk);
+            Assert.Empty(none.Calls);
+            Assert.Equal(["window"], noneSurface.Shown);
+        }
+        var picking = new FakeShellHost(view) { PickerShowing = true }.Ready();
+        var pickSurface = new FakeSurface();
+        await desk.RunAsync(ShellViews.Batch(ShellVerb.Uri, ProtocolLink.Format(desk.Tokens.Issue(ProtocolLink.SaveIn, [Plate]), ProtocolLink.SaveIn)), picking, pickSurface);
+        Assert.Empty(picking.Calls);
+        Assert.Equal(ShellWords.PickYourselfFirst, Assert.Single(pickSurface.Answers).Message);
     }
 
     [Fact]

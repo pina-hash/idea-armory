@@ -17,8 +17,9 @@ internal sealed record ToastContent(string Tag, string Group, string Title, stri
 // notification is silent: a question, never an alarm that pulls a student out of SolidWorks.
 internal static class ToastXml
 {
-    // The check-out questions about opened files, and the answers to what Armory did.
-    internal const string OpenGroup = "open", AnswerGroup = "answer";
+    // The check-out questions about opened files, the questions before a save down, and the
+    // answers to what Armory did.
+    internal const string OpenGroup = "open", SaveDownGroup = "savedown", AnswerGroup = "answer";
     // A question nobody answered leaves the notification center after an hour.
     internal static readonly TimeSpan Expires = TimeSpan.FromHours(1);
 
@@ -50,6 +51,10 @@ internal static class ToastXml
 internal static class ToastWords
 {
     internal const string CheckOutAndReopen = "Check out and reopen", NotNow = "Not now", OpenArmory = "Open Armory";
+    internal const string KeepOnThisComputer = "Keep on this computer only";
+
+    // The question before a save down's first button: the team's rule.
+    internal static string SaveIn(int year) => $"Save in {year}";
 
     // One file SolidWorks opened that this computer has not checked out.
     internal static (string Title, string Text) Ask(OpenPromptInfo file) => file.CanCheckOut

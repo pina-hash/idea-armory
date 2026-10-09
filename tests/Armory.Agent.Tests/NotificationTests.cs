@@ -25,10 +25,17 @@ public sealed class ProtocolLinkTests
         Assert.Equal(new ProtocolLink(Token, ProtocolLink.Show), link);
         Assert.Equal("idea-armory:act?t=" + Token + "&a=checkout", ProtocolLink.Format(Token, ProtocolLink.CheckOut));
         Assert.True(ProtocolLink.Format(Token, ProtocolLink.CheckOut).Length <= ProtocolLink.MaxLength);
+        // The two answers to the question before a save down.
+        Assert.True(ProtocolLink.TryParse("idea-armory:act?t=" + Token + "&a=savein", out link));
+        Assert.Equal(new ProtocolLink(Token, ProtocolLink.SaveIn), link);
+        Assert.True(ProtocolLink.TryParse("idea-armory:act?t=" + Token + "&a=keeplocal", out link));
+        Assert.Equal(new ProtocolLink(Token, ProtocolLink.KeepLocal), link);
+        Assert.True(ProtocolLink.Format(Token, ProtocolLink.KeepLocal).Length <= ProtocolLink.MaxLength);
         foreach (var refused in new[]
         {
             "idea-armory:", "idea-armory:act", "idea-armory:act?t=" + Token, "idea-armory:act?t=" + Token + "&a=checkout/",
             "idea-armory:act?t=" + Token + "&a=checkout&x=1", "idea-armory:act?t=" + Token + "&a=delete", "idea-armory:act?t=" + Token + "&a=CHECKOUT",
+            "idea-armory:act?t=" + Token + "&a=KeepLocal", "idea-armory:act?t=" + Token + "&a=save",
             "idea-armory:act?t=" + Token[..21] + "&a=show", "idea-armory:act?t=" + Token + "A&a=show", "idea-armory:act?t=" + Token[..21] + "%&a=show",
             "idea-armory:act?t=" + Token[..21] + "\"&a=show", "idea-armory:act?t=" + Token[..21] + " &a=show", "idea-armory:ACT?t=" + Token + "&a=show",
             "idea-armory:act?a=show&t=" + Token, "idea-armory://act?t=" + Token + "&a=show", "https://ideabosco.com/act?t=" + Token + "&a=show",
@@ -299,5 +306,60 @@ public sealed class OpenAsksTests
         raced.Update([Open("Gear.SLDPRT")], false, Start);
         Assert.Null(raced.Due(Start + OpenAsks.Gather, windowShowing: true));
         Assert.Null(raced.NextDue);
+    }
+}
+
+// The question before a save down (B2) as a Windows notification: each prompt once, only while the
+// window is hidden, withdrawn when it no longer stands, and no file name in its tag.
+public sealed class SaveDownAsksTests
+{
+    private static Armory.Agent.Engine.SaveDownPrompt Prompt(string name, string drops = "3 appearances (colors)")
+        => new($"savedown:Robot 2027/{name}:{drops}", "Robot 2027/" + name, name, $"When you save {name}, Armory saves it in SolidWorks 2025",
+            $"Your team uses 2025, and 2025 can't keep: {drops}. Part numbers and descriptions are kept by Armory.", 2025);
+
+    [Fact]
+    public void Each_prompt_asks_once_while_hidden_and_is_withdrawn_when_it_no_longer_stands()
+    {
+        var asks = new SaveDownAsks();
+        var plate = Prompt("Plate.SLDPRT");
+        var (show, withdraw) = asks.Update([plate], windowShowing: false);
+        var ask = Assert.Single(show);
+        Assert.Same(plate, ask.Prompt);
+        Assert.Empty(withdraw);
+        Assert.DoesNotContain("Plate", ask.Tag, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(SaveDownAsks.TagOf(plate), ask.Tag);
+        // Still standing: no second notification.
+        Assert.Empty(asks.Update([plate], false).Show);
+        // A new drop list for the same file is a new question.
+        var more = Prompt("Plate.SLDPRT", "3 appearances (colors), 1 decal");
+        var (again, gone) = asks.Update([more], false);
+        Assert.Equal(more, Assert.Single(again).Prompt);
+        Assert.Equal([ask.Tag], gone);
+        // Answered or closed: withdrawn; the same question coming back asks again.
+        Assert.Equal([SaveDownAsks.TagOf(more)], asks.Update([], false).Withdraw);
+        Assert.Single(asks.Update([more], false).Show);
+    }
+
+    [Fact]
+    public void While_the_window_shows_its_card_asks_and_no_notification_comes_later()
+    {
+        var asks = new SaveDownAsks();
+        var gear = Prompt("Gear.SLDPRT");
+        Assert.Empty(asks.Update([gear], windowShowing: true).Show);
+        Assert.Empty(asks.Update([gear], windowShowing: false).Show);
+        Assert.Empty(asks.Update([], false).Withdraw);
+    }
+
+    [Fact]
+    public void The_notification_has_save_in_the_year_and_keep_on_this_computer()
+    {
+        Assert.Equal("Save in 2025", ToastWords.SaveIn(2025));
+        var tokens = new ToastTokens();
+        var save = ProtocolLink.Format(tokens.Issue(ProtocolLink.SaveIn, ["Robot 2027/Plate.SLDPRT"]), ProtocolLink.SaveIn);
+        var keep = ProtocolLink.Format(tokens.Issue(ProtocolLink.KeepLocal, ["Robot 2027/Plate.SLDPRT"]), ProtocolLink.KeepLocal);
+        var xml = XDocument.Parse(ToastXml.Build(new ToastContent("s0123", ToastXml.SaveDownGroup, "When you save Plate.SLDPRT, Armory saves it in SolidWorks 2025", "2025 can't keep: 3 appearances (colors).",
+            "idea-armory:", [new(ToastWords.SaveIn(2025), save), new(ToastWords.KeepOnThisComputer, keep)])));
+        var actions = xml.Descendants("action").Select(a => ((string?)a.Attribute("content"), (string?)a.Attribute("arguments"))).ToArray();
+        Assert.Equal([("Save in 2025", save), ("Keep on this computer only", keep)], actions);
     }
 }

@@ -14,6 +14,7 @@ internal sealed partial class TrayApp : IShellSurface
     private ShellDesk? desk;
     private Notifier? notifier;
     private readonly OpenAsks asks = new();
+    private readonly SaveDownAsks saveDownAsks = new();
     private System.Threading.Timer? askTimer;
     private int asksPosted;
 
@@ -142,6 +143,41 @@ internal sealed partial class TrayApp : IShellSurface
         }
         foreach (var tag in asks.Update(open, WindowShowing, DateTimeOffset.UtcNow)) notifier.Withdraw(tag, ToastXml.OpenGroup);
         ScheduleAsk();
+        UpdateSaveDownAsks();
+    }
+
+    // ---- The question before a save down (B2) ------------------------------------------------
+
+    private void UpdateSaveDownAsks()
+    {
+        IReadOnlyList<Armory.Agent.Engine.SaveDownPrompt> prompts;
+        try { prompts = host.SaveDownPrompts; }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            log.Error("could not read the save down questions", error);
+            return;
+        }
+        var (show, withdraw) = saveDownAsks.Update(prompts, WindowShowing);
+        foreach (var tag in withdraw) notifier!.Withdraw(tag, ToastXml.SaveDownGroup);
+        foreach (var ask in show) ShowSaveDownAsk(ask);
+    }
+
+    // "When you save Plate.SLDPRT, Armory saves it in SolidWorks 2025" with what 2025 can't keep,
+    // and Save in 2025 or Keep on this computer only. No answer is the first.
+    private void ShowSaveDownAsk(SaveDownAsk ask)
+    {
+        var prompt = ask.Prompt;
+        string[] paths = [prompt.Path];
+        var toast = new ToastContent(ask.Tag, ToastXml.SaveDownGroup, prompt.Title, prompt.Text, OpenLink(paths, ask.Tag),
+            [new(ToastWords.SaveIn(prompt.PinnedRelease), OpenLink(paths, ask.Tag, ProtocolLink.SaveIn)),
+             new(ToastWords.KeepOnThisComputer, OpenLink(paths, ask.Tag, ProtocolLink.KeepLocal))]);
+        var how = notifier!.Ask(toast, (prompt.Title, prompt.Text + " Click here to open Armory.")) switch
+        {
+            NotifiedBy.Toast => "a Windows notification",
+            NotifiedBy.Balloon => "the tray balloon",
+            _ => "nothing (notifications are off; the window's card asks)",
+        };
+        log.Info("shell: a save down question asked by " + how);
     }
 
     private void AskDue()

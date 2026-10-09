@@ -1,3 +1,4 @@
+using Armory.Agent.Engine;
 using Armory.Agent.Engine.View;
 
 namespace Armory.Agent;
@@ -165,4 +166,45 @@ internal sealed class OpenAsks
     }
 
     private static DateTimeOffset Min(DateTimeOffset a, DateTimeOffset b) => a < b ? a : b;
+}
+
+// One question before a save down, as its notification shows it: the prompt and its tag.
+internal sealed record SaveDownAsk(string Tag, SaveDownPrompt Prompt);
+
+// Which questions before a save down get a Windows notification (B2 on a computer newer than its
+// project's year): each SaveDownPrompt once, only while the window is hidden (its notice card
+// asks otherwise, and a prompt the card asked never comes back as a notification), with "Save in
+// 2025" and "Keep on this computer only". A notification is withdrawn when its prompt no longer
+// stands (answered, saved, or the file closed); the same prompt may ask again only after that.
+// No answer is the team's rule, so nothing waits on one. Pure.
+internal sealed class SaveDownAsks
+{
+    private readonly HashSet<string> asked = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> shown = new(StringComparer.Ordinal);
+
+    // The prompts standing now. Returns the notifications to show and the tags to withdraw.
+    internal (IReadOnlyList<SaveDownAsk> Show, IReadOnlyList<string> Withdraw) Update(IReadOnlyList<SaveDownPrompt> prompts, bool windowShowing)
+    {
+        var keys = new HashSet<string>(prompts.Select(p => p.Key), StringComparer.Ordinal);
+        asked.IntersectWith(keys);
+        List<string> withdraw = [];
+        foreach (var (tag, key) in shown.ToArray())
+        {
+            if (keys.Contains(key)) continue;
+            shown.Remove(tag);
+            withdraw.Add(tag);
+        }
+        List<SaveDownAsk> show = [];
+        foreach (var prompt in prompts)
+        {
+            if (!asked.Add(prompt.Key) || windowShowing) continue;
+            var tag = TagOf(prompt);
+            shown[tag] = prompt.Key;
+            show.Add(new SaveDownAsk(tag, prompt));
+        }
+        return (show, withdraw);
+    }
+
+    // No file name reaches Windows' notification store: a hash of the prompt's key.
+    internal static string TagOf(SaveDownPrompt prompt) => "s" + ToastXml.TagFor([prompt.Key]);
 }

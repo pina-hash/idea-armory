@@ -50,7 +50,7 @@ go of SolidWorks when it quits, and SolidWorks keeps running.
 window (the sign-in entry uses it). `--quit` asks the running copy to exit cleanly and
 waits up to 30 seconds. `--check` opens nothing, prints one JSON line
 `{"version","webView2Runtime","wwwroot","vaultRoot"}`, and exits 0 when the app files and
-the WebView2 Runtime are present, 1 otherwise. `"idea-armory:act?t=<token>&a=<checkout|show>"`
+the WebView2 Runtime are present, 1 otherwise. `"idea-armory:act?t=<token>&a=<checkout|show|savein|keeplocal>"`
 is what Windows passes when a notification's button is clicked (docs/agent/EXPLORER.md section
 7): with Armory running, it is handed over and the launch exits 0 (1 when the running copy can't
 be reached, after bringing its window up); with none running, Armory starts with its window

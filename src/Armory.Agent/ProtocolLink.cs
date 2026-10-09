@@ -8,7 +8,7 @@ using System.Text;
 namespace Armory.Agent;
 
 // The link a Windows notification's button or body carries (docs/agent/EXPLORER.md, "Windows
-// notifications"): exactly idea-armory:act?t=<token>&a=<checkout|show>, the scheme in any case,
+// notifications"): exactly idea-armory:act?t=<token>&a=<checkout|show|savein|keeplocal>, the scheme in any case,
 // the token 22 characters of [A-Za-z0-9_-] (128 random bits, ToastTokens), at most 80 characters
 // in all. It carries no path and no name: the token means something only to the Armory that
 // made it, once, for 30 minutes. Anything else (idea-armory: alone, a trailing slash, quotes,
@@ -19,6 +19,9 @@ internal sealed record ProtocolLink(string Token, string Action)
     internal const string Scheme = "idea-armory";
     internal const string Prefix = Scheme + ":";
     internal const string CheckOut = "checkout", Show = "show";
+    // The two answers to the question before a save down (SaveDownAsks): save in the project's
+    // year, or keep the file on this computer only.
+    internal const string SaveIn = "savein", KeepLocal = "keeplocal";
     internal const int TokenLength = 22;
     internal const int MaxLength = 80;
     // What a second launch hands over for anything that is not a link: open the window, nothing more.
@@ -42,10 +45,12 @@ internal sealed record ProtocolLink(string Token, string Action)
         rest = rest[TokenLength..];
         if (!rest.StartsWith(ActionField, StringComparison.Ordinal)) return false;
         var action = rest[ActionField.Length..].ToString();
-        if (action is not (CheckOut or Show)) return false;
+        if (!IsAction(action)) return false;
         link = new ProtocolLink(token.ToString(), action);
         return true;
     }
+
+    internal static bool IsAction(string action) => action is CheckOut or Show or SaveIn or KeepLocal;
 
     internal static bool IsTokenChar(char c) => char.IsAsciiLetterOrDigit(c) || c is '_' or '-';
 
