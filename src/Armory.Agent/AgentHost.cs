@@ -139,6 +139,8 @@ internal sealed class AgentHost : IAsyncDisposable
     internal Task<ActionResult> CheckInAsync(IReadOnlyList<string> paths) => OnEngineAsync("check in", e => e.CheckInAsync(paths));
     internal Task<ActionResult> UndoCheckOutAsync(IReadOnlyList<string> paths) => OnEngineAsync("undo check out", e => e.UndoCheckOutAsync(paths));
     internal Task<ActionResult> TakeBackAsync(Guid fileId) => OnEngineAsync("take back", e => e.TakeBackAsync(fileId));
+    // File detail's Put back on this computer: one of your kept copies, checked out to you (feedback N4).
+    internal Task<ActionResult> PutBackKeptCopyAsync(Guid fileId, Guid versionId) => OnEngineAsync("put back a kept copy", e => e.PutBackKeptCopyAsync(fileId, versionId));
     // The picture File Explorer shows for a file in the vault (ShellThumbnails), or null.
     internal Task<byte[]?> ThumbnailAsync(string vaultPath)
         => Volatile.Read(ref runtime)?.Files.ExistingFile(vaultPath) is { } file ? thumbnails.GetAsync(file) : Task.FromResult<byte[]?>(null);

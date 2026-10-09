@@ -41,6 +41,8 @@ await engine.CheckOutAsync(paths, open: false); // "Check out" / "Check out and 
 await engine.CheckInAsync(paths);
 await engine.UndoCheckOutAsync(paths);
 await engine.TakeBackAsync(fileId);   // when the server says can_take_back (v0.3): armory_break_lock
+await engine.PutBackKeptCopyAsync(fileId, versionId); // File detail: one of your kept copies, back on this computer,
+                                      // checked out to you (0.3.3, "Put back on this computer" below)
 await engine.LaunchAsync(path);       // "Open": the file's own program (never programs or scripts, D14);
                                       // a file not here yet downloads first (a pass scoped to it) and opens when it arrives
 await engine.RenameFileAsync(path, newName);
@@ -483,6 +485,36 @@ Tests: `CheckOutTests.Check_in_while_SolidWorks_holds_the_file_never_loses_the_s
 per step of the rule) and the strengthened `CheckoutSimulationTests` (docs/core/simulation.md).
 The end-to-end file system models the write hold (`PortableVaultFileSystem.Hold`: open,
 unreadable, saves go through; `HoldUnreadable`: another program, not open).
+
+### Put back on this computer (0.3.3)
+
+`PutBackKeptCopyAsync(fileId, versionId)`: one of the signed-in person's own kept copies
+(a history entry of kind `keptCopy`, its id) becomes the file on this disk again, checked out
+to them, to look at in SolidWorks and check in. Until 0.3.3 a kept copy could only be
+downloaded from the file's page on ideabosco.com. In order:
+
+1. The kept copy is looked up in the file's history on the server: someone else's ("That copy
+   of Plate.SLDPRT is Maria Lopez's. Only your own kept copies can be put back here."), or an
+   id that is not a kept copy, is refused, and nothing is checked out.
+2. Checked out by someone else: refused, naming who. Checked out to nobody: `CheckOutAsync`
+   first, exactly as the student would click it (bytes saved without a check out are kept
+   and the shared version put back before the lock is taken); its refusal is the answer.
+3. Open in SolidWorks: refused ("Close Plate.SLDPRT in SolidWorks first, then put your copy
+   back.").
+4. A pass for the file keeps any save the server does not have yet (as every pass does:
+   "saved while checked out"). The file is then read; bytes that are not on the server (its
+   shared version, a version or a kept copy in its history) are never replaced ("Armory
+   couldn't keep the changes to ... yet, so your copy wasn't put back."), nor bytes it can't
+   read.
+5. The kept copy is downloaded to staging and put in place with `Replace` over exactly the
+   bytes read (refused if they changed or the file opened since), writable. Those bytes are
+   on the server already, so they are never kept again as a new copy. The file stays checked
+   out: nothing is shared until the student checks it in. "Put your copy of Plate.SLDPRT back
+   on this computer. It's checked out to you: look at it in SolidWorks, then check it in to
+   share it."
+
+The window sends `putBackKeptCopy { fileId, versionId }` (docs/agent/BRIDGE.md). Test:
+`CheckOutTests.A_kept_copy_of_yours_is_put_back_checked_out_and_shared_only_at_check_in`.
 
 ### Every lock this computer holds is its check out (v0.2.1)
 

@@ -48,9 +48,11 @@ uses a demo transport that answers from `wwwroot/demo/states.js`. See "The demo"
   key, then Check out, Check out and open, Check in, Undo check out or Force check in as its
   state allows, Show in folder as a quiet link, Checked out (the person and computer,
   or "Available. Check it out to make changes."), and the history. Left for the page (0.3.3,
-  the host's half is in): the status `checkingInWhenClosed` gets its chip ("Checks in when
-  closed", tone look) in the page's status words; until then such a row shows no chip
-  (`MyFileView.note` carries the words).
+  the host's half is in): a history entry of kind `keptCopy` gets Put back on this computer
+  (`putBackKeptCopy`; the host refuses another person's copy in one sentence, so the key may
+  show on every kept copy until the view says which are yours), and the status
+  `checkingInWhenClosed` gets its chip ("Checks in when closed", tone look) in the page's
+  status words; until then such a row shows no chip (`MyFileView.note` carries the words).
 - **Settings** is a sheet over Home with exactly the folder (and Change), Start Armory
   when I sign in, and the theme.
 - **The small dialog** (`<dialog id="ask">`) asks New folder, Rename folder, Delete
@@ -243,7 +245,7 @@ answers it with exactly one `actionResult` carrying the same id and a plain sent
 Plate.SLDPRT.", "Close Plate.SLDPRT in SolidWorks first."). The actions are
 `launchFile`, `checkOut`, `checkIn`, `undoCheckOut`, `takeBack`, `takeBackAll`, `createFolder`,
 `renameFolder`, `deleteFolder`, `renameFile`, `addFiles`, `dropFiles`, `reportProblem`,
-`sendFeedback` and `takeOverFolder`.
+`sendFeedback`, `takeOverFolder` and `putBackKeptCopy`.
 
 The page shows an action is under way from the moment it is sent until its
 `actionResult` arrives (v0.2.1): the pressed key gets `aria-busy="true"` and
@@ -284,6 +286,7 @@ replaces all of it. The spinner holds still under `prefers-reduced-motion`.
 | `reportProblem` | `kind`, `body`, `requestId` | Send in Report a problem (Settings), after the page refuses empty words | `kind` is `bug`, `idea` or `other`; the host saves the words with a fresh `userReport` incident and sends them (docs/agent/TELEMETRY.md); the answer is one sentence: "Sent. Thank you for telling us.", or "Saved. It will be sent ..." when it can't go yet |
 | `sendFeedback` | `kind`, `body`, `requestId` | Send in Send feedback (the header's key, or Settings), after the page refuses empty words | v0.3: `kind` is `bug`, `idea` or `other`; a note on its own (`armory_submit_app_feedback`), saved first and sent at once when it can be, with Armory's version and what it was doing as its context, and no incident after it; the answer is one sentence, "Sent. Thank you for the feedback." or "Saved. It will be sent ..." |
 | `openIncidents` | | Open incidents folder (Settings) | opens `%LOCALAPPDATA%\IDEA Armory\incidents` in File Explorer, so the files can be handed over by hand |
+| `putBackKeptCopy` | `fileId`, `versionId`, `requestId` | Put back on this computer, on a File detail history entry of kind `keptCopy` (0.3.3, feedback N4) | `versionId` is the entry's `id`. The host's `PutBackKeptCopyAsync` (docs/agent/ENGINE.md, "Put back on this computer"): only the signed-in person's own kept copy; the file is checked out first when it is checked out to nobody; any save on disk the server doesn't have is kept first, and an open file is refused; the copy is put in place and stays checked out, shared only at check in. Answers "Put your copy of Plate.SLDPRT back on this computer. It's checked out to you: look at it in SolidWorks, then check it in to share it.", or why not ("That copy of Plate.SLDPRT is Maria Lopez's. Only your own kept copies can be put back here.", "Close Plate.SLDPRT in SolidWorks first, then put your copy back.") |
 
 ## Thumbnails (0.3.2)
 

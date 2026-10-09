@@ -981,4 +981,78 @@ public sealed class CheckOutTests
             ("f", file), ("h", Hash("an idea that did not work"))));
         NoViolations(t.A);
     }
+
+    // ---- Put back on this computer (feedback N4's recovery) ----------------------------------
+
+    // A kept copy of yours goes back on this computer from File detail: the file is checked out
+    // first when it isn't (its own bytes saved without a check out kept first), nothing on disk
+    // that the server doesn't have is ever replaced, and the copy stays checked out to you until
+    // you check it in. Someone else's kept copy is never put back here.
+    [PostgresFact]
+    public async Task A_kept_copy_of_yours_is_put_back_checked_out_and_shared_only_at_check_in()
+    {
+        await using var t = await TeamAsync();
+        t.A.Write(Plate, "v1");
+        await t.A.SyncAsync();
+        await t.B.SyncAsync();
+        var file = await t.FileId("Plate.SLDPRT");
+        // Abraham's evening: changes that ended up as a kept copy, the shared version back on disk.
+        t.A.ForceWrite(Plate, "an hour and a half of work");
+        await t.A.SyncAsync();
+        Assert.Equal("v1", t.A.Text(Plate));
+        var kept = (await t.A.Engine.GetFileDetailAsync(file))!.History.Single(h => h.Kind == HistoryKinds.KeptCopy);
+        var version = Guid.Parse(kept.Id);
+
+        // Not checked out: it is checked out first, then the copy goes back.
+        var put = await t.A.Engine.PutBackKeptCopyAsync(file, version);
+        Assert.True(put.Ok, put.Message);
+        Assert.Equal("Put your copy of Plate.SLDPRT back on this computer. It's checked out to you: look at it in SolidWorks, then check it in to share it.", put.Message);
+        Assert.Equal("an hour and a half of work", t.A.Text(Plate));
+        Assert.False(t.A.Disk.IsReadOnly(Plate));
+        Assert.Equal((Alex, 1L, 1L), (await t.Holder(file), await t.Versions(file), await t.Sides(file)));
+        Assert.Equal(FileStatuses.Changed, Assert.Single(t.A.Engine.View.MyFiles).Status);
+        // A pass changes nothing: the bytes are on the server already, never kept twice.
+        await t.A.SyncAsync();
+        Assert.Equal((1L, 1L), (await t.Versions(file), await t.Sides(file)));
+        Assert.Equal("Your copy is already Plate.SLDPRT on this computer. It's checked out to you.", (await t.A.Engine.PutBackKeptCopyAsync(file, version)).Message);
+
+        // Checked out with new saves of its own: they are kept first, then replaced.
+        t.A.Save(Plate, "a later idea");
+        Assert.True((await t.A.Engine.PutBackKeptCopyAsync(file, version)).Ok);
+        Assert.Equal("an hour and a half of work", t.A.Text(Plate));
+        Assert.Contains(Alex + "|saved while checked out", await t.SideAuthors(file));
+        Assert.Equal(1, await t.World.CountAsync("select count(*) from armory_side_versions where file_id=@f and content_sha256=@h", ("f", file), ("h", Hash("a later idea"))));
+
+        // Open in SolidWorks: never replaced.
+        t.A.Save(Plate, "unsaved elsewhere");
+        t.A.Disk.Hold(Plate);
+        Assert.Equal("Close Plate.SLDPRT in SolidWorks first, then put your copy back.", (await t.A.Engine.PutBackKeptCopyAsync(file, version)).Message);
+        Assert.Equal("unsaved elsewhere", t.A.Text(Plate));
+        t.A.Disk.Unhold(Plate);
+
+        // Shared only when checked in.
+        Assert.True((await t.A.Engine.PutBackKeptCopyAsync(file, version)).Ok);
+        Assert.Equal(1L, await t.Versions(file));
+        Assert.Equal("Checked in Plate.SLDPRT.", (await t.A.CheckInAsync(Plate)).Message);
+        Assert.Equal(Hash("an hour and a half of work"), await t.CurrentHash(file));
+        await t.B.SyncAsync();
+        Assert.Equal("an hour and a half of work", t.B.Text(Plate));
+
+        // Someone else's copy, or one that isn't a kept copy, is refused, and nothing changes.
+        t.B.ForceWrite(Plate, "Maria's idea");
+        await t.B.SyncAsync();
+        var marias = (await t.B.Engine.GetFileDetailAsync(file))!.History.First(h => h.Kind == HistoryKinds.KeptCopy && h.Author == "Maria Lopez");
+        await t.A.SyncAsync();
+        Assert.Equal("That copy of Plate.SLDPRT is Maria Lopez's. Only your own kept copies can be put back here.",
+            (await t.A.Engine.PutBackKeptCopyAsync(file, Guid.Parse(marias.Id))).Message);
+        var current = (await t.A.Engine.GetFileDetailAsync(file))!.History.Single(h => h.IsCurrent);
+        Assert.Equal("That kept copy isn't in Plate.SLDPRT's history.", (await t.A.Engine.PutBackKeptCopyAsync(file, Guid.Parse(current.Id))).Message);
+        // Checked out by someone else: says who, and waits for them.
+        Assert.True((await t.B.CheckOutAsync(Plate)).Ok);
+        await t.A.SyncAsync();
+        Assert.Equal("Plate.SLDPRT is checked out by Maria Lopez on student B lab PC. Your copy can be put back once it's checked in.",
+            (await t.A.Engine.PutBackKeptCopyAsync(file, version)).Message);
+        Assert.Empty(t.A.Engine.View.MyFiles);
+        NoViolations(t.A, t.B);
+    }
 }
