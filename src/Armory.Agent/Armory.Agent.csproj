@@ -14,7 +14,7 @@
     <Company>IDEA, Don Bosco Tech</Company>
     <AssemblyTitle>IDEA Armory</AssemblyTitle>
     <Copyright>IDEA, Don Bosco Tech</Copyright>
-    <Version>0.3.2</Version>
+    <Version>0.3.3</Version>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <ApplicationIcon>Assets\armory.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
