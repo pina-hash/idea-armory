@@ -872,8 +872,15 @@ hold the new paths; the client half is in docs/agent/CLIENT.md section 6.
     or 40001 is resent by `PostgrestClient` with the same body (up to 3 times), as for the
     other batches; a file the batch answers with 40P01 or 40001 (its savepoint rolled back)
     goes again in a later call of its own files, with a new id, up to as many rounds, and is
-    then "busy on the server". A whole call refused otherwise (this computer's device is not
-    the caller's) counts its files as refused.
+    then "busy on the server". A later round's id is chained from the call that answered the
+    file busy ("take back batch, again" and, per file, that call's id with the file's take
+    back id), never built from the round number alone: so a second ask for a file that stayed
+    busy gets fresh tries in every round, where 0.3.2 rebuilt the first ask's ids and the
+    server answered its old busy receipt (one real try instead of four). A call whose every file
+    was refused (for example a role the server no longer grants) is answered from its receipt
+    again if the very same check outs are asked for again, until one of them changes; the
+    client's `CanTakeBack`, read again before each ask, normally stops it first. A whole call
+    refused otherwise (this computer's device is not the caller's) counts its files as refused.
   - **One sentence.** "Force checked in 212 files. Anything that wasn't checked in is kept as
     its holder's own copy. 3 files weren't checked out any more." then, as they apply, "N files
     are in a project where only a mentor or CAD lead can force a check in.", "N files are

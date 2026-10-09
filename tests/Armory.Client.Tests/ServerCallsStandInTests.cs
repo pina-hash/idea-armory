@@ -151,6 +151,9 @@ public sealed partial class ClientTests
             request.Headers.TryAddWithoutValidation("x-upsert", "false");
             return await env.Http.SendAsync(request);
         }
+        // The real code of each refusal, as the body names it (and the HTTP status too while
+        // StorageRealStatus is on).
+        env.Supabase.StorageRealStatus = true;
         var name = $"{uid}/{Guid.NewGuid()}.png";
         Assert.Equal(HttpStatusCode.OK, (await Put(name, TestPng(10))).StatusCode);
         Assert.Equal(HttpStatusCode.Conflict, (await Put(name, TestPng(10))).StatusCode); // never overwritten
@@ -160,14 +163,21 @@ public sealed partial class ClientTests
         // Another person's folder: the insert policy (own folder) refuses it.
         Assert.Equal(HttpStatusCode.Forbidden, (await Put($"{Guid.NewGuid()}/{Guid.NewGuid()}.png", TestPng(10))).StatusCode);
         Assert.Equal(HttpStatusCode.BadRequest, (await Put($"{uid}/picture.png", TestPng(10))).StatusCode);
-        Assert.Equal(HttpStatusCode.Forbidden, (await Put($"{uid}/{Guid.NewGuid()}.png", TestPng(10), token: "not-a-token")).StatusCode);
+        // A bad token is InvalidJWT, 400 on any Storage.
+        var badToken = await Put($"{uid}/{Guid.NewGuid()}.png", TestPng(10), token: "not-a-token");
+        Assert.Equal(HttpStatusCode.BadRequest, badToken.StatusCode);
+        Assert.Equal("InvalidJWT", JsonNode.Parse(await badToken.Content.ReadAsStringAsync())!["code"]!.GetValue<string>());
         Assert.Equal(2, env.Supabase.StoredObjects.Count); // the two that went; the duplicate never replaced the first
-        // Older Storage answers every refusal 400 with its own code in the body.
-        env.Supabase.StorageLegacyStatus = true;
-        var legacy = await Put($"{Guid.NewGuid()}/{Guid.NewGuid()}.png", TestPng(10));
-        Assert.Equal(HttpStatusCode.BadRequest, legacy.StatusCode);
-        Assert.Equal("403", JsonNode.Parse(await legacy.Content.ReadAsStringAsync())!["statusCode"]!.GetValue<string>());
-        env.Supabase.StorageLegacyStatus = false;
+        // Storage as it answers: every refusal but a 500 is HTTP 400 with its own code in the body.
+        env.Supabase.StorageRealStatus = false;
+        var refused = await Put($"{Guid.NewGuid()}/{Guid.NewGuid()}.png", TestPng(10));
+        Assert.Equal(HttpStatusCode.BadRequest, refused.StatusCode);
+        var body = JsonNode.Parse(await refused.Content.ReadAsStringAsync())!;
+        Assert.Equal(("403", "AccessDenied"), (body["statusCode"]!.GetValue<string>(), body["code"]!.GetValue<string>()));
+        // A busy Storage (544 in a 400 body) is offline for the client, never a refused picture.
+        env.Supabase.FailStorage("544", "DatabaseTimeout", "Database timeout");
+        await Assert.ThrowsAsync<ArmoryOfflineException>(() => shots.UploadAsync(TestPng(10)));
+        Assert.Equal(2, env.Supabase.StoredObjects.Count);
         // An expired token is renewed once and the picture goes.
         env.Supabase.ExpireAccessToken(sessions.Current!.AccessToken);
         var renewed = await shots.UploadAsync(TestPng(10));

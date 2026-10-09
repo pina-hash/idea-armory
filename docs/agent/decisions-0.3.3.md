@@ -149,7 +149,8 @@ Files go in id order, at most 500 per call. If the website doesn't have the func
 (PGRST202), Armory falls back to one `armory_break_lock` per file. A whole call that ends in a
 deadlock (40P01) or serialization failure (40001) is sent again up to 3 times, and a file that
 the server reports as deadlocked inside the results goes again in a later call, up to 3
-rounds. Each call's record is saved before it is sent; after a crash the call is sent again
+rounds, each round's operation id chained from the call that answered it busy (so asking again
+gets fresh tries, never the old busy answer). Each call's record is saved before it is sent; after a crash the call is sent again
 with the same operation id only if every file still has exactly the check out it named,
 otherwise it is dropped, so a force check in never ends a check out someone made after the
 crash.
@@ -158,8 +159,12 @@ crash.
 Kinds bug, idea, praise, other; "What did you try?" (up to 1,000 characters); the area (the
 window or view the person was on, up to 120); an optional picture of the Armory window only,
 shown to the person exactly as it will be sent, at most 2 MiB. If the website doesn't have the
-new form yet (PGRST202), the note goes through the old five-argument form without the new
-fields, and praise is sent as "other" there (the old form refuses praise), and Armory says so.
+new form yet (PGRST202), the note goes through the old five-argument form, praise is sent as
+"other" there (the old form refuses praise), what was tried, the area and the kind asked for go
+in the note's context (so only the picture is lost), and Armory says so. A note without a
+picture is saved first and sent later when it can't go now; a note with a picture is never
+written to disk, and when its picture can't go the window keeps the words and offers to send it
+without the picture.
 
 ### D3. "Your feedback"
 Lists the person's own notes and their status (new, seen, resolved, closed). There are no

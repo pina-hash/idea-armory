@@ -120,10 +120,13 @@ internal sealed class MainWindow : Form, IBridgeWindow
             core.AddWebResourceRequestedFilter("https://" + HostName + "/index.html*", CoreWebView2WebResourceContext.Document);
             // A file's thumbnail, as File Explorer shows it: https://armory.local/thumb/<vault path>.
             core.AddWebResourceRequestedFilter("https://" + HostName + ThumbPrefix + "*", CoreWebView2WebResourceContext.Image);
+            // Send feedback's picture of this window, from memory: https://armory.local/shot/<id>.png.
+            core.AddWebResourceRequestedFilter("https://" + HostName + WindowShots.Prefix + "*", CoreWebView2WebResourceContext.Image);
             core.WebResourceRequested += (_, args) =>
             {
-                if (args.ResourceContext == CoreWebView2WebResourceContext.Image) ServeThumbnail(core, args);
-                else ServeStartPage(core, args);
+                if (args.ResourceContext != CoreWebView2WebResourceContext.Image) ServeStartPage(core, args);
+                else if (IsShotRequest(args.Request.Uri)) ServeShot(core, args);
+                else ServeThumbnail(core, args);
             };
             core.NavigationStarting += (_, args) => KeepInsideApp(args.Uri, () => args.Cancel = true);
             // A frame never leaves the app and never opens the browser by itself.
@@ -237,6 +240,64 @@ internal sealed class MainWindow : Form, IBridgeWindow
         {
             try { deferral?.Complete(); }
             catch (Exception error) when (error is not OutOfMemoryException) { log.Error("could not finish a thumbnail answer", error); }
+        }
+    }
+
+    private static bool IsShotRequest(string uri)
+        => IsAppUri(uri) && Uri.TryCreate(uri, UriKind.Absolute, out var parsed) && parsed.AbsolutePath.StartsWith(WindowShots.Prefix, StringComparison.Ordinal);
+
+    // Send feedback's picture, exactly the bytes that would be sent, from memory. no-store: the
+    // WebView's disk cache never keeps a picture of the window. One the host no longer holds is 404.
+    private void ServeShot(CoreWebView2 core, CoreWebView2WebResourceRequestedEventArgs args)
+    {
+        try
+        {
+            var path = new Uri(args.Request.Uri).AbsolutePath;
+            var shot = host.Shots.Get(WindowShots.IdOfPath(path));
+            args.Response = shot is null
+                ? core.Environment.CreateWebResourceResponse(null, 404, "Not Found", "Cache-Control: no-store")
+                : core.Environment.CreateWebResourceResponse(new MemoryStream(shot.Png, writable: false), 200, "OK", "Content-Type: image/png\r\nCache-Control: no-store");
+        }
+        catch (Exception error) when (error is ArgumentException or UriFormatException or InvalidOperationException or System.Runtime.InteropServices.COMException)
+        {
+            log.Error("could not serve the window's picture", error);
+        }
+    }
+
+    // Send feedback's "Add a picture of this window" (the page has hidden its dialog and masked
+    // what a picture must not show). CapturePreviewAsync is what this WebView draws: never the
+    // screen, never another window. Over 2 MB, it is taken again smaller with the DevTools
+    // protocol's Page.captureScreenshot (the same page, clip.scale), measured each time, at most
+    // three times and never below a quarter. Held in memory only; nothing goes to disk.
+    async Task<WindowCapture?> IBridgeWindow.CaptureWindowAsync(int cssWidth, int cssHeight)
+    {
+        if (web?.CoreWebView2 is not { } core) return null;
+        try
+        {
+            byte[] png;
+            using (var stream = new MemoryStream())
+            {
+                await core.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png, stream);
+                png = stream.ToArray();
+            }
+            var scale = 1.0;
+            var scaled = false;
+            for (var round = 0; round < 3 && png.LongLength > Armory.Client.FeedbackScreenshots.MaximumBytes; round++)
+            {
+                if (Armory.Client.ScreenshotFit.NextScale(png.LongLength, scale) is not { } next) break;
+                var answer = await core.CallDevToolsProtocolMethodAsync("Page.captureScreenshot", WindowShots.CaptureParameters(cssWidth, cssHeight, next));
+                using var document = System.Text.Json.JsonDocument.Parse(answer);
+                png = Convert.FromBase64String(document.RootElement.GetProperty("data").GetString() ?? "");
+                scale = next;
+                scaled = true;
+            }
+            return new WindowCapture(png, scaled);
+        }
+        catch (Exception error) when (error is InvalidOperationException or System.Runtime.InteropServices.COMException or ArgumentException
+            or System.Text.Json.JsonException or FormatException or KeyNotFoundException or IOException)
+        {
+            log.Error("could not take a picture of the window", error);
+            return null;
         }
     }
 

@@ -286,10 +286,14 @@ public sealed class EngineUnitTests
         foreach (var name in new[] { "path", "name", "bytesDone", "bytesTotal" })
             Assert.True(moving.TryGetProperty(name, out _), name);
         using var r = JsonDocument.Parse(BridgeMessages.ActionResultMessage("r3", true, "Checked in Plate.SLDPRT."));
-        Assert.Equal(["type", "requestId", "ok", "message"], r.RootElement.EnumerateObject().Select(p => p.Name).ToArray());
+        Assert.Equal(["type", "requestId", "ok", "message", "offer"], r.RootElement.EnumerateObject().Select(p => p.Name).ToArray());
         Assert.Equal("actionResult", r.RootElement.GetProperty("type").GetString());
         Assert.Equal("r3", r.RootElement.GetProperty("requestId").GetString());
         Assert.True(r.RootElement.GetProperty("ok").GetBoolean());
+        // offer is null but after Send feedback with a picture that couldn't go (0.3.3).
+        Assert.Equal(JsonValueKind.Null, r.RootElement.GetProperty("offer").ValueKind);
+        using var offered = JsonDocument.Parse(BridgeMessages.ActionResultMessage("r4", false, "Your note wasn't sent.", ActionResult.WithoutPicture));
+        Assert.Equal("withoutPicture", offered.RootElement.GetProperty("offer").GetString());
 
         // The check-out question carries its own key (one per open), which Not now sends
         // back in dismissNotice; the page reads these names.

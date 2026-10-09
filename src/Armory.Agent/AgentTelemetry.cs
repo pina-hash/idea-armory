@@ -14,6 +14,7 @@ namespace Armory.Agent;
 internal sealed class AgentTelemetry : IAsyncDisposable
 {
     public const int MaximumReportCharacters = 8000;
+    // Report a problem: bug, idea or other. Send feedback takes praise too (FeedbackSender.Kinds).
     public static readonly IReadOnlyList<string> ReportKinds = ["bug", "idea", "other"];
     private readonly AgentPaths paths;
     private readonly AgentLog log;
@@ -22,6 +23,7 @@ internal sealed class AgentTelemetry : IAsyncDisposable
     private Func<CancellationToken, Task<JsonNode?>>? snapshot;
     private Func<JsonNode?>? quickSnapshot;
     private IncidentUploader? uploader;
+    private FeedbackSender? feedback;
     private Task? uploading;
 
     internal AgentTelemetry(AgentPaths paths, AgentLog log, TimeProvider? clock = null)
@@ -80,6 +82,7 @@ internal sealed class AgentTelemetry : IAsyncDisposable
         session = currentSession;
         snapshot = describe;
         quickSnapshot = quick;
+        this.feedback = feedback;
         uploader = new IncidentUploader(api, Reporter.Store, transferring, log: log.Info, feedback: feedback, limiter: Limiter);
         uploading = Task.Run(() => uploader.RunAsync(stopping.Token));
     }
@@ -127,16 +130,19 @@ internal sealed class AgentTelemetry : IAsyncDisposable
         };
     }
 
-    // "Send feedback" (v0.3): the person's words as a note on its own (armory_submit_app_feedback),
-    // with Armory's version and what it was doing as its context, never file contents. Saved here
-    // first, so a note that can't go now is sent later; the answer is one plain sentence.
-    internal async Task<(bool Ok, string Message)> SendFeedbackAsync(string? kind, string? body)
+    // "Send feedback" without a picture (0.3.3, the same as the website's): the person's words as a
+    // note on its own (armory_submit_app_feedback), with what they tried and the area of the app it
+    // is about, Armory's version and what it was doing as its context, never file contents. kind:
+    // bug, idea, praise or other. Saved here first, so a note that can't go now is sent later; the
+    // answer is one plain sentence. (A note with a picture never comes here: FeedbackDesk.)
+    internal async Task<(bool Ok, string Message)> SendFeedbackAsync(string? kind, string? body, string? tried = null, string? area = null)
     {
         var words = (body ?? "").Trim();
         if (words.Length == 0) return (false, "Write a few words first.");
         if (words.Length > MaximumReportCharacters) words = words[..MaximumReportCharacters];
-        var normalized = ReportKinds.Contains(kind ?? "") ? kind! : "other";
-        var path = await Reporter.SaveNoteAsync(normalized, words).ConfigureAwait(false);
+        var normalized = FeedbackSender.KindOf(kind);
+        var path = await Reporter.SaveNoteAsync(normalized, words, FeedbackSender.Optional(tried, FeedbackSender.MaximumTriedCharacters),
+            FeedbackSender.Optional(area, FeedbackSender.MaximumAreaCharacters)).ConfigureAwait(false);
         if (path is null) return (false, "Armory couldn't save your feedback. Try again in a moment.");
         var outcome = UploadOutcome.Offline;
         if (uploader is { } sending)
@@ -152,6 +158,9 @@ internal sealed class AgentTelemetry : IAsyncDisposable
         log.Info("send feedback: " + normalized + ", " + outcome);
         return outcome switch
         {
+            // A site before 0235 took it with the five arguments: praise went as other.
+            UploadOutcome.Sent when normalized == "praise" && feedback?.NewFieldsMissing == true
+                => (true, "Sent. Thank you for the feedback. The website doesn't take praise yet, so it went as other feedback."),
             UploadOutcome.Sent => (true, "Sent. Thank you for the feedback."),
             UploadOutcome.NotLive or UploadOutcome.Waiting => (true, "Saved. It will be sent when the website is ready."),
             UploadOutcome.Offline => (true, "Saved. It will be sent when this computer is back online."),

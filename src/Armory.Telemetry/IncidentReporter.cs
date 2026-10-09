@@ -125,10 +125,23 @@ public sealed class IncidentReporter : IFlightObserver
 
     // "Send feedback": a note on its own, always saved (no throttle), queued here like an incident
     // until the site has it. No incident follows it (IncidentDocument.NoteKind, noteOnly), and it
-    // carries no flight events: its context is the snapshot and the log's last lines.
-    public async Task<string?> SaveNoteAsync(string kind, string body)
-        => Write(new Glitch(IncidentDocument.NoteKind, GlitchRules.Clip($"A note from the window ({kind}): {body.ReplaceLineEndings(" ").Trim()}"), null),
-            await SnapshotAsync().ConfigureAwait(false), new IncidentFeedback(kind, body), events: [], recorded: 0, noteOnly: true);
+    // carries no flight events: its context is the snapshot and the log's last lines. tried and
+    // area go with the words, scrubbed the same way.
+    public async Task<string?> SaveNoteAsync(string kind, string body, string? tried = null, string? area = null)
+        => Write(NoteGlitch(kind, body), await SnapshotAsync().ConfigureAwait(false), new IncidentFeedback(kind, body, tried, area), events: [], recorded: 0, noteOnly: true);
+
+    // The same note as SaveNoteAsync would save, rendered and scrubbed (the very document the file
+    // would hold), but never written: the window's Send feedback with a picture goes at once and
+    // is never kept on disk with its picture.
+    public async Task<JsonObject> ComposeNoteAsync(string kind, string body, string? tried = null, string? area = null)
+    {
+        var snapshot = await SnapshotAsync().ConfigureAwait(false);
+        var (incident, _) = Build(NoteGlitch(kind, body), snapshot, new IncidentFeedback(kind, body, tried, area), null, [], 0, noteOnly: true);
+        return IncidentDocument.Read(IncidentDocument.Render(incident, sources.Scrubber));
+    }
+
+    private static Glitch NoteGlitch(string kind, string body)
+        => new(IncidentDocument.NoteKind, GlitchRules.Clip($"A note from the window ({kind}): {body.ReplaceLineEndings(" ").Trim()}"), null);
 
     private JsonNode? Quick()
     {
@@ -141,19 +154,7 @@ public sealed class IncidentReporter : IFlightObserver
     {
         try
         {
-            var now = clock.GetUtcNow();
-            if (events is null)
-            {
-                events = FlightJson.Events(recorder.Snapshot(), recorder.UtcAt);
-                recorded = recorder.Recorded;
-            }
-            if (glitch.Trigger is { } at) trigger = FlightJson.Event(at, recorder.UtcAt(at.Timestamp));
-            IReadOnlyList<string> log;
-            try { log = sources.LogTail?.Invoke(IncidentDocument.LogLines) ?? []; }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { log = ["(agent.log could not be read: " + error.Message + ")"]; }
-            var header = sources.Header();
-            var incident = IncidentDocument.Build(glitch, header, now, trigger, events, recorded, recorder.Capacity, snapshot, log, feedback);
-            if (noteOnly) incident[IncidentDocument.NoteOnlyField] = true;
+            var (incident, now) = Build(glitch, snapshot, feedback, trigger, events, recorded, noteOnly);
             var path = Store.Save(now, glitch.Kind, IncidentDocument.Render(incident, sources.Scrubber));
             sources.Log?.Invoke($"incident: saved {Path.GetFileName(path)} ({glitch.Kind})");
             Saved?.Invoke(path);
@@ -165,5 +166,26 @@ public sealed class IncidentReporter : IFlightObserver
             catch (Exception) { }
             return null;
         }
+    }
+
+    // The incident document, before scrubbing: with the recorder's events unless given, the
+    // trigger, the log's last lines and the header. Returns when it was made.
+    private (JsonObject Incident, DateTimeOffset Now) Build(Glitch glitch, JsonNode? snapshot, IncidentFeedback? feedback, JsonObject? trigger, JsonArray? events,
+        long recorded, bool noteOnly)
+    {
+        var now = clock.GetUtcNow();
+        if (events is null)
+        {
+            events = FlightJson.Events(recorder.Snapshot(), recorder.UtcAt);
+            recorded = recorder.Recorded;
+        }
+        if (glitch.Trigger is { } at) trigger = FlightJson.Event(at, recorder.UtcAt(at.Timestamp));
+        IReadOnlyList<string> log;
+        try { log = sources.LogTail?.Invoke(IncidentDocument.LogLines) ?? []; }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { log = ["(agent.log could not be read: " + error.Message + ")"]; }
+        var header = sources.Header();
+        var incident = IncidentDocument.Build(glitch, header, now, trigger, events, recorded, recorder.Capacity, snapshot, log, feedback);
+        if (noteOnly) incident[IncidentDocument.NoteOnlyField] = true;
+        return (incident, now);
     }
 }

@@ -94,6 +94,95 @@ public sealed class FeedbackTests
         Assert.DoesNotContain(log, l => l.Contains(alex.Sessions.Current!.AccessToken, StringComparison.Ordinal));
     }
 
+    // Storage busy (a database timeout in a 400 body, as Storage answers it, or a 503): the window
+    // hears "offline, try again", never "picture refused", and the same picture sent again goes
+    // once, named by one note.
+    [PostgresFact]
+    public async Task A_busy_storage_is_tried_again_and_the_picture_goes_once()
+    {
+        await using var world = await World.StartAsync();
+        world.Latency = LatencyProfile.School;
+        await ArmoryV3StandIn.ApplyFeedbackV2Async(world.Database);
+        var alex = await world.ComputerAsync("student A laptop", Alex);
+        var sender = SenderFor(alex, new SubmitLimiter(clock: alex.Clock), []);
+        var shot = Png(80_000, 4);
+        var note = new FeedbackNote("bug", "Check in spun.", "Restarted Armory.", "Home > Robot 2027 > Drivetrain", shot);
+
+        world.Supabase.FailStorage("544", "DatabaseTimeout", "Database timeout");
+        var busy = await sender.SendAsync(note);
+        Assert.IsType<FeedbackResult.Offline>(busy);
+        Assert.False(busy.CanSendWithoutPicture);
+        // The same, answered with Storage's real status (503 read only).
+        world.Supabase.StorageRealStatus = true;
+        world.Supabase.FailStorage("503", "DatabaseReadOnly", "Database is read only");
+        Assert.IsType<FeedbackResult.Offline>(await sender.SendAsync(note));
+        world.Supabase.StorageRealStatus = false;
+        Assert.Empty(world.Supabase.StoredObjects);
+        Assert.Equal(0, await world.CountAsync("select count(*) from public.armory_app_feedback"));
+
+        var sent = Assert.IsType<FeedbackResult.Sent>(await sender.SendAsync(note));
+        var stored = Assert.Single(world.Supabase.StoredObjects);
+        Assert.Equal(shot, stored.Value.Bytes);
+        Assert.Equal(3, world.Supabase.StorageUploads); // two answered busy, one stored
+        var row = await NoteAsync(world, sent.Id);
+        Assert.Equal(new object?[] { "bug", "Check in spun.", "Restarted Armory.", "Home > Robot 2027 > Drivetrain", stored.Value.Name }, row[..5]);
+        Assert.Equal(1, await world.CountAsync("select count(*) from public.armory_app_feedback"));
+    }
+
+    // 0235's functions without its storage half (the migration's NOTICE path): the picture is
+    // refused as not available, the window offers the note without it, and that goes through the
+    // eight-argument form with every other field.
+    [PostgresFact]
+    public async Task A_site_with_0235_but_no_bucket_offers_and_sends_the_note_without_the_picture()
+    {
+        await using var world = await World.StartAsync();
+        world.Latency = LatencyProfile.School;
+        await ArmoryV3StandIn.ApplyFeedbackV2Async(world.Database);
+        await ArmoryV3StandIn.DropFeedbackShotsBucketAsync(world.Database);
+        var alex = await world.ComputerAsync("student A laptop", Alex);
+        var sender = SenderFor(alex, new SubmitLimiter(clock: alex.Clock), []);
+        var note = new FeedbackNote("praise", "Check in all is fast now.", "Checked in 200 files.", "Settings", Png(2000), new JsonObject { ["view"] = "settings" });
+
+        var refused = Assert.IsType<FeedbackResult.ScreenshotRefused>(await sender.SendAsync(note));
+        Assert.Equal(("not_available", true), (refused.Reason, refused.CanSendWithoutPicture));
+        Assert.Equal("Your note wasn't sent: the website isn't ready for screenshots yet. You can send it without the picture.", refused.Message);
+        Assert.Equal(0, await world.CountAsync("select count(*) from public.armory_app_feedback"));
+
+        var sent = Assert.IsType<FeedbackResult.Sent>(await sender.SendAsync(note with { Screenshot = null }));
+        Assert.Equal(new object?[] { "praise", "Check in all is fast now.", "Checked in 200 files.", "Settings", null }, (await NoteAsync(world, sent.Id))[..5]);
+        Assert.False(sender.NewFieldsMissing);
+        Assert.Empty(world.Supabase.StoredObjects);
+    }
+
+    // "Your feedback": each status in plain words, newest first; a note the admin marked spam reads
+    // closed, never spam. There are no replies, so there is nothing else to show.
+    [PostgresFact]
+    public async Task Your_feedback_shows_each_status_and_never_spam()
+    {
+        await using var world = await World.StartAsync();
+        world.Latency = LatencyProfile.School;
+        await ArmoryV3StandIn.ApplyFeedbackV2Async(world.Database);
+        var alex = await world.ComputerAsync("student A laptop", Alex);
+        var sender = SenderFor(alex, new SubmitLimiter(clock: alex.Clock), []);
+        List<Guid> ids = [];
+        foreach (var (kind, words) in new[] { ("bug", "Spins."), ("idea", "Dark mode."), ("praise", "Fast now."), ("other", "Thanks.") })
+        {
+            ids.Add(Assert.IsType<FeedbackResult.Sent>(await sender.SendAsync(new FeedbackNote(kind, words, Area: "Home"))).Id);
+            await Task.Delay(15); // created_at orders them
+        }
+        await ArmoryV3StandIn.SetFeedbackStatusAsync(world.Database, ids[0], "seen");
+        await ArmoryV3StandIn.SetFeedbackStatusAsync(world.Database, ids[1], "resolved");
+        await ArmoryV3StandIn.SetFeedbackStatusAsync(world.Database, ids[2], "spam");
+
+        var notes = (await alex.Api.MyAppFeedbackAsync())!;
+        Assert.Equal(Enumerable.Reverse(ids), notes.Select(n => n.Id));
+        Assert.Equal(["other", "praise", "idea", "bug"], notes.Select(n => n.Kind));
+        Assert.Equal([AppFeedbackNote.New, AppFeedbackNote.Closed, AppFeedbackNote.Resolved, AppFeedbackNote.Seen], notes.Select(n => n.Status));
+        Assert.Equal(["Not read yet", "Closed", "Done", "Read by the IDEA team"], notes.Select(n => AppFeedbackNote.StatusWords(n.Status)));
+        Assert.All(notes, n => Assert.Equal(("Home", alex.Sessions.Current!.DeviceName), (n.Area, n.DeviceName)));
+        Assert.All(notes.Skip(1), n => Assert.NotNull(n.ReviewedAt));
+    }
+
     // A site before 0235: the five-argument form takes the note without the new fields (praise
     // goes as other), there is no bucket for the picture (offered without it), and "Your
     // feedback" is not available.
@@ -107,16 +196,20 @@ public sealed class FeedbackTests
         var sender = SenderFor(alex, new SubmitLimiter(clock: alex.Clock), log);
 
         var praise = Assert.IsType<FeedbackResult.SentWithoutNewFields>(await sender.SendAsync(new FeedbackNote("praise", "Love the new check in.", "Nothing.", "Files")));
-        Assert.Equal(("other", true, true), (praise.Kind, praise.KindChanged, praise.LeftOutDetails));
+        Assert.Equal(("other", true, false), (praise.Kind, praise.KindChanged, praise.LeftOutPicture));
         Assert.Equal(new object?[] { "other", "Love the new check in." }, (await world.QueryAsync($"select kind, body from public.armory_app_feedback where id = '{praise.Id}'",
             r => new object?[] { r.GetString(0), r.GetString(1) })).Single());
+        // Only the picture can be lost: what was tried, the area and the kind asked for are in the
+        // context the admin's list shows whole.
+        var kept = JsonNode.Parse((await world.QueryAsync($"select context::text from public.armory_app_feedback where id = '{praise.Id}'", r => r.GetString(0))).Single())!;
+        Assert.Equal(("praise", "Nothing.", "Files"), (kept["askedKind"]!.GetValue<string>(), kept["tried"]!.GetValue<string>(), kept["area"]!.GetValue<string>()));
         Assert.Contains(log, l => l.Contains("no eight-argument armory_submit_app_feedback", StringComparison.Ordinal));
         Assert.Null(await alex.Api.MyAppFeedbackAsync());
 
         // Within the hour the wide form is not asked again, and a picture is not uploaded at all.
         var wide = world.Supabase.RpcCount(ArmoryApi.SubmitFeedbackRpc);
         var bug = Assert.IsType<FeedbackResult.SentWithoutNewFields>(await sender.SendAsync(new FeedbackNote("bug", "Spins.", Screenshot: Png(200))));
-        Assert.Equal(("bug", false, true), (bug.Kind, bug.KindChanged, bug.LeftOutDetails));
+        Assert.Equal(("bug", false, true), (bug.Kind, bug.KindChanged, bug.LeftOutPicture));
         Assert.Equal(wide + 1, world.Supabase.RpcCount(ArmoryApi.SubmitFeedbackRpc));
         Assert.Equal(0, world.Supabase.StorageUploads);
 

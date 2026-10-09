@@ -54,6 +54,12 @@
 		drag: false,
 		resultTimer: 0,
 		pending: {}, // requestId -> an action the host has not answered yet (see Working)
+		myFeedback: null, // the host's last answer about Your feedback (see Send feedback)
+		mineAsked: 0, // when Your feedback was last asked for
+		shooting: null, // while the host takes a picture of the window: what was masked, what waits
+		routeShot: null, // a demo route's picture to take (1) or to take and send (offer)
+		waits: {}, // answers a demo route waits for before the page is ready
+		readyWanted: false,
 		routed: false,
 		ready: false,
 		waitingForDetail: false
@@ -1759,9 +1765,10 @@
 		html += '<div class="setting-row">';
 		html += '<button class="key" type="button" data-action="askReport" data-key="set-report" aria-haspopup="dialog">Report a problem</button>';
 		html += '<button class="key" type="button" data-action="askFeedback" data-key="set-feedback" aria-haspopup="dialog">Send feedback</button>';
+		html += '<span class="set-mine" id="set-mine-slot">' + mineKeyHtml() + '</span>';
 		html += '<button class="textlink" type="button" data-action="openIncidents" data-key="set-incidents">' + icon('folder') + '<span>Open incidents folder</span></button>';
 		html += '</div>';
-		html += '<p class="setting-help">Armory keeps a short record of what it was doing when something goes wrong: file names, never what is in your files. A report sends your words with it. Feedback sends just your words, with Armory\'s version and what it was doing.</p>';
+		html += '<p class="setting-help">Armory keeps a short record of what it was doing when something goes wrong: file names, never what is in your files. A report sends your words with it. Feedback sends your words, and a picture of this window if you add one, with Armory\'s version and what it was doing.</p>';
 		html += '</section>';
 		return html;
 	}
@@ -1777,6 +1784,8 @@
 			setRecessTop(ui.homeRecess);
 			mountLists(false);
 		}
+		// "Your feedback" shows in the sheet once the host says the website has it.
+		readMyFeedback();
 		sheet.innerHTML = settingsHtml(ui.view);
 		if (!sheet.open) sheet.showModal();
 		// The sheet itself takes focus, so a screen reader reads its name; Tab then
@@ -1808,6 +1817,8 @@
 			// A file's new name usually keeps its kind: only the part before the dot is picked.
 			var dot = kind === 'renameFile' ? field.value.lastIndexOf('.') : -1;
 			if (dot > 0) field.setSelectionRange(0, dot);
+			// Words being written (a note brought back from Your feedback) keep going at their end.
+			else if (kind === 'feedback') field.setSelectionRange(field.value.length, field.value.length);
 			else field.select();
 		} else (ask.querySelector('[data-ask-first]') || ask).focus();
 	}
@@ -1822,17 +1833,14 @@
 		// on Cancel, so Enter never does it by accident.
 		var cancelFirst = false;
 		var extra = '';
+		// Send feedback and Your feedback draw their own housing contents.
+		if (kind === 'feedback') return feedbackHtml(c);
+		if (kind === 'myFeedback') return myFeedbackHtml(c);
 		if (kind === 'report') {
 			title = 'Report a problem';
 			body = 'Tell us what went wrong, or what would make Armory better. Your words go with a short record of what Armory was doing: file names, never what is in your files.';
 			extra = reportKindsHtml(c.kind);
 			field = areaHtml('What happened?');
-			ok = 'Send';
-		} else if (kind === 'feedback') {
-			title = 'Send feedback';
-			body = 'Tell us what would make Armory better, or what got in your way. Your words go to the IDEA team with Armory\'s version and what it was doing: file names, never what is in your files.';
-			extra = reportKindsHtml(c.kind);
-			field = areaHtml('Your feedback');
 			ok = 'Send';
 		} else if (kind === 'checkOutAll') {
 			title = 'Check out all';
@@ -1966,15 +1974,11 @@
 			}
 			act('reportProblem', { kind: c.kind, body: words }, { key: a.returnKey });
 		} else if (a.kind === 'feedback') {
-			var feedbackArea = ask.querySelector('#ask-report');
-			var feedbackWords = feedbackArea.value.trim();
-			if (!feedbackWords) {
-				ask.querySelector('#ask-error').textContent = 'Write a few words first.';
-				feedbackArea.setAttribute('aria-invalid', 'true');
-				feedbackArea.focus();
-				return;
-			}
-			act('sendFeedback', { kind: c.kind, body: feedbackWords }, { key: a.returnKey });
+			// The dialog stays open until the host answers (sendFeedback, below).
+			sendFeedback();
+			return;
+		} else if (a.kind === 'myFeedback') {
+			return;
 		} else if (a.kind === 'renameFile') {
 			var fileInput = ask.querySelector('#ask-name');
 			var newName = fileInput.value.trim();
@@ -2103,6 +2107,401 @@
 			},
 			from
 		);
+	}
+
+	/* ------------------------------------------- Send feedback, Your feedback */
+
+	/*
+	 * Send feedback, the same as the website's (0.3.3): what kind (Bug, Idea, Praise, Other),
+	 * the words, what was tried, the window or view it is about (filled in here, read only),
+	 * and an optional picture of the Armory window. The picture is taken by the host from this
+	 * page alone, with the dialog hidden, every email address shown as •••@domain and the
+	 * file pictures hidden; it comes back as the very bytes that would be sent, shown here
+	 * before anything goes, with a key to remove it. The dialog stays open until the host
+	 * answers: a note that went closes it; one whose picture couldn't go keeps the words and
+	 * offers "Send without the picture". Ctrl+Enter sends.
+	 *
+	 * "Your feedback" lists this account's notes and where each one is. There are no replies
+	 * in Armory, and the list says so; when the website doesn't have it yet it is hidden.
+	 */
+	var FEEDBACK_KINDS = [
+		['bug', 'Bug', 'Something broke'],
+		['idea', 'Idea', 'Something to add'],
+		['praise', 'Praise', 'Something you like'],
+		['other', 'Other', 'Anything else']
+	];
+	var KIND_NAME = { bug: 'Bug', idea: 'Idea', praise: 'Praise', other: 'Other' };
+	var STATUS_TONE = { new: 'off', seen: 'ok', resolved: 'ok', closed: 'off' };
+	var TRIED_MAX = 1000;
+	var AREA_MAX = 120;
+	/** Every email address in a text node, masked while a picture is taken. */
+	var ADDRESS = /[\w.+-]+@[\w-]+(\.[\w-]+)+/g;
+	/** How long an answer about Your feedback stands before the host is asked again. */
+	var FEEDBACK_FRESH = 60000;
+
+	/** At most n characters as the website counts them (never half of a pair). */
+	function cutChars(s, n) {
+		var chars = Array.from(String(s || ''));
+		return chars.length <= n ? String(s || '') : chars.slice(0, n).join('');
+	}
+
+	/** The window or view the note is about: "Settings", "File details: Gear.SLDPRT",
+	 *  "Home > Robot 2027 > Drivetrain", or "Home". Team folder and file names, never an
+	 *  address; at most 120 characters. */
+	function feedbackArea(fromSettings) {
+		var where = 'Home';
+		if (fromSettings) where = 'Settings';
+		else if (ui.screen === 'detail' && ui.detail) where = 'File details: ' + ui.detail.name;
+		else if (ui.view && ui.view.connection === 'signedIn' && ui.index) {
+			var place = browserPlace();
+			if (place) where = ['Home', place.project.name].concat(place.folder ? place.folder.split('/') : []).join(' > ');
+		}
+		return cutChars(where, AREA_MAX);
+	}
+
+	/** Asks the host for Your feedback, at most once a minute. */
+	function readMyFeedback() {
+		var now = Date.now();
+		if (ui.mineAsked && now - ui.mineAsked < FEEDBACK_FRESH) return;
+		ui.mineAsked = now;
+		bridge.send('readMyFeedback');
+	}
+
+	/** True while the list can be offered: the website has it (shown), or it couldn't be
+	 *  read just now (offline, failed). Hidden when the website doesn't have it, or signed out. */
+	function mineOffered() {
+		var m = ui.myFeedback;
+		return !!m && (m.state === 'shown' || m.state === 'offline' || m.state === 'failed');
+	}
+
+	/** The Settings sheet's "Your feedback" key, with how many notes there are. */
+	function mineKeyHtml() {
+		if (!mineOffered()) return '';
+		var n = ui.myFeedback.state === 'shown' ? ui.myFeedback.notes.length : null;
+		return (
+			'<button class="key" type="button" data-action="openMyFeedback" data-key="set-mine" aria-haspopup="dialog"' +
+			(n != null ? ' aria-label="Your feedback, ' + esc(plural(n, 'note', 'notes')) + '"' : '') + '>' +
+			'Your feedback' + (n != null ? ' (' + esc(num(n)) + ')' : '') + '</button>'
+		);
+	}
+
+	/** Opens Send feedback. draft: a note being written, brought back from Your feedback. */
+	function openFeedback(fromSettings, returnKey, draft) {
+		readMyFeedback();
+		var d = draft || {};
+		openAsk('feedback', { kind: d.kind || 'idea', area: d.area || feedbackArea(fromSettings), body: d.body || '', tried: d.tried || '' }, returnKey);
+		ui.ask.shot = d.shot || null;
+		ui.ask.withoutPicture = !!d.withoutPicture;
+		paintShot();
+		paintSendKey();
+		paintTriedCount();
+	}
+
+	function feedbackHtml(c) {
+		var html = '<div class="segmented feedback-kinds" role="group" aria-label="What kind of feedback">';
+		FEEDBACK_KINDS.forEach(function (k) {
+			html +=
+				'<button class="pad seg seg-plain" type="button" data-action="reportKind" data-value="' + k[0] + '" data-key="ask-kind-' + k[0] + '" aria-pressed="' + (c.kind === k[0]) + '">' +
+				'<span class="seg-words"><span class="seg-name">' + esc(k[1]) + '</span><span class="seg-sub">' + esc(k[2]) + '</span></span></button>';
+		});
+		html += '</div>';
+		return (
+			titleBar('h2', 'Send feedback', ' id="ask-title"') +
+			'<div class="ask-body">' +
+			'<p class="ask-words" id="ask-words">' +
+			esc('Tell us what got in your way, what would make Armory better, or what you like. It goes to the IDEA team with Armory\'s version and what it was doing: file names, never what is in your files.') +
+			'</p>' +
+			html +
+			'<label class="field-label label" for="ask-report">Your feedback</label>' +
+			'<textarea class="field field-area" id="ask-report" data-key="ask-report" rows="5" maxlength="8000" spellcheck="true" aria-describedby="ask-words ask-error">' + esc(c.body) + '</textarea>' +
+			'<label class="field-label label" for="ask-tried">What did you try? (optional)</label>' +
+			'<textarea class="field field-tried" id="ask-tried" data-key="ask-tried" rows="3" maxlength="' + TRIED_MAX + '" spellcheck="true" aria-describedby="ask-tried-count">' + esc(c.tried) + '</textarea>' +
+			'<p class="field-count" id="ask-tried-count" aria-live="polite"></p>' +
+			'<p class="ask-about" id="ask-area"><span class="label">About</span> <span class="ask-about-where">' + esc(c.area) + '</span></p>' +
+			'<div class="ask-shot" id="ask-shot"></div>' +
+			'<p class="field-error" id="ask-error" aria-live="polite"></p>' +
+			'<div class="ask-keys">' +
+			'<span class="ask-mine" id="ask-mine-slot">' + mineLinkHtml() + '</span>' +
+			'<button class="key primary" type="button" data-action="askOk" data-key="ask-ok">Send</button>' +
+			'<button class="key" type="button" data-action="askCancel" data-key="ask-cancel">Cancel</button>' +
+			'</div></div>'
+		);
+	}
+
+	function mineLinkHtml() {
+		return mineOffered() ? '<button class="textlink" type="button" data-action="openMyFeedback" data-key="ask-mine">Your feedback</button>' : '';
+	}
+
+	/** The picture part: the key that takes one, or the picture itself as it would be sent. */
+	function shotHtml(a) {
+		var s = a.shot;
+		if (s)
+			return (
+				'<figure class="shot-figure">' +
+				'<img class="shot-img" id="ask-shot-img" src="' + esc(s.url) + '" alt="The picture of this window that would be sent" draggable="false">' +
+				'<figcaption class="shot-caption" id="ask-shot-caption">' +
+				esc('This is the picture that will be sent: ' + num(s.width) + ' by ' + num(s.height) + ' pixels, ' + bytes(s.bytes) + '. Email addresses and file pictures are hidden.' +
+					(s.scaled ? ' It was made smaller to fit 2 MB.' : '')) +
+				'</figcaption></figure>' +
+				'<button class="key" type="button" data-action="removeShot" data-key="ask-shot-remove">Remove picture</button>'
+			);
+		// The website can't take pictures yet (it said so, or it has no Your feedback either,
+		// which came with them): nothing to offer. Offline, the host's answer says so instead.
+		var m = ui.myFeedback;
+		if (m && (m.state === 'missing' || (m.state === 'shown' && !m.pictures))) return '';
+		return (
+			'<button class="key" type="button" data-action="addShot" data-key="ask-shot" aria-describedby="ask-shot-help">Add a picture of this window</button>' +
+			'<p class="setting-help" id="ask-shot-help">Only Armory\'s window is in it, with email addresses and file pictures hidden. You see it before it goes.</p>'
+		);
+	}
+
+	function paintShot() {
+		var box = ask.querySelector('#ask-shot');
+		if (box && ui.ask && ui.ask.kind === 'feedback') box.innerHTML = shotHtml(ui.ask);
+	}
+
+	/** Send, or "Send without the picture" once the host offered it and no picture is on. */
+	function paintSendKey() {
+		var ok = ask.querySelector('[data-key="ask-ok"]');
+		if (ok && ui.ask && !ok.querySelector('.spin')) ok.textContent = ui.ask.withoutPicture && !ui.ask.shot ? 'Send without the picture' : 'Send';
+	}
+
+	/** Near the limit, how much of it is used. */
+	function paintTriedCount() {
+		var box = ask.querySelector('#ask-tried');
+		var out = ask.querySelector('#ask-tried-count');
+		if (!box || !out) return;
+		var n = box.value.length;
+		out.textContent = n >= TRIED_MAX * 0.8 ? num(n) + ' of ' + num(TRIED_MAX) + ' characters' : '';
+	}
+
+	function setAskError(words) {
+		var out = ask.querySelector('#ask-error');
+		if (out) out.textContent = words || '';
+	}
+
+	/** The note as it stands, so Your feedback can bring it back. */
+	function feedbackDraft() {
+		var a = ui.ask;
+		return {
+			kind: a.ctx.kind,
+			area: a.ctx.area,
+			body: ask.querySelector('#ask-report').value,
+			tried: ask.querySelector('#ask-tried').value,
+			shot: a.shot,
+			withoutPicture: a.withoutPicture
+		};
+	}
+
+	function sendFeedback() {
+		var a = ui.ask;
+		if (!a || a.sending || a.shooting) return;
+		var box = ask.querySelector('#ask-report');
+		var words = box.value.trim();
+		if (!words) {
+			setAskError('Write a few words first.');
+			box.setAttribute('aria-invalid', 'true');
+			box.focus();
+			return;
+		}
+		box.removeAttribute('aria-invalid');
+		setAskError('');
+		var tried = ask.querySelector('#ask-tried').value.trim();
+		a.sending = act('sendFeedback', { kind: a.ctx.kind, body: words, tried: tried || null, area: a.ctx.area, shot: a.shot ? a.shot.id : null }, { key: 'ask-ok' });
+		lockFeedback(true);
+	}
+
+	/** While a note is on its way, nothing in the dialog changes it. */
+	function lockFeedback(on) {
+		Array.prototype.forEach.call(ask.querySelectorAll('textarea'), function (t) {
+			t.readOnly = on;
+		});
+		Array.prototype.forEach.call(ask.querySelectorAll('button'), function (b) {
+			if (b.getAttribute('data-key') !== 'ask-ok') b.disabled = on;
+		});
+	}
+
+	/** The host's answer to the note this dialog sent. */
+	function feedbackAnswered(m) {
+		var a = ui.ask;
+		a.sending = null;
+		lockFeedback(false);
+		if (m.ok) {
+			ask.close();
+			showResult(true, m.message);
+		} else {
+			// The words stay in the dialog, and so does what the host said; the working line goes.
+			showResult(false, '');
+			if (m.offer === 'withoutPicture') {
+				a.withoutPicture = true;
+				a.shot = null;
+				paintShot();
+			}
+			setAskError(m.message);
+			paintSendKey();
+			var ok = ask.querySelector('[data-key="ask-ok"]');
+			if (ok) ok.focus();
+		}
+		routeAnswered('sent');
+	}
+
+	/* ---- The picture of the window ---- */
+
+	/** Hides the dialog and what a picture must not show, waits two frames so the window is
+	 *  drawn that way, then asks the host for the picture. */
+	function takeShot() {
+		var a = ui.ask;
+		if (!a || a.kind !== 'feedback' || a.shooting || a.sending) return;
+		a.shooting = true;
+		setAskError('');
+		hideForShot();
+		requestAnimationFrame(function () {
+			requestAnimationFrame(function () {
+				if (ui.ask !== a) return restoreAfterShot();
+				a.shooting = bridge.send('captureWindow', { width: Math.max(1, Math.round(window.innerWidth)), height: Math.max(1, Math.round(window.innerHeight)) });
+			});
+		});
+	}
+
+	function hideForShot() {
+		var masked = [];
+		var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+		for (var node = walker.nextNode(); node; node = walker.nextNode()) {
+			var text = node.nodeValue;
+			if (text.indexOf('@') < 0) continue;
+			var hidden = text.replace(ADDRESS, function (address) {
+				return '•••@' + address.split('@')[1];
+			});
+			if (hidden !== text) {
+				masked.push([node, text]);
+				node.nodeValue = hidden;
+			}
+		}
+		ui.shooting = { masked: masked, held: [] };
+		ask.classList.add('away');
+		document.documentElement.classList.add('shooting');
+	}
+
+	/** Puts back every address, the pictures and the dialog, then the host messages that
+	 *  waited (a view or activity drawn meanwhile would have shown an address). */
+	function restoreAfterShot() {
+		var s = ui.shooting;
+		if (!s) return;
+		ui.shooting = null;
+		s.masked.forEach(function (m) {
+			m[0].nodeValue = m[1];
+		});
+		document.documentElement.classList.remove('shooting');
+		ask.classList.remove('away');
+		s.held.forEach(onHost);
+	}
+
+	/** True when a host message must wait until the picture is taken. */
+	function holdForShot(message) {
+		if (!ui.shooting || (message.type !== 'view' && message.type !== 'activity' && message.type !== 'fileDetail')) return false;
+		ui.shooting.held.push(message);
+		return true;
+	}
+
+	/** The host's answer to captureWindow. */
+	function shotTaken(m) {
+		restoreAfterShot();
+		var a = ui.ask;
+		if (!a || a.kind !== 'feedback' || a.shooting !== m.requestId) return;
+		a.shooting = null;
+		if (m.ok) a.shot = { id: m.id, url: m.url, width: m.width, height: m.height, bytes: m.bytes, scaled: !!m.scaled };
+		else setAskError(m.message || 'Armory couldn\'t take a picture of its window. You can send your note without one.');
+		paintShot();
+		paintSendKey();
+		var next = ask.querySelector('[data-key="ask-shot-remove"]') || ask.querySelector('[data-key="ask-shot"]');
+		if (next) next.focus({ preventScroll: true });
+		if (ui.routeShot === 'offer') {
+			// The demo's "can't go" state: the picture is sent, and its answer is awaited.
+			ui.routeShot = null;
+			waitFor('sent');
+			sendFeedback();
+		}
+		routeAnswered('shot');
+	}
+
+	/* ---- Your feedback ---- */
+
+	/** draft: the note being written when the list was opened from Send feedback. */
+	function openMyFeedback(returnKey, draft) {
+		readMyFeedback();
+		openAsk('myFeedback', { draft: draft || null }, returnKey);
+	}
+
+	function myFeedbackHtml(c) {
+		return (
+			titleBar('h2', 'Your feedback', ' id="ask-title"') +
+			'<div class="ask-body">' +
+			'<div class="mine-list" id="mine-list" aria-live="polite">' + mineListHtml() + '</div>' +
+			'<p class="setting-help mine-foot" id="ask-words">The IDEA team reads every note. There are no replies in Armory: the status shows where yours is.</p>' +
+			'<div class="ask-keys">' +
+			(c.draft ? '<button class="key" type="button" data-action="myFeedbackBack" data-key="mine-back">Back to your note</button>' : '') +
+			'<button class="key primary" type="button" data-action="askCancel" data-key="mine-done" data-ask-first="true">Done</button>' +
+			'</div></div>'
+		);
+	}
+
+	function mineListHtml() {
+		var m = ui.myFeedback;
+		if (!m) return '<p class="ask-words">Getting your feedback...</p>';
+		if (m.state !== 'shown') return '<p class="ask-words">' + esc(m.message || 'Your feedback isn\'t here yet.') + '</p>';
+		if (!m.notes.length) return '<p class="ask-words">You haven\'t sent any feedback from this account yet.</p>';
+		return (
+			'<ul class="mine-notes">' +
+			m.notes
+				.map(function (n) {
+					var when = '<time datetime="' + esc(n.createdAt) + '" title="' + esc(fullTime(n.createdAt)) + '">' + esc(agoWhole(n.createdAt)) + '</time>';
+					var facts = [n.deviceName ? 'from ' + esc(n.deviceName) : '', n.area ? 'about ' + esc(n.area) : '', n.hasScreenshot ? 'with a picture' : ''];
+					return (
+						'<li class="mine-note">' +
+						'<div class="mine-top"><span class="mine-kind">' + esc(KIND_NAME[n.kind] || 'Other') + '</span>' + chip(n.statusWords, STATUS_TONE[n.status] || 'off') + '</div>' +
+						'<p class="mine-body">' + esc(n.body) + '</p>' +
+						(n.tried ? '<p class="mine-tried"><span class="label">Tried</span> ' + esc(n.tried) + '</p>' : '') +
+						'<p class="mine-meta">' + metaLine([when].concat(facts)) + '</p>' +
+						'</li>'
+					);
+				})
+				.join('') +
+			'</ul>'
+		);
+	}
+
+	/** The host's answer to readMyFeedback. */
+	function myFeedbackRead(m) {
+		ui.myFeedback = { state: m.state, pictures: !!m.pictures, message: m.message || null, notes: m.notes || [] };
+		var slot = document.getElementById('set-mine-slot');
+		if (slot && sheet.open) slot.innerHTML = mineKeyHtml();
+		if (ui.ask && ui.ask.kind === 'myFeedback') {
+			var list = ask.querySelector('#mine-list');
+			if (list) list.innerHTML = mineListHtml();
+		}
+		if (ui.ask && ui.ask.kind === 'feedback' && !ui.ask.sending) {
+			var link = ask.querySelector('#ask-mine-slot');
+			if (link) link.innerHTML = mineLinkHtml();
+			if (!ui.ask.shot) paintShot();
+		}
+		routeAnswered('mine');
+	}
+
+	/* ---- The demo's places that wait for an answer ---- */
+
+	/** A demo route opened something that waits for the host (the demo answers at once):
+	 *  the page says it is ready only once the answer is drawn. */
+	function waitFor(name) {
+		ui.waits[name] = true;
+	}
+
+	function routeAnswered(name) {
+		if (!ui.waits[name]) return;
+		delete ui.waits[name];
+		if (ui.readyWanted && !Object.keys(ui.waits).length) {
+			ui.readyWanted = false;
+			markReady();
+		}
 	}
 
 	/* ------------------------------------------------------------- Actions */
@@ -2875,7 +3274,29 @@
 				// Send feedback opens over Home, from the account panel or from Settings.
 				var fromSettings = sheet.open;
 				if (fromSettings) sheet.close();
-				openAsk('feedback', { kind: 'idea' }, fromSettings ? 'hdr-settings' : 'feedback');
+				openFeedback(fromSettings, fromSettings ? 'hdr-settings' : 'feedback');
+				break;
+			case 'addShot':
+				takeShot();
+				break;
+			case 'removeShot':
+				if (ui.ask && ui.ask.kind === 'feedback') {
+					ui.ask.shot = null;
+					paintShot();
+					paintSendKey();
+					var addKey = ask.querySelector('[data-key="ask-shot"]');
+					if (addKey) addKey.focus();
+				}
+				break;
+			case 'openMyFeedback':
+				// From Settings, or from Send feedback (the note being written comes back with Back).
+				if (sheet.open) {
+					sheet.close();
+					openMyFeedback('hdr-settings', null);
+				} else if (ui.ask && ui.ask.kind === 'feedback') openMyFeedback(ui.ask.returnKey, feedbackDraft());
+				break;
+			case 'myFeedbackBack':
+				if (ui.ask && ui.ask.kind === 'myFeedback' && ui.ask.ctx.draft) openFeedback(false, ui.ask.returnKey, ui.ask.ctx.draft);
 				break;
 			case 'reportKind':
 				if (ui.ask && (ui.ask.kind === 'report' || ui.ask.kind === 'feedback')) {
@@ -2968,6 +3389,12 @@
 				return;
 			}
 		}
+		// Ctrl+Enter sends a note or a report from anywhere in its dialog.
+		if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && ask.open && ui.ask && (ui.ask.kind === 'feedback' || ui.ask.kind === 'report')) {
+			e.preventDefault();
+			askOk();
+			return;
+		}
 		if (e.key === 'Enter' && el && el.id === 'ask-name') {
 			e.preventDefault();
 			askOk();
@@ -3029,15 +3456,31 @@
 	// A click on the dim area around a sheet closes it.
 	[sheet, ask].forEach(function (d) {
 		d.addEventListener('click', function (e) {
-			if (e.target !== d) return;
+			if (e.target !== d || feedbackBusy()) return;
 			var r = d.getBoundingClientRect();
 			if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) d.close();
 		});
+	});
+	// A note on its way, or a picture being taken, keeps its dialog (Escape waits for it too).
+	ask.addEventListener('cancel', function (e) {
+		if (feedbackBusy()) e.preventDefault();
+	});
+	function feedbackBusy() {
+		return !!(ui.ask && (ui.ask.sending || ui.ask.shooting));
+	}
+	// What was tried: how much of its 1,000 characters is used, near the limit.
+	document.addEventListener('input', function (e) {
+		if (e.target && e.target.id === 'ask-tried') paintTriedCount();
 	});
 
 	/* ------------------------------------------------------- Host messages */
 
 	function markReady() {
+		// A demo place still waiting for an answer it draws (routeAnswered calls this again).
+		if (Object.keys(ui.waits).length) {
+			ui.readyWanted = true;
+			return;
+		}
 		if (ui.ready) return;
 		ui.ready = true;
 		requestAnimationFrame(function () {
@@ -3086,7 +3529,10 @@
 			ui.pin = [];
 			mountLists(false);
 		}
-		if (r.screen === 'settings') openSettings();
+		if (r.screen === 'settings') {
+			openSettings();
+			if (!ui.myFeedback) waitFor('mine');
+		}
 		routeDialog(r);
 		// A demo state drawn just after a key was pressed (the demo holds the answer).
 		if (r.press) {
@@ -3099,7 +3545,20 @@
 	function routeDialog(r) {
 		if (!r || !r.dialog) return;
 		if (r.dialog === 'report') openAsk('report', { kind: 'bug' }, 'hdr-settings');
-		if (r.dialog === 'feedback') openAsk('feedback', { kind: 'idea' }, 'feedback');
+		if (r.dialog === 'feedback') {
+			// words: typed in already; shot: a picture taken (offer: and sent, and refused).
+			openFeedback(false, 'feedback', r.words ? { body: r.words } : null);
+			if (!ui.myFeedback) waitFor('mine');
+			if (r.shot) {
+				ui.routeShot = r.shot;
+				waitFor('shot');
+				takeShot();
+			}
+		}
+		if (r.dialog === 'myFeedback') {
+			openMyFeedback('hdr-settings', null);
+			if (!ui.myFeedback) waitFor('mine');
+		}
 		if (r.dialog === 'takeBack' && ui.detail) askTakeBack([findRow(ui.detail.fileId)], 'd-takeback');
 		if (r.dialog === 'forceAll') {
 			var here = browserPlace();
@@ -3124,7 +3583,9 @@
 		}
 	}
 
-	bridge.onMessage(function (message) {
+	function onHost(message) {
+		// While the host takes a picture of the window, nothing redraws it.
+		if (holdForShot(message)) return;
 		if (message.type === 'view') {
 			var wasSignedIn = ui.view && ui.view.connection === 'signedIn';
 			ui.view = message.view;
@@ -3162,9 +3623,16 @@
 		} else if (message.type === 'actionResult') {
 			delete ui.pending[message.requestId];
 			endWorking(message.requestId);
-			showResult(!!message.ok, message.message);
+			// Send feedback answers in its own dialog, which stays open until then.
+			if (ui.ask && ui.ask.sending && ui.ask.sending === message.requestId) feedbackAnswered(message);
+			else showResult(!!message.ok, message.message);
+		} else if (message.type === 'windowShot') {
+			shotTaken(message);
+		} else if (message.type === 'myFeedback') {
+			myFeedbackRead(message);
 		}
-	});
+	}
+	bridge.onMessage(onHost);
 
 	bridge.send('ready');
 })();

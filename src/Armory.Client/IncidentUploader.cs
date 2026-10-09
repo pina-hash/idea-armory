@@ -152,10 +152,17 @@ public sealed class IncidentUploader
     // A new incident was saved: the next round comes now (still at most one a minute).
     public void Wake() => wake.Release();
 
-    // A note's words: through the window's FeedbackSender when there is one (no new fields).
-    private async Task<Guid> SubmitNoteAsync(string kind, string body, string version, string? device, JsonObject context, CancellationToken ct)
-        => feedback is null ? await api.SubmitAppFeedbackAsync(kind, body, version, device, context, ct)
-            : (await feedback.SubmitOnceAsync(kind, body, FeedbackSender.FitVersion(version), device, context, null, null, null, ct)).Id;
+    // A note's words, what was tried and the area: through the window's FeedbackSender when there
+    // is one (the eight-argument form while the site has it, never a picture: a saved note has
+    // none). Without one, the five-argument form, praise going as other and tried, area and the
+    // kind asked for in the context (FeedbackSender.WithAsked), as the sender's fallback does.
+    private async Task<Guid> SubmitNoteAsync(string kind, string body, string version, string? device, JsonObject context, string? tried, string? area,
+        CancellationToken ct)
+    {
+        if (feedback is not null) return (await feedback.SubmitOnceAsync(kind, body, FeedbackSender.FitVersion(version), device, context, tried, area, null, ct)).Id;
+        var narrow = FeedbackSender.NarrowKind(kind);
+        return await api.SubmitAppFeedbackAsync(narrow, body, version, device, FeedbackSender.WithAsked(context, kind != narrow ? kind : null, tried, area), ct);
+    }
 
     private static bool NeedsFeedback(JsonObject incident) => incident["feedback"] is JsonObject && incident["feedbackId"] is null;
     private static bool NoteOnly(JsonObject incident) => incident[IncidentDocument.NoteOnlyField] is JsonValue v && v.TryGetValue<bool>(out var only) && only;
@@ -189,8 +196,9 @@ public sealed class IncidentUploader
             if (NeedsFeedback(incident))
             {
                 var note = (JsonObject)incident["feedback"]!;
-                var id = await SendShortenedOnceAsync(file, incident, rpc, shortened => SubmitNoteAsync(Text(note, "kind") ?? "other",
-                    Body(Text(note, "body") ?? "", shortened), Version(incident, shortened), device, FeedbackContext(incident, shortened ? ShortenedContextBytes : MaximumContextBytes), ct));
+                var id = await SendShortenedOnceAsync(file, incident, rpc, shortened => SubmitNoteAsync(FeedbackSender.KindOf(Text(note, "kind")),
+                    Body(Text(note, "body") ?? "", shortened), Version(incident, shortened), device, FeedbackContext(incident, shortened ? ShortenedContextBytes : MaximumContextBytes),
+                    FeedbackSender.Optional(Text(note, "tried"), FeedbackSender.MaximumTriedCharacters), FeedbackSender.Optional(Text(note, "area"), FeedbackSender.MaximumAreaCharacters), ct));
                 incident["feedbackId"] = id.ToString();
                 feedbackSent.Add(file);
                 store.Rewrite(file, incident);
@@ -297,8 +305,8 @@ public sealed class IncidentUploader
     // What a person's report carries besides their words: what the app was doing and its last
     // log lines (paths, never file contents), from the incident saved with it, within maximumBytes
     // as JSON (the site's limit is 128 KiB as sent): the oldest log lines go first, then the
-    // snapshot.
-    internal static JsonObject FeedbackContext(JsonObject incident, int maximumBytes = MaximumContextBytes)
+    // snapshot. The window's Send feedback with a picture builds its context the same way.
+    public static JsonObject FeedbackContext(JsonObject incident, int maximumBytes = MaximumContextBytes)
     {
         var lines = new JsonArray();
         if (incident["log"] is JsonArray log)

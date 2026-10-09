@@ -91,7 +91,7 @@ so a person can hand the files over by hand today.
   "summary": "A loop pass took 74.0 s: 12 downloaded, 0 uploaded, 0 kept copies, 0 refused.",   // at most 500 characters
   "appVersion": "0.3.0", "osVersion": "Microsoft Windows 10.0.22631 (X64)", "deviceName": "LAB-PC-07", "email": "alex.kim@students.test",
   "projectId": null,
-  "feedback": null,              // { "kind": "bug", "body": "..." } for a userReport
+  "feedback": null,              // { "kind": "bug", "body": "..." } for a userReport; a note adds "tried" and "area" when given
   "feedbackId": null,            // the site's id once the words were sent
   "trigger": { "seq": 4012, "at": "...", "kind": "passEnd", ... },
   "flight": { "capacity": 4000, "recorded": 4012, "trimmed": 0, "events": [ ...oldest first... ] },
@@ -149,14 +149,29 @@ stays queued, the uploader does not ask for that RPC again for 6 hours (remember
 Offline, signed out or a busy site: tried again on the next round. A refusal for good (400,
 413, invalid input): the file is kept as `.held` and never sent again.
 
-## Send feedback (v0.3)
+## Send feedback (v0.3, the same as the website's since 0.3.3)
 
-"Send feedback" (a key in the window's header, and in Settings) opens the same small dialog: Bug, Idea or
-Other (Idea first), the words, Send. The window sends `sendFeedback { kind, body }`; the host
-saves a note (`<utc>-note.json.gz`, `noteOnly: true`: the words, the snapshot and the log's last
-lines, no flight events) and sends it at once through `armory_submit_app_feedback`, with the
-app's version and the computer's name. Nothing follows a note: no incident. A note that can't go
-now waits in the incidents folder like an incident and goes on a later round.
+"Send feedback" (a key in the window's header, and in Settings) opens a small dialog: Bug, Idea,
+Praise or Other (Idea first), the words, "What did you try?" (optional, up to 1,000
+characters), the window or view it is about (filled in by the page, up to 120), an optional
+picture of the Armory window, Send (or Ctrl+Enter). The window sends `sendFeedback { kind, body,
+tried, area, shot }` (docs/agent/BRIDGE.md).
+
+Without a picture the host saves a note (`<utc>-note.json.gz`, `noteOnly: true`: the words,
+`feedback: {kind, body, tried, area}` with tried and area only when given, the snapshot and the
+log's last lines, no flight events) and sends it at once through `armory_submit_app_feedback`,
+with the app's version and the computer's name. Nothing follows a note: no incident. A note
+that can't go now waits in the incidents folder like an incident and goes on a later round,
+with what was tried and the area. Tried and area are scrubbed like the words: another person's
+address is `[address]`, this computer's tokens and keys `[redacted]`.
+
+**A picture is never written to the incidents folder, or anywhere on disk.** A note with a
+picture is composed the same way (`IncidentReporter.ComposeNoteAsync`: the very document a saved
+note would hold, scrubbed, never saved) and sent at once with its picture; when it can't go, the
+window keeps the words and offers to send the note without the picture, which then takes the
+saved path above. The picture itself lives only in the window's memory until it is sent or
+replaced (docs/agent/CLIENT.md section 7, "The window's Send feedback"). The flight recorder
+keeps each upload as a transfer named `screenshot`: its size and how it ended, never its bytes.
 
 ## Report a problem
 

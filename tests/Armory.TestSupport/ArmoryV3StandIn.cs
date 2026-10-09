@@ -37,6 +37,23 @@ public static class ArmoryV3StandIn
         await ApplyAsync(database, "armory_v3_feedback_v2.sql");
     }
 
+    /// <summary>
+    /// 0235's functions without its storage half: what the migration leaves when its role could not
+    /// write Storage (its NOTICE path): no armory-feedback-shots bucket and none of its policies, so
+    /// an upload is refused as not available (Storage's 404 NoSuchBucket).
+    /// </summary>
+    public static async Task DropFeedbackShotsBucketAsync(ArmoryTestDatabase database)
+    {
+        await using var connection = await database.OpenAsync();
+        await using var command = new NpgsqlCommand("""
+            drop policy if exists "armory feedback shots insert own folder" on storage.objects;
+            drop policy if exists "armory feedback shots admin read" on storage.objects;
+            delete from storage.objects where bucket_id = 'armory-feedback-shots';
+            delete from storage.buckets where id = 'armory-feedback-shots';
+            """, connection);
+        await command.ExecuteNonQueryAsync();
+    }
+
     /// <summary>Sets a note's status the way the site admin's console does (new, seen, resolved or spam).</summary>
     public static async Task SetFeedbackStatusAsync(ArmoryTestDatabase database, Guid note, string status)
     {

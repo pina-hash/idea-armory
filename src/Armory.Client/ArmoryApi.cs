@@ -39,6 +39,16 @@ public sealed record AppFeedbackNote(Guid Id, DateTimeOffset CreatedAt, string K
     string AppVersion, string? DeviceName, string Status, DateTimeOffset? ReviewedAt)
 {
     public const string New = "new", Seen = "seen", Resolved = "resolved", Closed = "closed";
+
+    // Where a note is, in the words "Your feedback" shows. There are no replies: the status is all
+    // the site keeps for the person.
+    public static string StatusWords(string status) => status switch
+    {
+        New => "Not read yet",
+        Seen => "Read by the IDEA team",
+        Resolved => "Done",
+        _ => "Closed",
+    };
 }
 // The payload of a folder_purged change (v0.3, armory_purge_folder): those files and their
 // history are gone from the server.

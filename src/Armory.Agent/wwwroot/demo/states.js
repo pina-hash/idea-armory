@@ -800,6 +800,41 @@
 			view: signedIn({ sync: SYNCED, changes: shared({}) })
 		},
 
+		sendFeedback: {
+			label: 'Send feedback, the same as the website\'s: four kinds, the words, what was tried, what it is about, and a picture of this window to add',
+			screens: ['home'],
+			params: { folder: 'Drivetrain', at: 'browser', dialog: 'feedback' },
+			view: signedIn({ sync: SYNCED, changes: shared({}) })
+		},
+
+		feedbackPicture: {
+			label: 'Send feedback with a picture of this window: exactly what would go, its size, and a key to remove it',
+			screens: ['home'],
+			params: { folder: 'Drivetrain', at: 'browser', dialog: 'feedback', words: 'Check in spun for a minute on Gearbox.SLDASM, then said it was done.', shot: '1' },
+			view: signedIn({ sync: SYNCED, changes: shared({}) })
+		},
+
+		feedbackWithoutPicture: {
+			label: 'A picture that couldn\'t go: the words stay in the dialog, and the note can go without it',
+			screens: ['home'],
+			params: { folder: 'Drivetrain', at: 'browser', dialog: 'feedback', words: 'Check in spun for a minute on Gearbox.SLDASM, then said it was done.', shot: 'offer' },
+			view: signedIn({ sync: SYNCED, changes: shared({}) })
+		},
+
+		yourFeedback: {
+			label: 'Your feedback: each note, where it is with the IDEA team, and that there are no replies in Armory',
+			screens: ['home'],
+			params: { dialog: 'myFeedback' },
+			view: signedIn({ sync: SYNCED, changes: shared({}) })
+		},
+
+		yourFeedbackHidden: {
+			label: 'Settings while the website has no Your feedback yet: the key is not there',
+			screens: ['settings'],
+			params: { feedback: 'missing' },
+			view: signedIn({ sync: SYNCED, changes: shared({}) })
+		},
+
 		partialCheckOut: {
 			label: 'A folder checked out, two of its files held by someone else: the answer at the foot',
 			screens: ['home'],
@@ -1046,8 +1081,68 @@
 		return d;
 	}
 
+	/* ------------------------------------------------------ Send feedback */
+
+	/** This account's notes, newest first, as readMyFeedback answers (FeedbackNoteView). */
+	var MY_FEEDBACK = [
+		{
+			id: '0f8a2c1e-5b3d-4e6f-8a7b-9c0d1e2f3a41',
+			createdAt: ago(2 * HOUR),
+			kind: 'bug',
+			body: 'Check in spun for a minute on Gearbox.SLDASM, then said it was done. It happened twice today.',
+			tried: 'Closed SolidWorks and checked it in again.',
+			area: 'Home > Robot 2027 > Drivetrain',
+			hasScreenshot: true,
+			appVersion: '0.3.3',
+			deviceName: ME.device,
+			status: 'new',
+			statusWords: 'Not read yet',
+			reviewedAt: null
+		},
+		{
+			id: '0f8a2c1e-5b3d-4e6f-8a7b-9c0d1e2f3a40',
+			createdAt: ago(DAY + 3 * HOUR),
+			kind: 'idea',
+			body: 'Show who else is working in a folder before I check out all of it.',
+			tried: null,
+			area: 'Home',
+			hasScreenshot: false,
+			appVersion: '0.3.2',
+			deviceName: ME.device,
+			status: 'seen',
+			statusWords: 'Read by the IDEA team',
+			reviewedAt: ago(20 * HOUR)
+		},
+		{
+			id: '0f8a2c1e-5b3d-4e6f-8a7b-9c0d1e2f3a3f',
+			createdAt: ago(5 * DAY),
+			kind: 'praise',
+			body: 'Check in all is fast now. Thank you!',
+			tried: null,
+			area: 'Settings',
+			hasScreenshot: false,
+			appVersion: '0.3.2',
+			deviceName: 'ROOM-209-PC',
+			status: 'resolved',
+			statusWords: 'Done',
+			reviewedAt: ago(4 * DAY)
+		}
+	];
+
+	/** The demo's picture of the window: a small drawing of one (the app's is the window
+	 *  itself), and what the app's picture of the window would weigh. */
+	var WINDOW_SHOT = {
+		id: '9f2c4e0a1b3d4c5e8f7a6b5c4d3e2f10',
+		url:
+			'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAHAAAABMCAIAAAA6OqTKAAABL0lEQVR42u3cMQrCQBAF0JxBxE4RbS0sbIQg2HgeS4/m8SwEEYtoMNnNzj74rWheMfOTVZvldi0DpkEAtBzQ2/36TMhLbS/nH9P3JUCBFgoqlhLQ8KCzxVwGDFCgQOsFTTm8c73v2NcCFCjQ30E7bumADgm6O+xHSveHPJyOHekHumo3vQK0JNBcATrhGZoFNPKWf8d6PXj+CFCglYHWMkOzg6YpSem2PNBooNF6qBlqyyv2QIG6lwf6X22a1pYP8IAZaOgeCtSpJ1CgQPuB5krYGTpZ0FKPkYHWAqqH6qG2PFCgFYMmWKl1zdCpgRZ/jAxUbdJD9VBbHmi4LQ80M6gemgjUMbJzebUJqNpky485toACLRDUDPV7eaBA9VAzVA8FCtT3Q8WfCQIFKt/yAPGX/Ws5O4PZAAAAAElFTkSuQmCC',
+		bytes: 219113
+	};
+
 	window.ArmoryDemoStates = {
 		now: NOW,
+		/** Your feedback, and Send feedback's picture of the window. */
+		myFeedback: MY_FEEDBACK,
+		windowShot: WINDOW_SHOT,
 		defaultState: 'synced',
 		/** The state the demo starts in after "Connect this computer" finishes. */
 		afterConnect: 'synced',

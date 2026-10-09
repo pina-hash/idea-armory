@@ -42,13 +42,18 @@
 //               extension refused); the check-out question says to reopen the file and its
 //               key checks out and reopens; the Settings sheet, Pause (Resume is the green
 //               primary, and nothing to pause while offline), Connect and the one-click
-//               folder of your own do what they say.
+//               folder of your own do what they say. Send feedback has four kinds, What did
+//               you try? (1,000 characters, counted near the limit) and the place it is
+//               about; Ctrl+Enter sends; a picture shows as it would be sent and can be
+//               removed; a picture that can't go keeps the words and offers the note without
+//               it; Your feedback says where each note is and that there are no replies, and
+//               is hidden on a site without it.
 //   logo        the IDEA gear turns (idea-gear-spin, 24s, linear, infinite) when motion is
 //               allowed, holds still when the student asks for reduced motion, and is
 //               fully painted in both.
 //   bridge      inside a stand-in WebView2 host (no demo transport): the page says ready
 //               first, renders Home, detail and Connect from host messages alone, wears
-//               effectiveTheme, ignores a stray or unknown message, and every one of the 25
+//               effectiveTheme, ignores a stray or unknown message, and every one of the
 //               page-to-host types is sent by the control that should send it, carrying
 //               exactly the fields BRIDGE.md gives it (an action's requestId included; a
 //               drop goes with its files through postMessageWithAdditionalObjects). An
@@ -56,7 +61,12 @@
 //               the status line; Not now on the check-out question sends that question's
 //               key and hides only it; a kept copy's tone follows HistoryEntryView.routine,
 //               never its note; an 'actionResult' shows its words in the quiet line; a
-//               view that arrives while the folder dialog is open keeps the typed name. In
+//               view that arrives while the folder dialog is open keeps the typed name.
+//               While the host takes Send feedback's picture the dialog is hidden, no text
+//               holds an email address, no file picture shows and a view waits; the picture
+//               shown is the host's; the offer keeps the note and sends it with no picture;
+//               Settings offers Your feedback only while the website has it. The DevTools
+//               call that takes a picture again smaller gives half the size at scale 0.5. In
 //               a plain browser the theme comes from ?theme= (idea, spaceWhite or
 //               space-white) or prefers-color-scheme.
 //   shapes      every demo view and file detail has exactly the fields bridge.js documents
@@ -232,6 +242,16 @@ tally.shapeFailures = 0;
 			problem('shape', 'demo ' + name, f);
 		}
 		if (found.length > 5) problem('shape', 'demo ' + name, `... and ${found.length - 5} more`);
+	}
+	// The demo's answers to readMyFeedback and captureWindow (their fields come flat in the
+	// messages) are the host's records too.
+	const answers = shapeProblems({ state: 'shown', pictures: true, message: null, notes: clone(demo.myFeedback) }, 'FeedbackListView', 'demo myFeedback', []);
+	shapeProblems({ ok: true, id: demo.windowShot.id, url: demo.windowShot.url, width: 1120, height: 760, bytes: demo.windowShot.bytes, scaled: false, message: null },
+		'WindowShotView', 'demo windowShot', answers);
+	tally.shapes++;
+	for (const f of answers) {
+		tally.shapeFailures++;
+		problem('shape', 'demo answers', f);
 	}
 	// Planted: a row with a field the host never sends and one the host does, left out,
 	// and a status word FileStatus doesn't have.
@@ -1107,13 +1127,95 @@ for (const size of SIZES) {
 		expect((await text(page, '#result-word')) === 'Sent. Thank you for telling us.', `the answer says "${await text(page, '#result-word')}"`);
 		expect((await page.evaluate(() => document.activeElement && document.activeElement.getAttribute('data-key'))) === 'hdr-settings', 'focus did not come back to Settings');
 	});
+	await flow('send feedback, the same as the website\'s', size, 'synced', async (page, expect) => {
+		await page.click('[data-key="row-dir:Drivetrain"]');
+		await settle(page);
+		await page.click('[data-key="feedback"]');
+		await settle(page);
+		expect((await page.evaluate(() => document.activeElement && document.activeElement.id)) === 'ask-report', 'the words field does not have focus');
+		// Four kinds, Idea first; what was tried, up to 1,000 characters; the place it is about.
+		const kinds = await page.$$eval('#ask [data-action="reportKind"]', (b) => b.map((x) => x.getAttribute('data-value') + ':' + x.getAttribute('aria-pressed')));
+		expect(kinds.join() === 'bug:false,idea:true,praise:false,other:false', 'the kinds are ' + kinds.join());
+		expect((await page.getAttribute('#ask-tried', 'maxlength')) === '1000', 'What did you try? does not stop at 1,000 characters');
+		expect((await text(page, '#ask-area')) === 'About Home > Robot 2027 > Drivetrain', `the note is about "${await text(page, '#ask-area')}"`);
+		// Empty words are refused in the page, Ctrl+Enter included.
+		await page.keyboard.press('Control+Enter');
+		await settle(page);
+		expect((await page.evaluate(() => document.getElementById('ask').open)) && /Write a few words/.test(await text(page, '#ask-error')), 'empty feedback was sent');
+		await page.click('[data-key="ask-kind-praise"]');
+		await page.fill('#ask-report', 'Check in all is fast now.');
+		await page.fill('#ask-tried', 'x'.repeat(950));
+		await settle(page);
+		expect((await text(page, '#ask-tried-count')) === '950 of 1,000 characters', `near the limit the count says "${await text(page, '#ask-tried-count')}"`);
+		// The list of notes, and back to the note with every word kept.
+		await page.click('[data-key="ask-mine"]');
+		await settle(page);
+		expect((await text(page, '#ask-title')) === 'Your feedback' && /There are no replies in Armory/.test(await text(page, '#ask')), 'Your feedback did not open from Send feedback');
+		await page.click('[data-key="mine-back"]');
+		await settle(page);
+		expect(
+			(await page.inputValue('#ask-report')) === 'Check in all is fast now.' && (await page.inputValue('#ask-tried')).length === 950 &&
+				(await page.getAttribute('[data-key="ask-kind-praise"]', 'aria-pressed')) === 'true',
+			'coming back from Your feedback lost the note'
+		);
+		await page.focus('#ask-tried');
+		await page.keyboard.press('Control+Enter');
+		await settle(page);
+		expect(!(await page.evaluate(() => document.getElementById('ask').open)), 'Ctrl+Enter did not send');
+		expect((await text(page, '#result-word')) === 'Sent. Thank you for the feedback.', `the answer says "${await text(page, '#result-word')}"`);
+	});
+	await flow('a picture of the window, shown as it would be sent', size, 'synced', async (page, expect) => {
+		await page.click('[data-key="feedback"]');
+		await settle(page);
+		await page.fill('#ask-report', 'Check in spun.');
+		await page.click('[data-key="ask-shot"]');
+		await page.waitForSelector('#ask-shot-img', { timeout: 3000 });
+		await settle(page);
+		expect(!(await page.evaluate(() => document.documentElement.classList.contains('shooting') || document.getElementById('ask').classList.contains('away'))), 'the window stayed masked after the picture');
+		expect(/^This is the picture that will be sent: \d[\d,]* by \d[\d,]* pixels, 214 KB\. Email addresses and file pictures are hidden\.$/.test(await text(page, '#ask-shot-caption')),
+			`the picture says "${await text(page, '#ask-shot-caption')}"`);
+		await page.click('[data-key="ask-shot-remove"]');
+		await settle(page);
+		expect(!(await page.$('#ask-shot-img')) && !!(await page.$('[data-key="ask-shot"]')), 'Remove picture left the picture');
+		expect((await page.inputValue('#ask-report')) === 'Check in spun.', 'taking a picture lost the words');
+	});
+	await flow('a picture that can\'t go offers the note without it', size, 'feedbackWithoutPicture', async (page, expect) => {
+		expect(await page.evaluate(() => document.getElementById('ask').open), 'the dialog closed on a refused picture');
+		expect((await text(page, '[data-key="ask-ok"]')) === 'Send without the picture', `the key says "${await text(page, '[data-key="ask-ok"]')}"`);
+		expect(/You can send it without the picture\./.test(await text(page, '#ask-error')), `the dialog says "${await text(page, '#ask-error')}"`);
+		expect((await page.inputValue('#ask-report')).length > 0, 'the words were lost');
+		await page.click('[data-key="ask-ok"]');
+		await settle(page);
+		expect(!(await page.evaluate(() => document.getElementById('ask').open)), 'Send without the picture did not send');
+		expect((await text(page, '#result-word')) === 'Sent. Thank you for the feedback.', `the answer says "${await text(page, '#result-word')}"`);
+	});
+	await flow('your feedback: where each note is, and no replies', size, 'synced', async (page, expect) => {
+		await page.click('[data-key="hdr-settings"]');
+		await settle(page);
+		await page.click('[data-key="set-mine"]');
+		await settle(page);
+		expect(await page.evaluate(() => document.getElementById('ask').open && !document.getElementById('settings').open), 'Your feedback did not open over Home');
+		const words = await page.$$eval('#ask .mine-note .chip', (c) => c.map((x) => x.textContent.trim()));
+		expect(words.join('|') === 'Not read yet|Read by the IDEA team|Done', 'the notes say ' + words.join(', '));
+		expect((await text(page, '.mine-foot')) === 'The IDEA team reads every note. There are no replies in Armory: the status shows where yours is.', 'the list does not say there are no replies');
+		await page.click('[data-key="mine-done"]');
+		await settle(page);
+		expect(!(await page.evaluate(() => document.getElementById('ask').open)), 'Done left the list open');
+	});
+	await flow('your feedback is hidden on a site without it', size, 'yourFeedbackHidden', async (page, expect) => {
+		expect(await page.evaluate(() => document.getElementById('settings').open), 'Settings did not open');
+		expect(!(await page.$('[data-key="set-mine"]')), 'Your feedback shows on a site without it');
+		await page.click('[data-key="set-feedback"]');
+		await settle(page);
+		expect(!(await page.$('[data-key="ask-mine"]')) && !(await page.$('[data-key="ask-shot"]')), 'Send feedback offers Your feedback or a picture on a site without them');
+	}, 'settings');
 	await flow('settings sheet', size, 'synced', async (page, expect) => {
 		await page.click('[data-key="hdr-settings"]');
 		await settle(page);
 		expect(await page.evaluate(() => document.getElementById('settings').open), 'Settings did not open');
 		// A theme pad says its name and, under it, what it is ("Dark", "Light"); the name is the setting.
 		const keys = await page.$$eval('#settings button', (b) => b.map((x) => (x.querySelector('.seg-name') || x).textContent.trim()));
-		expect(keys.join('|') === 'Done|Change|On|Match Windows|IDEA|Space White|Report a problem|Send feedback|Open incidents folder', `sheet holds ${keys.join(', ')}`);
+		expect(keys.join('|') === 'Done|Change|On|Match Windows|IDEA|Space White|Report a problem|Send feedback|Your feedback (3)|Open incidents folder', `sheet holds ${keys.join(', ')}`);
 		await page.click('[data-key="set-theme-spaceWhite"]');
 		await settle(page);
 		expect((await page.getAttribute('html', 'data-theme')) === 'spaceWhite', 'Space White did not apply');
@@ -1278,10 +1380,13 @@ const CONTRACT = {
 	chooseVaultRoot: [],
 	reportProblem: ['kind', 'body', ...ACT],
 	openIncidents: [],
-	sendFeedback: ['kind', 'body', ...ACT],
+	sendFeedback: ['kind', 'body', 'tried', 'area', 'shot', ...ACT],
 	// 0.3.3: File detail's Put back on this computer on a kept copy (the host's half is in;
 	// the page's key is still to come, so this reports "never sent" until it is there).
-	putBackKeptCopy: ['fileId', 'versionId', ...ACT]
+	putBackKeptCopy: ['fileId', 'versionId', ...ACT],
+	// Asks (0.3.3): a requestId, answered by windowShot and myFeedback.
+	captureWindow: ['width', 'height', ...ACT],
+	readMyFeedback: [...ACT]
 };
 tally.bridgeFailures = 0;
 tally.bridgeTypes = 0;
@@ -1625,8 +1730,113 @@ tally.bridgeTypes = 0;
 		await page.fill('#ask-report', 'Show who is online on the team page.');
 		m = await click('[data-key="ask-ok"]');
 		expect(m.type === 'sendFeedback' && m.kind === 'idea' && m.body === 'Show who is online on the team page.', 'Send feedback sent ' + JSON.stringify(m));
-		await host({ type: 'actionResult', requestId: m.requestId, ok: true, message: 'Sent. Thank you for the feedback.' });
+		await host({ type: 'actionResult', requestId: m.requestId, ok: true, message: 'Sent. Thank you for the feedback.', offer: null });
 		expect((await page.textContent('#result-word')) === 'Sent. Thank you for the feedback.', 'the feedback\'s answer was not shown');
+
+		// Send feedback with a picture of the window (0.3.3). While the host takes it the dialog
+		// and its scrim are hidden, no text on the page holds an email address, no file picture
+		// shows, and a view that arrives waits; then all of it comes back and the picture shows
+		// exactly as the host will send it. A picture that can't go keeps the note and offers it
+		// without the picture.
+		const SHOT_ID = '9f2c4e0a1b3d4c5e8f7a6b5c4d3e2f10';
+		const SHOT_URL = demo.windowShot.url;
+		const ADDRESS = '[\\w.+-]+@[\\w-]+(\\.[\\w-]+)+';
+		m = await click('[data-key="feedback"]');
+		expect(await page.evaluate(() => document.getElementById('ask').open), 'Send feedback did not open again: ' + JSON.stringify(m));
+		await page.click('[data-key="ask-kind-bug"]');
+		await page.fill('#ask-report', 'Check in spun on Gearbox.SLDASM.');
+		await page.fill('#ask-tried', 'Restarted Armory.');
+		const aboutWords = ((await page.textContent('#ask-area')) || '').replace(/\s+/g, ' ').trim();
+		// A file picture as the app shows one (the page asks the host for none outside the app).
+		await page.evaluate((src) => {
+			const slot = document.createElement('span');
+			const img = document.createElement('img');
+			img.className = 'thumb';
+			img.id = 'planted-thumb';
+			img.alt = '';
+			img.src = src;
+			slot.appendChild(img);
+			document.getElementById('main').appendChild(slot);
+		}, SHOT_URL);
+		await page.click('[data-key="ask-shot"]');
+		await page.waitForFunction(() => window.__sent.some((x) => x.type === 'captureWindow'), null, { timeout: 3000 }).catch(() => {});
+		const during = await page.evaluate((pattern) => {
+			const found = [];
+			const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+			for (let n = walker.nextNode(); n; n = walker.nextNode()) if (new RegExp(pattern).test(n.nodeValue)) found.push(n.nodeValue.trim());
+			return {
+				dialog: getComputedStyle(document.getElementById('ask')).visibility,
+				shooting: document.documentElement.classList.contains('shooting'),
+				thumb: getComputedStyle(document.getElementById('planted-thumb')).visibility,
+				addresses: found,
+				masked: document.body.textContent.includes('•••@boscotech.edu')
+			};
+		}, ADDRESS);
+		expect(during.dialog === 'hidden' && during.shooting && during.thumb === 'hidden' && !during.addresses.length && during.masked,
+			'while the picture was taken the window showed ' + JSON.stringify(during));
+		const shotAsks = await take();
+		all.push(...shotAsks);
+		const capture = shotAsks.find((x) => x.type === 'captureWindow') || {};
+		expect(capture.width === 1280 && capture.height === 800 && typeof capture.requestId === 'string', 'Add a picture asked for ' + JSON.stringify(capture));
+		await host({ type: 'view', view: view('synced', { sync: { state: 'synced', line: 'Held until the picture was taken.', detail: null, pendingCount: 0 } }) });
+		expect(!(await page.evaluate(() => document.body.textContent.includes('Held until the picture was taken.'))), 'a view redrew the window while its picture was taken');
+		await host({ type: 'windowShot', requestId: capture.requestId, ok: true, id: SHOT_ID, url: SHOT_URL, width: 1280, height: 800, bytes: 219113, scaled: true, message: null });
+		const afterShot = await page.evaluate(() => ({
+			dialog: getComputedStyle(document.getElementById('ask')).visibility,
+			shooting: document.documentElement.classList.contains('shooting'),
+			address: document.body.textContent.includes('jordan.reyes@boscotech.edu'),
+			held: document.body.textContent.includes('Held until the picture was taken.'),
+			src: (document.getElementById('ask-shot-img') || {}).src || null,
+			caption: ((document.getElementById('ask-shot-caption') || {}).textContent || '').replace(/\s+/g, ' ').trim(),
+			words: document.getElementById('ask-report').value
+		}));
+		expect(afterShot.dialog === 'visible' && !afterShot.shooting && afterShot.address && afterShot.held, 'after the picture the window is ' + JSON.stringify(afterShot));
+		expect(afterShot.src === SHOT_URL, 'the picture shown is not the one the host will send: ' + String(afterShot.src).slice(0, 40));
+		expect(afterShot.caption === 'This is the picture that will be sent: 1,280 by 800 pixels, 214 KB. Email addresses and file pictures are hidden. It was made smaller to fit 2 MB.',
+			'the picture says ' + afterShot.caption);
+		expect(afterShot.words === 'Check in spun on Gearbox.SLDASM.', 'taking the picture lost the words');
+		m = await click('[data-key="ask-ok"]');
+		expect(m.type === 'sendFeedback' && m.kind === 'bug' && m.body === 'Check in spun on Gearbox.SLDASM.' && m.tried === 'Restarted Armory.' && m.shot === SHOT_ID &&
+			'About ' + m.area === aboutWords, 'Send with a picture sent ' + JSON.stringify(m) + ' about ' + aboutWords);
+		expect(await page.evaluate(() => document.getElementById('ask').open), 'the dialog closed before the host answered');
+		await host({ type: 'actionResult', requestId: m.requestId, ok: false, offer: 'withoutPicture',
+			message: 'Your note wasn\'t sent: that screenshot is already on another note. You can send it without the picture.' });
+		const offered = await page.evaluate(() => ({
+			open: document.getElementById('ask').open,
+			key: document.querySelector('[data-key="ask-ok"]').textContent.trim(),
+			said: document.getElementById('ask-error').textContent,
+			words: document.getElementById('ask-report').value,
+			tried: document.getElementById('ask-tried').value,
+			picture: !!document.getElementById('ask-shot-img')
+		}));
+		expect(offered.open && offered.key === 'Send without the picture' && /already on another note/.test(offered.said) && offered.words === 'Check in spun on Gearbox.SLDASM.' &&
+			offered.tried === 'Restarted Armory.' && !offered.picture, 'the offer showed ' + JSON.stringify(offered));
+		m = await click('[data-key="ask-ok"]');
+		expect(m.type === 'sendFeedback' && m.shot === null && m.body === 'Check in spun on Gearbox.SLDASM.' && m.tried === 'Restarted Armory.', 'Send without the picture sent ' + JSON.stringify(m));
+		await host({ type: 'actionResult', requestId: m.requestId, ok: true, message: 'Saved. It will be sent when this computer is back online.', offer: null });
+		expect(!(await page.evaluate(() => document.getElementById('ask').open)) && (await page.textContent('#result-word')) === 'Saved. It will be sent when this computer is back online.',
+			'the note without its picture did not close with its answer');
+
+		// Your feedback: in Settings while the website has it (or it couldn't be read just now),
+		// never when it doesn't; its list says where each note is, and that there are no replies.
+		await click('[data-key="hdr-settings"]');
+		const mine = (n) => ({ type: 'myFeedback', requestId: 'r-mine', state: 'shown', pictures: true, message: null, notes: demo.myFeedback.slice(0, n) });
+		await host(mine(3));
+		expect(((await page.textContent('[data-key="set-mine"]').catch(() => '')) || '').trim() === 'Your feedback (3)', 'Settings does not offer Your feedback (3)');
+		await host({ type: 'myFeedback', requestId: 'r-mine', state: 'offline', pictures: false, message: 'You\'re offline. Your feedback shows here once this computer is back online.', notes: [] });
+		expect(((await page.textContent('[data-key="set-mine"]').catch(() => '')) || '').trim() === 'Your feedback', 'offline, Settings does not offer Your feedback');
+		await host({ type: 'myFeedback', requestId: 'r-mine', state: 'missing', pictures: false, message: null, notes: [] });
+		expect(!(await page.$('[data-key="set-mine"]')), 'Settings offers Your feedback on a site without it');
+		await host(mine(2));
+		m = await click('[data-key="set-mine"]');
+		const listed = await page.evaluate(() => ({
+			title: document.getElementById('ask-title').textContent.trim(),
+			words: [...document.querySelectorAll('#ask .mine-note .chip')].map((c) => c.textContent.trim()),
+			foot: document.querySelector('#ask .mine-foot').textContent.trim()
+		}));
+		expect(listed.title === 'Your feedback' && listed.words.join('|') === 'Not read yet|Read by the IDEA team' && /There are no replies in Armory/.test(listed.foot),
+			'Your feedback listed ' + JSON.stringify(listed));
+		await click('[data-key="mine-done"]');
 		await click('[data-key="hdr-settings"]');
 		await page.keyboard.press('Escape');
 		m = await click('[data-key="signout"]');
@@ -1760,6 +1970,34 @@ tally.bridgeTypes = 0;
 	}
 	function expect(ok, what) {
 		if (!ok) fails.push(what);
+	}
+}
+
+// Send feedback's picture taken again smaller (MainWindow, when the first is over 2 MB): the
+// DevTools protocol's Page.captureScreenshot with exactly the parameters
+// WindowShots.CaptureParameters makes (FeedbackDeskTests holds the C# to this same JSON), on the
+// engine WebView2 runs. At a device scale of 1, clip.scale 0.5 gives half the window's width and
+// height: the window's own viewport, never beyond it.
+{
+	const fails = [];
+	const context = await browser.newContext({ viewport: { width: 1120, height: 760 }, deviceScaleFactor: 1, colorScheme: 'dark', reducedMotion: 'reduce' });
+	const page = await context.newPage();
+	try {
+		await page.goto(pathToFileURL(path.join(WWWROOT, 'index.html')).href + '?state=synced');
+		await page.waitForSelector('html[data-ready="true"]', { timeout: 15000 });
+		const cdp = await context.newCDPSession(page);
+		const parameters = JSON.parse('{"format":"png","captureBeyondViewport":false,"clip":{"x":0,"y":0,"width":1120,"height":760,"scale":0.5}}');
+		const shot = await cdp.send('Page.captureScreenshot', parameters);
+		const png = Buffer.from(shot.data, 'base64');
+		const size = png.length > 24 && png.toString('latin1', 12, 16) === 'IHDR' ? [png.readUInt32BE(16), png.readUInt32BE(20)] : null;
+		if (!size || size[0] !== 560 || size[1] !== 380) fails.push('clip.scale 0.5 of 1120x760 gave ' + JSON.stringify(size));
+	} catch (e) {
+		fails.push('threw ' + String(e.message || e).split('\n')[0]);
+	}
+	await context.close();
+	for (const f of fails) {
+		tally.bridgeFailures++;
+		problem('capture', 'Page.captureScreenshot', f);
 	}
 }
 
