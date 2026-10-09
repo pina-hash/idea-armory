@@ -40,6 +40,19 @@ rather than losing them; the agent's own moves are written at once. `FolderMoves
 had no readable id, or when its id was not found while another folder's id could not be read.
 `Renames` is null on the first scan after a start, which has no earlier file map.
 
+The file map (path, NTFS id, size, last-write time, hash, hash time) survives a restart too,
+in `.armory\file-hashes.json` (0.3.3: first scans of 10 to 38 seconds in the field hashed the
+whole vault again). It is written through and atomically renamed, at most once a minute while
+files change and when the detector is disposed. The first scan after a start takes a hash from
+it only for the same file (NTFS id) at the same path with the same size and last-write time,
+hashed outside the racy window, exactly as any later scan reuses its own; anything unreadable
+is no map at all (every file is hashed, as before), and a map not written means more hashing,
+never less. It does not prove renames (`Renames` stays null on that scan). A canceled token
+stops a scan between files (the agent quitting), and what it had read is dropped.
+`FileIdentity.StillAsHashed` tells a later step that a file is still the one the scan hashed
+(the same id, size and last-write time, hashed outside the racy window): a check out uses the
+scan's hash then instead of reading the file again (`IVaultFileSystem.UnchangedSinceScan`).
+
 Renames require an identical NTFS volume/file id. Ambiguous hard-link identities are not
 guessed. File renames come in path order, except that a rename onto a path another rename
 leaves comes after it, so a chain (Plate to "Plate old", then "Plate v2" to Plate) applies
@@ -87,7 +100,9 @@ writing (`FileAccess.ReadWrite`, `FileShare.Read`, as SolidWorks holds a part) i
 the bytes changed with size and time put back; a folder that cannot be listed (a
 deny ACE) keeps only what is inside it; a chain and a swap of real folders come in an order
 that applies; and a folder renamed while the detector was stopped is one move from the saved
-map, reported again after a crash and never after the agent's own move. `FolderMoveOrderTests`
+map, reported again after a crash and never after the agent's own move; the second start
+hashes only what changed since the first, a canceled scan stops between files, and a file is
+unchanged since the scan only while its id, size and time are. `FolderMoveOrderTests`
 run the ordering on every host, including 3,000 random trees of student renames, moves,
 deletions and new folders, each list applied move by move with every target free, and the
 order of file renames (a chain, a case-only rename and a swap).

@@ -19,7 +19,11 @@ Before changing an attribute, the adapter writes and fully flushes a desired-sta
 whole batch, and not at all when no intent changed, so a 5,000-file import costs one flushed
 write and a pass that applies the same rule again costs none; a file whose bit cannot be
 changed is returned, retried by the next scan (bits only, one batch) and reported in its
-problems, and never stops the others.
+problems, and never stops the others. `ApplyLockAttributesNow` (0.3.3) applies a batch the
+same way, with one manifest write, and returns the files it could not change instead of
+retrying them: the engine sets the bits of a whole chunk of check outs or releases in one call
+(a thousand bits in one call in the Windows test), still before each release, and keeps the
+lock of any file whose bit it could not set.
 
 An intent belongs to one file, not to a path: it records the NTFS id of the file it was
 made for, and a path with no file keeps no intent. When the agent moves a folder

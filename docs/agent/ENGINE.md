@@ -54,7 +54,7 @@ await engine.AddFilesAsync(projectId, folder, sources);       // files and whole
 engine.DismissNotice(key);            // a notice card's OK, or one check-out question ("prompt:...")
 await engine.DismissNoticeAsync(key); // the same, done once the view (or the next one) leaves it out
 await engine.MoveAsync(from, to);     // a rename through armory_move_file
-await engine.StopAsync();
+await engine.StopAsync();             // ends the pass at once, from any thread (0.3.3)
 
 // The SolidWorks link (0.3.3; "The SolidWorks year" below). Each marshals onto the engine thread.
 engine.RecordReleaseStamp(stamp);     // after a save it watched: Core ReleaseStamp for exactly those bytes
@@ -67,6 +67,8 @@ engine.SolidWorksDetached();
 open files this computer has not checked out, for the tray's one quiet balloon per opened
 file (D13). Every method marshals onto the engine's own thread (see Threading), so the
 window's UI thread only awaits: it never scans, hashes, saves the state or waits on a pass.
+File detail and Open of a file already on this disk never wait for the engine thread at all
+(0.3.3, "Every click at once" below).
 `View`, `IsPaused` and `OpenWithoutCheckOut` are published values, read without the engine.
 
 ## One pass
@@ -88,6 +90,9 @@ A pass has four phases. A, B and D run one step at a time; C moves files several
    that person's work). Two accounts in one folder at once is never allowed.
 2. **Scan, folders, capture.** The platform scan (ignore list applied) gives every file's hash,
    its read-only bit, the folders, the folder moves it proved and SolidWorks' `~$` markers.
+   It runs off the engine thread and stops between files when the engine stops (0.3.3). The
+   markers' documents are asked about once, together; a marker found stale is not asked about
+   again until SolidWorks writes it again ("Every click at once" below).
    Folder changes on this disk are read first (see Folders and projects): a folder move this
    engine was making when it stopped is finished from what the disk shows, a renamed folder's
    records follow the disk, a project folder renamed, moved or removed in Explorer is put back,
@@ -131,12 +136,13 @@ A pass has four phases. A, B and D run one step at a time; C moves files several
 
 **Phase B. Plan with Core, Explicit mode.** For every path, in path order:
    `Reconciler.Plan(SyncInput)` with base,
-   local hash, remote revision, lock ownership, open state (`IsOpenNow`: the platform's check
-   or a `~$` marker; since 0.3.2 asked once for every file on disk before planning,
-   `IVaultFileSystem.OpenAmong`, never once per file: on Windows each question was a Restart
-   Manager session of about 28 ms, so planning 1,500 files took 40 seconds every pass and every
-   click waited behind it; a batch of check outs and the `~$` markers are asked the same way,
-   and every write still asks again just before it), online state, the break obligation, the saved release (read only
+   local hash, remote revision, lock ownership, open state (a live `~$` marker, or the
+   platform's answer; since 0.3.3 asked only about the files on disk whose plan depends on it,
+   `Reconciler.OpenMatters`, once for all of them and off the engine thread,
+   `IVaultFileSystem.OpenAmongAsync`: 0.3.1 asked file by file, about 28 ms a Restart Manager
+   session, so planning 1,500 files took 40 seconds; 0.3.2 asked about every file at once and
+   held the engine thread for its 10 second budget; every write still asks again just before
+   it, see "Every click at once" below), online state, the break obligation, the saved release (read only
    for bytes that changed: see "The SolidWorks year"), the project's
    pin and gate mode, the preserved hash, `CheckoutMode.Explicit` and the student's request
    (`CheckIn` or `Undo` from the file's state; a closed add counts as `CheckIn`). Offline
@@ -148,7 +154,9 @@ A pass has four phases. A, B and D run one step at a time; C moves files several
    accents away (NFKD, marks dropped, so the dotted capital I is I), makes the capital sharp s
    the small one and folds case both ways, where .NET's casing alone keeps "ẞolt" and "ßolt",
    or "İnsert" and "insert", apart. Folding more than the server only puts a few more files in
-   one unit. The activity panel learns here how many files and bytes will go each way.
+   one unit. The activity panel learns here how many files and bytes will go each way. An
+   action's pass plans only its own paths and the files sharing a name with them (0.3.3); a
+   loop pass gives way to a waiting click every 100 paths.
 
 **Phase C. The units**, at most `EngineOptions.TransferConcurrency` at once. A unit runs its
    files' plans in order and each plan's actions in order; any failure stops that file until
@@ -162,12 +170,17 @@ A pass has four phases. A, B and D run one step at a time; C moves files several
    second and last read of the pass). Then, file by file in path order: a check in, an
    undo and a closed add let their lock go once the file is clean, and a lock taken only for
    a move or a removal as soon as that is done, whatever is on disk; always read-only first,
-   then the release, and a read-only bit that can't be set keeps the lock until a later pass
-   can set it. A check in, an undo or an add of a file on this disk is decided by a read of
+   then the release (one `ApplyLockAttributesNow` batch per chunk of releases, 0.3.3), and a
+   read-only bit that can't be set keeps the lock until a later pass can set it. A check in, an undo or an add of a file on this disk is decided by a read of
    it, never by the scan alone: never while it is open, never over bytes not read just now
    ("Check in when closed", under Check out). An asked-for check out keeps any lock this
    computer holds and otherwise takes its own (see Check out). Whether the files are open is
-   asked once for the check outs and the check ins together. The check outs are then taken,
+   asked once, fresh, for the check ins and for the check outs whose copy is not the shared
+   version (0.3.3: a check out over the shared version takes its lock open or not; for its
+   "open it again" hint those files get a glance first, within 250 ms). The check outs are
+   then taken (a check out reuses
+   the scan's hash when the platform says the file is unchanged since, `UnchangedSinceScan`,
+   and makes its files writable in batches),
    the check ins' files read, and the releases' in-flight
    records saved together, once, and the releases sent, both `TransferConcurrency` at a
    time like the units (a crash or the connection stops them as it stops the units). The
@@ -186,8 +199,9 @@ A pass has four phases. A, B and D run one step at a time; C moves files several
    keeps it writable). A file the scan could not read is left as it is until a pass can read
    it (its read-only bit in the scan is the last one read). Files the server does
    not have (not added yet, a refused name, a release-gate draft, too large) are never
-   touched. A bit the scan finds cleared is set again. One batch per pass
-   (`ApplyLockAttributes`, one manifest write); a download sets the bit on the staged copy
+   touched. A bit the scan finds cleared is set again. Whether a file waiting to be let go is
+   open is this pass's answer; only those not asked about this pass are asked, once. One batch
+   per pass (`ApplyLockAttributes`, one manifest write); a download sets the bit on the staged copy
    before it is renamed into place (`Replace(readOnly)`), so new bytes are never writable.
 8. **View and state.** The window's `AgentView` is rebuilt (during the pass, at most every
    500 ms), and everything the pass changed is saved before it returns.
@@ -228,7 +242,13 @@ immutable snapshot bytes.
   long lists draw only the rows in sight.
 - **File detail** never waits for a pass: it reads the server's files as last published
   (`publishedRemote`, replaced at the end of every read of the server and patched by
-  `KnowLock`) and this computer's records between two steps of a pass.
+  `KnowLock`), fetches the history off the engine thread (0.3.3: it took 10.6 seconds behind a
+  plan on 0.3.2) and takes this computer's records from the engine thread between two steps
+  of a pass.
+- **Nothing slow runs on the engine thread** (0.3.3): the scan, the open-files question, a
+  file's history and the shell's Open run on pool threads and the engine thread only awaits
+  them, so a queued click starts within milliseconds. `StopAsync` cancels from the calling
+  thread, and the scan and the open-files question stop on that token.
 - **Units.** Phase C runs units as interleaved async tasks on the engine thread, at most
   `TransferConcurrency` at once (default 6, a judgment call on the measurements in
   docs/agent/PROOF.md, not a knee: one computer alone keeps getting faster up to 24 at once,
@@ -962,3 +982,74 @@ moved everything again. Now:
 while 200 files download (the whole download takes about 9 seconds), a check in answers in
 about half a second while 200 files upload, and a check out made on another computer shows
 on a row about 8 seconds later in the middle of a 20-second download.
+
+### Every click at once (0.3.3, feedback N6)
+
+Mr. Pina: "no button or action in the armory should feel laggy or delayed." On 0.3.1 and
+0.3.2 a click on a 1,467-file vault waited behind the loop's plan (40 seconds of Restart
+Manager sessions on 0.3.1, a 10 second budget held on the engine thread on 0.3.2) and then
+planned the whole vault again for itself. Now:
+
+- **Open files are asked about only where it matters.** `Reconciler.OpenMatters(SyncInput)`
+  (Core; a property test holds it to the whole small state space in both modes and with every
+  request) says whether a plan can depend on the file being open: only where it would write
+  over or move the file, keep bytes and then put the shared version back, or remove a missing
+  file. Phase B asks the platform once about the files on disk where it says so (and a closed
+  add whose automatic check in depends on it), through
+  `IVaultFileSystem.OpenAmongAsync(paths, budget, ct, fresh)` off the engine thread, within
+  `OpenBudget` (2 seconds). A quiet pass over a synced vault asks about no file. Every write
+  still asks `IsOpen` just before it writes, and a check in's release is decided on a fresh
+  question (`fresh: true`, never a remembered answer): the guard of "Check in when closed" is
+  unchanged. The views, My files and the read-only rule read the last answers (`KnownOpen`:
+  this pass's or the one before, or a live marker), never a question per file per view. An
+  undo's "close it first", a folder rename's or removal's check and a check out's "open it
+  again" hint are a glance (`GlanceBudget`, 250 ms; past it Windows' probe alone answers); the
+  pass and the move ask again before anything is written. Each question is one `openFiles`
+  flight event (docs/agent/TELEMETRY.md).
+- **On Windows** (`OpenFileDetector.OpenAmongAsync`, docs/platform/open-files.md) the probe
+  and Restart Manager run on worker threads, Restart Manager one question at a time; a file it
+  cleared a few seconds ago that is still the same file (NTFS id and last-write time) is not
+  asked about again unless the question is fresh, and the programs holding files are logged at
+  most once per 10 minutes.
+- **A loop pass gives way** to a waiting click after its scan, between projects while it reads
+  the server, every 100 paths while it plans, and during its open-files questions: the click
+  ends the question at once (`loopQuestions`) instead of waiting out its budget. A pass that
+  gave way moves nothing and finishes nothing (`passYield` `action` in the flight recorder);
+  the renames its scan proved are kept for the next scan, which does not report them again.
+- **An action's pass plans only its own files** (`PathsToPlan`): the paths its scope holds and
+  the files sharing a name with them in their project (one unit). Phases A and D stay whole,
+  except that its marker question asks only about its own files; the other markers stay as the
+  last pass found them, and a marker seen for the first time counts as open until the loop
+  asks.
+- **Clicks coalesce.** Check out, check in, undo and Force check in record their request at
+  once, without the pass gate (durable before anything is sent), write their running line at
+  once ("Checking in Plate.SLDPRT") and wait for one action run (`JoinActionPassAsync`): every
+  click that arrives while the run waits for the gate joins it, and each reads its own outcome
+  (per-request results, never a map one click clears for another). Ten row clicks of Check in
+  are one pass and one `armory_release_locks` call. Rename, the folder actions, Add files, Put
+  back and Open also write their running line before they wait for anything.
+- **Batches.** Read-only bits go in one `ApplyLockAttributesNow` call per chunk of locks or
+  releases, still before each release; a check out reuses the scan's hash when the platform
+  says the file is unchanged since (`UnchangedSinceScan`: the same NTFS id, size and last-write
+  time).
+- **Stale markers.** A `~$` marker found stale is remembered by its stamp
+  (`IVaultFileSystem.MarkerStamp`: its NTFS id and last-write time) and not asked about again
+  until that changes (IDEA-06 asked about 224 of them every pass); nothing deletes a marker.
+- **Pause and resume** show at once, mid-pass too (while the server is being read, right after
+  the read).
+- **The first scan after a start** reuses the hashes the Windows scan kept
+  (`.armory/file-hashes.json`, docs/platform/local-changes.md): 10 to 38 second first scans in
+  the field.
+
+`LargeVaultResponsivenessTests` measures each window action on a mentor's computer holding a
+1,500-file synced vault, with the school network's latency and the open-files question costing
+what it cost on Windows (`PortableVaultFileSystem.OpenAmongCost`: 10 seconds were it asked about
+all 1,500 read-only files, a fifth of that a file for files checked out here). Each action must
+answer within 1 second plus the server calls, transfers and open-files questions it made (their
+times added up), and say what it is doing within half a second; a quiet pass asks about no file.
+`docs/agent/responsiveness-0.3.3.md` is a run of it, with the command that makes it again.
+`ResponsivenessTests` holds the pieces: ten check in clicks waiting for a pass are one pass and
+one release call; views and a quiet pass never ask file by file; stopping returns at once while
+the question is slow; stale markers are not asked about again until they change; a folder check
+out reads no unchanged file and sets bits in batches; Open, File detail, Pause and a check out
+answer while the loop's question is slow.
