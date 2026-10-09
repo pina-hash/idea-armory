@@ -534,7 +534,7 @@ public sealed partial class SyncEngine
         if (string.IsNullOrWhiteSpace(key)) return false;
         pendingDismissals.Enqueue(key);
         RequestPublish();
-        if (passGate.CurrentCount > 0) await SettleAsync();
+        if (passGate.CurrentCount > 0 && !halted) await SettleAsync();
         return true;
     });
 

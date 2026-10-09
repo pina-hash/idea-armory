@@ -45,7 +45,7 @@ public sealed partial class SyncEngine
             : pending > 0 ? new SyncView(SyncStates.Syncing, "Uploading your saves.", null, pending)
             : new SyncView(SyncStates.Synced, "Everything is saved to Armory.", LastChecked(), 0);
         return new AgentView(connection, new ConnectView(connectPhase, connectMessage), account, sync, moving, options.VaultRoot,
-            notices, Prompt(), MyFiles(files), Projects(), settings, effectiveTheme);
+            notices, Prompt(), MyFiles(files), Projects(), settings, effectiveTheme, FolderOwner(connection));
     }
 
     private string? LastChecked() => lastOnline is { } at ? "Last checked " + Relative(at) + "." : null;

@@ -5,7 +5,9 @@ namespace Armory.Agent.Engine.View;
 
 // The window's whole picture (docs/agent/BRIDGE.md, v2-design.md 4.6). The page renders from
 // this alone. AgentViewContractTests holds every record here to the fields wwwroot/bridge.js
-// documents; data objects use kind and direction, never a type field.
+// documents; data objects use kind and direction, never a type field. FolderOwner is set only
+// while the folder belongs to another account (connection vaultOwnedByOther); Profiles only on
+// a computer shared by several students (docs/agent/PROFILES.md), else null.
 public sealed record AgentView(
     string Connection,
     ConnectView Connect,
@@ -18,7 +20,9 @@ public sealed record AgentView(
     IReadOnlyList<MyFileView> MyFiles,
     IReadOnlyList<ProjectView> Projects,
     SettingsView Settings,
-    string EffectiveTheme);
+    string EffectiveTheme,
+    FolderOwnerView? FolderOwner = null,
+    ProfilesView? Profiles = null);
 
 public sealed record ConnectView(string Phase, string? Message);
 public sealed record AccountView(string Email, string DeviceName);
@@ -31,7 +35,31 @@ public sealed record ProjectView(string Id, string Name, bool Archived, string R
 public sealed record FolderView(string Path, string Name, int FileCount, IReadOnlyList<FileRowView> Files);
 public sealed record FileRowView(string? FileId, string Name, string Path, string Status, CheckoutView Checkout, bool Changed, bool ReleaseNotChecked,
     string? UpdatedAt, string? UpdatedBy);
-public sealed record SettingsView(string VaultRoot, bool StartAtSignIn, string Theme);
+// SharedComputer: "This computer is shared by several students" (docs/agent/PROFILES.md).
+public sealed record SettingsView(string VaultRoot, bool StartAtSignIn, string Theme, bool SharedComputer = false);
+// Whose the Armory folder is while it belongs to another account (X-owner-name): their address,
+// their name, and what they still have waiting in it ("2 files checked out"; null until the
+// engine has looked, empty when nothing waits).
+public sealed record FolderOwnerView(string Email, string Name, IReadOnlyList<string>? Waiting);
+
+// A computer shared by several students (docs/agent/PROFILES.md). Showing: the window is on the
+// picker ("Who's using Armory?"), and the view carries no student's files. SharedFolder is the
+// computer's one Armory folder. PinsNote says who turned PINs off or on, and when. Note is one
+// line for Home about the folder the student in use is in (their own, or back in the shared one).
+public sealed record ProfilesView(bool Showing, string? CurrentId, string SharedFolder, bool PinsRequired, bool CanChangePins, string? PinsNote,
+    bool CanTurnOff, string? Note, IReadOnlyList<ProfileView> Profiles, PickerStepView Step);
+// One student on this computer. Waiting: what they had waiting when Armory last stopped for them
+// ("2 files checked out"), in Folder (the shared folder, or their own when OwnFolder). Hue: one of
+// eight circle colors for the initials. NeedsSignIn: their sign-in here ended (or is missing).
+public sealed record ProfileView(string Id, string Name, string Email, string Initials, int Hue, bool Current, string? LastUsedAt,
+    string Folder, bool OwnFolder, string? Waiting, bool NeedsSignIn, bool HasPin, bool CanRemove);
+// Where the picker is (PickerSteps). ProfileId: whose step it is. Message: one sentence for it
+// (a wrong PIN, a sign-in that didn't finish). WaitSeconds: until another PIN may be tried.
+// OwnFolder, OwnerName and OwnerWaiting: the folderBusy step's own folder and whose work waits.
+// FromName: the student Armory is finishing for while switching. ConnectPhase: the browser
+// sign-in of the adding and signInAgain steps (ConnectView's phases).
+public sealed record PickerStepView(string Kind, string? ProfileId, string? Message, int? TriesLeft, int? WaitSeconds,
+    string? OwnFolder, string? OwnerName, string? OwnerWaiting, string? FromName, string? ConnectPhase);
 public sealed record FileDetailView(string FileId, string Name, string Path, string Project, string Folder, string Status, CheckoutView Checkout,
     bool ReleaseNotChecked, bool CanTakeBack, IReadOnlyList<HistoryEntryView> History);
 // Routine: a kept copy that is the ordinary record of work (saved while checked out, an earlier
@@ -64,6 +92,11 @@ public sealed record ActionResult(bool Ok, string Message);
 public static class Connections
 {
     public const string SignedOut = "signedOut", Connecting = "connecting", SignedIn = "signedIn", VaultOwnedByOther = "vaultOwnedByOther";
+}
+public static class PickerSteps
+{
+    public const string Choose = "choose", Pin = "pin", NewPin = "newPin", Adding = "adding", FolderBusy = "folderBusy", Switching = "switching",
+        SignInAgain = "signInAgain", TooNew = "tooNew";
 }
 public static class SyncStates
 {
@@ -111,9 +144,14 @@ public static class BridgeMessages
         RenameFile = "renameFile", AddFiles = "addFiles", DropFiles = "dropFiles", DismissNotice = "dismissNotice", SaveSettings = "saveSettings",
         ChooseVaultRoot = "chooseVaultRoot", ReportProblem = "reportProblem", OpenIncidents = "openIncidents", SendFeedback = "sendFeedback", TakeBackAll = "takeBackAll",
         TakeOverFolder = "takeOverFolder", SwitchAccount = "switchAccount";
+    // A computer shared by several students (docs/agent/PROFILES.md).
+    public const string ShowPicker = "showPicker", PickProfile = "pickProfile", EnterPin = "enterPin", SetPin = "setPin", AddProfile = "addProfile",
+        ForgotPin = "forgotPin", CancelPicker = "cancelPicker", ChooseFolder = "chooseFolder", RemoveProfile = "removeProfile",
+        SetSharedComputer = "setSharedComputer", SetPinsRequired = "setPinsRequired";
     public static readonly IReadOnlyList<string> PageToHost = [Ready, Connect, CancelConnect, SignOut, Pause, Resume, OpenVault, OpenFile, LaunchFile, ShowInFolder,
         CheckOut, CheckIn, UndoCheckOut, TakeBack, CreateFolder, RenameFolder, DeleteFolder, RenameFile, AddFiles, DropFiles, DismissNotice, SaveSettings, ChooseVaultRoot,
-        ReportProblem, OpenIncidents, SendFeedback, TakeBackAll, TakeOverFolder, SwitchAccount];
+        ReportProblem, OpenIncidents, SendFeedback, TakeBackAll, TakeOverFolder, SwitchAccount,
+        ShowPicker, PickProfile, EnterPin, SetPin, AddProfile, ForgotPin, CancelPicker, ChooseFolder, RemoveProfile, SetSharedComputer, SetPinsRequired];
 
     public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
     {
