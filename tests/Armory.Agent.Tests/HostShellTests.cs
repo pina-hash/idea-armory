@@ -202,4 +202,87 @@ public sealed class HostShellTests
         thread.Join();
         if (failed is not null) throw failed;
     }
+
+    // setup.exe's shortcut: Inno Setup's [Icons] AppUserModelID writes the value as a BSTR. Armory
+    // reads it as its own and leaves the shortcut alone.
+    [WindowsFact]
+    [SupportedOSPlatform("windows")]
+    public void An_inno_setup_shortcut_with_the_app_id_as_a_bstr_is_read_and_left_alone()
+    {
+        using var folder = new TempFolder();
+        var exe = folder.File("IdeaArmory.exe");
+        File.WriteAllBytes(exe, [0x4D, 0x5A]);
+        var path = folder.File("IDEA Armory.lnk");
+        dynamic shell = Activator.CreateInstance(Type.GetTypeFromProgID("WScript.Shell")!)!;
+        dynamic link = shell.CreateShortcut(path);
+        link.TargetPath = exe;
+        link.Save();
+        Exception? failed = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                InnoShortcut.WriteBstrAppId(path, ShellIdentity.AppId);
+                var written = File.GetLastWriteTimeUtc(path);
+                Assert.Equal(ShellIdentity.AppId, ShortcutAppId.ReadAppId(path));
+                Assert.False(ShortcutAppId.Stamp(path, exe, ShellIdentity.AppId));
+                Assert.Equal(written, File.GetLastWriteTimeUtc(path));
+            }
+            catch (Exception error) { failed = error; }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        thread.Join();
+        if (failed is not null) throw failed;
+    }
+}
+
+// Writes System.AppUserModel.ID as Inno Setup does (Setup.InstFunc.Ole.pas: VT_BSTR).
+[SupportedOSPlatform("windows")]
+internal static class InnoShortcut
+{
+    internal static void WriteBstrAppId(string shortcut, string appId)
+    {
+        object link = new ShellLink();
+        try
+        {
+            var file = (System.Runtime.InteropServices.ComTypes.IPersistFile)link;
+            file.Load(shortcut, 2);
+            var key = new PropertyKey { FormatId = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"), PropertyId = 5 };
+            var value = new PropVariant { Type = 8, Pointer = System.Runtime.InteropServices.Marshal.StringToBSTR(appId) };
+            try
+            {
+                var store = (IPropertyStore)link;
+                System.Runtime.InteropServices.Marshal.ThrowExceptionForHR(store.SetValue(ref key, ref value));
+                System.Runtime.InteropServices.Marshal.ThrowExceptionForHR(store.Commit());
+            }
+            finally { System.Runtime.InteropServices.Marshal.FreeBSTR(value.Pointer); }
+            file.Save(shortcut, true);
+        }
+        finally { System.Runtime.InteropServices.Marshal.FinalReleaseComObject(link); }
+    }
+
+    [System.Runtime.InteropServices.ComImport, System.Runtime.InteropServices.Guid("00021401-0000-0000-C000-000000000046")]
+    private class ShellLink { }
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct PropertyKey { public Guid FormatId; public int PropertyId; }
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Explicit, Size = 24)]
+    private struct PropVariant
+    {
+        [System.Runtime.InteropServices.FieldOffset(0)] public ushort Type;
+        [System.Runtime.InteropServices.FieldOffset(8)] public IntPtr Pointer;
+    }
+
+    [System.Runtime.InteropServices.ComImport, System.Runtime.InteropServices.Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99")]
+    [System.Runtime.InteropServices.InterfaceType(System.Runtime.InteropServices.ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IPropertyStore
+    {
+        [System.Runtime.InteropServices.PreserveSig] int GetCount(out uint count);
+        [System.Runtime.InteropServices.PreserveSig] int GetAt(uint index, out PropertyKey key);
+        [System.Runtime.InteropServices.PreserveSig] int GetValue(ref PropertyKey key, out PropVariant value);
+        [System.Runtime.InteropServices.PreserveSig] int SetValue(ref PropertyKey key, ref PropVariant value);
+        [System.Runtime.InteropServices.PreserveSig] int Commit();
+    }
 }

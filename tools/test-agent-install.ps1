@@ -449,7 +449,8 @@ public static class ArmoryInstallShortcut
             PropertyKey key = new PropertyKey { FormatId = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"), PropertyId = 5 };
             PropVariant value;
             if (((IPropertyStore)link).GetValue(ref key, out value) != 0) return null;
-            try { return value.Type == 31 && value.Pointer != IntPtr.Zero ? Marshal.PtrToStringUni(value.Pointer) : null; }
+            // VT_LPWSTR (Armory's own stamp) or VT_BSTR (Inno Setup's [Icons] AppUserModelID).
+            try { return (value.Type == 31 || value.Type == 8) && value.Pointer != IntPtr.Zero ? Marshal.PtrToStringUni(value.Pointer) : (value.Type == 0 ? null : "(a value of type " + value.Type + ")"); }
             finally { PropVariantClear(ref value); }
         }
         finally { Marshal.FinalReleaseComObject(link); }
@@ -461,7 +462,10 @@ function Assert-ShortcutAppId {
     Initialize-ShortcutReader
     $script:ShortcutId = $null
     $read = { try { $script:ShortcutId = [ArmoryInstallShortcut]::AppId($Shortcut) } catch { $script:ShortcutId = 'unreadable: ' + $_.Exception.Message }; $script:ShortcutId -ceq $Aumid }
-    if (-not (Wait-Until $read 60)) { Fail ('The Start menu shortcut''s AppUserModelID is "' + $script:ShortcutId + '", expected ' + $Aumid) }
+    if (-not (Wait-Until $read 60)) {
+        $said = @((Read-AgentLog) -split "`r?`n" | Where-Object { $_ -match 'shortcut' }) -join ' / '
+        Fail ('The Start menu shortcut''s AppUserModelID is "' + $script:ShortcutId + '", expected ' + $Aumid + '; agent.log about the shortcut: ' + $said)
+    }
     Note ('Start menu shortcut: System.AppUserModel.ID = ' + $Aumid)
 }
 # A notification's link as Windows starts it (the scheme's registered command): handed to the

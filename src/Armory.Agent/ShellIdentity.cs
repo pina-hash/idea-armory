@@ -122,6 +122,7 @@ internal static class ShortcutAppId
     private static readonly PropertyKey AppIdKey = new(new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"), 5);
     private const int ReadWriteMode = 2; // STGM_READWRITE
     private const ushort StringType = 31; // VT_LPWSTR
+    private const ushort BstrType = 8; // VT_BSTR: how Inno Setup writes the setup's shortcut
 
     // True when it wrote the value.
     internal static bool Stamp(string shortcut, string exe, string appId)
@@ -181,7 +182,7 @@ internal static class ShortcutAppId
     private static string? Read(IPropertyStore store, PropertyKey key)
     {
         if (store.GetValue(ref key, out var value) != 0) return null;
-        try { return value.Type == StringType && value.Pointer != IntPtr.Zero ? Marshal.PtrToStringUni(value.Pointer) : null; }
+        try { return value.Type is StringType or BstrType && value.Pointer != IntPtr.Zero ? Marshal.PtrToStringUni(value.Pointer) : null; }
         finally { PropVariantClear(ref value); }
     }
 
