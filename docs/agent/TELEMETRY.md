@@ -39,6 +39,7 @@ ring unless an incident is saved.
 | `exception` | the engine (loop, engine thread), the bridge, the crash handlers | type, where, message, stack, fatal |
 | `readOnlyBroken` | the engine (`ApplyReadOnly`) | a file the read-only rule had made read-only, found writable again (and made read-only) |
 | `repairedCheckout` | the engine (`AdoptMyLocks`, cfb37e2) | a lock this computer holds that had no record here, now shown as checked out by you |
+| `note` `checkInWaits` | the engine (`ReadBeforeReleaseAsync`, 0.3.3) | a check in, an undo or an add's automatic check in that starts to wait, once: detail "<path>: open" (open in SolidWorks; checked in once closed) or "<path>: unreadable" (the file could not be read; checked in once it can be) |
 
 **Never collected:** file contents, tokens (access, refresh, the anon key), signed storage
 URLs, request or response bodies, passwords, and other people's email addresses (every
@@ -99,7 +100,7 @@ so a person can hand the files over by hand today.
     "files": 412, "filesByStatus": { "synced": 400, "downloading": 12 },
     "checkedOutHere": 2, "checkedOutHerePaths": [ "..." ], "notices": [ ... ], "settings": { "vaultRoot": "C:\\IDEA\\Armory", ... },
     "engine": { "online": true, "paused": false, "inPass": true, "records": 412, "projects": [ ... ], ... },
-    "pendingRequests": { "checkOut": 0, "checkIn": 1, "undo": 0, "savesWaiting": 0, ... },
+    "pendingRequests": { "checkOut": 0, "checkIn": 1, "undo": 0, "checkInWhenClosed": 1, "savesWaiting": 0, ... },  // checkInWhenClosed: adds open when added, and (0.3.3) check ins and undos waiting for their file to close or to be read
     "lastPasses": [ ...the last three passes... ],
     "host": { "runtimeProblem": null, "connectPhase": "idle", "signedIn": true, "transfersRunning": 6 }
   },

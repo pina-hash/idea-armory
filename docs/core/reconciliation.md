@@ -77,11 +77,31 @@ obligations for "Check out":
   as a kept copy and puts the shared version back, or downloads the current version), hash
   again and ask again. Any other step refuses the check out with a plain sentence.
 
+`CheckoutRules.NextCheckInStep(baseHash, localHash, read, isOpen)` is the check in rule
+(feedback N4, 0.3.3). It decides when this device may let a lock go for a check in, an undo
+or an add's automatic check in: `WaitForClose` while the file is open (SolidWorks keeps
+saving through the handle it opened while the file was writable, whatever the read-only bit
+says afterwards), `ReadAgain` when the hash was not read from the disk just now (a scan
+that could not open the file keeps the hash it read last), `CommitFirst` when the bytes read
+just now are not the shared version (a pass shares them first: a check in commits them, an
+undo keeps them as a kept copy and puts the shared version back, a removal is shared), and
+`LetGo` only over the shared version read just now from a closed file. Adapter obligations
+for a release:
+
+- Ask whether the file is open, and never let go while it is: the request stays, and the
+  file stays writable, until it is closed.
+- Never pass off an earlier scan's hash as read. Make the file read-only first, so nothing
+  can open it for writing between the read and the release, then hash it where it is now.
+- Let the lock go only on `LetGo`.
+
 `CheckoutTests` has one test per row above, the gate on every Explicit route in both modes,
 properties over the whole state space (the shared file advances only at check in or add,
 every kept copy names why, an open file is never replaced), the read-only rule, and the
 check out rule, including its agreement with the Explicit reconciler over the whole state
-space (a check out it allows can never share anything but the shared version).
+space (a check out it allows can never share anything but the shared version), and the check
+in rule, one test per step and its agreement with the Explicit reconciler (where it lets go,
+a pass for the request has nothing left to do; where it shares first, that pass commits,
+keeps and restores, or shares the removal).
 `CheckoutSimulationTests` runs Explicit under the seeded simulation (see
 [simulation](simulation.md)).
 

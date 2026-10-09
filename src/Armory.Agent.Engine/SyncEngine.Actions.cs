@@ -937,9 +937,11 @@ public sealed partial class SyncEngine
 
     // What the read-only rule is applied from: the file's lock ownership, except that a file
     // this computer is letting go of (a check in, an undo, a closed add, a lock taken only for a
-    // move or a removal) is read-only already, before its lock is released.
+    // move or a removal) is read-only already, before its lock is released. A check in, an undo
+    // or an add waiting for its file to close keeps it writable: SolidWorks can go on saving it
+    // until it is closed, and the check in shares what was saved (feedback N4).
     private LockOwnership DesiredOwnership(FileState st, LockOwnership ownership, VaultPath path)
-        => ownership == LockOwnership.ThisDevice && (st.Request != CheckoutRequest.None || st.TransientLock || (st.AutoCheckIn && !IsOpenNow(path)))
+        => ownership == LockOwnership.ThisDevice && (st.TransientLock || ((st.Request != CheckoutRequest.None || st.AutoCheckIn) && !IsOpenNow(path)))
             ? LockOwnership.Free : ownership; // MUTATION: a checked-in file left writable
 
     // Decision D4: a file the server has is read-only on disk unless this computer has it
@@ -952,10 +954,17 @@ public sealed partial class SyncEngine
     {
         List<(VaultPath Path, LockOwnership Ownership)> batch = [];
         List<FileState> changed = [];
+        // Whether the files waiting to be checked in are open (DesiredOwnership), asked once.
+        List<VaultPath> waiting = [];
+        foreach (var st in state.Files.Values)
+            if ((st.Request != CheckoutRequest.None || st.AutoCheckIn) && TryLocal(st.Path, out var here)) waiting.Add(here.Path);
+        using (KnowOpen(waiting))
         foreach (var st in state.Files.Values)
         {
             // Where the file is on disk (in a folder waiting to go back, too: the rule holds there).
-            if (st.FileId is not { } id || !TryLocal(st.Path, out var file)) continue;
+            // A file the scan could not read is left as it is: its read-only bit is the last one
+            // read, not the disk's (feedback N4), and a later pass that can read it applies the rule.
+            if (st.FileId is not { } id || !TryLocal(st.Path, out var file) || file.Unread) continue;
             // Archived (decision D8): its files are left as they are.
             if (state.Projects.GetValueOrDefault(st.ProjectId) is { Archived: true }) continue;
             LockOwnership ownership;

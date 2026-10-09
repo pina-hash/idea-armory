@@ -34,6 +34,44 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
     private readonly object gate = new();
     private readonly HashSet<string> open = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> readOnlyBits = new(StringComparer.OrdinalIgnoreCase);
+    // Feedback N4: SolidWorks holds a part it opened while it was writable with a write handle,
+    // which every reader that does not share writing conflicts with. The Windows scan
+    // (LocalChangeDetector) then can't open it: it reports "being used by another process" and
+    // carries the previous scan's entry over (hash, size, read-only bit) marked Unread, and every
+    // read (OpenRead, and the hash Replace, Move and MoveToRecovery check) fails. SolidWorks
+    // keeps saving through its handle whatever the read-only bit says afterwards (HeldForWriting:
+    // Computer.Save lets those saves through). Hold is SolidWorks (open, with its ~$ marker);
+    // HoldUnreadable is another program holding it the same way (a backup or a virus scan), which
+    // the open-file check does not see.
+    private readonly HashSet<string> held = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> heldForWriting = new(StringComparer.OrdinalIgnoreCase);
+    private Dictionary<string, LocalFile> lastScan = new(StringComparer.OrdinalIgnoreCase);
+    public void Hold(string relative)
+    {
+        Open(relative);
+        lock (gate)
+        {
+            held.Add(P(relative).Value);
+            if (!readOnlyBits.Contains(P(relative).Value)) heldForWriting.Add(P(relative).Value);
+        }
+    }
+    public void HoldUnreadable(string relative) { lock (gate) held.Add(P(relative).Value); }
+    // Closed (SolidWorks), or let go (the other program).
+    public void Unhold(string relative)
+    {
+        bool wasOpen;
+        lock (gate)
+        {
+            held.Remove(P(relative).Value);
+            heldForWriting.Remove(P(relative).Value);
+            wasOpen = open.Contains(P(relative).Value);
+        }
+        if (wasOpen) Close(relative);
+    }
+    public bool IsHeld(string relative) { lock (gate) return held.Contains(P(relative).Value); }
+    // SolidWorks opened it while it was writable: its saves go through its handle.
+    public bool HeldForWriting(string relative) { lock (gate) return heldForWriting.Contains(P(relative).Value); }
+    private static IOException SharingViolation(string full) => new($"The process cannot access the file '{full}' because it is being used by another process.");
     private readonly List<FolderMove> studentFolderMoves = [];
     private int recoveries;
     public PortableVaultFileSystem(string root) { Root = root; Directory.CreateDirectory(root); }
@@ -142,6 +180,15 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
                 continue;
             }
             if (!VaultPath.TryCreate(relative, out var path, out var problem)) { problems.Add($"{relative}: {problem}"); continue; }
+            bool isHeld;
+            lock (gate) isHeld = held.Contains(path.Value);
+            if (isHeld)
+            {
+                // As LocalChangeDetector: never a deletion, and never the old entry passed off as read.
+                problems.Add($"{relative}: {SharingViolation(full).Message}");
+                if (lastScan.TryGetValue(path.Value, out var previous)) files.Add(previous with { Unread = true });
+                continue;
+            }
             try
             {
                 var bytes = File.ReadAllBytes(full);
@@ -166,6 +213,7 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
             readOnlyBits.RemoveWhere(path => !present.Contains(path));
             moves = [.. studentFolderMoves];
             studentFolderMoves.Clear();
+            lastScan = files.ToDictionary(f => f.Path.Value, StringComparer.OrdinalIgnoreCase);
         }
         return new(files.OrderBy(f => f.Path).ToArray(), markers, problems, null, folders, ReportsFolderMoves ? moves : null);
     }
@@ -184,7 +232,13 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
     }
     public int IsOpenCalls { get; private set; }
     public int OpenAmongCalls { get; private set; }
-    public Stream OpenRead(VaultPath path) => new FileStream(Full(path.Value), FileMode.Open, FileAccess.Read, FileShare.Read);
+    public Stream OpenRead(VaultPath path)
+    {
+        lock (gate) if (held.Contains(path.Value)) throw SharingViolation(Full(path.Value));
+        return new FileStream(Full(path.Value), FileMode.Open, FileAccess.Read, FileShare.Read);
+    }
+    // The destination's hash, read as the Windows adapter reads it: a held file can't be read.
+    private bool Unreadable(VaultPath path) { lock (gate) return held.Contains(path.Value); }
 
     private string? HashOf(string full) => File.Exists(full) ? Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(full))) : null;
     private void RecordIfUnpreserved(VaultPath path, string? hash, string what)
@@ -202,6 +256,7 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
     public ReplaceOutcome Replace(VaultPath path, string? expectedHash, Stream content, bool readOnly = false)
     {
         var full = Full(path.Value);
+        if (Unreadable(path)) return ReplaceOutcome.Refused(SharingViolation(full).Message);
         if (HashOf(full) != expectedHash) return ReplaceOutcome.Refused("Destination changed since the plan was made.");
         RecordIfOpen(path, "replace");
         RecordIfUnpreserved(path, expectedHash, "replace");
@@ -223,6 +278,7 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
     public ReplaceOutcome MoveToRecovery(VaultPath path, string expectedHash)
     {
         var full = Full(path.Value);
+        if (Unreadable(path)) return ReplaceOutcome.Refused(SharingViolation(full).Message);
         if (HashOf(full) != expectedHash) return ReplaceOutcome.Refused("File changed.");
         RecordIfOpen(path, "recovery");
         RecordIfUnpreserved(path, expectedHash, "recovery");
@@ -241,6 +297,7 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
     {
         var source = Full(from.Value);
         var target = Full(to.Value);
+        if (Unreadable(from)) return ReplaceOutcome.Refused(SharingViolation(source).Message);
         if (HashOf(source) != expectedHash) return ReplaceOutcome.Refused("File changed.");
         if (File.Exists(target) && !string.Equals(Path.GetFullPath(source), Path.GetFullPath(target), StringComparison.OrdinalIgnoreCase)) return ReplaceOutcome.Refused("Destination exists.");
         RecordIfOpen(from, "move");

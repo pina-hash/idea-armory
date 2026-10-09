@@ -26,6 +26,23 @@ public enum CheckOutStep
     // The server has no live version (never added, or removed): there is nothing to check out.
     NotShared,
 }
+// What a check in (or an undo, or an add's automatic check in) of one file needs before this
+// device may let its lock go.
+public enum CheckInStep
+{
+    // The bytes read just now are the shared version: let the lock go.
+    LetGo,
+    // The bytes read just now are not the shared version: a pass shares them first (a check in
+    // commits them; an undo keeps them as a kept copy and puts the shared version back), then
+    // decide again.
+    CommitFirst,
+    // The file is open (SolidWorks has it): it can still be saved, so the lock stays and the
+    // file stays writable until it is closed. The first pass after it closes decides again.
+    WaitForClose,
+    // The file could not be read just now: what is on disk is unknown, so the lock stays until
+    // a later pass can read it.
+    ReadAgain,
+}
 
 public static class CheckoutRules
 {
@@ -45,5 +62,20 @@ public static class CheckoutRules
         if (localHash is not null && localHash != baseRevision?.Hash) return CheckOutStep.KeepChangesFirst; // MUTATION: check out over unshared bytes
         if (Reconciler.SameRevision(baseRevision, remote)) return localHash is null ? CheckOutStep.RemovedHere : CheckOutStep.TakeLock;
         return isOpen ? CheckOutStep.CloseFirst : CheckOutStep.DownloadFirst;
+    }
+
+    // The check in rule (feedback N4: a part SolidWorks held open for writing was "checked in"
+    // with nothing uploaded, and its saves were later put aside as a kept copy). The lock is let
+    // go only over bytes read at that moment that are the shared version, and never while the
+    // file is open: SolidWorks keeps saving through the handle it opened while the file was
+    // writable, whatever the read-only bit says afterwards. The adapter makes the file read-only
+    // first, then reads it, and passes the shared version's hash (baseHash), the hash it has for
+    // the file (localHash, null when the file is not on disk), whether that hash was read from
+    // the disk just now (read), and whether the file is open.
+    public static CheckInStep NextCheckInStep(string? baseHash, string? localHash, bool read, bool isOpen)
+    {
+        if (isOpen) return CheckInStep.WaitForClose; // MUTATION: let go while open
+        if (!read) return CheckInStep.ReadAgain; // MUTATION: let go over bytes not read
+        return localHash == baseHash ? CheckInStep.LetGo : CheckInStep.CommitFirst;
     }
 }

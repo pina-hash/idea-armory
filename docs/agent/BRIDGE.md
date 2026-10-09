@@ -47,7 +47,12 @@ uses a demo transport that answers from `wwwroot/demo/states.js`. See "The demo"
 - **File detail**: the file's display (its state and who has it), Open as the primary
   key, then Check out, Check out and open, Check in, Undo check out or Force check in as its
   state allows, Show in folder as a quiet link, Checked out (the person and computer,
-  or "Available. Check it out to make changes."), and the history.
+  or "Available. Check it out to make changes."), and the history. Left for the page (0.3.3,
+  the host's half is in): a history entry of kind `keptCopy` gets Put back on this computer
+  (`putBackKeptCopy`; the host refuses another person's copy in one sentence, so the key may
+  show on every kept copy until the view says which are yours), and the status
+  `checkingInWhenClosed` gets its chip ("Checks in when closed", tone look) in the page's
+  status words; until then such a row shows no chip (`MyFileView.note` carries the words).
 - **Settings** is a sheet over Home with exactly the folder (and Change), Start Armory
   when I sign in, and the theme.
 - **The small dialog** (`<dialog id="ask">`) asks New folder, Rename folder, Delete
@@ -167,6 +172,10 @@ CheckoutView {
 }
 
 MyFileView { fileId: string | null, path: string, name: string, project: string, status: FileStatus, note: string | null, checkout: CheckoutView }
+  // note: what is under way for it, or null: "Checking in.", "Undoing the check out.", "Checks in as
+  // soon as you close it in SolidWorks." (0.3.3, with status checkingInWhenClosed), "Checks in as soon
+  // as Armory can read it. Close any program that might be using it.", "You added it while it was
+  // open. It is checked in by itself when you close it.", or the offline words.
 ProjectView {
   id: string, name: string,
   archived: boolean,                // shown as "Archived. It no longer updates." with no keys
@@ -194,6 +203,8 @@ FileRowView {
 }
 FileStatus = "synced" | "changed" | "uploading" | "downloading" | "waiting" | "newerWaiting"
            | "keptCopy" | "notInArmory" | "notOnThisComputer"
+           | "checkingInWhenClosed"   // 0.3.3: checked out by you and asked to be checked in, but open in
+                                      // SolidWorks (or unreadable) now; checked in as soon as it is closed
 SettingsView { vaultRoot: string, startAtSignIn: boolean, theme: "system" | "idea" | "spaceWhite" }
 
 FileDetailView {
@@ -261,7 +272,7 @@ answers it with exactly one `actionResult` carrying the same id and a plain sent
 Plate.SLDPRT.", "Close Plate.SLDPRT in SolidWorks first."). The actions are
 `launchFile`, `checkOut`, `checkIn`, `undoCheckOut`, `takeBack`, `takeBackAll`, `createFolder`,
 `renameFolder`, `deleteFolder`, `renameFile`, `addFiles`, `dropFiles`, `reportProblem`,
-`sendFeedback` and `takeOverFolder`.
+`sendFeedback`, `takeOverFolder` and `putBackKeptCopy`.
 
 The page shows an action is under way from the moment it is sent until its
 `actionResult` arrives (v0.2.1): the pressed key gets `aria-busy="true"` and
@@ -286,7 +297,7 @@ replaces all of it. The spinner holds still under `prefers-reduced-motion`.
 | `launchFile` | `path`, `requestId` | Open (rows, File detail, a notice) | opens the file in its own program (SolidWorks for a part); refuses programs and scripts |
 | `showInFolder` | `path` | Show in folder, a row for a file that isn't in Armory | opens File Explorer with the file selected |
 | `checkOut` | `paths`, `open`, `requestId` | Check out (a file row, File detail, the selection bar), Check out and open on File detail and Check out and reopen on the question (`open: true`), Check out all after the small dialog (the folder's path) | takes each file to change it, makes it writable here, downloads a newer version first; with `open`, then opens it (asking first for SolidWorks to close it, if it has it open) |
-| `checkIn` | `paths`, `requestId` | Check in (a file row, File detail, My files, the selection bar), Check in all | uploads the changes, makes the file read-only, lets it go |
+| `checkIn` | `paths`, `requestId` | Check in (a file row, File detail, My files, the selection bar), Check in all | uploads the changes, makes the file read-only, reads it again and lets it go only over what it shared; a file open in SolidWorks stays checked out and writable and is checked in as soon as it is closed (0.3.3): "Plate.SLDPRT is open in SolidWorks. Save it there and close it; Armory checks it in as soon as it's closed.", "Checked in 12 of 15 files. 3 are open in SolidWorks: Armory checks them in as you close them." |
 | `undoCheckOut` | `paths`, `requestId` | Undo check out (File detail, the selection bar) | puts back the version from before the check out (changes are kept in the history), lets it go |
 | `takeBack` | `fileId`, `requestId` | Force check in of one file (a file row, File detail, the selection bar), after the small dialog asks (mentors and CAD leads) | ends the check out for its holder (the type keeps its old name); anything they hadn't checked in is kept as their own copy |
 | `takeBackAll` | `fileIds`, `requestId` | Force check in of more than one file (Force check in all, the selection bar), after the small dialog asks; at most 20,000 ids | one action: each lock broken as for one file (16 at a time), then one pass for all of them, and one sentence back (since 0.3.1; before, the page sent one `takeBack` per file and each ran a whole pass) |
@@ -302,6 +313,7 @@ replaces all of it. The spinner holds still under `prefers-reduced-motion`.
 | `reportProblem` | `kind`, `body`, `requestId` | Send in Report a problem (Settings), after the page refuses empty words | `kind` is `bug`, `idea` or `other`; the host saves the words with a fresh `userReport` incident and sends them (docs/agent/TELEMETRY.md); the answer is one sentence: "Sent. Thank you for telling us.", or "Saved. It will be sent ..." when it can't go yet |
 | `sendFeedback` | `kind`, `body`, `requestId` | Send in Send feedback (the header's key, or Settings), after the page refuses empty words | v0.3: `kind` is `bug`, `idea` or `other`; a note on its own (`armory_submit_app_feedback`), saved first and sent at once when it can be, with Armory's version and what it was doing as its context, and no incident after it; the answer is one sentence, "Sent. Thank you for the feedback." or "Saved. It will be sent ..." |
 | `openIncidents` | | Open incidents folder (Settings) | opens `%LOCALAPPDATA%\IDEA Armory\incidents` in File Explorer, so the files can be handed over by hand |
+| `putBackKeptCopy` | `fileId`, `versionId`, `requestId` | Put back on this computer, on a File detail history entry of kind `keptCopy` (0.3.3, feedback N4) | `versionId` is the entry's `id`. The host's `PutBackKeptCopyAsync` (docs/agent/ENGINE.md, "Put back on this computer"): only the signed-in person's own kept copy; the file is checked out first when it is checked out to nobody; any save on disk the server doesn't have is kept first, and an open file is refused; the copy is put in place and stays checked out, shared only at check in. Answers "Put your copy of Plate.SLDPRT back on this computer. It's checked out to you: look at it in SolidWorks, then check it in to share it.", or why not ("That copy of Plate.SLDPRT is Maria Lopez's. Only your own kept copies can be put back here.", "Close Plate.SLDPRT in SolidWorks first, then put your copy back.") |
 
 ## Thumbnails (0.3.2)
 

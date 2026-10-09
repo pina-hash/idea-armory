@@ -79,6 +79,17 @@ check in or undo releases the lock; offline passes apply it again from the owner
 known. So a holder whose check out was taken back keeps saving until its next pass, as on
 a real computer.
 
+Since 0.3.3 (feedback N4) the agent plans from what its scan read, not from the disk. A file
+SolidWorks opens while it is writable is, three times in four, held for writing: the agent's
+scan can't read it and keeps the hash it read last (`LocalFile.Unread`), every save goes to
+disk unseen until it is closed, a check out of it can't hash it, it can't be deleted, and a
+download or a move to recovery over it is refused (Replace reads the destination first, and
+refuses one that changed since the scan). Right after SolidWorks closes a checked-out part,
+another program sometimes grabs it until the client's next pass (not open, still unreadable).
+A check in, an undo, an add's automatic check in and a deletion's own lock are let go through
+`CheckoutRules.NextCheckInStep`: the scan's view must be clean, then the file is read (when it
+can be) and the lock goes only when it is closed and its bytes are the shared version.
+
 The oracle keeps every v1 invariant and adds:
 
 - Every shared version with bytes is written under a lock its writer took by an explicit
@@ -94,19 +105,34 @@ The oracle keeps every v1 invariant and adds:
   never becomes a shared version.
 - A closed add never keeps its lock after a pass.
 - Undo never replaces an open file or bytes the server does not keep as a side version.
+- A lock is let go only over the shared version: at every release, the bytes on disk (not the
+  scan's view of them) equal the server's latest version (0.3.3).
+- The working copy is never reverted while the student holds it: a download never replaces
+  bytes saved under this device's own check out unless they became a shared version, for an
+  undo (kept first), or after a mentor took that check out back (0.3.3).
+- An edit made while this device held the file's check out is never lost to a file made
+  read-only under it: closing (or the drain) drops an unsaved edit only when a mentor took that
+  check out back, because the lock is never let go while the file is open (0.3.3).
 - No check out survives the drain, and every save is in server history after the
   client's next online sync, as in v1.
 
 A run must also reach every route it models (check outs, check ins, an add's automatic
 check in, undo restores, adds, revivals, forced saves, put backs, offline saves, releases,
 saves after a Take back, torn journal writes, crashes in the middle of a sync, lost
-acknowledgments and a kept copy for every `SideVersionReason`); the counts are printed as
+acknowledgments, saves through a SolidWorks write hold, check ins that waited for the file to
+close and check ins that waited to read it, and a kept copy for every `SideVersionReason`);
+the counts are printed as
 `EXPLICIT coverage`. A normal run here reached `check_outs=19019 check_ins=5796
 add_check_ins=1370 undos=564 adds=11791 revivals=7615 forced_saves=12208 put_backs=698
 offline_saves=5926 releases=46526 saves_after_take_back=219 torn_writes=15253
 mid_sync_crashes=13115 lost_acknowledgments=220`; `blocked_adds` (an add whose name
 another device locked and then crashed before its first version) is printed but too rare
-to require.
+to require. With the write hold (0.3.3) a run reached `check_outs=19094 check_ins=6113
+add_check_ins=361 undos=502 adds=11743 revivals=7528 forced_saves=12160 put_backs=703
+blocked_adds=8 offline_saves=5869 releases=46494 saves_after_take_back=217 torn_writes=15423
+mid_sync_crashes=13094 lost_acknowledgments=267 held_saves=9518 waits_for_close=2151
+read_agains=217` in 19.5 s (an add SolidWorks holds is seen only once it is closed, so fewer
+adds are checked in after saves made while open).
 
 The full Core test project (both simulations in parallel) passed: `Total tests: 226.
 Passed: 226.`, with `EXPLICIT scenarios=10000 elapsed=21.368s` and `SIMULATION
@@ -133,8 +159,12 @@ It does not count a compilation error as a caught mutation.
 | Explicit: undo restores without keeping the changes | explicit | 24 | Unsynced local overwrite without side-version acknowledgment at step 44 | `b375f8a` |
 | Explicit: the read-only rule leaves a checked-in file writable (only another person's or my other device's check out is read-only) | explicit | 0 | A save to a shared file this device had not checked out at step 1 | `b375f8a` |
 | Explicit: the check out rule takes the lock over bytes saved without a check out | explicit | 23 | A save made without a check out became the shared version at step 47 | `b375f8a` |
+| Explicit: the check in rule lets go over bytes it did not read (feedback N4) | explicit | 46 | A lock was let go over bytes that are not the shared version | 0.3.3 |
+| Explicit: the check in rule lets go while the file is open | explicit | 12 | An edit made under this device's check out could not be saved: the lock was let go while the file was open | 0.3.3 |
 
-All nine were caught. Before A2 the script's `lock-before-upload` anchor no longer
+All nine were caught. The two 0.3.3 cases were run the same way (one anchor each in
+`src/Armory.Core/Checkout.cs`, the explicit simulation, the source restored byte-identical)
+by a shell port of the script, as PowerShell is not installed here; both were caught. Before A2 the script's `lock-before-upload` anchor no longer
 matched the reconciler and the recorded hashes were stale; both are fixed. PowerShell is
 not installed in the A2 container, so the nine cases were run by an exact Python port of
 the script (same anchors, filters, REPRO match and byte-identical restore check). The

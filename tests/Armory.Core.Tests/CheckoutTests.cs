@@ -159,6 +159,73 @@ public sealed class CheckoutTests
         Assert.Equal(Enum.GetValues<CheckOutStep>().Length, steps.Count);
     }
 
+    // The check in rule (feedback N4), one test per step. An open file waits, whatever was read
+    // and whatever the hash: SolidWorks keeps saving through the handle it opened while the file
+    // was writable, so the lock stays (and the file writable) until it is closed.
+    [Fact]
+    public void Check_in_waits_while_the_file_is_open_whatever_was_read()
+    {
+        foreach (var local in new string?[] { "base", "edit", null })
+        foreach (var read in new[] { false, true })
+            Assert.Equal(CheckInStep.WaitForClose, CheckoutRules.NextCheckInStep("base", local, read, isOpen: true));
+    }
+
+    // A file that could not be read just now is unknown: the hash an earlier scan left for it is
+    // never trusted, even (above all) when it is the shared version's.
+    [Fact]
+    public void Check_in_never_lets_go_over_bytes_it_could_not_read()
+    {
+        foreach (var local in new string?[] { "base", "edit", null })
+            Assert.Equal(CheckInStep.ReadAgain, CheckoutRules.NextCheckInStep("base", local, read: false, isOpen: false));
+        Assert.Equal(CheckInStep.ReadAgain, CheckoutRules.NextCheckInStep(null, null, read: false, isOpen: false));
+    }
+
+    // Bytes read just now that are not the shared version (saves, or the file removed here) are
+    // shared first: the lock is never let go over them.
+    [Fact]
+    public void Check_in_shares_changed_bytes_read_just_now_first()
+    {
+        Assert.Equal(CheckInStep.CommitFirst, CheckoutRules.NextCheckInStep("base", "edit", read: true, isOpen: false));
+        Assert.Equal(CheckInStep.CommitFirst, CheckoutRules.NextCheckInStep("base", null, read: true, isOpen: false));
+        Assert.Equal(CheckInStep.CommitFirst, CheckoutRules.NextCheckInStep(null, "edit", read: true, isOpen: false));
+    }
+
+    // Only the shared version, read just now from a closed file, lets the lock go (a removed
+    // file gone from this disk too).
+    [Fact]
+    public void Check_in_lets_go_only_over_the_shared_version_read_just_now()
+    {
+        Assert.Equal(CheckInStep.LetGo, CheckoutRules.NextCheckInStep("base", "base", read: true, isOpen: false));
+        Assert.Equal(CheckInStep.LetGo, CheckoutRules.NextCheckInStep(null, null, read: true, isOpen: false));
+    }
+
+    // The rule agrees with the Explicit reconciler: where it lets go, a pass for the check in or
+    // the undo has nothing left to do; where it shares first, that pass commits the bytes (check
+    // in), keeps them and puts the shared version back (undo), or shares the removal.
+    [Fact]
+    public void Check_in_rule_agrees_with_the_explicit_reconciler()
+    {
+        var steps = new HashSet<CheckInStep>();
+        foreach (var input in SmallStateSpace().Where(i => i.IsOnline && !i.LockWasBroken && i.Remote is { IsTombstone: false } && Reconciler.SameRevision(i.Base, i.Remote)))
+        foreach (var request in new[] { CheckoutRequest.CheckIn, CheckoutRequest.Undo })
+        {
+            var held = input with { Checkout = CheckoutMode.Explicit, Lock = LockOwnership.ThisDevice, Request = request };
+            var step = CheckoutRules.NextCheckInStep(held.Base?.Hash, held.LocalHash, read: true, held.IsOpen);
+            steps.Add(step);
+            var plan = Kinds(held);
+            switch (step)
+            {
+                case CheckInStep.LetGo: Assert.Equal([SyncActionKind.None], plan); break;
+                case CheckInStep.CommitFirst when plan is [SyncActionKind.Refuse]: break; // the release gate refuses the bytes: never let go
+                case CheckInStep.CommitFirst when held.LocalHash is null: Assert.Equal([SyncActionKind.ProposeTombstone], plan); break;
+                case CheckInStep.CommitFirst when request == CheckoutRequest.CheckIn: Assert.Equal([SyncActionKind.Upload], plan); break;
+                case CheckInStep.CommitFirst: Assert.Equal([SyncActionKind.SaveSideVersion, SyncActionKind.Download], plan); break;
+                case CheckInStep.WaitForClose: Assert.True(held.IsOpen); break;
+            }
+        }
+        Assert.Equal([CheckInStep.LetGo, CheckInStep.CommitFirst, CheckInStep.WaitForClose], steps.Order());
+    }
+
     // E1, first row: bytes already kept against a removal go to recovery, exactly as Automatic.
     [Theory]
     [InlineData(false, SyncActionKind.MoveLocalToRecovery)]

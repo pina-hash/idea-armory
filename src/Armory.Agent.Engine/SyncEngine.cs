@@ -1248,6 +1248,8 @@ public sealed partial class SyncEngine : IAsyncDisposable
         var asked = new Dictionary<string, VaultPath>(StringComparer.OrdinalIgnoreCase);
         foreach (var path in paths) asked.TryAdd(path.Value, path);
         var scope = new OpenScope(this, openKnown);
+        // Nothing to ask: no question at all (each file outside the scope is asked on its own).
+        if (asked.Count == 0) return scope;
         try { openKnown = new([.. asked.Keys], fs.OpenAmong(asked.Values)); }
         // Each file is asked on its own instead.
         catch (Exception error) when (error is IOException or UnauthorizedAccessException) { deps.Log?.Invoke("open files: " + error.Message); }

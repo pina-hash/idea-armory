@@ -16,6 +16,8 @@ internal sealed record UndoCheckOutMessage(IReadOnlyList<string>? Paths, string?
 internal sealed record TakeBackMessage(string? FileId, string? RequestId);
 // Force check in of many files in one action (0.3.1): Force check in all, the selection bar.
 internal sealed record TakeBackAllMessage(IReadOnlyList<string>? FileIds, string? RequestId);
+// File detail's Put back on this computer: a kept copy (its history entry id) of a file.
+internal sealed record PutBackKeptCopyMessage(string? FileId, string? VersionId, string? RequestId);
 // The folder taken in turns: the account signed in now takes over this computer's Armory folder
 // when the account it belongs to has nothing waiting in it (SyncEngine.TakeOverFolderAsync).
 internal sealed record TakeOverFolderMessage(string? RequestId);
@@ -83,6 +85,7 @@ internal sealed class Bridge(AgentHost host, IBridgeWindow window, AgentLog log)
         [BridgeMessages.TakeBackAll] = typeof(TakeBackAllMessage),
         [BridgeMessages.TakeOverFolder] = typeof(TakeOverFolderMessage),
         [BridgeMessages.SwitchAccount] = null,
+        [BridgeMessages.PutBackKeptCopy] = typeof(PutBackKeptCopyMessage),
     };
 
     // The answer to an action the window sent with something unusable in it.
@@ -206,6 +209,11 @@ internal sealed class Bridge(AgentHost host, IBridgeWindow window, AgentLog log)
                         takeIds.Add(g);
                     }
                     await AnswerAsync(type, takeIds.Count, asked, takeAll?.RequestId, allIds ? host.TakeBackAsync(takeIds) : Refuse(NotAFile));
+                    break;
+                case BridgeMessages.PutBackKeptCopy:
+                    var putBack = Read<PutBackKeptCopyMessage>(message);
+                    await AnswerAsync(type, 1, asked, putBack?.RequestId, Guid.TryParse(putBack?.FileId, out var putFile) && Guid.TryParse(putBack?.VersionId, out var putVersion)
+                        ? host.PutBackKeptCopyAsync(putFile, putVersion) : Refuse(NotAFile));
                     break;
                 case BridgeMessages.CreateFolder:
                     var create = Read<CreateFolderMessage>(message);

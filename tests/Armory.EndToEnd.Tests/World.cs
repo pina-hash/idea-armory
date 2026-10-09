@@ -271,11 +271,12 @@ internal sealed class Computer : IAsyncDisposable
         File.WriteAllBytes(full, bytes);
     }
     // Ctrl+S in SolidWorks: refused like SolidWorks refuses it when the file is read-only on
-    // disk (not checked out to this computer).
+    // disk (not checked out to this computer). A part SolidWorks opened while it was writable
+    // (Disk.Hold) is saved through the handle it holds, whatever the bit says since (feedback N4).
     public void Save(string path, string text) => Save(path, Encoding.UTF8.GetBytes(text));
     public void Save(string path, byte[] bytes)
     {
-        if (Disk.IsReadOnly(path)) throw new IOException($"{path} is read-only. SOLIDWORKS cannot save over it.");
+        if (Disk.IsReadOnly(path) && !Disk.HeldForWriting(path)) throw new IOException($"{path} is read-only. SOLIDWORKS cannot save over it.");
         Write(path, bytes);
     }
     // Someone cleared the read-only bit by hand (Explorer, Properties) and then saved anyway.

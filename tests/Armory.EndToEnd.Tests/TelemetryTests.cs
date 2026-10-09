@@ -56,6 +56,45 @@ public sealed class TelemetryTests
         Assert.DoesNotContain(Since(t.A.Flight, before), e => e.Kind == FlightKind.ReadOnlyBroken);
     }
 
+    // The readOnlyBroken incidents of IDEA-06 (0.3.0, 0.3.1): a file the scan can't read keeps
+    // the read-only bit an earlier scan read (cleared, from when it was checked out), so every
+    // pass took it for a bit someone cleared, though the bit was set. A file the scan could not
+    // read is never judged by its old entry: no event, and nothing is applied to it, until a
+    // pass can read it. (A bit someone really cleared is still recorded: the test above.)
+    [PostgresFact]
+    public async Task An_unreadable_file_never_reports_readOnlyBroken()
+    {
+        const string Bracket = "Robot 2027/Drivetrain/Bracket.SLDPRT";
+        await using var t = await TeamAsync();
+        t.A.Write(Plate, "v1");
+        t.A.Write(Bracket, "bracket");
+        await t.A.SyncAsync();
+        Assert.True((await t.A.CheckOutAsync(Plate, Bracket)).Ok);
+        await t.A.SyncAsync();
+        Assert.False(t.A.Disk.IsReadOnly(Plate));
+        var before = t.A.Flight.Recorded;
+        var batches = t.A.Disk.AttributeBatches;
+        // Plate: open in SolidWorks; Bracket: held by another program the open-file check doesn't see.
+        t.A.Disk.Hold(Plate);
+        t.A.Disk.HoldUnreadable(Bracket);
+        Assert.True((await t.A.CheckInAsync(Plate, Bracket)).Ok);
+        await t.A.SyncTimesAsync(3);
+        Assert.DoesNotContain(Since(t.A.Flight, before), e => e.Kind == FlightKind.ReadOnlyBroken);
+        Assert.Equal(batches, t.A.Disk.AttributeBatches); // nothing applied over what wasn't read
+        Assert.False(t.A.Disk.IsReadOnly(Plate));
+        // Readable again: checked in, read-only, and still no event.
+        t.A.Disk.Unhold(Plate);
+        t.A.Disk.Unhold(Bracket);
+        await t.A.SyncTimesAsync(2);
+        Assert.True(t.A.Disk.IsReadOnly(Plate));
+        Assert.True(t.A.Disk.IsReadOnly(Bracket));
+        Assert.Empty(t.A.Engine.View.MyFiles);
+        Assert.DoesNotContain(Since(t.A.Flight, before), e => e.Kind == FlightKind.ReadOnlyBroken);
+        // Each wait is noted once, when it starts.
+        Assert.Equal([Bracket + ": unreadable", Plate + ": open"],
+            Since(t.A.Flight, before).Where(e => e.Kind == FlightKind.Note && e.Name == "checkInWaits").Select(e => e.Detail!).Order(StringComparer.Ordinal));
+    }
+
     [PostgresFact]
     public async Task A_check_out_with_no_record_here_is_recorded_as_repaired()
     {

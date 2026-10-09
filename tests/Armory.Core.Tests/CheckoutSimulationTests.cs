@@ -10,7 +10,10 @@ namespace Armory.Core.Tests;
 // The seeded simulation for Explicit check out (v2). Same oracle as SimulationTests, with
 // clients that check out, save while checked out, sometimes force a save without a check out,
 // check in, undo, add files and re-add removed names, among crashes, lost connections, torn
-// journal writes, lock breaks and server removals. See docs/core/simulation.md.
+// journal writes, lock breaks and server removals. SolidWorks holds most parts it opens while
+// writable (the agent's scan can't read them and keeps what it read last), and another program
+// sometimes grabs a checked-out part right after it is closed (feedback N4). See
+// docs/core/simulation.md.
 public sealed class CheckoutSimulationTests(ITestOutputHelper output)
 {
     [Fact]
@@ -49,6 +52,9 @@ internal sealed class CheckoutCoverage
 {
     internal int CheckOuts, CheckIns, AddCheckIns, Undos, Adds, Revivals, ForcedSaves, PutBacks, BlockedAdds, OfflineSaves, Releases;
     internal int SavesAfterTakeBack, TornWrites, MidSyncCrashes, LostAcknowledgments;
+    // Feedback N4: saves SolidWorks made through the handle the scan can't read past, and check
+    // ins (undos, adds) that waited for the file to close or to be read.
+    internal int HeldSaves, WaitsForClose, ReadAgains;
     internal readonly int[] Kept = new int[Enum.GetValues<SideVersionReason>().Length];
 
     // Counted and printed, but too rare to require of every run: an add whose name another
@@ -72,6 +78,9 @@ internal sealed class CheckoutCoverage
         yield return ("torn_writes", TornWrites);
         yield return ("mid_sync_crashes", MidSyncCrashes);
         yield return ("lost_acknowledgments", LostAcknowledgments);
+        yield return ("held_saves", HeldSaves);
+        yield return ("waits_for_close", WaitsForClose);
+        yield return ("read_agains", ReadAgains);
         foreach (var reason in Enum.GetValues<SideVersionReason>()) yield return ("kept_" + reason, Kept[(int)reason]);
     }
     public override string ToString() => string.Join(' ', Routes().Select(r => $"{r.Name}={r.Count}"));
@@ -151,7 +160,7 @@ internal sealed class CheckoutSimulation
                         break;
                     case 1: Edit(client, path); break;
                     case 2: Save(client, path); break;
-                    case 3: if (client.Files[path].Hash is not null) client.Open.Add(path); break;
+                    case 3: if (client.Files[path].Hash is not null) OpenFile(client, path); break;
                     case 4: Close(client, path); break;
                     case 5: client.Online = false; break;
                     case 6: client.Online = true; break;
@@ -268,21 +277,37 @@ internal sealed class CheckoutSimulation
         Apply(client, path);
         client.Requests.Remove(path);
         coverage.CheckOuts++;
-        if (open) client.Open.Add(path);
+        if (open) OpenFile(client, path);
     }
-    private CheckOutStep NextCheckOutStep(Client client, VaultPath path)
+    // The agent hashes the copy at check-out time; a copy it can't read is not checked out.
+    private CheckOutStep? NextCheckOutStep(Client client, VaultPath path)
     {
         var file = client.Files[path];
+        if (Unreadable(client, path)) return null;
         return CheckoutRules.NextCheckOutStep(file.Base, file.Hash, server.Latest.GetValueOrDefault(path), client.Open.Contains(path));
     }
+
+    // SolidWorks opens the file. One it opens while it is writable it usually holds with a write
+    // handle (feedback N4): the agent's scan can't read it, and every save goes through that
+    // handle until it is closed. Sometimes it loads the file and lets go of it.
+    private void OpenFile(Client client, VaultPath path)
+    {
+        client.Busy.Remove(path);
+        if (client.Open.Add(path) && Writable(client, path) && random.Next(4) != 0) client.Held.Add(path);
+    }
+    // What the agent can't read now: a file SolidWorks holds, or one another program grabbed.
+    private static bool Unreadable(Client client, VaultPath path) => client.Held.Contains(path) || client.Busy.Contains(path);
 
     // SolidWorks opens a read-only file read-only: there is nothing to save.
     private void Edit(Client client, VaultPath path)
     {
         if (client.Files[path].Hash is null) return;
-        client.Open.Add(path);
+        OpenFile(client, path);
         if (!Writable(client, path)) return;
         client.Buffers[path] = Encoding.UTF8.GetBytes($"seed={seed};save={++sequence};device={client.Device};path={path}");
+        // The check out this edit is made under, if any: it must never be lost to a lock let go.
+        if (Holds(client, path)) client.BufferEpochs[path] = server.Epochs[path];
+        else client.BufferEpochs.Remove(path);
         if (client.Online && Holds(client, path)) Transition(path, LockEvent.Edit, client.Actor);
     }
 
@@ -292,6 +317,8 @@ internal sealed class CheckoutSimulation
         if (!client.Buffers.ContainsKey(path)) Edit(client, path);
         if (!client.Buffers.TryGetValue(path, out var bytes) || !Writable(client, path)) return;
         client.Buffers.Remove(path);
+        client.BufferEpochs.Remove(path);
+        if (client.Held.Contains(path)) coverage.HeldSaves++;
         // A save after the student cleared the attribute is still a save without a check out.
         Write(client, path, bytes, forced: client.Attributes[path].Cleared);
     }
@@ -299,8 +326,23 @@ internal sealed class CheckoutSimulation
     private void Close(Client client, VaultPath path)
     {
         if (client.Buffers.ContainsKey(path)) Save(client, path);
-        client.Buffers.Remove(path); // an edit that could not be saved is closed without saving
+        DropUnsaved(client, path); // an edit that could not be saved is closed without saving
         client.Open.Remove(path);
+        // Right after SolidWorks closes a checked-out part, another program (a backup, a virus
+        // scan) sometimes reads it before the agent does: the agent can't read it until its next pass.
+        if (client.Held.Remove(path) && Holds(client, path) && server.Origins.GetValueOrDefault(path) == Origin.CheckOut && random.Next(3) == 0)
+            client.Busy.Add(path);
+    }
+
+    // An edit that could not be saved (the file became read-only) is lost when it is closed. The
+    // new invariant (feedback N4): never one made while this device held the file's check out,
+    // unless a mentor took that check out back. Armory never lets the lock go while the file is
+    // open, so the file stays writable until it is closed.
+    private void DropUnsaved(Client client, VaultPath path)
+    {
+        if (!client.Buffers.Remove(path)) return;
+        if (client.BufferEpochs.Remove(path, out var epoch))
+            Assert.True(server.BrokenEpochs.Contains((path, epoch)), $"an edit made under this device's check out could not be saved: the lock was let go while the file was open, at step {step}");
     }
 
     // The student cleared the read-only attribute and saved anyway.
@@ -308,8 +350,9 @@ internal sealed class CheckoutSimulation
     {
         if (client.Files[path].Hash is null || Writable(client, path)) return;
         client.Buffers.Remove(path);
+        client.BufferEpochs.Remove(path);
         var bytes = Encoding.UTF8.GetBytes($"seed={seed};forced={++sequence};device={client.Device};path={path}");
-        if (random.Next(2) == 0) client.Open.Add(path);
+        if (random.Next(2) == 0) OpenFile(client, path);
         client.Attributes[path].Cleared = true;
         client.Attributes[path].ReadOnly = false;
         coverage.ForcedSaves++;
@@ -322,7 +365,7 @@ internal sealed class CheckoutSimulation
         var file = client.Files[path];
         if (file.Hash is not null || file.Base is { IsTombstone: false }) return;
         var bytes = Encoding.UTF8.GetBytes($"seed={seed};add={++sequence};device={client.Device};path={path}");
-        if (random.Next(2) == 0) client.Open.Add(path);
+        var open = random.Next(2) == 0;
         // A file the student creates is writable; the server does not have it yet.
         var attribute = client.Attributes[path];
         attribute.Shared = false;
@@ -330,12 +373,13 @@ internal sealed class CheckoutSimulation
         attribute.Cleared = false;
         attribute.ReadOnly = false;
         Write(client, path, bytes);
+        if (open) OpenFile(client, path);
     }
 
     private void LocalDelete(Client client, VaultPath path)
     {
         var file = client.Files[path];
-        if (file.Hash is null) return;
+        if (file.Hash is null || Unreadable(client, path)) return; // Windows refuses while it is held
         file.Hash = null;
         file.Preserved = null;
         client.Journal.Append(new($"{client.Device}:delete:{++sequence}", IntentKind.Tombstone, path.Value, null, null, client.Person));
@@ -357,6 +401,7 @@ internal sealed class CheckoutSimulation
         }
         file.Hash = hash;
         file.Preserved = null;
+        if (!forced && Holds(client, path)) client.OwnSaves[path] = (hash, server.Epochs[path]);
         everSaved[hash] = bytes.ToArray();
         if (!client.Online) coverage.OfflineSaves++;
         client.Recorder.Record($"{client.Device}:save:{++sequence}", path, client.Person, new MemoryStream(bytes));
@@ -378,6 +423,8 @@ internal sealed class CheckoutSimulation
         foreach (var path in Ordered)
         {
             var file = client.Files[path];
+            // The scan: a file the agent can't read keeps what it read last (LocalFile.Unread).
+            if (!Unreadable(client, path)) file.Observed = file.Hash;
             var ownership = Ownership(client, path);
             var open = client.Open.Contains(path);
             var request = client.Requests.GetValueOrDefault(path);
@@ -386,7 +433,7 @@ internal sealed class CheckoutSimulation
             if (request == CheckoutRequest.None && ownership == LockOwnership.ThisDevice && !open &&
                 server.Origins.GetValueOrDefault(path) == Origin.Add)
                 request = CheckoutRequest.CheckIn;
-            var input = new SyncInput(path, file.Base, file.Hash, server.Latest.GetValueOrDefault(path), ownership, open, client.Online,
+            var input = new SyncInput(path, file.Base, file.Observed, server.Latest.GetValueOrDefault(path), ownership, open, client.Online,
                 server.BreakNotices.Contains((client.Device, path)), PreservedLocalHash: file.Preserved,
                 Checkout: CheckoutMode.Explicit, Request: request);
             var plan = Reconciler.Plan(input);
@@ -398,7 +445,7 @@ internal sealed class CheckoutSimulation
                     // SaveRecorder already journals the immutable upload snapshot. Remaining
                     // lock/deletion requests carry stable ids and are safe to append repeatedly.
                     if (intent.Kind == IntentKind.Upload) continue;
-                    client.Journal.Append(new($"{client.Device}:intent:{intent.Kind}:{path}:{file.Hash}:{file.Base?.Id}",
+                    client.Journal.Append(new($"{client.Device}:intent:{intent.Kind}:{path}:{file.Observed}:{file.Base?.Id}",
                         intent.Kind, path.Value, intent.Hash, null, client.Person));
                 }
                 Reapply(client.Attributes[path]);
@@ -408,6 +455,7 @@ internal sealed class CheckoutSimulation
             FinishCheckOut(client, path, request);
             Apply(client, path);
         }
+        client.Busy.Clear(); // the other program let go of it by the next pass
         if (!client.Online) return;
         CheckClientArchives(client);
         // An add holds its lock only while it is open: a closed add is checked in by the pass.
@@ -426,10 +474,10 @@ internal sealed class CheckoutSimulation
             {
                 case SyncActionKind.SaveSideVersion:
                     Assert.NotNull(action.Why);
-                    Preserve(client, path, file.Hash!);
+                    Preserve(client, path, input.LocalHash!);
                     coverage.Kept[(int)action.Why.Value]++;
                     CrashPoint();
-                    file.Preserved = file.Hash;
+                    file.Preserved = input.LocalHash;
                     server.BreakNotices.Remove((client.Device, path));
                     break;
                 case SyncActionKind.AcquireLockThenUpload:
@@ -444,14 +492,28 @@ internal sealed class CheckoutSimulation
                     CrashPoint();
                     goto case SyncActionKind.Upload;
                 case SyncActionKind.Upload:
-                    SharedWrite(client, path, input, file.Hash);
+                    SharedWrite(client, path, input, input.LocalHash);
                     CrashPoint();
                     file.Base = server.Latest[path];
                     file.Preserved = null;
                     Transition(path, LockEvent.Synced, client.Actor);
                     break;
                 case SyncActionKind.Download:
+                    // Replace reads the destination first: one it can't read, or that changed
+                    // since the scan, is refused (the plan stops until the next pass).
+                    if (Unreadable(client, path) || file.Hash != input.LocalHash) return;
                     Assert.False(client.Open.Contains(path), $"open overwrite at step {step}");
+                    // The new invariant (feedback N4): the working copy is never reverted while
+                    // the student holds it. Bytes saved under this device's own check out are
+                    // replaced only once they are a shared version, for an undo (kept first,
+                    // checked above), or after a mentor took that check out back. (A shared
+                    // version that moved under the check out is this device's own add or check in
+                    // whose answer a crash lost: the agent replays it from its in-flight record,
+                    // and here it is a conflict, kept first like any other.)
+                    if (client.OwnSaves.TryGetValue(path, out var own) && own.Hash == file.Hash && input.Request != CheckoutRequest.Undo &&
+                        Reconciler.SameRevision(input.Base, input.Remote))
+                        Assert.True(server.BrokenEpochs.Contains((path, own.Epoch)) || server.Versions.Any(v => !v.Side && v.Path == path && v.Revision.Hash == own.Hash),
+                            $"bytes saved under this device's check out were replaced on disk at step {step}");
                     Assert.True(file.Hash is null || file.Hash == file.Base?.Hash || file.Preserved == file.Hash,
                         $"unsynced local overwrite without side-version acknowledgment at step {step}");
                     if (input.Request == CheckoutRequest.Undo && file.Hash is not null && file.Hash != file.Base?.Hash)
@@ -464,16 +526,19 @@ internal sealed class CheckoutSimulation
                     Assert.True(Reconciler.SameRevision(input.Remote, server.Latest.GetValueOrDefault(path)));
                     Apply(client, path, shared: true); // set on the staged file before it replaces this one
                     file.Hash = server.Latest[path].Hash;
+                    file.Observed = file.Hash;
                     CrashPoint();
                     file.Base = server.Latest[path];
                     file.Preserved = null;
                     break;
                 case SyncActionKind.MoveLocalToRecovery:
+                    if (Unreadable(client, path) || file.Hash != input.LocalHash) return;
                     Assert.False(client.Open.Contains(path), $"open recovery move at step {step}");
                     Assert.True(file.Hash == file.Base?.Hash || file.Preserved == file.Hash, "unpreserved recovery move");
                     client.Recovery.Add(file.Hash!);
                     CrashPoint();
                     file.Hash = null;
+                    file.Observed = null;
                     CrashPoint();
                     file.Base = server.Latest[path];
                     file.Preserved = null;
@@ -489,8 +554,8 @@ internal sealed class CheckoutSimulation
                     Transition(path, LockEvent.Synced, client.Actor);
                     break;
                 case SyncActionKind.None:
-                    if (file.Hash == input.Remote?.Hash) file.Base = input.Remote;
-                    if (file.Hash is null) server.BreakNotices.Remove((client.Device, path));
+                    if (input.LocalHash == input.Remote?.Hash) file.Base = input.Remote;
+                    if (input.LocalHash is null) server.BreakNotices.Remove((client.Device, path));
                     break;
                 case SyncActionKind.NotifyNewerVersionWaiting:
                 case SyncActionKind.Refuse:
@@ -502,7 +567,10 @@ internal sealed class CheckoutSimulation
 
     // Check in and Undo release once the file is clean (committed, or restored). So do adds
     // (once closed, in the same pass that added them) and a deletion's own lock. An explicit
-    // check out is otherwise kept. The file is made read-only before the lock is released.
+    // check out is otherwise kept. The file is made read-only before the lock is released. As
+    // the agent does (feedback N4): the scan's view says whether the file is clean, then the
+    // file is read just now (CheckoutRules.NextCheckInStep): never let go while it is open, nor
+    // over bytes the agent could not read.
     private void FinishCheckOut(Client client, VaultPath path, CheckoutRequest request)
     {
         if (!Holds(client, path))
@@ -515,7 +583,19 @@ internal sealed class CheckoutSimulation
         // The request was read before this pass ran; an add it created and committed while
         // closed is checked in now (D2).
         if (request == CheckoutRequest.None && origin == Origin.Add && !client.Open.Contains(path)) request = CheckoutRequest.CheckIn;
-        if (file.Hash != file.Base?.Hash || request == CheckoutRequest.None && origin != Origin.Delete) return;
+        if (file.Observed != file.Base?.Hash || request == CheckoutRequest.None && origin != Origin.Delete) return;
+        if (file.Observed is not null || file.Hash is not null)
+        {
+            var read = !Unreadable(client, path);
+            switch (CheckoutRules.NextCheckInStep(file.Base?.Hash, read ? file.Hash : file.Observed, read, client.Open.Contains(path)))
+            {
+                case CheckInStep.WaitForClose: coverage.WaitsForClose++; return;
+                case CheckInStep.ReadAgain: coverage.ReadAgains++; return;
+                case CheckInStep.CommitFirst: return;
+            }
+        }
+        // The new invariant (feedback N4): a lock is let go only over the shared version on disk.
+        Assert.True(file.Hash == server.Latest.GetValueOrDefault(path)?.Hash, $"a lock was let go over bytes that are not the shared version at step {step}");
         Transition(path, LockEvent.Synced, client.Actor);
         CrashPoint();
         var attribute = client.Attributes[path];
@@ -580,6 +660,7 @@ internal sealed class CheckoutSimulation
         }
         server.Locks[path] = result.State;
         server.Origins[path] = origin;
+        server.Epochs[path] = server.Epochs.GetValueOrDefault(path) + 1;
         if (result.RecoveryOwner is { } owner) server.BreakNotices.Add((owner.Device, path));
         return true;
     }
@@ -588,6 +669,7 @@ internal sealed class CheckoutSimulation
     {
         var state = server.Locks.GetValueOrDefault(path, new FreeLock());
         if (Owner(state) is null) return;
+        server.BrokenEpochs.Add((path, server.Epochs.GetValueOrDefault(path)));
         var actor = new LockActor(new("Mentor", "admin"), true);
         Transition(path, LockEvent.RequestBreak, actor);
         Transition(path, LockEvent.ConfirmBreak, actor);
@@ -626,7 +708,10 @@ internal sealed class CheckoutSimulation
     private static void Crash(Client client)
     {
         client.Open.Clear();
+        client.Held.Clear();
+        client.Busy.Clear();
         client.Buffers.Clear();
+        client.BufferEpochs.Clear();
         client.Store.CrashAfter = null;
         client.NeedsRecovery = true;
         client.Restart();
@@ -639,8 +724,10 @@ internal sealed class CheckoutSimulation
         {
             client.Store.CrashAfter = null;
             foreach (var path in client.Buffers.Keys.ToArray()) Save(client, path);
-            client.Buffers.Clear();
+            foreach (var path in client.Buffers.Keys.ToArray()) DropUnsaved(client, path);
             client.Open.Clear();
+            client.Held.Clear();
+            client.Busy.Clear();
             client.Online = true;
         }
         for (var round = 0; round < 5; round++)
@@ -713,6 +800,9 @@ internal sealed class CheckoutSimulation
         public HashSet<(string Device, VaultPath Path)> BreakNotices { get; } = [];
         public Dictionary<string, JournalEntry> Applied { get; } = new(StringComparer.Ordinal);
         public List<(LockHolder Actor, LockHolder? Holder)> Advances { get; } = [];
+        // Each lock taken on a path is a new check out (its epoch); a mentor took these back.
+        public Dictionary<VaultPath, int> Epochs { get; } = [];
+        public HashSet<(VaultPath Path, int Epoch)> BrokenEpochs { get; } = [];
         private readonly HashSet<string> operations = new(StringComparer.Ordinal);
         public void AddVersion(VaultPath path, string? hash, string author, bool side, string operation)
         {
@@ -725,6 +815,7 @@ internal sealed class CheckoutSimulation
     private sealed class LocalFile
     {
         internal string? Hash;
+        internal string? Observed; // what the agent's scan last read (feedback N4)
         internal Revision? Base;
         internal string? Preserved;
     }
@@ -749,6 +840,14 @@ internal sealed class CheckoutSimulation
         internal Dictionary<VaultPath, DiskAttribute> Attributes { get; } = [];
         internal Dictionary<VaultPath, byte[]> Buffers { get; } = [];
         internal HashSet<VaultPath> Open { get; } = [];
+        // SolidWorks holds these for writing (opened while writable): the agent can't read them.
+        internal HashSet<VaultPath> Held { get; } = [];
+        // Another program holds these until the next pass: not open, and unreadable.
+        internal HashSet<VaultPath> Busy { get; } = [];
+        // The check out (epoch) an unsaved edit was made under, and this device's last save of
+        // each file made while it held the check out.
+        internal Dictionary<VaultPath, int> BufferEpochs { get; } = [];
+        internal Dictionary<VaultPath, (string Hash, int Epoch)> OwnSaves { get; } = [];
         internal Dictionary<VaultPath, CheckoutRequest> Requests { get; } = [];
         internal HashSet<string> Recovery { get; } = new(StringComparer.Ordinal);
         internal MemoryJournalStore Store { get; } = new();

@@ -3,7 +3,8 @@
 `LocalChangeDetector` treats FileSystemWatcher as a wake-up hint and always enumerates the
 real directory tree for inventory, in one walk that yields files, folders and SolidWorks
 `~$` markers. The cache stores canonical path, volume/file id, size, last-write UTC time,
-content hash, hash time and the read-only bit.
+content hash, hash time, the read-only bit, and whether this scan could read the file
+(`Unread`, below).
 
 Hashes are reused only when the metadata tuple is unchanged and the file is outside the racy
 window: a file whose last-write time is within 2 seconds of the moment it was hashed is
@@ -53,7 +54,14 @@ attributes could not be read, or a reparse point (excluded and reported, never t
 file that could not be opened, at its own path; and the file or folder whose id turns up on
 an entry the scan could not take in (a path over the 240-character limit, a name the vault
 refuses, a file another program holds with no sharing, whose id is still read with
-`FILE_READ_ATTRIBUTES`). Every other missing file or folder is reported missing, so one long
+`FILE_READ_ATTRIBUTES`). Every file kept that way is marked `Unread` (0.3.3, feedback N4):
+its hash, size, time and read-only bit are the last ones read, not the disk's now, and the
+first scan that can read it hashes it again, whatever its size and time say (a writer can put
+both back). SolidWorks holds a part it opened while it was writable with a write handle, which
+the scan's read handle (sharing read and delete, never write) conflicts with, so a checked-out
+part open in SolidWorks is `Unread` on every scan until it is closed; before 0.3.3 nothing said
+so, and a check in took the old hash for the disk's (docs/agent/ENGINE.md, "Check in when
+closed"). Every other missing file or folder is reported missing, so one long
 Pack and Go path, a link, or an open file never stops a deletion elsewhere from showing, and
 nothing stays "present" after the problem is gone. Call Scan serially from the agent
 coordinator.
@@ -73,7 +81,10 @@ above and below at once) is reported top-most first with no re-hash; a folder ca
 renamed after the scan returns and a file can be renamed while it is being hashed; markers, attribute changes and folder
 events wake the engine while `.armory` and desktop.ini do not; a 250-character path, a file
 renamed to a name that does not fit and a file held open with no sharing never hide a deleted
-file or a deleted folder elsewhere, on three scans in a row; a folder that cannot be listed (a
+file or a deleted folder elsewhere, on three scans in a row; a file another handle holds for
+writing (`FileAccess.ReadWrite`, `FileShare.Read`, as SolidWorks holds a part) is kept
+`Unread` with its old hash and a problem, and hashed again once that handle closes though
+the bytes changed with size and time put back; a folder that cannot be listed (a
 deny ACE) keeps only what is inside it; a chain and a swap of real folders come in an order
 that applies; and a folder renamed while the detector was stopped is one move from the saved
 map, reported again after a crash and never after the agent's own move. `FolderMoveOrderTests`

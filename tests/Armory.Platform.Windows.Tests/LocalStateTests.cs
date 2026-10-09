@@ -68,7 +68,48 @@ public sealed class LocalStateTests(ITestOutputHelper output)
         Assert.Equal("READY", await child.ReadLine());
         var blocked = scanner.Scan(fullRescan: true);
         Assert.NotEmpty(blocked.Problems);
-        Assert.Equal(first.Files[0], Assert.Single(blocked.Files));
+        // Kept as it was, and marked as not read this time (feedback N4).
+        Assert.Equal(first.Files[0] with { Unread = true }, Assert.Single(blocked.Files));
+    }
+
+    // Feedback N4: SolidWorks holds a part it has open for writing, so the scan can't open it.
+    // The entry carried over says so (Unread) instead of passing the old hash and read-only bit
+    // off as the disk's, and the first scan that can read the file again hashes it, even when
+    // the writer put its size and time back.
+    [WindowsFact]
+    public void A_file_held_open_for_writing_is_marked_unread_and_hashed_again_once_readable()
+    {
+        using var vault = new TestVault();
+        var file = vault.File("part.SLDPRT");
+        File.WriteAllBytes(file, [1, 2, 3, 4]);
+        var written = DateTime.UtcNow.AddMinutes(-1); // outside the racy window
+        File.SetLastWriteTimeUtc(file, written);
+        using var scanner = new LocalChangeDetector(vault.Paths);
+        var first = Assert.Single(scanner.Scan().Files);
+        Assert.False(first.Unread);
+        Assert.Equal(TestVault.Hash([1, 2, 3, 4]), first.Hash);
+        using (var solidWorks = new FileStream(file, FileMode.Open, FileAccess.ReadWrite, FileShare.Read))
+        {
+            // Saved through the handle, the same size.
+            solidWorks.Write([9, 9, 9, 9]);
+            solidWorks.Flush(flushToDisk: true);
+            var held = scanner.Scan();
+            Assert.Contains(held.Problems, p => p.StartsWith("part.SLDPRT", StringComparison.OrdinalIgnoreCase));
+            var carried = Assert.Single(held.Files);
+            Assert.True(carried.Unread);
+            Assert.Equal(first with { Unread = true }, carried);
+            Assert.Equal(0, held.HashesComputed);
+        }
+        // Closed, with its time put back as it was: only Unread says it must be read again.
+        File.SetLastWriteTimeUtc(file, written);
+        var closed = scanner.Scan();
+        var read = Assert.Single(closed.Files);
+        Assert.False(read.Unread);
+        Assert.Equal(first.Size, read.Size);
+        Assert.Equal(first.LastWriteUtc, read.LastWriteUtc);
+        Assert.Equal(1, closed.HashesComputed);
+        Assert.Equal(TestVault.Hash([9, 9, 9, 9]), read.Hash);
+        output.WriteLine($"held: unread with the old hash; closed: hashed again to {read.Hash[..8]} with equal size and time");
     }
 
     [WindowsFact]
