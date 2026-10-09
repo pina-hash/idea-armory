@@ -490,8 +490,10 @@ function Assert-Payload([string]$Folder, [string]$Label) {
         if (-not (Test-Path -LiteralPath $file)) { Fail ($Label + ' has no ' + $relative) }
         $info = [Diagnostics.FileVersionInfo]::GetVersionInfo($file)
         $actual = '{0}.{1}.{2}' -f $info.FileMajorPart, $info.FileMinorPart, $info.FileBuildPart
-        if ($info.ProductName -cne 'IDEA Armory' -or $actual -ne $Version) { Fail ($Label + '\' + $relative + ' carries "' + $info.ProductName + '" ' + $actual + ', expected "IDEA Armory" ' + $Version) }
-        Note ($Label + '\' + $relative + ': ' + $info.ProductName + ' ' + $actual + ' by ' + $info.CompanyName)
+        # A setup built by Inno Setup pads its strings with spaces.
+        $product = ([string]$info.ProductName).TrimEnd()
+        if ($product -cne 'IDEA Armory' -or $actual -ne $Version) { Fail ($Label + '\' + $relative + ' carries "' + $product + '" ' + $actual + ', expected "IDEA Armory" ' + $Version) }
+        Note ($Label + '\' + $relative + ': ' + $product + ' ' + $actual + ' by ' + ([string]$info.CompanyName).TrimEnd())
     }
     $never = @(Get-ChildItem -LiteralPath $Folder -Recurse -File -Force | Where-Object { $_.Name -in @('BadgeProbe.exe', 'ShellPipeTest.exe') -or $_.Name -like 'SolidWorks.Interop*' })
     if ($never.Count -gt 0) { Fail ($Label + ' ships ' + (($never | ForEach-Object { $_.Name }) -join ', ')) }
