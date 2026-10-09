@@ -513,6 +513,9 @@ public sealed partial class SyncEngine : IAsyncDisposable
             DetectLocalMoves(scan);
             await ExecutePendingMovesAsync(ct);
             await ArchiveSupersededAsync(entries, ct);
+            // An add whose first version never got there, its file gone from here: its empty
+            // record is removed for the team.
+            if (online == true) await RemoveEmptyAddsAsync(ct);
             // A known folder gone for a second scan: one removal for the team.
             if (online == true) await RemoveMissingFoldersAsync(ct);
             if (online == true) online = await RefreshStaleAsync(ct);
@@ -583,7 +586,10 @@ public sealed partial class SyncEngine : IAsyncDisposable
         if (uploaded > 0) did.Add($"{Count(uploaded, "file", "files")} uploaded");
         if (sideVersions > 0) did.Add(Count(sideVersions, "kept copy", "kept copies"));
         if (did.Count > 0) activity.Log("Sync finished: " + string.Join(", ", did) + ".");
-        if (online == false && wasOnline) activity.Log("This computer is offline. Armory keeps trying by itself.");
+        LogNameBlocked();
+        if (online == false && wasOnline)
+            activity.Log(deps.Sessions.Current is null ? "This computer was signed out of Armory. Your work is safe here until you connect it again."
+                : "This computer is offline. Armory keeps trying by itself.");
         if (online == true && !wasOnline && lastOnline != default) activity.Log("Back online.");
         wasOnline = online != false;
         if (deps.Log is null || (!failed && passMoving == 0 && uploaded + downloaded + sideVersions + refused == 0 && took < TimeSpan.FromSeconds(10))) return;
@@ -592,6 +598,26 @@ public sealed partial class SyncEngine : IAsyncDisposable
     }
 
     private bool wasOnline = true;
+
+    // Files that can't be added until they have names of their own: one running line whenever
+    // their number changes, never one per pass (they wait for a person, not for Armory).
+    private int nameBlockedLogged;
+    private void LogNameBlocked()
+    {
+        var blocked = state.Files.Values.Where(f => f.RefusalKind == NameTakenKind && !f.Purged && state.Projects.GetValueOrDefault(f.ProjectId) is { Archived: false })
+            .GroupBy(f => f.ProjectId).Select(g => (Project: state.Projects[g.Key].Name, Count: g.Count())).ToList();
+        var count = blocked.Sum(b => b.Count);
+        if (count == nameBlockedLogged) return;
+        nameBlockedLogged = count;
+        if (count == 0) return;
+        var where = blocked.Count == 1 ? blocked[0].Project : "their projects";
+        activity.Log(count == 1 ? $"1 file is waiting for you: its name is taken in {where}."
+            : $"{count:N0} files are waiting for you: their names are taken in {where}.");
+    }
+
+    // Going offline, or being signed out, during a pass: either one stops the pass's server work
+    // and keeps what is in flight for the next time; neither is ever a refusal or a file's problem.
+    private static bool Stopped(Exception error) => error is ArmoryOfflineException or ArmorySignedOutException;
 
     private string PassKind() => passScope is not null ? "action" : loopPass ? "loop" : "whole";
 
@@ -710,7 +736,11 @@ public sealed partial class SyncEngine : IAsyncDisposable
                             if (FolderPurge.From(change) is { } purge) FolderPurged(ps, purge);
                             if (change.Kind == "lock_broken" && change.Payload["former_device_id"]?.GetValue<string>() is { } former &&
                                 Guid.TryParse(former, out var device) && state.IsMine(device))
-                                foreach (var st in state.WithFileId(change.EntityId)) st.BreakNotice = true;
+                                foreach (var st in state.WithFileId(change.EntityId))
+                                {
+                                    st.BreakNotice = true;
+                                    st.BrokenBy = Text(change.Payload, "by");
+                                }
                             if (change.Kind == "file_revived") RecordRevival(change.EntityId, change.CreatedAt);
                             // Another computer renamed a folder: moved here in one step (ApplyRemoteFolderMoves).
                             if (change.Kind == "folder_renamed" && Text(change.Payload, "from") is { } from && Text(change.Payload, "to") is { } to &&
@@ -743,7 +773,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
                 MarkDirty();
                 return true;
             }
-            catch (ArmoryOfflineException) { MarkDirty(); return false; }
+            catch (Exception error) when (Stopped(error)) { MarkDirty(); return false; }
         }
         finally
         {
@@ -766,6 +796,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
     private void KnowProject(ProjectState ps, IReadOnlyList<RemoteFile> files)
     {
         ForgetProject(ps.Id);
+        sharedDeviceNames = null;
         remoteProjects[ps.Id] = files;
         foreach (var file in files) Know(ps, file, publish: false);
         projectReads[ps.Id] = new ProjectRead(ps.Folder, deps.Clock.GetTimestamp());
@@ -775,6 +806,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
 
     private void ForgetProject(Guid project)
     {
+        sharedDeviceNames = null;
         remoteProjects.Remove(project);
         foreach (var (id, known) in remoteById.Where(r => r.Value.Project.Id == project).ToArray())
         {
@@ -805,6 +837,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
             return;
         }
         if (remoteById.TryGetValue(file.Id, out var old)) remoteByPath.Remove(old.Path.Value);
+        if (file.Lock is { IsLive: true } || old.File?.Lock is { IsLive: true }) sharedDeviceNames = null;
         remoteByPath[path.Value] = (file, ps);
         remoteById[file.Id] = (file, ps, path);
         if (publish && !refreshing) publishedRemote = publishedRemote.SetItem(file.Id, (file, ps, path));
@@ -825,6 +858,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
     // connection drops before the server is read again.
     private void KnowLock(Guid fileId, RemoteLock? held)
     {
+        sharedDeviceNames = null;
         foreach (var st in state.WithFileId(fileId)) st.Holder = Known(held);
         if (!remoteById.TryGetValue(fileId, out var known)) return;
         var file = known.File with { Lock = held };
@@ -1040,7 +1074,8 @@ public sealed partial class SyncEngine : IAsyncDisposable
         if (st?.LocalMoveTo is not null || movingTo.Contains(key)) return null;
         // A new file at a removed file's path is planned against that removed file: Core's
         // re-add, which the server answers by reviving the name with its history (contract
-        // C4, EnsureServerFileAsync). Names are never refused here.
+        // C4, EnsureServerFileAsync). A removed name is never refused; a name a live file holds
+        // elsewhere in the project is, once Core has planned the add (below).
         st ??= FileFor(project, key);
         if (remote.File is not null) st.FileId ??= remote.File.Id;
         if (st.Inflight is not null) return null; // finished on the next online pass
@@ -1054,6 +1089,10 @@ public sealed partial class SyncEngine : IAsyncDisposable
             MarkDirty();
             return null;
         }
+        // An add whose first version never reached the server, gone from this disk: Core has
+        // nothing to plan for it, and its absence is counted by the step that removes its empty
+        // record (RemoveEmptyAddsAsync).
+        if (localFile is null && EmptyAdd(st)) return null;
 
         // One scan's absence is not a deletion: wait for a second scan before planning one.
         if (localFile is null && st.BaseHash is not null)
@@ -1080,6 +1119,17 @@ public sealed partial class SyncEngine : IAsyncDisposable
         if (!isOnline)
         {
             JournalOffline(plan, st);
+            return null;
+        }
+        // An add (or the re-add of a removed name) whose name another live file of the project
+        // holds is refused here, at the plan, until that file is renamed or removed or this one
+        // is: never a unit, never expected as an upload, never counted as moving, and counted as
+        // refused only when the refusal is new. IDEA-06's 142 copies were planned, expected as
+        // uploads ("Uploading 0 of 142 files") and refused again on every pass.
+        if (plan.Actions is [{ Kind: SyncActionKind.Upload or SyncActionKind.AcquireLockThenUpload }, ..] &&
+            (st.FileId is null || remote.File is { Deleted: true }) && NameHolderElsewhere(project, path) is { } holder)
+        {
+            RefuseName(st, holder.Folder, holder.Name);
             return null;
         }
         return new Planned(key, path, input, plan, st, project, remote.File);
@@ -1125,7 +1175,8 @@ public sealed partial class SyncEngine : IAsyncDisposable
     {
         var run = passScope is { } scope ? units.Where(scope.Covers).ToList() : units;
         foreach (var unit in run) foreach (var planned in unit) ExpectTransfers(planned);
-        LogPassStart(run.Sum(u => u.Count(p => p.Plan.Actions.Any(a => a.Kind != SyncActionKind.None))), units.Sum(u => u.Count));
+        // A plan that only refuses (the release gate) moves nothing: it is never counted as moving.
+        LogPassStart(run.Sum(u => u.Count(p => p.Plan.Actions.Any(a => a.Kind is not (SyncActionKind.None or SyncActionKind.Refuse)))), units.Sum(u => u.Count));
         var started = deps.Clock.GetTimestamp();
         var next = await RunConcurrentlyAsync(run, RunUnitAsync, notStarted: unit =>
         {
@@ -1197,7 +1248,8 @@ public sealed partial class SyncEngine : IAsyncDisposable
                 await ExecutePlannedAsync(planned, ct);
                 if (failedFiles.Count > 0 && failedFiles.Remove(planned.Key)) flight?.FileRecovered(planned.Key);
             }
-            catch (ArmoryOfflineException) { online = false; }
+            // Signed out during the pass: a stop like going offline, never this file's problem.
+            catch (Exception error) when (Stopped(error)) { online = false; }
             catch (Exception error) when (error is ArmoryClientException or Armory.Storage.HashMismatchException or IOException or UnauthorizedAccessException or InvalidDataException)
             { FileProblem(planned.Key, error); }
             // Anything else is not this file's: nothing is saved from the moment it is thrown.
@@ -1216,13 +1268,26 @@ public sealed partial class SyncEngine : IAsyncDisposable
         // Its record left this computer's state meanwhile (a removed file's past, forgotten when
         // the name was revived in this same unit): nothing is left to do for it.
         if (!state.Files.TryGetValue(planned.Key, out var current) || !ReferenceEquals(current, st)) return;
+        // A refusal is decided again by this plan; the one it had stays known, so the same
+        // refusal made again is not news (SetRefusal).
+        var before = (st.Refusal, st.RefusalKind);
+        refusalsBefore[st] = before;
         st.Refusal = null; st.RefusalKind = null; st.NewerWaiting = false; st.RemovedWaiting = false;
-        foreach (var action in planned.Plan.Actions)
+        try
         {
-            Checkpoint("before-" + action.Kind, ct);
-            if (!await ExecuteAsync(action, planned.Input, st, planned.Project, planned.Remote, ct)) break;
+            foreach (var action in planned.Plan.Actions)
+            {
+                Checkpoint("before-" + action.Kind, ct);
+                if (!await ExecuteAsync(action, planned.Input, st, planned.Project, planned.Remote, ct)) break;
+            }
         }
+        finally { refusalsBefore.Remove(st); }
+        // A refusal that is over (the namesake renamed, the file made smaller): the flight says so once.
+        if (before.Refusal is not null && st.Refusal is null) flight?.Refusal(st.Path, null, null);
     }
+
+    // The refusal each unit's record had when its plan started to run (ExecutePlannedAsync).
+    private readonly Dictionary<FileState, (string? Refusal, string? Kind)> refusalsBefore = new(ReferenceEqualityComparer.Instance);
 
     // What the student asked for this file, as Core reads it. A file added while open is
     // checked in once it is closed (decision D2).
@@ -1283,19 +1348,24 @@ public sealed partial class SyncEngine : IAsyncDisposable
             seen.Add(document);
             if (!markerFirstSeen.ContainsKey(document)) markerFirstSeen[document] = now;
             var live = open.Contains(doc.Value) || (markerPath is { } m && open.Contains(m.Value));
-            if (live) { markerSince.Remove(document); markerDocuments.Add(document); continue; }
+            if (live) { markerSince.Remove(document); staleRecorded.Remove(document); markerDocuments.Add(document); continue; }
             if (!markerSince.TryGetValue(document, out var since)) markerSince[document] = since = now;
             if (now - since < options.StaleMarkerAfter) markerDocuments.Add(document);
+            // In the flight once per stale marker, not on every pass: IDEA-06's 224 markers spent
+            // every pass's notice budget and hid everything else.
             else Notice(NoticeKinds.CantRead, null, document,
-                $"Armory is treating {doc.Name} as closed. If SolidWorks still has it open, save it there.", StaleMarkerTitle);
+                $"Armory is treating {doc.Name} as closed. If SolidWorks still has it open, save it there.", StaleMarkerTitle, record: staleRecorded.Add(document));
         }
         foreach (var gone in markerSince.Keys.Where(k => !seen.Contains(k)).ToArray()) markerSince.Remove(gone);
+        staleRecorded.RemoveWhere(k => !seen.Contains(k));
         foreach (var gone in markerFirstSeen.Keys.Where(k => !seen.Contains(k)).ToArray()) markerFirstSeen.Remove(gone);
         // A question dismissed for one open is forgotten once that open is over.
         dismissedPrompts.RemoveWhere(key => !markerFirstSeen.Any(m => key == PromptKey(m.Key, m.Value)));
     }
 
     internal const string StaleMarkerTitle = "SolidWorks may have closed unexpectedly";
+    // The stale markers already in the flight recorder (until they go, or come alive again).
+    private readonly HashSet<string> staleRecorded = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, DateTimeOffset> markerSince = new(StringComparer.OrdinalIgnoreCase);
     // When this computer first saw each open document's ~$ marker: one check-out question per open.
     private readonly Dictionary<string, DateTimeOffset> markerFirstSeen = new(StringComparer.OrdinalIgnoreCase);
@@ -1360,11 +1430,13 @@ public sealed partial class SyncEngine : IAsyncDisposable
     }
 
     // A pass's own notice about one file or folder; the view groups them by kind into cards.
-    private void Notice(string kind, Guid? fileId, string path, string detail, string? title = null, string? itemDetail = null, string? reasonKind = null, string? who = null)
+    // Record: whether the flight recorder gets it (a notice that only repeats what it said before doesn't).
+    private void Notice(string kind, Guid? fileId, string path, string detail, string? title = null, string? itemDetail = null, string? reasonKind = null, string? who = null,
+        bool record = true)
     {
         notes.Add(new Note(kind, fileId, path, detail, title, itemDetail, reasonKind, who));
         // A 5,000-file import is 5,000 notices: the first few hundred of a pass are plenty.
-        if (flight is not null && noticesRecorded++ < MaximumNoticesRecorded) flight.Notice(kind, path, detail);
+        if (record && flight is not null && noticesRecorded++ < MaximumNoticesRecorded) flight.Notice(kind, path, detail);
     }
 
     // A problem with one file (path) or with this computer (no path): the window gets a plain

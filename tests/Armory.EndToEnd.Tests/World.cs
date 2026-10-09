@@ -65,9 +65,11 @@ internal sealed class World : IAsyncDisposable
         return person;
     }
 
-    public async Task<Computer> ComputerAsync(string name, string email)
+    // deviceName: the name the computer connects under, when two computers share one (two lab
+    // computers imaged alike, both IDEA-06); its own name otherwise.
+    public async Task<Computer> ComputerAsync(string name, string email, string? deviceName = null)
     {
-        var computer = new Computer(this, name, Path.Combine(Temp, name.Replace(' ', '-')));
+        var computer = new Computer(this, name, Path.Combine(Temp, name.Replace(' ', '-'))) { DeviceName = deviceName ?? name };
         owned.Add(computer);
         await computer.ConnectAsync(email);
         return computer;
@@ -164,6 +166,8 @@ internal sealed class Computer : IAsyncDisposable
         http = new HttpClient(network);
     }
     public string Name { get; }
+    // The name this computer connects under (Windows' computer name).
+    public string DeviceName { get; init; } = "";
     public LatencyHandler Network { get; }
     // This computer's network as the agent's other parts use it (its latency and Offline switch).
     public HttpClient Http => http;
@@ -203,7 +207,7 @@ internal sealed class Computer : IAsyncDisposable
         using var browser = new FakeBrowser();
         Task<FakeBrowserResult>? approval = null;
         var flow = new ConnectFlow(http, world.Site.BaseUri, new Launcher(uri => approval = browser.SignInAndApproveAsync(uri, email)), sessions);
-        var session = await flow.ConnectAsync(Name);
+        var session = await flow.ConnectAsync(DeviceName.Length > 0 ? DeviceName : Name);
         var result = await approval!;
         Assert.Equal(System.Net.HttpStatusCode.OK, result.Status);
         Assert.Equal(email, session.Email);

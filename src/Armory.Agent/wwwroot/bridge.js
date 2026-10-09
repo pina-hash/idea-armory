@@ -45,7 +45,7 @@
 	 * @typedef {'idle' | 'waitingForBrowser' | 'finishing' | 'failed'} ConnectPhase
 	 * @typedef {'synced' | 'syncing' | 'offline' | 'paused' | 'attention'} SyncState
 	 * @typedef {'synced' | 'changed' | 'uploading' | 'downloading' | 'waiting' | 'newerWaiting'
-	 *   | 'keptCopy' | 'notInArmory' | 'notOnThisComputer' | 'checkingInWhenClosed'} FileStatus
+	 *   | 'keptCopy' | 'notInArmory' | 'notOnThisComputer' | 'checkingInWhenClosed' | 'noVersion'} FileStatus
 	 * @typedef {'available' | 'mine' | 'other' | 'myOtherComputer'} CheckoutState
 	 * @typedef {'upload' | 'download' | 'move'} Direction
 	 * @typedef {'info' | 'look' | 'bad'} NoticeTone
@@ -333,8 +333,10 @@
  *   takeBackAll: { fileIds }              (Force check in of more than one file: one action, one pass)
  *   takeOverFolder: none                  (the folder is another account's: take it over when nothing of theirs waits)
  *   switchAccount: none                   (sign out, and the next person signs in now)
-	 *   createFolder: { projectId, parent, name }    renameFolder: { projectId, folder, newName }
-	 *   deleteFolder: { projectId, folder }   renameFile: { path, newName }   (one file, in its folder)
+	 *   createFolder: { projectId, parent, name }    renameFolder: { projectId, folder, newName, force }
+	 *   deleteFolder: { projectId, folder, force }   renameFile: { path, newName, force }   (one file, in its folder)
+	 *                                         (force: a mentor or CAD lead force checks in the check outs
+	 *                                          in the way first, in the same action; false for everyone else)
 	 *   addFiles: { projectId, folder }
 	 *   dropFiles: { projectId, folder }      (sent with the dropped File objects)
 	 *   dismissNotice: { key }               (a notice card's key, or the check-out question's)
@@ -396,9 +398,9 @@
 		takeBack: ['fileId'],
 		takeBackAll: ['fileIds'],
 		createFolder: ['projectId', 'parent', 'name'],
-		renameFolder: ['projectId', 'folder', 'newName'],
-		deleteFolder: ['projectId', 'folder'],
-		renameFile: ['path', 'newName'],
+		renameFolder: ['projectId', 'folder', 'newName', 'force'],
+		deleteFolder: ['projectId', 'folder', 'force'],
+		renameFile: ['path', 'newName', 'force'],
 		addFiles: ['projectId', 'folder'],
 		dropFiles: ['projectId', 'folder'],
 		dismissNotice: ['key'],

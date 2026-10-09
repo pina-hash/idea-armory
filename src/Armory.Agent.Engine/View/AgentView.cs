@@ -105,11 +105,13 @@ public static class FileStatuses
 {
     // CheckingInWhenClosed: checked out by you and asked to be checked in, but open in SolidWorks
     // (or unreadable) now, so it is checked in as soon as it is closed (feedback N4).
+    // NoVersion: a server record whose first version never arrived (its add stopped between the
+    // create and the first check in), with nothing of it on its way from this computer.
     public const string Synced = "synced", Changed = "changed", Uploading = "uploading", Downloading = "downloading", Waiting = "waiting",
         NewerWaiting = "newerWaiting", KeptCopy = "keptCopy", NotInArmory = "notInArmory", NotOnThisComputer = "notOnThisComputer",
-        CheckingInWhenClosed = "checkingInWhenClosed";
+        CheckingInWhenClosed = "checkingInWhenClosed", NoVersion = "noVersion";
     public static readonly IReadOnlySet<string> All = new HashSet<string>(StringComparer.Ordinal)
-        { Synced, Changed, Uploading, Downloading, Waiting, NewerWaiting, KeptCopy, NotInArmory, NotOnThisComputer, CheckingInWhenClosed };
+        { Synced, Changed, Uploading, Downloading, Waiting, NewerWaiting, KeptCopy, NotInArmory, NotOnThisComputer, CheckingInWhenClosed, NoVersion };
 }
 public static class CheckoutStates
 {

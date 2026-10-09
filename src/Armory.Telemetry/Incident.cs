@@ -4,8 +4,9 @@ using System.Text.Json.Nodes;
 
 namespace Armory.Telemetry;
 
-// Who and what wrote an incident.
-public sealed record IncidentHeader(string AppVersion, string OsVersion, string? DeviceName, string? Email);
+// Who and what wrote an incident. MachineId tells apart computers that share a DeviceName (a
+// short hash of Windows' own install id; null where there is none).
+public sealed record IncidentHeader(string AppVersion, string OsVersion, string? DeviceName, string? Email, string? MachineId = null);
 
 // The words a person typed in "Report a problem" or "Send feedback", kept with their incident
 // until the site has them. A note from Send feedback can carry what was tried (at most 1000
@@ -90,6 +91,7 @@ public static class IncidentDocument
             ["appVersion"] = header.AppVersion,
             ["osVersion"] = header.OsVersion,
             ["deviceName"] = header.DeviceName,
+            ["machineId"] = header.MachineId,
             ["email"] = header.Email,
             ["projectId"] = projectId?.ToString(),
             ["feedback"] = Feedback(feedback),

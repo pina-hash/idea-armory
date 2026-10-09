@@ -156,7 +156,7 @@ public sealed partial class SyncEngine
         {
             if (st.FileId is { } id && remoteById.TryGetValue(id, out var remote) && remote.File.Lock is { IsLive: true } lck && OwnershipOf(lck) == LockOwnership.MyOtherDevice)
             {
-                otherComputers.Add(lck.HolderDeviceName ?? "another computer");
+                otherComputers.Add(DeviceLabel(lck.HolderDeviceName, lck.HolderDeviceId));
                 continue;
             }
             byPeople++;
@@ -252,7 +252,7 @@ public sealed partial class SyncEngine
             {
                 ReleaseOutcome.Released when undo => kept ? $"Undid the check out of {path.Name}. Your changes are kept as your own copy." : $"Undid the check out of {path.Name}.",
                 ReleaseOutcome.Released => $"Checked in {path.Name}.",
-                ReleaseOutcome.TakenBack => $"{path.Name} was force checked in by a mentor before {(undo ? "the check out was undone" : "it was checked in")}. Your changes are kept in its history.",
+                ReleaseOutcome.TakenBack => $"{path.Name} was force checked in by {BreakerName(st)} before {(undo ? "the check out was undone" : "it was checked in")}. Your changes are kept in its history.",
                 ReleaseOutcome.Refused => $"{path.Name} can't be checked in. {st.Refusal} It stays checked out by you.",
                 // Feedback N4: SolidWorks keeps saving a part it has open, so it is checked in once closed.
                 ReleaseOutcome.WaitingForClose when undo => $"{path.Name} is open in SolidWorks. Close it there; Armory undoes the check out as soon as it's closed.",
@@ -324,7 +324,7 @@ public sealed partial class SyncEngine
             }
             if (broke) KnowLock(fileId, null);
             await PassLockedAsync(cancellationToken, PassScope.File(fileId));
-            var from = OwnershipOf(held) == LockOwnership.MyOtherDevice ? "your other computer, " + (held.HolderDeviceName ?? "another computer") : DisplayName(held.HolderEmail);
+            var from = OwnershipOf(held) == LockOwnership.MyOtherDevice ? "your other computer, " + DeviceLabel(held.HolderDeviceName, held.HolderDeviceId) : DisplayName(held.HolderEmail);
             var kept = OwnershipOf(held) == LockOwnership.MyOtherDevice ? "Anything not checked in there is kept as your own copy." : "Anything they hadn't checked in is kept as their own copy.";
             return broke ? new(true, $"Force checked in {name} from {from}. {kept}") : new(false, $"{name} isn't checked out any more.");
         }
@@ -374,15 +374,23 @@ public sealed partial class SyncEngine
             if (targets.Count == 0)
                 return new(false, notAllowed > 0 && notOut + mine + notThere == 0 ? "Only a mentor or CAD lead can force a check in." : "None of those files is checked out by someone else now.");
             activity.Log($"Force checking in {Count(targets.Count, "file", "files")}");
-            var tally = new TakeBackTally(targets.Count);
-            var rest = BreakBatchAvailable ? await BreakLocksInBatchesAsync(targets, tally, cancellationToken) : targets;
-            if (rest.Count > 0 && !tally.Offline) await BreakLocksOneByOneAsync(rest, tally, cancellationToken);
-            foreach (var id in tally.Broken) KnowLock(id, null);
+            var tally = await BreakLocksAsync(targets, cancellationToken);
             // One pass for every file, never one per file.
             if (tally.Broken.Count + tally.Reread.Count > 0) await PassLockedAsync(cancellationToken, PassScope.FilesOf(tally.Broken.Concat(tally.Reread)));
             return new(tally.Broken.Count > 0, tally.Sentence(notOut, notAllowed, mine));
         }
         finally { LeaveAction(); }
+    }
+
+    // These check outs end, in batches (armory_break_locks) or one by one on a site without it, and
+    // this computer knows at once that they are free. The caller runs the pass after.
+    private async Task<TakeBackTally> BreakLocksAsync(List<TakeBackTarget> targets, CancellationToken ct)
+    {
+        var tally = new TakeBackTally(targets.Count);
+        var rest = BreakBatchAvailable ? await BreakLocksInBatchesAsync(targets, tally, ct) : targets;
+        if (rest.Count > 0 && !tally.Offline) await BreakLocksOneByOneAsync(rest, tally, ct);
+        foreach (var id in tally.Broken) KnowLock(id, null);
+        return tally;
     }
 
     // A site without armory_break_locks: each lock alone, with the same id as one file's Force
@@ -484,10 +492,14 @@ public sealed partial class SyncEngine
 
     // Rename one file in its folder (addendum 7). A file Armory does not have is renamed on this
     // disk; a file in Armory is renamed for everyone through armory_move_file under a lock taken
-    // for the move (v1 MoveAsync), refused while someone else has it checked out.
+    // for the move (v1 MoveAsync), refused while someone else has it checked out. With force, a
+    // mentor or CAD lead force checks that check out in first, inside this same action (N5).
     public async Task<ActionResult> RenameFileAsync(string path, string newName, CancellationToken cancellationToken = default)
+        => await RenameFileAsync(path, newName, force: false, cancellationToken);
+
+    public async Task<ActionResult> RenameFileAsync(string path, string newName, bool force, CancellationToken cancellationToken = default)
     {
-        if (!engineThread.IsCurrent) return await engineThread.InvokeAsync(() => RenameFileAsync(path, newName, cancellationToken));
+        if (!engineThread.IsCurrent) return await engineThread.InvokeAsync(() => RenameFileAsync(path, newName, force, cancellationToken));
         newName = newName?.Trim() ?? "";
         if (!VaultPath.TryCreate(path, out var from, out _, options.VaultRoot)) return new(false, "That isn't a file in your Armory folder.");
         if (!VaultPath.TryValidateName(newName, out var problem)) return new(false, problem ?? "That name can't be used for a file.");
@@ -495,6 +507,7 @@ public sealed partial class SyncEngine
         if (!VaultPath.TryCreate(from.Value[..(slash + 1)] + newName, out var to, out var tooLong, options.VaultRoot)) return new(false, tooLong ?? "That name can't be used here.");
         if (string.Equals(from.Value, to.Value, StringComparison.Ordinal)) return new(false, "That is already its name.");
         Guid operation;
+        Forced? forced = null;
         await EnterActionAsync(cancellationToken);
         try
         {
@@ -533,16 +546,87 @@ public sealed partial class SyncEngine
                 return new(true, $"Renamed {from.Name} to {to.Name}.");
             }
             if (remoteById.TryGetValue(fileId, out var remote) && OwnershipOf(remote.File.Lock) is LockOwnership.OtherPerson or LockOwnership.MyOtherDevice)
-                return new(false, $"{Who(remote.File.Lock!)} has {from.Name} checked out, so it can't be renamed now.");
+            {
+                var held = remote.File.Lock!;
+                if (!force) return new(false, $"{Who(held)} has {from.Name} checked out, so it can't be renamed now.{InTheWay([held], remote.Project)}");
+                if (!remote.Project.CanTakeBack) return new(false, "Only a mentor or CAD lead can force a check in.");
+                if (online != true) return Offline($"{from.Name} can be renamed once this computer is back online.");
+                (forced, var refusal) = await ForceCheckInForAsync([new(fileId, remote.Project, held)], from.Name, $"{from.Name} wasn't renamed.", cancellationToken);
+                if (refusal is not null) return refusal;
+            }
             operation = Guid.NewGuid();
             state.Moves.Add(new PendingMove(operation, fileId, from.Value, to.Value));
             MarkDirty();
             await PassLockedAsync(cancellationToken, PassScope.File(fileId));
         }
         finally { LeaveAction(); }
-        return moveResults.Remove(operation, out var done) && done
-            ? new(true, $"Renamed {from.Name} to {to.Name}.")
-            : new(false, online != true ? $"You're offline. {from.Name} can be renamed once this computer is back online." : $"Armory couldn't rename {from.Name}. Someone may have it checked out, or {to.Name} is already used in the project.");
+        return With(forced, moveResults.Remove(operation, out var done) && done
+            ? new(true, forced is null ? $"Renamed {from.Name} to {to.Name}." : $"Renamed it to {to.Name}.")
+            : new(false, online != true ? $"You're offline. {from.Name} can be renamed once this computer is back online." : $"Armory couldn't rename {from.Name}. Someone may have it checked out, or {to.Name} is already used in the project."));
+    }
+
+    // ---- Force check in inside a rename or a removal (N5) ---------------------------------------
+    //
+    // The server lets only the holder move a file, and refuses to rename or delete a folder while
+    // anyone else has a file in it checked out, with no role allowed past (idea-app 0232, 0233).
+    // So a mentor or CAD lead organizes around other people's check outs in one action: those
+    // check outs end exactly as Force check in ends them (armory_break_locks, or one
+    // armory_break_lock each), the holders' work that wasn't checked in is kept as their own copy
+    // by their computers, and then the rename or removal goes as usual.
+
+    // What a Force check in inside an action came to: "3 files from Maria Lopez" (What) and what
+    // became of their work (Kept).
+    private sealed record Forced(string What, string Kept);
+
+    // Ends these check outs for an action. Forced is null when none ended; Refusal is the answer
+    // when any is still in the way (the rename or removal is then not sent).
+    private async Task<(Forced? Forced, ActionResult? Refusal)> ForceCheckInForAsync(List<TakeBackTarget> targets, string? oneName, string notDone, CancellationToken ct)
+    {
+        activity.Log($"Force checking in {Count(targets.Count, "file", "files")}");
+        var tally = await BreakLocksAsync(targets, ct);
+        var broken = targets.Where(t => tally.Broken.Contains(t.Id)).ToList();
+        var forced = broken.Count == 0 ? null : ForcedWords(broken, oneName);
+        // Broken, or nobody's any more: nothing of them is in the way now.
+        if (!tally.Offline && tally.Broken.Count + tally.Gone == tally.Total) return (forced, null);
+        // The ones ended are read again; nothing is renamed or removed.
+        if (broken.Count > 0) await PassLockedAsync(ct, PassScope.FilesOf(broken.Select(t => t.Id)));
+        return (forced, new(false, tally.Sentence(0, 0, 0) + " " + notDone));
+    }
+
+    private Forced ForcedWords(List<TakeBackTarget> broken, string? oneName)
+    {
+        var what = broken.Count == 1 && oneName is not null ? oneName : Count(broken.Count, "file", "files");
+        var mine = broken.Where(t => OwnershipOf(t.Held) == LockOwnership.MyOtherDevice).ToList();
+        var people = broken.Except(mine).Select(t => DisplayName(t.Held.HolderEmail)).Distinct(StringComparer.Ordinal).ToList();
+        var devices = mine.Select(t => DeviceLabel(t.Held.HolderDeviceName, t.Held.HolderDeviceId)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var computers = devices.Count == 0 ? null : devices.Count == 1 ? "your other computer, " + devices[0] : "your other computers, " + Names(devices);
+        if (people.Count == 0) return new($"{what} from {computers}", "Anything not checked in there is kept as your own copy.");
+        if (computers is null && people.Count == 1)
+        {
+            var first = people[0].Split(' ')[0];
+            return new($"{what} from {people[0]}", $"Anything {first} hadn't checked in is kept as {first}'s own copy.");
+        }
+        return new($"{what} from {Names(computers is null ? people : [.. people, "your other computer"])}", "Anything they hadn't checked in is kept as their own copy.");
+    }
+
+    // An action's answer after a Force check in inside it: "Force checked in 3 files from Maria
+    // Lopez, then renamed Gearbox to Gearbox v2. Anything Maria hadn't checked in is kept as
+    // Maria's own copy." Done: the answer says the action was done (not only that it will be).
+    private static ActionResult With(Forced? forced, ActionResult answer, bool done = true)
+    {
+        if (forced is null) return answer;
+        if (answer.Ok && done) return new(true, $"Force checked in {forced.What}, then {char.ToLowerInvariant(answer.Message[0]) + answer.Message[1..]} {forced.Kept}");
+        return new(answer.Ok, $"Force checked in {forced.What}. {answer.Message} {forced.Kept}");
+    }
+
+    // What to do about check outs in the way, as a refusal's last words: ask the holders (or check
+    // in on your other computer), or force check in (N5).
+    private string InTheWay(IReadOnlyCollection<RemoteLock> locks, ProjectState? project)
+    {
+        var one = locks.Count == 1;
+        var ask = locks.All(l => OwnershipOf(l) == LockOwnership.MyOtherDevice)
+            ? $"Check {(one ? "it" : "the files")} in on your other computer" : $"Ask them to check {(one ? "it" : "the files")} in";
+        return $" {ask}, {ForceCheckInHint(project, one ? "it" : "them")}.";
     }
 
     // A notice card's Done or OK, or "prompt:..." for one check-out question. Applied with the
@@ -1011,15 +1095,20 @@ public sealed partial class SyncEngine
         if (st.FileId is not { } id || !remoteById.TryGetValue(id, out var remote) || remote.File.Lock is not { IsLive: true } held)
             return $"Someone else checked out {path.Name} first.";
         return OwnershipOf(held) == LockOwnership.MyOtherDevice
-            ? $"{path.Name} is checked out on your other computer, {held.HolderDeviceName ?? "another computer"}. Check it in there first."
+            ? $"{path.Name} is checked out on your other computer, {DeviceLabel(held.HolderDeviceName, held.HolderDeviceId)}. Check it in there first."
             : $"{path.Name} is checked out by {Who(held)}.";
     }
 
     private string HolderName(FileState st)
         => st.FileId is { } id && remoteById.TryGetValue(id, out var remote) && remote.File.Lock is { IsLive: true } held ? DisplayName(held.HolderEmail) : "Someone else";
 
-    // "Maria Lopez on LAB-PC-07".
-    private static string Who(RemoteLock held) => $"{DisplayName(held.HolderEmail)} on {held.HolderDeviceName ?? "another computer"}";
+    // "Maria Lopez on LAB-PC-07" ("on IDEA-06 (a030)" when two computers share that name).
+    private string Who(RemoteLock held) => $"{DisplayName(held.HolderEmail)} on {DeviceLabel(held.HolderDeviceName, held.HolderDeviceId)}";
+
+    // The way past someone else's check out, as a refusal's last words (N5): a mentor or CAD lead
+    // can force check in; anyone else can ask one to. Them names the files ("it", "them").
+    private static string ForceCheckInHint(ProjectState? project, string them)
+        => project?.CanTakeBack == true ? $"or force check {them} in" : $"or ask a mentor or CAD lead to force check {them} in";
 
     // Who has the file checked out as this computer last knew it, for when it can't ask the server.
     private LockOwnership KnownOwnership(FileState st)

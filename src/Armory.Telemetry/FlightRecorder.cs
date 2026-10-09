@@ -18,6 +18,7 @@ public enum FlightKind : byte
     ReadOnlyBroken,
     RepairedCheckout,
     Note,
+    Refusal,
 }
 
 // One event, stored in place in the recorder's ring (no allocation per event). Strings are
@@ -134,12 +135,17 @@ public sealed class FlightRecorder
 
     public void Note(string name, string? detail) => Write(FlightKind.Note, name, null, detail, true);
 
+    // A file's refusal started or changed (kind: nameTaken, tooLarge, gate or refused; namesake:
+    // the path of the file that holds a taken name), or ended (kind null). Recorded only when it
+    // changes, never again on every pass while it stands.
+    public void Refusal(string path, string? kind, string? namesake) => Write(FlightKind.Refusal, kind, path, namesake, kind is null);
+
     private void Write(FlightKind kind, string? name, string? target, string? detail, bool ok, int status = 0, long ms = 0, long bytes = 0,
         int count = 0, int count2 = 0, int count3 = 0, int count4 = 0, string? stack = null, bool fatal = false)
     {
         var timestamp = clock.GetTimestamp();
         var observer = Observer;
-        var watched = observer is not null && kind is not (FlightKind.Rpc or FlightKind.Transfer or FlightKind.Notice);
+        var watched = observer is not null && kind is not (FlightKind.Rpc or FlightKind.Transfer or FlightKind.Notice or FlightKind.Refusal);
         FlightEvent copy = default;
         lock (gate)
         {

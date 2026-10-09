@@ -147,12 +147,17 @@ internal sealed partial class AgentHost : IAsyncDisposable
     private readonly ShellThumbnails thumbnails = new();
     internal Task<ActionResult> TakeBackAsync(IReadOnlyList<Guid> fileIds) => OnEngineAsync("take back " + fileIds.Count + " files", e => e.TakeBackAsync(fileIds));
     // One file, in the same folder: a file Armory doesn't have yet is renamed on disk; a file in
-    // Armory is renamed for everyone (refused while someone else has it checked out).
-    internal Task<ActionResult> RenameFileAsync(string path, string newName) => OnEngineAsync("rename a file", e => e.RenameFileAsync(path, newName));
+    // Armory is renamed for everyone (refused while someone else has it checked out, unless force:
+    // a mentor or CAD lead force checks it in first, in the same action).
+    internal Task<ActionResult> RenameFileAsync(string path, string newName, bool force = false)
+        => OnEngineAsync("rename a file", e => e.RenameFileAsync(path, newName, force));
     // Folders (contract C5 and C6): a rename or a removal goes to the team in one call, then here.
+    // Force: as for a file, for every check out in the folder that is in the way.
     internal Task<ActionResult> CreateFolderAsync(Guid project, string parent, string name) => OnEngineAsync("new folder", e => e.CreateFolderAsync(project, parent, name));
-    internal Task<ActionResult> RenameFolderAsync(Guid project, string folder, string newName) => OnEngineAsync("rename a folder", e => e.RenameFolderAsync(project, folder, newName));
-    internal Task<ActionResult> DeleteFolderAsync(Guid project, string folder) => OnEngineAsync("delete a folder", e => e.DeleteFolderAsync(project, folder));
+    internal Task<ActionResult> RenameFolderAsync(Guid project, string folder, string newName, bool force = false)
+        => OnEngineAsync("rename a folder", e => e.RenameFolderAsync(project, folder, newName, force));
+    internal Task<ActionResult> DeleteFolderAsync(Guid project, string folder, bool force = false)
+        => OnEngineAsync("delete a folder", e => e.DeleteFolderAsync(project, folder, force));
     // sources: full paths on this computer (the file picker's, or the files and folders dropped on
     // the window); a folder is copied whole. Copied in, never over anything already there.
     internal Task<ActionResult> AddFilesAsync(Guid project, string folder, IReadOnlyList<string> sources)

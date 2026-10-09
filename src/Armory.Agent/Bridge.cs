@@ -22,9 +22,11 @@ internal sealed record PutBackKeptCopyMessage(string? FileId, string? VersionId,
 // when the account it belongs to has nothing waiting in it (SyncEngine.TakeOverFolderAsync).
 internal sealed record TakeOverFolderMessage(string? RequestId);
 internal sealed record CreateFolderMessage(string? ProjectId, string? Parent, string? Name, string? RequestId);
-internal sealed record RenameFolderMessage(string? ProjectId, string? Folder, string? NewName, string? RequestId);
-internal sealed record DeleteFolderMessage(string? ProjectId, string? Folder, string? RequestId);
-internal sealed record RenameFileMessage(string? Path, string? NewName, string? RequestId);
+// Force (N5): a mentor or CAD lead force checks in the check outs in the way first, in the same
+// action; the engine refuses it from anyone else.
+internal sealed record RenameFolderMessage(string? ProjectId, string? Folder, string? NewName, bool? Force, string? RequestId);
+internal sealed record DeleteFolderMessage(string? ProjectId, string? Folder, bool? Force, string? RequestId);
+internal sealed record RenameFileMessage(string? Path, string? NewName, bool? Force, string? RequestId);
 internal sealed record AddFilesMessage(string? ProjectId, string? Folder, string? RequestId);
 internal sealed record DropFilesMessage(string? ProjectId, string? Folder, string? RequestId);
 internal sealed record DismissNoticeMessage(string? Key);
@@ -246,21 +248,21 @@ internal sealed class Bridge(AgentHost host, IBridgeWindow window, AgentLog log)
                         !Guid.TryParse(rename?.ProjectId, out var renameIn) ? Refuse(NotAProject)
                         : !TryFolder(rename!.Folder, allowTop: false, out var renamed) ? Refuse(NotAFile)
                         : !TryName(rename.NewName, out var newName) ? Refuse(NotAName)
-                        : host.RenameFolderAsync(renameIn, renamed, newName));
+                        : host.RenameFolderAsync(renameIn, renamed, newName, rename.Force == true));
                     break;
                 case BridgeMessages.DeleteFolder:
                     var delete = Read<DeleteFolderMessage>(message);
                     await AnswerAsync(type, 1, asked, delete?.RequestId,
                         !Guid.TryParse(delete?.ProjectId, out var deleteIn) ? Refuse(NotAProject)
                         : !TryFolder(delete!.Folder, allowTop: false, out var deleted) ? Refuse(NotAFile)
-                        : host.DeleteFolderAsync(deleteIn, deleted));
+                        : host.DeleteFolderAsync(deleteIn, deleted, delete.Force == true));
                     break;
                 case BridgeMessages.RenameFile:
                     var renameFile = Read<RenameFileMessage>(message);
                     await AnswerAsync(type, 1, asked, renameFile?.RequestId,
                         !TryPath(renameFile?.Path, out var renamedFile) ? Refuse(NotAFile)
                         : !TryName(renameFile!.NewName, out var newFileName) ? Refuse(NotAFileName)
-                        : host.RenameFileAsync(renamedFile, newFileName));
+                        : host.RenameFileAsync(renamedFile, newFileName, renameFile.Force == true));
                     break;
                 case BridgeMessages.AddFiles:
                     // The Windows file picker chooses the files (on this, the window's thread);

@@ -46,14 +46,18 @@ await engine.PutBackKeptCopyAsync(fileId, versionId); // File detail: one of you
 await engine.LaunchAsync(path);       // "Open": the file's own program (never programs or scripts, D14);
                                       // a file not here yet downloads first (a pass scoped to it) and opens when it arrives
 await engine.RenameFileAsync(path, newName);
+await engine.RenameFileAsync(path, newName, force: true); // 0.3.3, a mentor or CAD lead: Force check in first (N5, below)
 // Folders (a folder is in a project: "" is its top folder, "Drivetrain/Gearbox" one inside).
 await engine.CreateFolderAsync(projectId, parent, name);      // New folder (on this computer)
 await engine.RenameFolderAsync(projectId, folder, newName);   // one armory_rename_folder, then one move here
 await engine.DeleteFolderAsync(projectId, folder);            // one armory_delete_folder, then recovery here
+await engine.RenameFolderAsync(projectId, folder, newName, force: true); // force: as for a file (N5)
+await engine.DeleteFolderAsync(projectId, folder, force: true);
 await engine.AddFilesAsync(projectId, folder, sources);       // files and whole folders, copied in, never over anything
 engine.DismissNotice(key);            // a notice card's OK, or one check-out question ("prompt:...")
 await engine.DismissNoticeAsync(key); // the same, done once the view (or the next one) leaves it out
 await engine.MoveAsync(from, to);     // a rename through armory_move_file
+await engine.MoveAsync(from, to, force: true); // force: as for RenameFileAsync (N5)
 await engine.StopAsync();
 
 // The SolidWorks link (0.3.3; "The SolidWorks year" below). Each marshals onto the engine thread.
@@ -127,7 +131,11 @@ A pass has four phases. A, B and D run one step at a time; C moves files several
    is recorded for its import summary. An Explorer rename is sent as `armory_move_file` (the
    projects it changed are read again). A
    journaled save whose bytes are no longer on disk is kept as a side version ("earlier
-   save, kept"). A known folder gone for a second scan is one `armory_delete_folder`.
+   save, kept"); a file never added because its name is taken is left alone here (its plan
+   adds it once the name is free, and its earlier saves go on the pass after). This
+   computer's own add whose first version never reached the server, its file gone for a second
+   scan, has its empty record removed for the team (see "Refusals, statuses and words"). A
+   known folder gone for a second scan is one `armory_delete_folder`.
 
 **Phase B. Plan with Core, Explicit mode.** For every path, in path order:
    `Reconciler.Plan(SyncInput)` with base,
@@ -140,7 +148,10 @@ A pass has four phases. A, B and D run one step at a time; C moves files several
    for bytes that changed: see "The SolidWorks year"), the project's
    pin and gate mode, the preserved hash, `CheckoutMode.Explicit` and the student's request
    (`CheckIn` or `Undo` from the file's state; a closed add counts as `CheckIn`). Offline
-   plans only add journal intents (never a lock intent for a shared file). Online plans are
+   plans only add journal intents (never a lock intent for a shared file). An add (or the
+   re-add of a removed name) whose name another live file of the project holds, in the files
+   this pass read, is refused right here (0.3.3): it never becomes a unit, is never expected as
+   an upload and never counts as moving, and its refusal counts only when it is new. Online plans are
    grouped into units: one file each, except that files sharing a name in a project are one
    unit, in path order, so which of them gets the name never depends on timing. "Sharing a
    name" is decided by a key at least as coarse as the server's own rule
@@ -402,13 +413,33 @@ on the next pass, through the crash points every write already has (`before-lock
   Core keeps every capture (earlier ones as "earlier save, kept") and the latest as one kept
   copy ("changed without a check out"), never the shared version, and the shared version
   comes back once the file is closed: one grouped notice.
+- **Organize around someone else's check out** (N5, 0.3.3). The server moves a file only for
+  its lock's holder and refuses to rename or delete a folder while anyone else has a file in it
+  checked out, with no role allowed past. A refusal says the way past: "Gearbox can't be
+  renamed now: Maria Lopez has 1 of its files checked out. Ask them to check it in, or ask a
+  mentor or CAD lead to force check it in." (a mentor or CAD lead reads "or force check it in").
+  With `force`, a mentor or CAD lead (`can_take_back`) renames a file or a folder, deletes a
+  folder or moves a file in one action: the check outs in the way end exactly as Force check
+  in ends them (`armory_break_locks`, or one `armory_break_lock` each on a site without it),
+  and this computer knows at once that they are free; then the rename or removal goes as
+  usual. "Force checked in 1 file from Maria Lopez, then renamed Gearbox to Gearbox v2.
+  Anything Maria hadn't checked in is kept as Maria's own copy." If any check out is still in
+  the way (offline, a role refusal), nothing is renamed or removed and the answer says why;
+  the files force checked in are read again. Anyone else asking with `force` is told "Only a
+  mentor or CAD lead can force a check in." An `instructor` is not in the server's
+  `can_take_back` (docs/agent/website-requests-v0.3.3.md).
 - **Take back** (`armory_break_lock`, for a mentor or CAD lead): the operation id derives from
   that one check out and the computer asking, so asking twice here takes it back once and a
   second mentor or CAD lead never reuses another caller's id. It is asked once and never
   resumed after a crash (no in-flight record): the mentor asks again, and the same id
   answers from the server's receipt. Asked from an older view after someone else took it
   back, it answers "Plate.SLDPRT isn't checked out any more." The holder's computer keeps
-  what was not checked in (`lockBroken`) and shows one notice. Several files at once go in
+  what was not checked in (`lockBroken`) and shows one notice, which names who force checked
+  it in (`FileState.BrokenBy`, the `by` of the `lock_broken` change: "Pina force checked in
+  Plate.SLDPRT."), says "Your changes that weren't checked in are kept as your own copy in its
+  history." only when the file here differed from the checked-in version, and adds "If it's
+  still open in SolidWorks, use Save As to keep working on a copy." while its `~$` marker is
+  there. A holder with nothing new still sees who did it, for 30 minutes. Several files at once go in
   `armory_break_locks` calls instead (0.3.3, see "Force check in of many files" under v0.3
   below), and those calls do have a durable record.
 - **Moves and removals** take the lock only for themselves (`FileState.TransientLock`) and let
@@ -643,12 +674,14 @@ the same id on the next pass.
   folder removed in Explorer is made again and its files downloaded: a missing project folder
   is never a removal, per file or per folder.
 - **Archived projects (D8, addendum 7)** are skipped silently: not read, not planned, no
-  notices, their folders and read-only bits left as they are. A check out this computer has
+  notices (refusals made before it was archived included), their folders and read-only bits
+  left as they are, and a file there Armory never added reads `notInArmory`, never `uploading`. A check out this computer has
   in one stays in My files and can be checked in (the project's files are read for that
   alone). Restored, the project syncs again from its change cursor.
 - **Window actions.** New folder makes the folder here (the server keeps no empty folders).
   Rename folder and Delete folder go to the team first, one call each (refused while someone
-  else has a file in it checked out, naming who; Delete folder also while a file in it is not
+  else has a file in it checked out, naming who, unless a mentor or CAD lead asks with force:
+  see "Organize around someone else's check out"; Delete folder also while a file in it is not
   in Armory yet), then here: one move (files not in Armory yet included), or recovery and the
   folder removed with every folder in it. Each is durable in `EngineState.FolderOps` with its
   own operation id before the call: a lost answer ("You're offline. Armory renames Gearbox to
@@ -690,8 +723,9 @@ the same id on the next pass.
   for that only when the id the server answered is one this computer has seen (a new id is a
   new file). A live name clash is one "shares a name" notice item: looked up first in the
   project's files this pass already read, so it costs no call (a Pack and Go with a hundred
-  shared names sends no `armory_create_file` for them, on any pass); a clash the read could
-  not show (SQLSTATE 23505) is the same item. A file never added because its name is taken,
+  shared names sends no `armory_create_file` for them, on any pass), at the plan since 0.3.3
+  (see "Refusals, statuses and words"); a clash the read could not show (SQLSTATE 23505) is
+  the same item. A file never added because its name is taken,
   then deleted from the disk, is forgotten: its saves stay in this computer's safe copies,
   and nothing waits or is retried for it.
 - Saves the release gate refuses are private drafts: never sent, never holding the lock,
@@ -707,6 +741,61 @@ the same id on the next pass.
 - A problem reaches the window as one plain sentence (no journal, vault or lock), under
   `cantRead` for this computer's disk and `cantSend` for what the server refused; the raw
   text goes only to the log (`EngineDependencies.Log`), once per problem.
+
+## Refusals, statuses and words (0.3.3)
+
+From IDEA-06's incidents (docs/agent/feedback-audit.md): 142 copies whose names were taken
+elsewhere in FRC 2026 Off-Season were planned, expected as uploads, refused and saved again on
+every pass for a day ("moving 142", "142 refused", "Uploading 0 of 142 files, 260.9 MB left"),
+38 empty records read "uploading" on every computer, and a sign-out left permanent refusals
+with the wrong words.
+
+- **A name taken elsewhere is refused at the plan, once.** Before 0.3.3 the name was checked
+  only while the unit ran and the refusal was wiped at the start of every unit, so it was
+  re-derived each pass as fresh work. Now the plan refuses it (`NameHolderElsewhere`, from the
+  files this pass read, no call), with the same words ("FRC 2026 Off-Season already has
+  WCP-0563.SLDPRT in COTS."). The archive of earlier saves leaves such a file alone. It goes in
+  by itself once the file holding the name is renamed or removed, or once the student renames
+  the copy (a new path) or deletes it (forgotten, its saves kept in this computer's safe copies).
+- **A refusal counts only when it is new.** Every refusal (a name taken, too large, the
+  release gate, a server refusal) is set through `SetRefusal`: `SyncReport.Refused`, the
+  pass's log line and the flight's `refusal` event count it only when it starts or changes,
+  never while it stands. A refusal that ends is one flight event too. A plan that only refuses
+  never counts as moving.
+- **An archived project's refusals are not notices**, and a file there Armory never added is
+  `notInArmory` (the window says the project is archived), never `uploading`: nothing uploads
+  it (D8). Only files this computer has checked out there are still news.
+- **A record with no version** (an add whose create reached the server and whose first
+  version never did) is `noVersion` ("Added without its first version"), never `uploading`, on
+  every computer that doesn't have the file. The computer whose state holds the create
+  (`FileState.CreateEntry`), once the file is gone from its disk for a second scan and every
+  save of it is kept in its history, removes the empty record for the team the ordinary way
+  (`RemoveEmptyAddsAsync`: a lock for the removal, then `armory_tombstone` with no parent, which
+  the contract allows when the file has no version). A file at that path again is added as its
+  first version instead. A record whose computer never comes back stays; a lead removing it on
+  the website is website request 2 (docs/agent/website-requests-v0.3.3.md).
+- **A sign-out during a pass is a stop like going offline** (`Stopped`): the write in flight
+  keeps its record and goes again with its own id once the computer is connected again,
+  never a refusal ("This save couldn't be read back from this computer's safe copy." was 0.3.1's
+  permanent word for it). The running line says "This computer was signed out of Armory. Your
+  work is safe here until you connect it again." A commit names the device that holds its
+  lock when it is made, so one sent again after a reconnect (a new device id) lands as the
+  shared version, not as someone else's kept copy.
+- **The status line says why.** While files need the student and some can't be added for their
+  names: "Everything else is saved. 148 files can't be added until they have names of their
+  own." ("1 file can't be added until it has a name of its own."; " A few others need you too."
+  when other cards need the student; "Your other saves are uploading." in place of "Everything
+  else is saved." while saves still wait). One running line whenever their number changes:
+  "148 files are waiting for you: their names are taken in FRC 2026 Off-Season."
+- **The nameShared card for SolidWorks copies** (every item a part, assembly or drawing): "A
+  project keeps one file per name, because SolidWorks finds parts by name. If it's the same
+  part as the team's, delete your copy and use the team's. If it's a different part, give it a
+  new name in SolidWorks (Save As, or Pack and Go with a prefix) so your assemblies follow it."
+  Each item keeps the folder of the file that holds its name.
+- **Two computers with one name** (two lab computers imaged alike, both IDEA-06): wherever two
+  device ids with one name are known here (this computer and the check outs it has read; a
+  reconnect's ids are one computer), check-out lines and refusals name each with the first four
+  characters of its device id: "Checked out by Alex Kim on IDEA-06 (a030)".
 
 ## Upgrade from 0.1.0 (D15)
 
@@ -733,18 +822,21 @@ saying its own reason),
 `projectRenaming` (a project renamed on the site, waiting for a file to close) and, since 0.3.3,
 `newerRelease` (the team's version of a file saved in a SolidWorks newer than its project's pin,
 "The SolidWorks year"). "SolidWorks year not checked" is never a notice, only a tag on File detail; waiting
-to upload is activity, never rows. My files are the files this computer has checked out, in
+to upload is activity, never rows; a row never says `uploading` while the status line says
+everything is saved (an archived project's new file is `notInArmory`, a record with no version
+`noVersion`). My files are the files this computer has checked out, in
 any project: a lock taken only for an add of a closed file (the pass checks it in) or only
 for a move or a removal is not listed, so a 5,000-file import lists nothing there while its
 files go in; a file added while it was open is, with "You added it while it was open", until
 it closes. Every row says who has it checked out ("Checked out by you", "Checked out by
 Maria Lopez on LAB-PC-07", "Checked out by you on LAB-PC-07" for my other computer,
-"Available"). Offline since the start, the team's files are listed as this computer last
+"Available"; "on IDEA-06 (a030)" when two computers known here share the name). Offline since the start, the team's files are listed as this computer last
 knew them (`FileState.Holder`, its base and its saves), each with its file id, label and
 status, and "waiting" only for saves not on the server yet. A dismissed card stays
 dismissed: the items the window last showed are hidden, whenever the dismissal arrives, and
 items that are gone are forgotten only at the end of a whole online pass, never while a view
-is built. Kept copies are one item per file (the newest), the card has OK, and it counts
+is built. The status line while cards need the student is in "Refusals, statuses and
+words". Kept copies are one item per file (the newest), the card has OK, and it counts
 toward "A few files need you" only while a checked-in version still waits for its file to
 close or someone else's check in overtook it. History entries are `version` ("Added to
 Armory", "Checked in", "Added again, with its history", from the `file_revived` changes,
