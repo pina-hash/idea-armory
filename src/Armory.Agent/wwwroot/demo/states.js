@@ -342,8 +342,10 @@
 			prompt: parts.prompt || null,
 			myFiles: [],
 			projects: projects(parts.changes, parts.opts),
-			settings: { vaultRoot: SETTINGS.vaultRoot, startAtSignIn: SETTINGS.startAtSignIn, theme: SETTINGS.theme, badges: badgesOff() },
-			effectiveTheme: 'idea'
+			settings: { vaultRoot: SETTINGS.vaultRoot, startAtSignIn: SETTINGS.startAtSignIn, theme: SETTINGS.theme, badges: badgesOff(), sharedComputer: false },
+			effectiveTheme: 'idea',
+			folderOwner: null,
+			profiles: null
 		};
 		view.myFiles = myFilesOf(view, parts.notes);
 		return view;
@@ -361,8 +363,10 @@
 			prompt: null,
 			myFiles: [],
 			projects: [],
-			settings: { vaultRoot: SETTINGS.vaultRoot, startAtSignIn: SETTINGS.startAtSignIn, theme: SETTINGS.theme, badges: badgesOff() },
-			effectiveTheme: 'idea'
+			settings: { vaultRoot: SETTINGS.vaultRoot, startAtSignIn: SETTINGS.startAtSignIn, theme: SETTINGS.theme, badges: badgesOff(), sharedComputer: false },
+			effectiveTheme: 'idea',
+			folderOwner: null,
+			profiles: null
 		};
 	}
 
@@ -462,12 +466,11 @@
 			label: 'The Armory folder belongs to another account',
 			screens: ['connect'],
 			view: (function () {
-				var v = notSignedIn(
-					'vaultOwnedByOther',
-					'idle',
-					'The folder C:\\IDEA\\Armory already holds files for alex.kim@boscotech.edu. Pick a different folder for your files, or sign out.'
-				);
+				// The folder's real owner, from the folder itself (the engine fills it); the
+				// screen names them, never connect.message.
+				var v = notSignedIn('vaultOwnedByOther', 'idle', null);
 				v.account = { email: ME.email, deviceName: ME.device };
+				v.folderOwner = { email: ALEX.email, name: ALEX.name, waiting: ['1 file checked out'] };
 				return v;
 			})()
 		},
@@ -1043,6 +1046,364 @@
 		}
 	};
 
+	/* ------------------------------------------------- A shared computer */
+
+	// Several students taking turns on one lab computer (docs/agent/PROFILES.md): each has a
+	// profile with their own sign-in and a 4-digit PIN. While the picker shows, the view
+	// carries none of the student in use's files (the host empties them), so these views
+	// are the signed-in one with every file left out.
+	var PROFILE = {
+		me: { id: '6f1c0e2a9b7d4c3e8a5f1b2c3d4e5f60', hue: 3, person: ME },
+		maria: { id: '1a2b3c4d5e6f708192a3b4c5d6e7f801', hue: 5, person: MARIA },
+		alex: { id: '2b3c4d5e6f708192a3b4c5d6e7f80912', hue: 1, person: ALEX },
+		sam: { id: '3c4d5e6f708192a3b4c5d6e7f8091a23', hue: 6, person: SAM },
+		pina: { id: '4d5e6f708192a3b4c5d6e7f8091a2b34', hue: 2, person: PINA }
+	};
+	var OWN_FOLDER = 'C:\\IDEA\\Armory-jordan';
+
+	function initialsOf(name) {
+		var words = String(name).replace(/^(Mr|Mrs|Ms|Dr|Mx)\.?\s+/i, '').split(/\s+/);
+		return (words[0].charAt(0) + (words.length > 1 ? words[words.length - 1].charAt(0) : '')).toUpperCase();
+	}
+
+	/** One student's tile, as the host sends it. */
+	function profileTile(key, o) {
+		var p = PROFILE[key];
+		o = o || {};
+		return {
+			id: p.id,
+			name: p.person.name,
+			email: p.person.email,
+			initials: initialsOf(p.person.name),
+			hue: p.hue,
+			current: !!o.current,
+			lastUsedAt: o.lastUsedAt === undefined ? ago(o.current ? 25 * MIN : 1 * DAY) : o.lastUsedAt,
+			folder: o.folder || SETTINGS.vaultRoot,
+			ownFolder: !!o.ownFolder,
+			waiting: o.waiting || null,
+			needsSignIn: !!o.needsSignIn,
+			hasPin: o.hasPin !== false,
+			canRemove: !!o.canRemove
+		};
+	}
+
+	function pickerStep(kind, o) {
+		var s = { kind: kind, profileId: null, message: null, triesLeft: null, waitSeconds: null, ownFolder: null, ownerName: null, ownerWaiting: null, fromName: null, connectPhase: null };
+		for (var k in o || {}) s[k] = o[k];
+		return s;
+	}
+
+	/** The students on this computer, the picker and its step. */
+	function profilesOf(o) {
+		var tiles = o.tiles;
+		var current = tiles.filter(function (t) {
+			return t.current;
+		})[0];
+		return {
+			showing: !!o.showing,
+			currentId: current ? current.id : null,
+			sharedFolder: SETTINGS.vaultRoot,
+			pinsRequired: o.pinsRequired !== false,
+			canChangePins: !!o.canChangePins,
+			pinsNote: o.pinsNote || null,
+			canTurnOff: !!o.canTurnOff,
+			note: o.note || null,
+			profiles: tiles,
+			step: o.step || pickerStep('choose')
+		};
+	}
+
+	/** The usual tiles: Jordan in use, then Maria, Alex and Sam. */
+	function labTiles(o) {
+		o = o || {};
+		return [
+			profileTile('me', { current: !o.nobody, canRemove: !o.nobody }),
+			profileTile('maria', { lastUsedAt: ago(2 * HOUR), needsSignIn: !!o.mariaSignIn }),
+			profileTile('alex', { lastUsedAt: ago(1 * DAY), waiting: o.alexWaiting || null }),
+			profileTile('sam', { lastUsedAt: ago(3 * DAY) })
+		];
+	}
+
+	/** A view while the picker shows: the student in use keeps working (the status says so),
+	 *  and nothing of their files is in it. */
+	function picking(profiles, nobody) {
+		var v = nobody ? notSignedIn('signedOut', 'idle', null) : notSignedIn('signedIn', 'idle', null);
+		if (!nobody) v.sync = { state: 'synced', line: 'Everything is saved to Armory.', detail: 'Last checked 2 minutes ago.', pendingCount: 0 };
+		v.settings.sharedComputer = true;
+		v.profiles = profiles;
+		return v;
+	}
+
+	/** The signed-in view of a student in use on a shared computer. */
+	function sharedHome(view, profiles) {
+		view.settings.sharedComputer = true;
+		view.profiles = profiles;
+		return view;
+	}
+
+	var ALEX_WAITS = '2 files checked out';
+
+	states.pickerChoose = {
+		label: 'Shared computer: who is using Armory? Jordan is in use; Maria, Alex and Sam can pick themselves',
+		screens: ['picker'],
+		view: picking(profilesOf({ showing: true, tiles: labTiles() }))
+	};
+
+	states.pickerWaiting = {
+		label: 'Shared computer: Alex is in use, and his tile says what waits for him',
+		screens: ['picker'],
+		view: picking(
+			profilesOf({
+				showing: true,
+				tiles: [
+					profileTile('alex', { current: true, canRemove: true }),
+					profileTile('me', { lastUsedAt: ago(3 * HOUR) }),
+					profileTile('maria', { lastUsedAt: ago(1 * DAY), waiting: '1 file checked out', folder: 'C:\\IDEA\\Armory-maria', ownFolder: true }),
+					profileTile('sam', { lastUsedAt: ago(3 * DAY) })
+				]
+			})
+		)
+	};
+
+	states.pickerPin = {
+		label: 'Shared computer: Maria picked herself and types her PIN',
+		screens: ['picker'],
+		view: picking(profilesOf({ showing: true, tiles: labTiles(), step: pickerStep('pin', { profileId: PROFILE.maria.id, triesLeft: 5 }) }))
+	};
+
+	states.pickerPinWrong = {
+		label: "Shared computer: a PIN that isn't right, and the tries left",
+		screens: ['picker'],
+		view: picking(
+			profilesOf({
+				showing: true,
+				tiles: labTiles(),
+				step: pickerStep('pin', { profileId: PROFILE.maria.id, triesLeft: 2, message: "That PIN isn't right. 2 more tries, then a short wait." })
+			})
+		)
+	};
+
+	states.pickerPinWait = {
+		label: 'Shared computer: five wrong PINs, a 30 second wait, and Forgot your PIN',
+		screens: ['picker'],
+		view: picking(
+			profilesOf({
+				showing: true,
+				tiles: labTiles(),
+				step: pickerStep('pin', {
+					profileId: PROFILE.maria.id,
+					triesLeft: 0,
+					waitSeconds: 30,
+					message: 'Too many wrong tries. Try again in 30 seconds, or sign in with Google instead.'
+				})
+			})
+		)
+	};
+
+	states.pickerAdding = {
+		label: 'Shared computer: adding a student, waiting for Google, with "Not you?" the step to look at',
+		screens: ['picker'],
+		view: picking(profilesOf({ showing: true, tiles: labTiles(), step: pickerStep('adding', { connectPhase: 'waitingForBrowser' }) }))
+	};
+
+	states.pickerNewPin = {
+		label: 'Shared computer: Sam was just added and chooses a PIN',
+		screens: ['picker'],
+		view: picking(profilesOf({ showing: true, tiles: labTiles(), step: pickerStep('newPin', { profileId: PROFILE.sam.id }) }))
+	};
+
+	states.pickerFolderBusy = {
+		label: "Shared computer: Jordan picked himself; Alex's 2 check outs are in the folder: wait, or a folder of his own",
+		screens: ['picker'],
+		view: picking(
+			profilesOf({
+				showing: true,
+				tiles: [
+					profileTile('alex', { current: true }),
+					profileTile('me', { lastUsedAt: ago(3 * HOUR) }),
+					profileTile('maria', { lastUsedAt: ago(1 * DAY) }),
+					profileTile('sam', { lastUsedAt: ago(3 * DAY) })
+				],
+				step: pickerStep('folderBusy', { profileId: PROFILE.me.id, ownFolder: OWN_FOLDER, ownerName: ALEX.name, ownerWaiting: ALEX_WAITS })
+			})
+		)
+	};
+
+	states.pickerSwitching = {
+		label: 'Shared computer: switching from Alex to Jordan',
+		screens: ['picker'],
+		view: picking(
+			profilesOf({
+				showing: true,
+				tiles: [profileTile('alex', { current: true }), profileTile('me', { lastUsedAt: ago(3 * HOUR) }), profileTile('maria'), profileTile('sam')],
+				step: pickerStep('switching', { profileId: PROFILE.me.id, fromName: ALEX.name })
+			})
+		)
+	};
+
+	states.pickerSignInAgain = {
+		label: "Shared computer: Maria's sign-in ended; her tile and her Sign in again",
+		screens: ['picker'],
+		view: picking(profilesOf({ showing: true, tiles: labTiles({ mariaSignIn: true }), step: pickerStep('signInAgain', {
+			profileId: PROFILE.maria.id,
+			message: 'Your sign-in on this computer ended. Sign in with your school Google account once more.'
+		}) }))
+	};
+
+	states.pickerFirst = {
+		label: 'Shared computer: just turned on, nobody yet, only Add a student',
+		screens: ['picker'],
+		view: picking(profilesOf({ showing: true, tiles: [], canTurnOff: true }), true)
+	};
+
+	states.pickerPinsOff = {
+		label: 'Shared computer: PINs turned off by Mr. Pina, one click switches',
+		screens: ['picker'],
+		view: picking(profilesOf({ showing: true, pinsRequired: false, pinsNote: 'Turned off by Mr. Pina on Oct 1.', canTurnOff: true, tiles: labTiles() }))
+	};
+
+	states.sharedHome = {
+		label: 'Shared computer: Home for Jordan, the student in use, with Switch student',
+		screens: ['home'],
+		view: sharedHome(signedIn({ sync: SYNCED, changes: shared({}) }), profilesOf({ tiles: labTiles() }))
+	};
+
+	states.sharedOwnFolder = {
+		label: "Shared computer: Jordan in a folder of his own while Alex's work waits in the shared one",
+		screens: ['home'],
+		view: (function () {
+			var v = sharedHome(
+				signedIn({ sync: SYNCED, changes: shared({}) }),
+				profilesOf({
+					tiles: [
+						profileTile('me', { current: true, folder: OWN_FOLDER, ownFolder: true, canRemove: true }),
+						profileTile('alex', { lastUsedAt: ago(40 * MIN), waiting: ALEX_WAITS }),
+						profileTile('maria'),
+						profileTile('sam')
+					],
+					note: "You're in your own folder, " + OWN_FOLDER + ", while Alex's work waits in " + SETTINGS.vaultRoot + '.'
+				})
+			);
+			v.vaultRoot = OWN_FOLDER;
+			return v;
+		})()
+	};
+
+	states.sharedSettings = {
+		label: 'Shared computer: Settings for a student (Remove only on themselves, the PIN switch is a mentor\'s)',
+		screens: ['settings'],
+		view: sharedHome(signedIn({ sync: SYNCED, changes: shared({}) }), profilesOf({ tiles: labTiles({ alexWaiting: ALEX_WAITS }) }))
+	};
+
+	states.sharedSettingsMentor = {
+		label: 'Shared computer: Settings for Mr. Pina, a mentor: the PIN switch and Remove on every student',
+		screens: ['settings'],
+		view: (function () {
+			var v = sharedHome(
+				signedIn({ sync: SYNCED, changes: shared({}) }),
+				profilesOf({
+					canChangePins: true,
+					canTurnOff: true,
+					tiles: [
+						profileTile('pina', { current: true, canRemove: true }),
+						profileTile('me', { lastUsedAt: ago(3 * HOUR), canRemove: true }),
+						profileTile('maria', { lastUsedAt: ago(1 * DAY), canRemove: true }),
+						profileTile('alex', { lastUsedAt: ago(1 * DAY), waiting: ALEX_WAITS, canRemove: true })
+					]
+				})
+			);
+			v.account = { email: PINA.email, deviceName: ME.device };
+			return v;
+		})()
+	};
+
+	// What the demo does for the picker's messages (bridge.js answers them from here): the view
+	// is the shared Home of whoever is picked; the right PIN for everyone is 2580.
+	var DEMO_PIN = '2580';
+	var sharedDemo = {
+		/** The picker over the view in use (its files left out). */
+		picking: function (v) {
+			if (!v.profiles) return v;
+			var p = JSON.parse(JSON.stringify(v.profiles));
+			p.showing = true;
+			p.step = pickerStep('choose');
+			return picking(p, !p.currentId);
+		},
+		step: function (v, kind, o) {
+			var out = sharedDemo.picking(v);
+			out.profiles.step = pickerStep(kind, o);
+			return out;
+		},
+		/** The picked student in use: their Home. */
+		use: function (v, id, folder) {
+			var p = JSON.parse(JSON.stringify(v.profiles));
+			p.profiles.forEach(function (t) {
+				t.current = t.id === id;
+				if (t.current) {
+					t.lastUsedAt = new Date(Date.parse(NOW)).toISOString();
+					if (folder) {
+						t.folder = folder;
+						t.ownFolder = folder !== SETTINGS.vaultRoot;
+					}
+					t.waiting = null;
+					t.canRemove = true;
+				}
+			});
+			p.currentId = id;
+			p.showing = false;
+			p.step = pickerStep('choose');
+			var who = p.profiles.filter(function (t) {
+				return t.current;
+			})[0];
+			var home = sharedHome(signedIn({ sync: SYNCED, changes: shared({}) }), p);
+			home.account = { email: who.email, deviceName: ME.device };
+			if (folder && folder !== SETTINGS.vaultRoot) home.vaultRoot = folder;
+			return home;
+		},
+		pick: function (v, id) {
+			var tile = v.profiles.profiles.filter(function (t) {
+				return t.id === id;
+			})[0];
+			if (tile && tile.needsSignIn)
+				return sharedDemo.step(v, 'signInAgain', { profileId: id, message: 'Your sign-in on this computer ended. Sign in with your school Google account once more.' });
+			if (!v.profiles.pinsRequired) return sharedDemo.use(v, id);
+			return sharedDemo.step(v, 'pin', { profileId: id, triesLeft: 5 });
+		},
+		enterPin: function (v, id, pin) {
+			if (pin === DEMO_PIN) return { ok: true, view: sharedDemo.use(v, id) };
+			var left = Math.max(0, (v.profiles.step.triesLeft == null ? 5 : v.profiles.step.triesLeft) - 1);
+			return {
+				ok: false,
+				view: sharedDemo.step(v, 'pin', left
+					? { profileId: id, triesLeft: left, message: "That PIN isn't right. " + (left === 1 ? '1 more try' : left + ' more tries') + ', then a short wait.' }
+					: { profileId: id, triesLeft: 0, waitSeconds: 30, message: 'Too many wrong tries. Try again in 30 seconds, or sign in with Google instead.' })
+			};
+		},
+		/** A just-added student: Sam Patel, unless he is here already. */
+		added: function (v) {
+			var out = sharedDemo.step(v, 'newPin', { profileId: PROFILE.sam.id });
+			if (!out.profiles.profiles.some(function (t) { return t.id === PROFILE.sam.id; })) out.profiles.profiles.push(profileTile('sam', { lastUsedAt: null }));
+			return out;
+		},
+		remove: function (v, id) {
+			var p = JSON.parse(JSON.stringify(v.profiles));
+			var gone = p.profiles.filter(function (t) {
+				return t.id === id;
+			})[0];
+			p.profiles = p.profiles.filter(function (t) {
+				return t.id !== id;
+			});
+			v.profiles = p;
+			if (gone && gone.current) return { name: gone.name, view: sharedDemo.step(v, 'choose') };
+			return { name: gone ? gone.name : 'That student', view: v };
+		},
+		ownFolder: OWN_FOLDER,
+		/** Shared mode just turned on: Jordan is the first student. */
+		turnedOn: function (v) {
+			return sharedHome(v, profilesOf({ canTurnOff: true, tiles: [profileTile('me', { current: true, canRemove: true })] }));
+		}
+	};
+
 	/* ------------------------------------------------------------- Details */
 
 	/** A plain history: the current version, then older check ins by the team. */
@@ -1173,6 +1534,8 @@
 		/** The signed-in student's name, for a file the demo adds. */
 		me: ME.name,
 		/** Where a demo "Change" folder picker lands. */
-		pickedVaultRoot: 'D:\\School\\Armory'
+		pickedVaultRoot: 'D:\\School\\Armory',
+		/** The shared computer's picker, for the demo transport. */
+		shared: sharedDemo
 	};
 })();

@@ -21,6 +21,8 @@ internal sealed partial class TrayApp : ApplicationContext
     private readonly ContextMenuStrip menu;
     private readonly ToolStripMenuItem pauseItem;
     private readonly ToolStripMenuItem accountItem;
+    // A shared computer (docs/agent/PROFILES.md): "Using Armory: Jordan Reyes", never a button.
+    private readonly ToolStripMenuItem usingItem;
     private readonly Control marshal;
     private readonly RegisteredWaitHandle showWait;
     private readonly RegisteredWaitHandle quitWait;
@@ -41,12 +43,13 @@ internal sealed partial class TrayApp : ApplicationContext
             trayIcons[state] = LoadIcon("tray-" + state + ".ico", SystemInformation.SmallIconSize);
 
         menu = new ContextMenuStrip();
+        usingItem = new ToolStripMenuItem("") { Enabled = false, Visible = false };
         var openItem = new ToolStripMenuItem("Open Armory", null, (_, _) => OpenWindow()) { Font = new Font(menu.Font, FontStyle.Bold) };
         var vaultItem = new ToolStripMenuItem("Open Armory folder", null, (_, _) => OpenVault());
         pauseItem = new ToolStripMenuItem("Pause", null, (_, _) => TogglePause());
         accountItem = new ToolStripMenuItem("Connect this computer", null, (_, _) => ConnectOrSignOut());
         var quitItem = new ToolStripMenuItem("Quit", null, (_, _) => Quit());
-        menu.Items.AddRange([openItem, vaultItem, pauseItem, accountItem, quitItem]);
+        menu.Items.AddRange([usingItem, openItem, vaultItem, pauseItem, accountItem, quitItem]);
         menu.Opening += (_, _) => UpdateMenu(host.View);
 
         notify = new NotifyIcon
@@ -62,6 +65,7 @@ internal sealed partial class TrayApp : ApplicationContext
         host.ViewChanged += OnViewChanged;
         SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
         SystemEvents.SessionEnding += OnSessionEnding;
+        SystemEvents.SessionSwitch += OnSessionSwitch;
         showWait = ThreadPool.RegisterWaitForSingleObject(instance.ShowSignal, (_, _) => Post(OpenWindow), null, Timeout.Infinite, executeOnlyOnce: false);
         quitWait = ThreadPool.RegisterWaitForSingleObject(instance.QuitSignal, (_, _) => Post(Quit), null, Timeout.Infinite, executeOnlyOnce: false);
 
@@ -103,14 +107,25 @@ internal sealed partial class TrayApp : ApplicationContext
     // Sign-out or shutdown: stop the engine the same way Quit does, while Windows waits.
     private void OnSessionEnding(object? sender, SessionEndingEventArgs e) => Post(Quit);
 
+    // Windows locked: on a shared computer the window is on the picker when it is unlocked.
+    private void OnSessionSwitch(object? sender, SessionSwitchEventArgs e)
+    {
+        if (e.Reason == SessionSwitchReason.SessionLock) host.ShowPicker(Armory.Core.PickerTrigger.WindowsLocked);
+    }
+
     private void UpdateMenu(AgentView view)
     {
         if (quitting) return;
         signedIn = view.Connection is Connections.SignedIn or Connections.VaultOwnedByOther;
         var paused = host.IsPaused;
         pauseItem.Text = paused ? "Resume" : "Pause";
-        accountItem.Text = signedIn ? "Sign out" : "Connect this computer";
+        // A shared computer: Switch student instead of Sign out (decision F7).
+        var inUse = view.Profiles?.Profiles.FirstOrDefault(p => p.Current);
+        usingItem.Visible = view.Profiles is not null;
+        usingItem.Text = inUse is null ? "Nobody is using Armory yet" : "Using Armory: " + inUse.Name;
+        accountItem.Text = view.Profiles is not null ? "Switch student" : signedIn ? "Sign out" : "Connect this computer";
         var line = string.IsNullOrWhiteSpace(view.Sync.Line) ? "IDEA Armory" : view.Sync.Line.Trim();
+        if (inUse is not null) line = inUse.Name.Split(' ')[0] + ": " + line;
         notify.Text = line.Length <= TooltipLimit ? line : line[..(TooltipLimit - 3)] + "...";
         var state = paused ? SyncStates.Paused : view.Sync.State;
         var icon = trayIcons.TryGetValue(state ?? string.Empty, out var found) ? found : trayIcons[SyncStates.Synced];
@@ -133,7 +148,7 @@ internal sealed partial class TrayApp : ApplicationContext
     {
         try
         {
-            var root = host.Settings.VaultRoot;
+            var root = host.VaultFolder;
             Directory.CreateDirectory(root);
             Shell.OpenFolder(root);
         }
@@ -152,6 +167,12 @@ internal sealed partial class TrayApp : ApplicationContext
 
     private void ConnectOrSignOut()
     {
+        if (host.SharedComputer)
+        {
+            host.ShowPicker(Armory.Core.PickerTrigger.SwitchStudent);
+            OpenWindow();
+            return;
+        }
         if (!signedIn)
         {
             OpenWindow();
@@ -183,6 +204,7 @@ internal sealed partial class TrayApp : ApplicationContext
         {
             SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
             SystemEvents.SessionEnding -= OnSessionEnding;
+            SystemEvents.SessionSwitch -= OnSessionSwitch;
             showWait.Unregister(null);
             quitWait.Unregister(null);
             host.ViewChanged -= OnViewChanged;

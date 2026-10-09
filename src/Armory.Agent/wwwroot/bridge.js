@@ -33,6 +33,7 @@
  *   at=browser (Home scrolled so the team's files are in view)
  *   result=<words> (the demo answers as if an action had just come back with these words;
  *     resultOk=0 makes it a refusal)
+ *   screen=picker (a shared computer's "Who is using Armory?"; the demo's PIN is 2580)
  * Nothing here touches the network.
  */
 (function () {
@@ -55,6 +56,7 @@
 	 * @typedef {'system' | 'idea' | 'spaceWhite'} ThemeSetting
 	 * @typedef {'idea' | 'spaceWhite'} EffectiveTheme
 	 * @typedef {'off' | 'on' | 'afterSignIn' | 'crowded' | 'partial' | 'broken'} BadgesState
+	 * @typedef {'choose' | 'pin' | 'newPin' | 'adding' | 'folderBusy' | 'switching' | 'signInAgain' | 'tooNew'} PickerStep
 	 */
 
 	/**
@@ -231,6 +233,66 @@
 	 * @property {boolean} startAtSignIn
 	 * @property {ThemeSetting} theme
 	 * @property {BadgesView | null} badges   null until the host has checked
+	 * @property {boolean} sharedComputer  several students take turns on this computer, each with a profile (PROFILES.md)
+	 */
+
+	/**
+	 * The account whose files are in the Armory folder, read from the folder itself: the
+	 * "belongs to someone else" screen names them (null on every other screen).
+	 * @typedef {object} FolderOwnerView
+	 * @property {string} email
+	 * @property {string} name
+	 * @property {string[] | null} waiting  what of theirs waits there ("2 files checked out"), null when not looked at yet
+	 */
+
+	/**
+	 * A computer shared by several students (null when it isn't). While showing is true the
+	 * page shows the picker and nothing else; the view then carries none of the student in
+	 * use's files, notices or account.
+	 * @typedef {object} ProfilesView
+	 * @property {boolean} showing
+	 * @property {string | null} currentId  the student in use, null before anyone is
+	 * @property {string} sharedFolder       the Armory folder the students take turns in
+	 * @property {boolean} pinsRequired      each student types their 4-digit PIN to switch
+	 * @property {boolean} canChangePins     the student in use is a mentor
+	 * @property {string | null} pinsNote    who turned PINs on or off, and when ("Turned off by Mr. Pina on Oct 1.")
+	 * @property {boolean} canTurnOff        the student in use may turn shared mode off
+	 * @property {string | null} note        one sentence for Home: a folder of their own, or back in the shared one
+	 * @property {ProfileView[]} profiles    the student in use first, then the most recent
+	 * @property {PickerStepView} step
+	 */
+
+	/**
+	 * One student's tile.
+	 * @typedef {object} ProfileView
+	 * @property {string} id               32 hex digits
+	 * @property {string} name
+	 * @property {string} email
+	 * @property {string} initials         one or two letters, drawn in the picture's place
+	 * @property {number} hue              0 to 7, the picture's color, the same for an address every time
+	 * @property {boolean} current
+	 * @property {string | null} lastUsedAt  ISO-8601
+	 * @property {string} folder           their Armory folder (the shared one, or C:\IDEA\Armory-<name>)
+	 * @property {boolean} ownFolder       a folder of their own, not the shared one
+	 * @property {string | null} waiting   their work waiting in their folder ("2 files checked out"); never for the student in use
+	 * @property {boolean} needsSignIn     their sign-in here ended: picking them opens the browser
+	 * @property {boolean} hasPin
+	 * @property {boolean} canRemove       Remove in Settings: themselves, or anyone for a mentor
+	 */
+
+	/**
+	 * Where the picker is. The fields a kind doesn't use are null.
+	 * @typedef {object} PickerStepView
+	 * @property {PickerStep} kind
+	 * @property {string | null} profileId     the student this step is for
+	 * @property {string | null} message       one sentence to show (a wrong PIN, a wait, a refusal)
+	 * @property {number | null} triesLeft     pin: wrong tries left before a wait
+	 * @property {number | null} waitSeconds   pin: seconds before another try
+	 * @property {string | null} ownFolder     folderBusy: the folder of their own Armory would use
+	 * @property {string | null} ownerName     folderBusy: whose work waits in the shared folder
+	 * @property {string | null} ownerWaiting  folderBusy: what of theirs waits ("2 files checked out")
+	 * @property {string | null} fromName      switching: the student whose last file finishes first
+	 * @property {ConnectPhase | null} connectPhase  adding and signInAgain: where the browser sign-in is
 	 */
 
 	/**
@@ -247,6 +309,8 @@
 	 * @property {ProjectView[]} projects
 	 * @property {SettingsView} settings
 	 * @property {EffectiveTheme} effectiveTheme
+	 * @property {FolderOwnerView | null} folderOwner  connection vaultOwnedByOther: whose the folder is
+	 * @property {ProfilesView | null} profiles        a shared computer's students and picker
 	 */
 
 	/**
@@ -366,18 +430,32 @@
 	 *   putBackKeptCopy: { fileId, versionId } (File detail: one of your kept copies, a keptCopy history
 	 *                                          entry's id, put back on this computer and checked out to you)
 	 *   turnOnBadges: none                    (Settings: the badges setup, as an administrator; one sentence back)
+	 * A shared computer (PROFILES.md):
+	 *   showPicker: none                      (Switch student: the picker shows)
+	 *   cancelPicker: none                    (back to the tiles; a browser sign-in under way stops)
+	 *   pickProfile: { profileId }            (a tile: the PIN step, or straight in when PINs are off)
+	 *   enterPin: { profileId, pin }          (sent at the fourth digit)
+	 *   setPin: { profileId, pin }            (a new student's PIN, or a new one after Forgot your PIN)
+	 *   addProfile: none                      (Add a student: the browser sign-in, once)
+	 *   forgotPin: { profileId }              (the browser sign-in as that same student)
+	 *   chooseFolder: { profileId, choice }   (choice: wait, or own: a folder of their own)
+	 *   removeProfile: { profileId }          (forgets their sign-in and PIN; no file is deleted)
+	 *   setSharedComputer: { on, pin }        (pin: the student in use's first PIN when turning on, else "")
+	 *   setPinsRequired: { on }               (a mentor only)
 	 * @typedef {'ready' | 'connect' | 'cancelConnect' | 'signOut' | 'pause' | 'resume'
 	 *   | 'openVault' | 'openFile' | 'launchFile' | 'showInFolder' | 'checkOut' | 'checkIn'
 	 *   | 'undoCheckOut' | 'takeBack' | 'createFolder' | 'renameFolder' | 'deleteFolder' | 'renameFile'
 	 *   | 'addFiles' | 'dropFiles' | 'dismissNotice' | 'saveSettings' | 'chooseVaultRoot'
 	 *   | 'reportProblem' | 'openIncidents' | 'sendFeedback' | 'takeBackAll' | 'takeOverFolder' | 'switchAccount'
-	 *   | 'putBackKeptCopy' | 'captureWindow' | 'readMyFeedback' | 'turnOnBadges'} PageMessageType
+	 *   | 'putBackKeptCopy' | 'captureWindow' | 'readMyFeedback' | 'turnOnBadges'
+	 *   | 'showPicker' | 'pickProfile' | 'enterPin' | 'setPin' | 'addProfile' | 'forgotPin' | 'cancelPicker'
+	 *   | 'chooseFolder' | 'removeProfile' | 'setSharedComputer' | 'setPinsRequired'} PageMessageType
 	 */
 
 	/**
 	 * Where the demo asks the page to start. Null inside WebView2.
 	 * @typedef {object} DemoRoute
-	 * @property {'home' | 'detail' | 'connect' | 'settings'} screen
+	 * @property {'home' | 'detail' | 'connect' | 'settings' | 'picker'} screen
 	 * @property {string | null} fileId
 	 * @property {string} state
 	 * @property {string | null} project   a project id
@@ -395,7 +473,7 @@
 	/* ------------------------------------------------------- Message lists */
 
 	/** Page to host message types (BRIDGE.md, "Page to host"). */
-	var PAGE_TO_HOST = ['ready', 'connect', 'cancelConnect', 'signOut', 'pause', 'resume', 'openVault', 'openFile', 'launchFile', 'showInFolder', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'dismissNotice', 'saveSettings', 'chooseVaultRoot', 'reportProblem', 'openIncidents', 'sendFeedback', 'takeBackAll', 'takeOverFolder', 'switchAccount', 'putBackKeptCopy', 'captureWindow', 'readMyFeedback', 'turnOnBadges'];
+	var PAGE_TO_HOST = ['ready', 'connect', 'cancelConnect', 'signOut', 'pause', 'resume', 'openVault', 'openFile', 'launchFile', 'showInFolder', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'dismissNotice', 'saveSettings', 'chooseVaultRoot', 'reportProblem', 'openIncidents', 'sendFeedback', 'takeBackAll', 'takeOverFolder', 'switchAccount', 'putBackKeptCopy', 'captureWindow', 'readMyFeedback', 'turnOnBadges', 'showPicker', 'pickProfile', 'enterPin', 'setPin', 'addProfile', 'forgotPin', 'cancelPicker', 'chooseFolder', 'removeProfile', 'setSharedComputer', 'setPinsRequired'];
 
 	/** Host to page message types (BRIDGE.md, "Host to page"). */
 	var HOST_TO_PAGE = ['view', 'fileDetail', 'activity', 'actionResult', 'windowShot', 'myFeedback', 'reveal'];
@@ -421,11 +499,19 @@
 		reportProblem: ['kind', 'body'],
 		sendFeedback: ['kind', 'body', 'tried', 'area', 'shot'],
 		putBackKeptCopy: ['fileId', 'versionId'],
-		captureWindow: ['width', 'height']
+		captureWindow: ['width', 'height'],
+		pickProfile: ['profileId'],
+		enterPin: ['profileId', 'pin'],
+		setPin: ['profileId', 'pin'],
+		forgotPin: ['profileId'],
+		chooseFolder: ['profileId', 'choice'],
+		removeProfile: ['profileId'],
+		setSharedComputer: ['on', 'pin'],
+		setPinsRequired: ['on']
 	};
 
 	/** Actions: each carries a requestId, and the host answers it with one actionResult. */
-	var ACTIONS = ['launchFile', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'reportProblem', 'sendFeedback', 'takeBackAll', 'takeOverFolder', 'putBackKeptCopy', 'turnOnBadges'];
+	var ACTIONS = ['launchFile', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'reportProblem', 'sendFeedback', 'takeBackAll', 'takeOverFolder', 'putBackKeptCopy', 'turnOnBadges', 'pickProfile', 'enterPin', 'setPin', 'addProfile', 'forgotPin', 'chooseFolder', 'removeProfile', 'setSharedComputer', 'setPinsRequired'];
 
 	/** Asks: each carries a requestId too, and the host answers it with a message of its own
 	 *  (windowShot, myFeedback), never actionResult. */
@@ -508,6 +594,7 @@
 		var view = null;
 		var pausedFrom = null;
 		var timers = [];
+		var sharedTimer = null;
 
 		var route = {
 			screen: /** @type {any} */ (params.get('screen') || ''),
@@ -865,7 +952,7 @@
 					break;
 				case 'saveSettings':
 					var movedOut = view.connection === 'vaultOwnedByOther' && message.vaultRoot !== view.settings.vaultRoot;
-					view.settings = { vaultRoot: message.vaultRoot, startAtSignIn: !!message.startAtSignIn, theme: message.theme, badges: view.settings.badges };
+					view.settings = { vaultRoot: message.vaultRoot, startAtSignIn: !!message.startAtSignIn, theme: message.theme, badges: view.settings.badges, sharedComputer: view.settings.sharedComputer };
 					view.vaultRoot = message.vaultRoot;
 					// A folder of the student's own ends the "folder belongs to someone else"
 					// stop, as the engine would: the demo goes on as if connected.
@@ -912,6 +999,19 @@
 					postView();
 					result(message, true, view.settings.badges.line);
 					break;
+				case 'showPicker':
+				case 'pickProfile':
+				case 'enterPin':
+				case 'setPin':
+				case 'addProfile':
+				case 'forgotPin':
+				case 'cancelPicker':
+				case 'chooseFolder':
+				case 'removeProfile':
+				case 'setSharedComputer':
+				case 'setPinsRequired':
+					handleShared(message);
+					break;
 				case 'openVault':
 				case 'showInFolder':
 				case 'addFiles':
@@ -922,6 +1022,91 @@
 					console.info('Armory demo: ' + message.type, message.path || message.folder || view.vaultRoot, files ? files.length + ' dropped' : '');
 					break;
 			}
+		}
+
+		/** A shared computer's messages, the way the host answers them (demo.shared draws
+		 *  each step). A browser sign-in finishes by itself after a few seconds. */
+		function handleShared(message) {
+			var shared = demo.shared;
+			var later = function (fn) {
+				clearTimeout(sharedTimer);
+				sharedTimer = setTimeout(function () {
+					sharedTimer = null;
+					fn();
+					postView();
+				}, 3000);
+			};
+			if (message.type === 'setSharedComputer') {
+				if (message.on) {
+					view = view.account ? shared.turnedOn(view) : shared.step(shared.turnedOn(view), 'choose');
+					if (!view.account) view.profiles.profiles = [];
+				} else {
+					view.settings.sharedComputer = false;
+					view.profiles = null;
+				}
+				postView();
+				return result(message, true, message.on ? 'This computer is shared now. Other students add themselves with Add a student.' : 'This computer is used by one student now. Nothing in any Armory folder changed.');
+			}
+			if (!view.profiles) return result(message, false, "This computer isn't set up for several students.");
+			var id = message.profileId;
+			var ok = true;
+			var words = '';
+			switch (message.type) {
+				case 'showPicker':
+					view = shared.picking(view);
+					break;
+				case 'cancelPicker':
+					clearTimeout(sharedTimer);
+					view = shared.step(view, 'choose');
+					break;
+				case 'pickProfile':
+					view = shared.pick(view, id);
+					break;
+				case 'enterPin':
+					var tried = shared.enterPin(view, id, message.pin);
+					view = tried.view;
+					ok = tried.ok;
+					break;
+				case 'setPin':
+					if (/^(\d)\1{3}$/.test(message.pin) || '0123456789'.indexOf(message.pin) >= 0 || '9876543210'.indexOf(message.pin) >= 0) {
+						view.profiles.step.message = "Pick a PIN that's harder to guess than 1234.";
+						ok = false;
+					} else view = shared.use(view, id);
+					break;
+				case 'addProfile':
+					view = shared.step(view, 'adding', { connectPhase: 'waitingForBrowser' });
+					later(function () {
+						view = shared.added(view);
+					});
+					break;
+				case 'forgotPin':
+					var who = view.profiles.profiles.filter(function (t) {
+						return t.id === id;
+					})[0];
+					view = shared.step(view, 'signInAgain', { profileId: id, connectPhase: 'waitingForBrowser', message: who ? 'Sign in as ' + who.email + ' to choose a new PIN.' : null });
+					later(function () {
+						view = shared.step(view, 'newPin', { profileId: id });
+					});
+					break;
+				case 'chooseFolder':
+					if (message.choice === 'own') {
+						view = shared.use(view, id, shared.ownFolder);
+						view.profiles.note = "You're in your own folder, " + shared.ownFolder + ", while " + (view.profiles.step.ownerName || 'Alex Kim').split(' ')[0] + "'s work waits in " + view.profiles.sharedFolder + '.';
+					} else view = shared.step(view, 'choose');
+					break;
+				case 'removeProfile':
+					var gone = shared.remove(view, id);
+					view = gone.view;
+					words = gone.name + ' was removed from this computer. No files were deleted.';
+					break;
+				case 'setPinsRequired':
+					view.profiles.pinsRequired = !!message.on;
+					view.profiles.pinsNote = 'Turned ' + (message.on ? 'on' : 'off') + ' by ' + (view.account ? view.account.email.split('@')[0] : 'a mentor') + ' on Oct 1.';
+					words = message.on ? 'Each student types their PIN when they switch on this computer.' : 'PINs are off on this computer. Picking a name switches at once.';
+					break;
+			}
+			postView();
+			if (ACTIONS.indexOf(message.type) >= 0) result(message, ok, words);
 		}
 
 		var script = document.createElement('script');

@@ -175,14 +175,22 @@ public sealed partial class SyncEngine : IAsyncDisposable
         }
     });
 
+    // Stops the loop (and live updates) and waits for it. A window action or a test's pass may
+    // still run afterwards; StopForGoodAsync (SyncEngine.Stopping.cs) is the stop after which
+    // nothing of this engine runs or writes again.
     public Task StopAsync() => engineThread.InvokeAsync(async () =>
+    {
+        await StopLoopAsync();
+        return true;
+    });
+
+    private async Task StopLoopAsync()
     {
         await stopping.CancelAsync();
         if (loop is not null) { try { await loop; } catch (OperationCanceledException) { } }
         if (deps.Live is { } live) live.Changed -= OnLiveChange;
         if (liveRun is not null) { try { await liveRun; } catch (OperationCanceledException) { } }
-        return true;
-    });
+    }
 
     private Task? liveRun;
     // A project's change feed has a new row (Realtime): a reason to read the server again now,
@@ -194,16 +202,12 @@ public sealed partial class SyncEngine : IAsyncDisposable
     });
     private long liveEvents;
 
+    // Stops for good (every save so far on disk, nothing more after it), then lets go.
     public async ValueTask DisposeAsync()
     {
-        await StopAsync();
-        await engineThread.InvokeAsync(async () =>
-        {
-            await SettleAsync();
-            StopActivity();
-            return true;
-        });
+        await StopForGoodAsync();
         stopping.Dispose();
+        halting.Dispose();
     }
 
     public void SetConnectState(string phase, string? message) => engineThread.Enqueue(() =>
@@ -281,7 +285,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
     // A whole pass, every file in it, as a test or a caller that wants everything done asks for it.
     public Task<SyncReport> SyncOnceAsync(CancellationToken cancellationToken = default) => engineThread.InvokeAsync(async () =>
     {
-        await passGate.WaitAsync(cancellationToken);
+        await WaitGateAsync(cancellationToken);
         try { return await PassLockedAsync(cancellationToken); }
         finally { passGate.Release(); }
     });
@@ -300,7 +304,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
     private async Task EnterActionAsync(CancellationToken ct)
     {
         actionsWaiting++;
-        try { await passGate.WaitAsync(ct); }
+        try { await WaitGateAsync(ct); }
         finally { actionsWaiting--; }
     }
 
@@ -371,6 +375,9 @@ public sealed partial class SyncEngine : IAsyncDisposable
     // An action passes its scope: only its files move in phase C.
     private async Task<SyncReport> PassLockedAsync(CancellationToken ct, PassScope? scope = null)
     {
+        // A stop for good stops every pass at its next step, an action's too (SyncEngine.Stopping.cs).
+        using var halt = CancellationTokenSource.CreateLinkedTokenSource(ct, halting.Token);
+        ct = halt.Token;
         var failed = true;
         failing = false;
         passScope = scope;
@@ -429,7 +436,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
         PruneStamps();
         var session = deps.Sessions.Current;
         if (session is null) { deps.Live?.SetProjects([]); return Report(false); }
-        if (state.Email is not null && !string.Equals(state.Email, session.Email, StringComparison.OrdinalIgnoreCase)) { deps.Live?.SetProjects([]); return Report(true); }
+        if (state.Email is not null && !string.Equals(state.Email, session.Email, StringComparison.OrdinalIgnoreCase)) { deps.Live?.SetProjects([]); LookAtOwnersWork(); return Report(true); }
         if (state.Email is null || state.DeviceId != session.DeviceId)
         {
             // A reconnect of the same person registers a new device; its work and the locks

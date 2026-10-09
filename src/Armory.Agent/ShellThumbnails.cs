@@ -26,7 +26,8 @@ internal sealed class ShellThumbnails : IDisposable
     {
         this.log = log;
         thread = new Thread(Run) { IsBackground = true, Name = "Armory thumbnails" };
-        thread.SetApartmentState(ApartmentState.STA);
+        // The shell's thumbnails are COM, Windows only (a test host elsewhere gets none).
+        if (OperatingSystem.IsWindows()) thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
     }
 

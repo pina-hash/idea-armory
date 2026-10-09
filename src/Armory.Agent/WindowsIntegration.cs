@@ -37,7 +37,7 @@ internal static class WindowsTheme
             using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
             return key?.GetValue("AppsUseLightTheme") is not int value || value != 0;
         }
-        catch (Exception error) when (error is System.Security.SecurityException or UnauthorizedAccessException or IOException) { return true; }
+        catch (Exception error) when (error is System.Security.SecurityException or UnauthorizedAccessException or IOException or PlatformNotSupportedException) { return true; }
     }
 }
 

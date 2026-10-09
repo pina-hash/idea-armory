@@ -72,7 +72,7 @@ public sealed class HostShellTests
     {
         var settings = new SettingsView(@"C:\IDEA\Armory", true, "system", new BadgesView(BadgesStates.Off, BadgeHealth.OffLine));
         using var json = JsonDocument.Parse(JsonSerializer.Serialize(settings, BridgeMessages.Json));
-        Assert.Equal(["vaultRoot", "startAtSignIn", "theme", "badges"], json.RootElement.EnumerateObject().Select(p => p.Name));
+        Assert.Equal(["vaultRoot", "startAtSignIn", "theme", "badges", "sharedComputer"], json.RootElement.EnumerateObject().Select(p => p.Name));
         var badges = json.RootElement.GetProperty("badges");
         Assert.Equal(["state", "line"], badges.EnumerateObject().Select(p => p.Name));
         Assert.Equal("off", badges.GetProperty("state").GetString());

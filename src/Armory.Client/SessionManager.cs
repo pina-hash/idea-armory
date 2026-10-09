@@ -41,6 +41,34 @@ public sealed class SessionManager
         SignedOut?.Invoke();
     }
 
+    // Removing a student from a shared computer (docs/agent/PROFILES.md): this sign-in ends on the
+    // server too, as far as it can (Supabase's sign-out of this one session, scope=local, which
+    // leaves the student's other computers signed in), then is forgotten here. Offline, refused or
+    // slow (5 seconds at most): forgotten here all the same, and the session simply goes unused.
+    // True when the server ended it.
+    public async Task<bool> SignOutSessionAsync(CancellationToken cancellationToken = default)
+    {
+        var ended = false;
+        if (Current is { } current)
+        {
+            try
+            {
+                using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                deadline.CancelAfter(TimeSpan.FromSeconds(5));
+                // The sign-out needs a live access token: an old one is renewed first.
+                var live = current.ExpiresAt - clock.GetUtcNow() > RefreshMargin ? current : await GetFreshAsync(cancellationToken: deadline.Token);
+                using var request = new HttpRequestMessage(HttpMethod.Post, live.SupabaseUrl.TrimEnd('/') + "/auth/v1/logout?scope=local");
+                request.Headers.TryAddWithoutValidation("apikey", live.AnonKey);
+                request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", live.AccessToken);
+                using var response = await http.SendAsync(request, deadline.Token);
+                ended = response.IsSuccessStatusCode;
+            }
+            catch (Exception error) when (error is HttpRequestException or OperationCanceledException or ArmoryClientException) { }
+        }
+        if (Current is not null) SignOut();
+        return ended;
+    }
+
     // Returns a session whose access token is valid for at least the refresh margin.
     public async Task<ArmorySession> GetFreshAsync(bool forceRefresh = false, CancellationToken cancellationToken = default)
     {

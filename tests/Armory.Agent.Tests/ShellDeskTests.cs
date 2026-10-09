@@ -80,6 +80,7 @@ internal sealed class FakeShellHost(AgentView view) : IShellHost
     public Task<ActionResult> UndoCheckOutAsync(IReadOnlyList<string> paths) => Call("undo", paths);
     public Task<ActionResult> TakeBackAsync(IReadOnlyList<Guid> fileIds) => Call("force check in", fileIds.Select(i => i.ToString()));
     public Task<ActionResult> CheckOutAndReopenAsync(IReadOnlyList<string> paths) => Call("check out and reopen", paths);
+    public bool PickerShowing { get; set; }
 }
 
 internal sealed class FakeSurface : IShellSurface
@@ -197,6 +198,25 @@ public sealed class ShellDeskTests
         var (folder, folderSurface, _) = await Run(held, ShellViews.Batch(ShellVerb.CheckOut, Full("Robot 2027/Drivetrain")));
         Assert.Empty(folderSurface.Questions);
         Assert.Equal(["check out: Robot 2027/Drivetrain"], folder.Calls);
+    }
+
+    [Fact]
+    public async Task While_the_picker_shows_nothing_acts_and_the_window_opens_on_it()
+    {
+        // A shared computer (docs/agent/PROFILES.md, F7): a right-click or a notification's button
+        // never acts in the name of whoever used Armory last.
+        var view = ShellViews.View(ShellViews.Row(Plate), ShellViews.Row(Gear, ShellViews.Mine));
+        foreach (var verb in new[] { ShellVerb.CheckOut, ShellVerb.CheckOutAndOpen, ShellVerb.CheckIn, ShellVerb.Undo, ShellVerb.ForceCheckIn, ShellVerb.Show, ShellVerb.Uri })
+        {
+            var host = new FakeShellHost(view).Ready();
+            host.PickerShowing = true;
+            var surface = new FakeSurface();
+            await new ShellDesk(_ => { }).RunAsync(ShellViews.Batch(verb, verb == ShellVerb.Uri ? "idea-armory:act?t=AAAAAAAAAAAAAAAAAAAAAA&a=checkout" : Full(Plate)), host, surface);
+            Assert.Empty(host.Calls);
+            Assert.Empty(surface.Questions);
+            Assert.Equal(["window"], surface.Shown);
+            Assert.Equal(new ActionResult(false, "Pick who you are in Armory first, then try again."), Assert.Single(surface.Answers));
+        }
     }
 
     [Fact]

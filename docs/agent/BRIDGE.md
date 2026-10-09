@@ -54,7 +54,14 @@ uses a demo transport that answers from `wwwroot/demo/states.js`. See "The demo"
   `checkingInWhenClosed` gets its chip ("Checks in when closed", tone look) in the page's
   status words; until then such a row shows no chip (`MyFileView.note` carries the words).
 - **Settings** is a sheet over Home with exactly the folder (and Change), Start Armory
-  when I sign in, and the theme.
+  when I sign in, the theme, and Shared computer (0.3.3: "This computer is shared by
+  several students", off by default; on a shared computer also who is using Armory now,
+  "Ask for a PIN when switching students", and the students with Remove where it may be
+  used; Change is not offered there, since the students take turns in one folder).
+- **Who is using Armory?** (0.3.3, a computer several students share; see "Several
+  students on one computer" below): the picker. It shows whenever `profiles.showing` is
+  true, over every other screen, with no header keys; Home's account card then says who is
+  using Armory and offers Switch student in place of Sign out and Switch account.
 - **The small dialog** (`<dialog id="ask">`) asks New folder, Rename folder, Delete
   folder, Check out all (how many files, in that folder and its folders, and that
   nobody else can save them until they are checked in; it starts on Cancel), Rename
@@ -111,6 +118,8 @@ AgentView {
   projects: ProjectView[]
   settings: SettingsView
   effectiveTheme: "idea" | "spaceWhite"
+  folderOwner: FolderOwnerView | null  // 0.3.3: connection vaultOwnedByOther: whose the folder is
+  profiles: ProfilesView | null        // 0.3.3: a shared computer's students and picker; null otherwise
 }
 ConnectView { phase: "idle" | "waitingForBrowser" | "finishing" | "failed", message: string | null }
 AccountView { email: string, deviceName: string }
@@ -215,11 +224,45 @@ FileStatus = "synced" | "changed" | "uploading" | "downloading" | "waiting" | "n
            | "noVersion"                    // 0.3.3: a record whose first version never arrived ("No first version";
                                             // File detail: "Added without its first version"), never "uploading"
 SettingsView { vaultRoot: string, startAtSignIn: boolean, theme: "system" | "idea" | "spaceWhite",
-               badges: BadgesView | null }   // 0.3.3; null until the host has checked
+               badges: BadgesView | null,     // 0.3.3; null until the host has checked
+               sharedComputer: boolean }      // 0.3.3; false unless Settings turned it on
 BadgesView {                        // 0.3.3: Armory's status on file icons (docs/agent/EXPLORER.md 2.6)
   state: "off" | "on" | "afterSignIn" | "crowded" | "partial" | "broken"   // BadgeHealthReport.Key
   line: string                      // Settings' sentence, e.g. "Armory's status shows on file icons."
 }                                   // Settings draws the row with Turn on (turnOnBadges) for off and broken
+
+FolderOwnerView {                   // 0.3.3: read from the folder by the engine, never from connect.message
+  email: string, name: string,
+  waiting: string[] | null          // what of theirs waits there ("1 file checked out"); null when not looked at yet
+}
+ProfilesView {                      // 0.3.3: see "Several students on one computer"
+  showing: boolean,                 // the picker shows, and the view carries none of the student in use's
+                                    // account, files, notices, prompt or activity names
+  currentId: string | null, sharedFolder: string,
+  pinsRequired: boolean, canChangePins: boolean,  // canChangePins: the student in use is a mentor (the server says)
+  pinsNote: string | null,          // "Turned off by Mr. Pina on Oct 9."
+  canTurnOff: boolean,
+  note: string | null,              // one sentence for Home: a folder of their own, or back in the shared one
+  profiles: ProfileView[],          // the student in use first, then the most recent
+  step: PickerStepView
+}
+ProfileView {
+  id: string,                       // 32 lowercase hex digits
+  name: string, email: string, initials: string,
+  hue: number,                      // 0 to 7: the picture's color, the same for an address every time
+  current: boolean, lastUsedAt: string | null,
+  folder: string, ownFolder: boolean,
+  waiting: string | null,           // "2 files checked out": their work waiting in their folder (never for the student in use)
+  needsSignIn: boolean, hasPin: boolean, canRemove: boolean
+}
+PickerStepView {
+  kind: "choose" | "pin" | "newPin" | "adding" | "folderBusy" | "switching" | "signInAgain" | "tooNew",
+  profileId: string | null, message: string | null,
+  triesLeft: number | null, waitSeconds: number | null,           // pin
+  ownFolder: string | null, ownerName: string | null, ownerWaiting: string | null,  // folderBusy
+  fromName: string | null,                                        // switching
+  connectPhase: "idle" | "waitingForBrowser" | "finishing" | "failed" | null  // adding, signInAgain
+}
 
 FileDetailView {
   fileId: string, name: string, path: string, project: string, folder: string,
@@ -289,6 +332,9 @@ Plate.SLDPRT.", "Close Plate.SLDPRT in SolidWorks first."). The actions are
 `sendFeedback`, `takeOverFolder`, `putBackKeptCopy` and `turnOnBadges`. An **ask** (0.3.3, `ASKS` in bridge.js) carries a `requestId`
 too and is answered by a message of its own, never `actionResult`: `captureWindow` by `windowShot`,
 `readMyFeedback` by `myFeedback`.
+`sendFeedback`, `takeOverFolder`, and (0.3.3) `pickProfile`, `enterPin`, `setPin`,
+`addProfile`, `forgotPin`, `chooseFolder`, `removeProfile`, `setSharedComputer` and
+`setPinsRequired`.
 
 The page shows an action is under way from the moment it is sent until its
 `actionResult` arrives (v0.2.1): the pressed key gets `aria-busy="true"` and
@@ -375,6 +421,49 @@ offers it too, and Back to your note returns with the words kept. The list shows
 status, the first lines of its words, what was tried, and when, from which computer, about what,
 with a picture. **There are no replies in Armory**: the site keeps none, and the list's foot says
 "The IDEA team reads every note. There are no replies in Armory: the status shows where yours is."
+| `showPicker` | | Switch student (Home's account card on a shared computer) | 0.3.3: the picker shows |
+| `cancelPicker` | | Back, Cancel, Escape on any picker step but the tiles | back to the tiles; a browser sign-in under way stops, and a student being added is not kept |
+| `pickProfile` | `profileId`, `requestId` | a student's tile | the PIN step; straight in when PINs are off; the browser sign-in first when their sign-in here ended or they have no PIN yet |
+| `enterPin` | `profileId`, `pin`, `requestId` | the fourth digit typed | right: the switch; wrong: the step says how many tries are left, then a wait (30 s doubling to 15 min, never a lockout) |
+| `setPin` | `profileId`, `pin`, `requestId` | the fourth digit of the second field, when both match | a new student's PIN (they are kept now), or a new one after Forgot your PIN; a PIN too easy to guess is refused in one sentence |
+| `addProfile` | `requestId` | Add a student, Try again, Open the browser again | the browser sign-in, once, into a profile of its own; again while one waits stops that one and starts a new one |
+| `forgotPin` | `profileId`, `requestId` | Forgot your PIN?, Sign in with Google, Open the browser again | the browser sign-in as that same student; another account changes nothing |
+| `chooseFolder` | `profileId`, `choice`, `requestId` | Wait for Alex, Use C:\IDEA\Armory-jordan | `choice` is `wait` (back to the tiles) or `own` (a folder of their own until their work there is done) |
+| `removeProfile` | `profileId`, `requestId` | Remove (Settings), after the small dialog asks | forgets that student's sign-in and PIN here (ending the sign-in on the server when it can); never deletes a file |
+| `setSharedComputer` | `on`, `pin`, `requestId` | the Shared computer switch, after the small dialog asks | on: the student signed in now becomes the first profile with the PIN given (`pin` is "" when nobody is signed in); off: only the student in use stays signed in |
+| `setPinsRequired` | `on`, `requestId` | Ask for a PIN when switching students | a mentor in use only; who and when are kept and shown (`pinsNote`) |
+
+## Several students on one computer (0.3.3)
+
+docs/agent/PROFILES.md has the rules and why. For the page: when `settings.sharedComputer`
+is true, `profiles` is filled; while `profiles.showing` is true the window draws the
+picker and nothing else (no header keys, the Settings sheet and the small dialog close).
+The view then carries no account, files, notices, prompt or file names in `activity`, so
+nothing of the student in use's shows to whoever sits down; their files keep moving
+meanwhile.
+
+The picker's steps (`profiles.step.kind`):
+
+- `choose`: a tile per student (`initials` in a disc colored by `hue`, the name, and one
+  line: "Using Armory now", "Alex has 2 files checked out here", "Last here 2 hours ago",
+  "Sign in again to continue") and Add a student. Tab reaches every tile, the arrows move
+  between them, Enter or a click picks one. The student in use's tile is lit.
+- `pin`: one 4-digit field (digits only, never shown); the fourth digit sends `enterPin`.
+  During a wait (`waitSeconds`) the field is disabled and Forgot your PIN? is the
+  primary key; the page counts the wait down from when the view arrived.
+- `newPin`: the PIN twice; the page refuses two that differ before anything is sent.
+- `adding` and `signInAgain`: Connect's steps and status plate for the browser sign-in,
+  with the one instruction a shared computer needs: when the browser page shows someone
+  else, click "Not you? Use another account" first.
+- `folderBusy`: the shared folder holds another student's work (`ownerName`,
+  `ownerWaiting`): Use `ownFolder` (primary) or Wait for them, and the same-path trade-off
+  in one sentence.
+- `switching`: the status plate while the last student's engine stops and the next one's
+  starts.
+- `tooNew`: a newer Armory set this computer's students up; nothing to press.
+
+Escape goes back to the tiles from every step but `choose` (where nothing lets the picker
+go without a student picked) and `switching`.
 
 ## Thumbnails (0.3.2)
 
@@ -394,7 +483,7 @@ check it).
 ## The demo
 
 Outside WebView2, `?state=<name>` picks a demo state (`demo/states.js`), `theme=idea`,
-`spaceWhite` or `space-white` the theme, `screen=home|detail|connect|settings` the
+`spaceWhite` or `space-white` the theme, `screen=home|detail|connect|settings|picker` the
 screen and `file=<fileId>` the file on File detail. The page-only places, so every
 state can be drawn without a click, are `project=<projectId>`, `folder=<path in the
 project>`, `select=<name>,<name>` (files in that folder), `expand=<notice key>`,
@@ -413,3 +502,10 @@ out changes the rows and answers with an `actionResult`, a rename adds the file 
 shortens its notice; `captureWindow` gets a small drawing of a window, the app's being the
 window itself, and `readMyFeedback` three sample notes); `openVault`, `showInFolder`, `addFiles` and `dropFiles` only log,
 since a browser has no File Explorer to open.
+shortens its notice); `openVault`, `showInFolder`, `addFiles` and `dropFiles` only log,
+since a browser has no File Explorer to open. The shared computer's states are
+`pickerChoose`, `pickerWaiting`, `pickerPin`, `pickerPinWrong`, `pickerPinWait`,
+`pickerAdding`, `pickerNewPin`, `pickerFolderBusy`, `pickerSwitching`,
+`pickerSignInAgain`, `pickerFirst`, `pickerPinsOff`, `sharedHome`, `sharedOwnFolder`,
+`sharedSettings` and `sharedSettingsMentor`; in them every student's PIN is 2580, a
+browser sign-in finishes by itself after 3 seconds, and Add a student adds Sam Patel.

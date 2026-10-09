@@ -42,6 +42,7 @@ internal sealed partial class AgentHost : IShellHost
     Task<ActionResult> IShellHost.UndoCheckOutAsync(IReadOnlyList<string> paths) => UndoCheckOutAsync(paths);
     Task<ActionResult> IShellHost.TakeBackAsync(IReadOnlyList<Guid> fileIds) => TakeBackAsync(fileIds);
     Task<ActionResult> IShellHost.CheckOutAndReopenAsync(IReadOnlyList<string> paths) => CheckOutAndReopenAsync(paths);
+    bool IShellHost.PickerShowing => PickerShowing;
 
     // The files SolidWorks has open that this computer has not checked out, for the notifications
     // that ask about them (TrayApp.Shell.cs).

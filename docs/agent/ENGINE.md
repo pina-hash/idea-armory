@@ -58,7 +58,8 @@ engine.DismissNotice(key);            // a notice card's OK, or one check-out qu
 await engine.DismissNoticeAsync(key); // the same, done once the view (or the next one) leaves it out
 await engine.MoveAsync(from, to);     // a rename through armory_move_file
 await engine.MoveAsync(from, to, force: true); // force: as for RenameFileAsync (N5)
-await engine.StopAsync();
+await engine.StopAsync();             // the loop only: actions and SyncOnceAsync still work after it
+await engine.StopForGoodAsync();      // 0.3.3: nothing of this engine runs or writes again (below)
 
 // The SolidWorks link (0.3.3; "The SolidWorks year" below). Each marshals onto the engine thread.
 engine.RecordReleaseStamp(stamp);     // after a save it watched: Core ReleaseStamp for exactly those bytes
@@ -68,6 +69,10 @@ engine.SolidWorksDetached();
 
 // File Explorer's badges (0.3.3, docs/agent/EXPLORER.md 2.4): on the engine thread, between two steps of a pass.
 await engine.BadgeFactsAsync();       // one Core BadgeFacts per file on this computer in a project of this account
+// 0.3.3, a folder several students take turns in (docs/agent/PROFILES.md):
+var waiting = await engine.WaitingAsync();       // what of the folder owner's waits here (FolderWaiting)
+var sealedFiles = await engine.SealCheckOutsAsync(); // the owner's check outs here made read-only
+var owner = SyncEngine.OwnerOf(stateStore);      // the address the folder is bound to, read without an engine
 ```
 
 `View` is the window's `AgentView` (docs/agent/BRIDGE.md); `OpenWithoutCheckOut` lists the
@@ -97,7 +102,10 @@ A pass has four phases. A, B and D run one step at a time; C moves files several
    The state document then forgets its email, device, former devices, notices and kept-copy
    records, and the next pass binds it to the new account; the files are the team's versions,
    so nothing is downloaded again. Anything waiting keeps the folder with its account (it is
-   that person's work). Two accounts in one folder at once is never allowed.
+   that person's work). Two accounts in one folder at once is never allowed. Since 0.3.3
+   the view names the folder's owner (`AgentView.FolderOwner`: their address, a name from it,
+   and what of theirs waits, looked at by a scan at most once a minute), and the window's
+   folder-taken screen reads it rather than picking an address out of a sentence.
 2. **Scan, folders, capture.** The platform scan (ignore list applied) gives every file's hash,
    its read-only bit, the folders, the folder moves it proved and SolidWorks' `~$` markers.
    Folder changes on this disk are read first (see Folders and projects): a folder move this
@@ -1069,3 +1077,33 @@ moved everything again. Now:
 while 200 files download (the whole download takes about 9 seconds), a check in answers in
 about half a second while 200 files upload, and a check out made on another computer shows
 on a row about 8 seconds later in the middle of a 20-second download.
+
+## Stopping for good, and a folder's owner (0.3.3)
+
+A computer several students share (docs/agent/PROFILES.md) runs one student's engine at a time
+on one folder, so a switch must know that the last student's engine has stopped writing before
+the next one's starts. `StopAsync` stops the loop only (tests and the window's actions still use
+the engine afterwards). `StopForGoodAsync` is the guarantee:
+
+- it cancels the pass or window action under way through a `halting` token linked into every
+  pass (`PassLockedAsync`) and into the wait for the pass gate (`WaitGateAsync`);
+- it waits for the loop to end, then takes the pass gate and never gives it back, then lets the
+  state settle (`SettleAsync`);
+- from then on `SyncOnceAsync` and every action are refused with `EngineStoppedException` (an
+  `InvalidOperationException`; the host answers "Armory is switching students. Try again in a
+  moment.") and `IsStopping` is true.
+
+Every disk write the engine makes (files, `state.json`, the journal, the snapshots) happens inside
+a pass or an action holding the gate, so when `StopForGoodAsync` returns nothing of that engine
+writes any more. `SharedFolderTests` hold it byte for byte: a stop in the middle of a download
+pass and in the middle of a check in, with every store wrapped to fail on a write after the stop.
+`DisposeAsync` is `StopForGoodAsync`; the host's `VaultRuntime` closes the stores only after it
+returns, and parks (keeps open, never reuses) a runtime whose engine did not stop in time.
+
+`WaitingAsync` answers what of the folder owner's waits here (`FolderWaiting`: check outs, saves
+not sent, changed files, new files, folder changes, and the words "2 files checked out"), the
+same scan `TakeOverFolderAsync` refuses with. `OwnerOf(IEngineStateStore)` reads the address a
+folder is bound to from its `state.json` without an engine. `SealCheckOutsAsync`, run by an
+engine that is never started after the owner's engine stopped for good, makes every file the
+owner has checked out there read-only, so SolidWorks opens it read-only for the next student;
+the owner's own engine makes them writable again at its next pass.

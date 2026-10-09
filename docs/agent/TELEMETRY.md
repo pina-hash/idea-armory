@@ -159,6 +159,14 @@ armory_submit_app_incident(p_kind text, p_summary text, p_app_version text, p_de
                            p_report jsonb, p_feedback uuid) returns uuid
 ```
 
+**On a computer several students share** (0.3.3, docs/agent/PROFILES.md) a note or incident is
+sent only while the student who wrote it is the one using Armory (`IncidentUploader.WriterInUse`,
+the address of the student in use, checked against the address in the file's header); the others
+wait in `incidents\` for their writer, and Send feedback says "Saved. It will be sent ..." for
+them. A file with no address (written while nobody was signed in) goes with whoever is in use. On
+a switch the uploader is rebuilt over the next student's own clients (`AgentTelemetry.UseAccount`),
+so a student's words never go out under another student's sign-in.
+
 **Until the site has them** PostgREST answers 404 `PGRST202` (function not found). The file
 stays queued, the uploader does not ask for that RPC again for 6 hours (remembered in
 `incidents\upload-wait.json`, so restarts do not ask more often), and nobody sees an error.

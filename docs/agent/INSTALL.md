@@ -17,6 +17,7 @@ laptops run Windows 10 or 11 with SolidWorks 2026. Installing needs no internet.
 | Start at sign-in | `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, value `IDEA Armory` = `"<exe>" --background` |
 | Apps entry (Settings > Apps) | `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\IDEA Armory` (flash drive) or `...\Uninstall\{28A1D010-82E3-4294-9676-83AC0AA1F5D3}_is1` (setup.exe), with DisplayName, Publisher, DisplayVersion, DisplayIcon, UninstallString, QuietUninstallString, NoModify, NoRepair and EstimatedSize |
 | Per-account data, written by the app | `%LOCALAPPDATA%\IDEA Armory\`: `settings.json`, `logs\agent.log`, `secrets\` (this computer's sign-in, protected with Windows DPAPI), `WebView2\` |
+| Students' profiles, only on a computer shared by several students (0.3.3, docs/agent/PROFILES.md) | `%LOCALAPPDATA%\IDEA Armory\profiles\`: `profiles.json` (who is on the computer; no sign-in or PIN in it) and one folder per student with their sign-in and PIN (DPAPI); never made while the setting is off |
 | The vault, created and synced by the app | `C:\IDEA\Armory\` (or `vaultRoot` in settings.json), with one folder per project and the agent's hidden `.armory\` folder (journal, saved copies, sync state) |
 
 Nothing goes under `Program Files`, `HKLM` or another account's profile (the optional
@@ -199,6 +200,13 @@ removes them at uninstall.)
   shortcut's `System.AppUserModel.ID` is `IdeaBosco.Armory` (after Armory has started), a launch of
   `IdeaArmory.exe "idea-armory:act?t=AAAAAAAAAAAAAAAAAAAAAA&a=show"` while Armory runs exits 0
   and leaves one `IdeaArmory.exe`; after uninstall, every key gone.
+
+Since 0.3.3 a computer where several students share one Windows account can be set up for
+them: Settings > Shared computer > "This computer is shared by several students". Each student
+then adds themselves once (their own Google sign-in and a 4-digit PIN) and picks their name
+when they sit down; they take turns in the one Armory folder. Nothing about the install
+changes: still one run for the shared account. Uninstalling removes `profiles\` with the rest
+of `%LOCALAPPDATA%\IDEA Armory` and keeps every Armory folder. See docs/agent/PROFILES.md.
 
 ## Artifact names
 

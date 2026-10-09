@@ -4,7 +4,7 @@ namespace Armory.Agent;
 
 // Every line the agent writes to disk passes through Scrub. It removes anything that looks
 // like a credential: JWTs (eyJ...), Bearer values, the values of access_token,
-// refresh_token, Authorization, apikey, anon_key, code and verifier in JSON, query strings,
+// refresh_token, Authorization, apikey, anon_key, code, verifier and pin in JSON, query strings,
 // headers and plain "key: value" text, and long random base64url runs. It errs toward
 // removing too much. An ArmorySession is only ever logged through its redacting ToString.
 public static partial class Redactor
@@ -30,7 +30,9 @@ public static partial class Redactor
         => run.All(c => char.IsAsciiHexDigit(c) || c == '-');
 
     private const string Keys = "access_token|refresh_token|provider_token|provider_refresh_token|id_token|apikey|api_key|anon_key|anonKey|" +
-        "accessToken|refreshToken|code|code_verifier|verifier|password|secret|client_secret|service_role_key|token_hash";
+        "accessToken|refreshToken|code|code_verifier|verifier|password|secret|client_secret|service_role_key|token_hash|" +
+        // A shared computer's PIN (docs/agent/PROFILES.md): never logged, and masked if it ever were.
+        "pin";
 
     [GeneratedRegex(@"eyJ[A-Za-z0-9_\-]{4,}(?:\.[A-Za-z0-9_\-]*){0,2}")]
     private static partial Regex Jwt();

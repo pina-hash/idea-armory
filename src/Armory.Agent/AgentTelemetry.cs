@@ -82,10 +82,34 @@ internal sealed class AgentTelemetry : IAsyncDisposable
         session = currentSession;
         snapshot = describe;
         quickSnapshot = quick;
-        this.feedback = feedback;
-        uploader = new IncidentUploader(api, Reporter.Store, transferring, log: log.Info, feedback: feedback, limiter: Limiter);
-        uploading = Task.Run(() => uploader.RunAsync(stopping.Token));
+        this.transferring = transferring;
+        UseAccount(api, feedback, writerInUse: null);
     }
+
+    // A computer shared by several students (docs/agent/PROFILES.md, F13): saved notes and
+    // incidents go through the student in use's own clients, and only the ones that student wrote
+    // (writerInUse: their address now). Called at each switch: the last student's uploader stops,
+    // and one for this student starts.
+    internal void UseAccount(ArmoryApi api, FeedbackSender? feedback, Func<string?>? writerInUse)
+    {
+        var next = new IncidentUploader(api, Reporter.Store, transferring, log: log.Info, feedback: feedback, limiter: Limiter) { WriterInUse = writerInUse };
+        var run = CancellationTokenSource.CreateLinkedTokenSource(stopping.Token);
+        CancellationTokenSource? previous;
+        lock (uploaderGate)
+        {
+            this.feedback = feedback;
+            previous = uploaderRun;
+            uploaderRun = run;
+            uploader = next;
+            uploading = Task.Run(() => next.RunAsync(run.Token));
+        }
+        try { previous?.Cancel(); }
+        catch (ObjectDisposedException) { }
+    }
+
+    private readonly object uploaderGate = new();
+    private CancellationTokenSource? uploaderRun;
+    private Func<bool> transferring = () => false;
 
     // At start: the run before ended without "stopped". Its crash incident comes from the last
     // flight it wrote (a stack overflow leaves nothing else).

@@ -18,6 +18,9 @@ internal interface IShellHost
     Task<ActionResult> UndoCheckOutAsync(IReadOnlyList<string> paths);
     Task<ActionResult> TakeBackAsync(IReadOnlyList<Guid> fileIds);
     Task<ActionResult> CheckOutAndReopenAsync(IReadOnlyList<string> paths);
+    // A shared computer's picker is showing (docs/agent/PROFILES.md, F7): nothing acts for the
+    // student who was last in use until someone picks who they are.
+    bool PickerShowing { get; }
 }
 
 // What the shell desk asks of the window and the tray (TrayApp.Shell.cs). The calls marshal to
@@ -129,6 +132,13 @@ internal sealed class ShellDesk(Action<string> log, TimeProvider? timeProvider =
             log("shell: " + ShellVerbNames.Name(batch.Verb) + ", " + batch.Paths.Count + (batch.Paths.Count == 1 ? " item" : " items"));
             var started = h.Started;
             if (!started.IsCompleted) await Task.WhenAny(started, Task.Delay(StartWait)).ConfigureAwait(false);
+            if (h.PickerShowing)
+            {
+                // Never act in the name of whoever used Armory last: the window opens on the picker.
+                s.OpenWindow();
+                s.Answer(new ActionResult(false, ShellWords.PickYourselfFirst));
+                return;
+            }
             if (batch.Verb == ShellVerb.Uri) await RunLinkAsync(batch.Paths.FirstOrDefault(), h, s).ConfigureAwait(false);
             else await RunVerbAsync(batch, h, s).ConfigureAwait(false);
         }
@@ -288,6 +298,7 @@ internal static class ShellPaths
 internal static class ShellWords
 {
     internal const string ConnectFirst = "Connect this computer first.";
+    internal const string PickYourselfFirst = "Pick who you are in Armory first, then try again.";
     internal const string NotInVault = "That isn't in the Armory folder.";
     internal const string WholeVault = "Pick files or folders inside a project for that.";
     internal const string NothingCheckedOut = "Nothing there is checked out by you.";

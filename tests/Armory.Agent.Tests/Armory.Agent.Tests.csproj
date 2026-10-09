@@ -17,6 +17,13 @@
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.1" PrivateAssets="all" />
     <ProjectReference Include="../../src/Armory.Agent/Armory.Agent.csproj" />
+    <!-- The real host on a shared computer (ProfilesHostTests): the fake Supabase and site over a
+         throwaway PostgreSQL database, and the end-to-end tests' portable folder and stores. The
+         fakes run on ASP.NET Core, which the disabled transitive references above would leave out. -->
+    <ProjectReference Include="../Armory.TestSupport/Armory.TestSupport.csproj" />
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <Compile Include="../Armory.EndToEnd.Tests/PortableVaultFileSystem.cs" Link="Portable/PortableVaultFileSystem.cs" />
+    <Compile Include="../Armory.EndToEnd.Tests/MemoryStores.cs" Link="Portable/MemoryStores.cs" />
     <Using Include="Xunit" />
   </ItemGroup>
   <ItemGroup>

@@ -22,6 +22,12 @@ internal sealed partial class AgentHost : IAsyncDisposable
     private readonly HttpClient restHttp;
     private readonly HttpClient siteHttp;
     private readonly HttpClient storageHttp;
+    // What the host is made of (HostParts.Windows, or a test's), and the clients of the student
+    // Armory works for: the one student's, or on a shared computer the one in use (the pointer a
+    // switch swaps; AgentHost.Profiles.cs).
+    private readonly HostParts parts;
+    private readonly Uri site;
+    private volatile ProfileClients clients;
     private readonly SemaphoreSlim lifecycle = new(1, 1);
     private readonly object gate = new();
     private readonly System.Threading.Timer hintTimer;
@@ -41,47 +47,44 @@ internal sealed partial class AgentHost : IAsyncDisposable
     private Task? beating;
     private static readonly TimeSpan GoodbyeDeadline = TimeSpan.FromSeconds(3);
 
-    internal AgentHost(AgentPaths paths, AgentLog log, Uri site, AgentTelemetry telemetry)
+    // parts: null for the app's own (Windows); a test passes its own.
+    internal AgentHost(AgentPaths paths, AgentLog log, Uri site, AgentTelemetry telemetry, HostParts? parts = null)
     {
         this.paths = paths;
         this.log = log;
+        this.site = site;
         Telemetry = telemetry;
+        this.parts = parts ??= HostParts.Windows(log, telemetry);
         settingsStore = new SettingsStore(paths.SettingsFile);
         settings = settingsStore.Load();
-        effectiveTheme = Themes.Effective(settings.Theme, WindowsTheme.AppsUseLightTheme());
-        restHttp = Http(TimeSpan.FromSeconds(30));
-        siteHttp = Http(TimeSpan.FromSeconds(30));
+        effectiveTheme = Themes.Effective(settings.Theme, parts.LightApps());
+        restHttp = parts.Http(TimeSpan.FromSeconds(30));
+        siteHttp = parts.Http(TimeSpan.FromSeconds(30));
         // Up to 2 GiB per transfer on a school network: a generous whole-request limit; a dead
         // connection is still noticed by the connect timeout and the engine's cancellation.
-        storageHttp = Http(TimeSpan.FromHours(2));
-        var secrets = new DpapiSecretStore(paths.SecretsFolder, problem => log.Error(problem));
-        Sessions = new SessionManager(restHttp, secrets);
+        storageHttp = parts.Http(TimeSpan.FromHours(2));
+        // One student per computer: the sign-in in secrets\, as always. A computer shared by
+        // several students: the student in use's own (AgentHost.Profiles.cs).
+        clients = OpenClients();
         // Says whether this start found a saved sign-in (the email only; tokens never reach the
         // log). The upgrade cycle (tools/test-agent-install.ps1 -Kind Upgrade) reads it to prove
         // that a new version still uses the sign-in an older one saved.
         log.Info(Sessions.Current is { } saved ? "session loaded for " + saved.Email : "no saved session");
-        Api = new ArmoryApi(new PostgrestClient(restHttp, Sessions, telemetry.Recorder));
-        Blobs = new BlobClient(siteHttp, storageHttp, site, Sessions, telemetry.Recorder);
-        Connector = new ConnectFlow(siteHttp, site, new DefaultBrowserLauncher(), Sessions);
-        Heartbeat = new TeamHeartbeat(Api, Sessions, AgentPaths.Version, log: log.Info);
-        // Send feedback, the same as the website's (v0.3.2): the window's one entry point, and the
-        // path the saved notes go through too, sharing the uploader's waits.
-        Feedback = new FeedbackSender(Api, new FeedbackScreenshots(restHttp, Sessions, telemetry.Recorder), Sessions, AgentPaths.Version,
-            telemetry.Limiter, log: log.Info);
-        Sessions.SignedOut += () => { log.Info("signed out"); Wake(); };
         hintTimer = new System.Threading.Timer(_ => PollHints(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         telemetry.Attach(() => Sessions.Current, DescribeAsync, DescribeNow, Api, () => Blobs.ActiveTransfers > 0, Feedback);
+        AttachedTelemetry();
     }
 
     internal AgentTelemetry Telemetry { get; }
-    internal SessionManager Sessions { get; }
-    internal ArmoryApi Api { get; }
-    internal BlobClient Blobs { get; }
-    internal ConnectFlow Connector { get; }
-    internal TeamHeartbeat Heartbeat { get; }
+    // The student in use's network side (ProfileClients): every one of these follows a switch.
+    internal SessionManager Sessions => clients.Sessions;
+    internal ArmoryApi Api => clients.Api;
+    internal BlobClient Blobs => clients.Blobs;
+    internal ConnectFlow Connector => clients.Connector;
+    internal TeamHeartbeat Heartbeat => clients.Heartbeat;
     // The window's Send feedback (FeedbackSender.SendAsync) and "Your feedback"
     // (Api.MyAppFeedbackAsync): docs/agent/CLIENT.md section 7.
-    internal FeedbackSender Feedback { get; }
+    internal FeedbackSender Feedback => clients.Feedback;
     internal AgentSettings Settings { get { lock (gate) return settings; } }
     internal string EffectiveTheme { get { lock (gate) return effectiveTheme; } }
     internal bool IsPaused
@@ -105,12 +108,12 @@ internal sealed partial class AgentHost : IAsyncDisposable
         get
         {
             var engine = Volatile.Read(ref runtime)?.Engine;
-            if (engine is null) return Fallback(runtimeProblem ?? "Armory is starting.");
-            try { return WithSettings(engine.View); }
+            if (engine is null) return WithProfiles(Fallback(runtimeProblem ?? NoRuntimeLine()));
+            try { return WithProfiles(WithSettings(engine.View)); }
             catch (Exception error) when (error is not OutOfMemoryException)
             {
                 LogEngineFailure("view", error);
-                return Fallback("Armory's sync engine is not running on this computer yet.");
+                return WithProfiles(Fallback("Armory's sync engine is not running on this computer yet."));
             }
         }
     }
@@ -123,7 +126,7 @@ internal sealed partial class AgentHost : IAsyncDisposable
         await RestartRuntimeAsync(settings);
         hintTimer.Change(HintPoll, HintPoll);
         // Beats until a clean stop; a failed beat is logged and never touches a sync pass.
-        beating = Task.Run(() => Heartbeat.RunAsync(running.Token));
+        StartBeating();
         // File Explorer's right-click items and badges (AgentHost.Shell.cs).
         StartShell();
     }
@@ -145,7 +148,7 @@ internal sealed partial class AgentHost : IAsyncDisposable
     internal Task<ActionResult> PutBackKeptCopyAsync(Guid fileId, Guid versionId) => OnEngineAsync("put back a kept copy", e => e.PutBackKeptCopyAsync(fileId, versionId));
     // The picture File Explorer shows for a file in the vault (ShellThumbnails), or null.
     internal Task<byte[]?> ThumbnailAsync(string vaultPath)
-        => Volatile.Read(ref runtime)?.Files.ExistingFile(vaultPath) is { } file ? thumbnails.GetAsync(file) : Task.FromResult<byte[]?>(null);
+        => Volatile.Read(ref runtime)?.Windows?.ExistingFile(vaultPath) is { } file ? thumbnails.GetAsync(file) : Task.FromResult<byte[]?>(null);
     private readonly ShellThumbnails thumbnails = new();
     internal Task<ActionResult> TakeBackAsync(IReadOnlyList<Guid> fileIds) => OnEngineAsync("take back " + fileIds.Count + " files", e => e.TakeBackAsync(fileIds));
     // One file, in the same folder: a file Armory doesn't have yet is renamed on disk; a file in
@@ -236,6 +239,12 @@ internal sealed partial class AgentHost : IAsyncDisposable
             log.Info("window: " + what + (result.Ok ? " done" : " refused"));
             return result;
         }
+        // The engine was stopping for good (a switch of student, a folder change): nothing was done.
+        catch (Exception error) when (error is EngineStoppedException || (error is OperationCanceledException && engine.IsStopping))
+        {
+            log.Info("window: " + what + " refused, the engine was stopping");
+            return new ActionResult(false, SharedComputer ? "Armory is switching students. Try again in a moment." : "Armory is restarting. Try again in a moment.");
+        }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
             LogEngineFailure(what, error);
@@ -245,6 +254,8 @@ internal sealed partial class AgentHost : IAsyncDisposable
 
     internal void SignOut()
     {
+        // A shared computer: nobody signs out, the next student picks themselves (Switch student).
+        if (SharedComputer) { ShowPicker(Armory.Core.PickerTrigger.SwitchStudent); return; }
         CancelConnect();
         Sessions.SignOut();
         RaiseView();
@@ -254,6 +265,7 @@ internal sealed partial class AgentHost : IAsyncDisposable
     // (the Armory folder stays; it is handed over when the last person has nothing waiting).
     internal async Task SwitchAccountAsync()
     {
+        if (SharedComputer) { ShowPicker(Armory.Core.PickerTrigger.SwitchStudent); return; }
         SignOut();
         await ConnectAsync();
     }
@@ -275,6 +287,8 @@ internal sealed partial class AgentHost : IAsyncDisposable
     // Contract section 3 through ConnectFlow, with the window following each phase.
     internal async Task ConnectAsync()
     {
+        // A shared computer: a new sign-in is a new student (Add a student).
+        if (SharedComputer) { await AddProfileAsync(); return; }
         CancellationTokenSource cancel;
         lock (gate)
         {
@@ -339,13 +353,20 @@ internal sealed partial class AgentHost : IAsyncDisposable
             RaiseView();
             return problem;
         }
+        // A shared computer's folders are chosen by the hand-over rule: its shared folder moves
+        // only with shared mode off (docs/agent/PROFILES.md).
+        if (SharedComputer && !string.Equals(root, Settings.VaultRoot, StringComparison.OrdinalIgnoreCase))
+        {
+            RaiseView();
+            return "To move the shared Armory folder, turn off \"This computer is shared by several students\" first.";
+        }
         AgentSettings previous, next;
         lock (gate)
         {
             previous = settings;
-            next = new AgentSettings(root!, startAtSignIn, Themes.Normalize(theme));
+            next = previous with { VaultRoot = root!, StartAtSignIn = startAtSignIn, Theme = Themes.Normalize(theme) };
             settings = next;
-            effectiveTheme = Themes.Effective(next.Theme, WindowsTheme.AppsUseLightTheme());
+            effectiveTheme = Themes.Effective(next.Theme, parts.LightApps());
         }
         try { settingsStore.Save(next); }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
@@ -371,7 +392,7 @@ internal sealed partial class AgentHost : IAsyncDisposable
     {
         lock (gate)
         {
-            var next = Themes.Effective(settings.Theme, WindowsTheme.AppsUseLightTheme());
+            var next = Themes.Effective(settings.Theme, parts.LightApps());
             if (next == effectiveTheme) return;
             effectiveTheme = next;
         }
@@ -400,57 +421,81 @@ internal sealed partial class AgentHost : IAsyncDisposable
         finally { lifecycle.Release(); }
     }
 
-    private async Task RestartRuntimeAsync(AgentSettings target)
+    // The folder the student Armory works for uses: settings' one, or on a shared computer the
+    // student in use's (none while nobody is).
+    private Task RestartRuntimeAsync(AgentSettings target) => RestartRuntimeAsync(RuntimeFolder(target));
+
+    private async Task RestartRuntimeAsync(string? folder)
     {
         await lifecycle.WaitAsync();
         try
         {
             var old = Interlocked.Exchange(ref runtime, null);
             if (old is not null) await StopRuntimeAsync(old);
-            runtimeProblem = null;
-            engineFailureLogged = false;
-            Interlocked.Exchange(ref lastHints, -1);
-            VaultRuntime? created = null;
-            try
-            {
-                // Opening the journal, snapshots and read-only intents touches the disk: off the UI thread.
-                created = await Task.Run(() => VaultRuntime.Create(target.VaultRoot, Sessions, Api, Blobs, log, Telemetry.Recorder, new RealtimeFeed(Sessions, log: log.Info)));
-                created.Engine.ViewChanged += OnEngineView;
-                created.Engine.ActivityChanged += OnEngineActivity;
-                ApplySettingsTo(created.Engine);
-                lock (gate) { if (connectPhase != "idle") created.Engine.SetConnectState(connectPhase, connectMessage); }
-                created.Engine.Start();
-                Volatile.Write(ref runtime, created);
-                log.Info("vault runtime started at " + target.VaultRoot);
-            }
-            catch (Exception error) when (error is not OutOfMemoryException)
-            {
-                log.Error("vault runtime could not start at " + target.VaultRoot, error);
-                if (created is not null) await StopRuntimeAsync(created);
-                runtimeProblem = error switch
-                {
-                    NotImplementedException => "Armory's sync engine is not running on this computer yet.",
-                    UnauthorizedAccessException => $"Armory is not allowed to use {target.VaultRoot}. Choose another folder in Settings.",
-                    IOException => $"Armory can't use the folder {target.VaultRoot}. Choose another folder in Settings.",
-                    _ => $"Armory could not start syncing {target.VaultRoot}. Restart Armory, or choose another folder in Settings.",
-                };
-            }
+            if (folder is not null) await StartRuntimeAsync(folder);
+            else runtimeProblem = null;
         }
         finally { lifecycle.Release(); }
         RaiseView();
     }
 
-    private async Task StopRuntimeAsync(VaultRuntime old)
+    // Under the lifecycle gate: a runtime for the folder, with the clients in use, started.
+    private async Task<bool> StartRuntimeAsync(string folder, VaultRuntime? made = null)
+    {
+        runtimeProblem = null;
+        engineFailureLogged = false;
+        Interlocked.Exchange(ref lastHints, -1);
+        var created = made;
+        try
+        {
+            // Opening the journal, snapshots and read-only intents touches the disk: off the UI thread.
+            created ??= await CreateRuntimeAsync(folder, clients);
+            created.Engine.ViewChanged += OnEngineView;
+            created.Engine.ActivityChanged += OnEngineActivity;
+            ApplySettingsTo(created.Engine);
+            lock (gate) { if (connectPhase != "idle") created.Engine.SetConnectState(connectPhase, connectMessage); }
+            created.Engine.Start();
+            Volatile.Write(ref runtime, created);
+            log.Info("vault runtime started at " + folder);
+            return true;
+        }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            log.Error("vault runtime could not start at " + folder, error);
+            if (created is not null) await StopRuntimeAsync(created);
+            runtimeProblem = error switch
+            {
+                NotImplementedException => "Armory's sync engine is not running on this computer yet.",
+                UnauthorizedAccessException => $"Armory is not allowed to use {folder}. Choose another folder in Settings.",
+                IOException => $"Armory can't use the folder {folder}. Choose another folder in Settings.",
+                _ => $"Armory could not start syncing {folder}. Restart Armory, or choose another folder in Settings.",
+            };
+            return false;
+        }
+    }
+
+    // One runtime for a folder and a student's clients, not started (the disk is touched: off the
+    // UI thread). A folder another runtime of this process still holds is refused (IOException).
+    private Task<VaultRuntime> CreateRuntimeAsync(string folder, ProfileClients with) => Task.Run(() => parts.Runtime(folder, with));
+
+    // Stops the engine for good (StopForGoodAsync: nothing of it runs or writes afterwards), then
+    // closes its files. An engine that has not stopped within patience is parked: its files stay
+    // open, so no other runtime can take its folder, until it does stop. False when parked.
+    private async Task<bool> StopRuntimeAsync(VaultRuntime old, TimeSpan? patience = null)
     {
         old.Engine.ViewChanged -= OnEngineView;
         old.Engine.ActivityChanged -= OnEngineActivity;
+        var wait = patience ?? StopTimeout;
+        var stopped = false;
         try
         {
-            var stop = old.Engine.StopAsync();
-            if (await Task.WhenAny(stop, Task.Delay(StopTimeout)) != stop) log.Error("the sync engine did not stop within " + StopTimeout.TotalSeconds + " seconds");
+            var stop = old.Engine.StopForGoodAsync();
+            stopped = await Task.WhenAny(stop, Task.Delay(wait)) == stop;
+            if (stopped) await stop;
+            else log.Error("the sync engine did not stop within " + wait.TotalSeconds + " seconds; its folder stays closed until it does");
         }
         catch (Exception error) when (error is not OutOfMemoryException) { LogEngineFailure("stop", error); }
-        await old.DisposeAsync(log, StopTimeout);
+        return await old.DisposeAsync(log, stopped ? StopTimeout : TimeSpan.Zero);
     }
 
     private void OnEngineView(AgentView view)
@@ -459,7 +504,7 @@ internal sealed partial class AgentHost : IAsyncDisposable
         lock (gate) settled = firstSignedInView;
         if (settled is not null && view.Connection is Connections.SignedIn or Connections.VaultOwnedByOther) settled.TrySetResult();
         TeamState(view.Activity);
-        ViewChanged?.Invoke(WithSettings(view));
+        ViewChanged?.Invoke(WithProfiles(WithSettings(view)));
     }
 
     // The settings and theme the window shows are the host's, saved this moment, never the
@@ -476,7 +521,8 @@ internal sealed partial class AgentHost : IAsyncDisposable
     private void OnEngineActivity(ActivityView activity)
     {
         TeamState(activity);
-        ActivityChanged?.Invoke(activity);
+        // While the picker shows, the page learns nothing of a student's files (decision F7).
+        ActivityChanged?.Invoke(PickerShowing ? Unnamed(activity) : activity);
     }
 
     // "syncing" while files move, "idle" otherwise: a change goes to the team at once.
@@ -515,10 +561,10 @@ internal sealed partial class AgentHost : IAsyncDisposable
 
     private void ApplySettingsTo(SyncEngine engine)
     {
-        AgentSettings current;
         string theme;
-        lock (gate) { current = settings; theme = effectiveTheme; }
-        engine.ApplySettings(current.ToView(), theme);
+        lock (gate) theme = effectiveTheme;
+        // SettingsNow carries the badges row too (AgentHost.Shell.cs).
+        engine.ApplySettings(SettingsNow(), theme);
     }
 
     private void OnEngine(string what, Action<SyncEngine> action)
@@ -534,7 +580,7 @@ internal sealed partial class AgentHost : IAsyncDisposable
     {
         var current = Volatile.Read(ref runtime);
         if (current is null) return;
-        var hints = current.Files.HintCount;
+        var hints = current.Windows?.HintCount ?? 0;
         if (Interlocked.Exchange(ref lastHints, hints) is var previous && previous >= 0 && previous != hints) Wake();
     }
 
@@ -573,7 +619,7 @@ internal sealed partial class AgentHost : IAsyncDisposable
         StartupRegistration.Apply(settings.StartAtSignIn, exe);
     }
 
-    private static HttpClient Http(TimeSpan timeout)
+    internal static HttpClient Http(TimeSpan timeout)
     {
         var handler = new SocketsHttpHandler
         {
@@ -601,20 +647,30 @@ internal sealed partial class AgentHost : IAsyncDisposable
     }
 }
 
-// One vault root's disk adapters and its engine. Disposed in reverse order of creation.
+// One vault root's disk adapters and its engine. Its stores are closed in reverse order of
+// creation, and only once the engine has stopped for good. One process holds one runtime per
+// folder at a time (a parked one included): a second is refused, as the stores' own lock files
+// (owner.lock, read-only.lock, FileShare.None) refuse one from another process.
 internal sealed class VaultRuntime
 {
-    private VaultRuntime(WindowsVaultFileSystem files, DurableJournalStore journal, WindowsSnapshotStore snapshots, SyncEngine engine)
+    private static readonly HashSet<string> Held = new(StringComparer.OrdinalIgnoreCase);
+    private readonly IDisposable[] stores;
+    private int closed;
+
+    internal VaultRuntime(string root, IVaultFileSystem files, SyncEngine engine, params IDisposable[] stores)
     {
+        var key = Path.TrimEndingDirectorySeparator(root);
+        lock (Held) if (!Held.Add(key)) throw new IOException("Armory is already running the folder " + root + ".");
+        Root = key;
         Files = files;
-        Journal = journal;
-        Snapshots = snapshots;
         Engine = engine;
+        this.stores = stores;
     }
 
-    internal WindowsVaultFileSystem Files { get; }
-    internal DurableJournalStore Journal { get; }
-    internal WindowsSnapshotStore Snapshots { get; }
+    internal string Root { get; }
+    internal IVaultFileSystem Files { get; }
+    // The Windows file system's own extras (disk notifications, thumbnails); null for a test's.
+    internal WindowsVaultFileSystem? Windows => Files as WindowsVaultFileSystem;
     internal SyncEngine Engine { get; }
 
     internal static VaultRuntime Create(string vaultRoot, SessionManager sessions, ArmoryApi api, BlobClient blobs, AgentLog? log = null,
@@ -648,7 +704,7 @@ internal sealed class VaultRuntime
                 // Live updates (v0.3): each synced project's change feed, filtered by project.
                 Live = live,
             });
-            return new VaultRuntime(files, journal, snapshots, engine);
+            return new VaultRuntime(files.Root, files, engine, files, journal, snapshots);
         }
         catch
         {
@@ -657,17 +713,33 @@ internal sealed class VaultRuntime
         }
     }
 
-    internal async Task DisposeAsync(AgentLog log, TimeSpan timeout)
+    // True when the files were closed; false when the engine has not stopped yet, and its files
+    // stay open (the folder closed to any other runtime) until it does.
+    internal async Task<bool> DisposeAsync(AgentLog log, TimeSpan timeout)
     {
-        try
+        Task dispose;
+        try { dispose = Engine.DisposeAsync().AsTask(); }
+        catch (Exception error) when (error is not OutOfMemoryException) { dispose = Task.FromException(error); }
+        if (await Task.WhenAny(dispose, Task.Delay(timeout)) != dispose)
         {
-            var dispose = Engine.DisposeAsync().AsTask();
-            if (await Task.WhenAny(dispose, Task.Delay(timeout)) != dispose) log.Error("the sync engine did not finish stopping; closing its files anyway");
-            else await dispose;
+            log.Error("the sync engine has not stopped; its files stay open until it does");
+            _ = dispose.ContinueWith(_ => Close(), CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
+            return false;
         }
+        try { await dispose; }
         catch (Exception error) when (error is not OutOfMemoryException) { if (error is not NotImplementedException) log.Error("engine dispose failed", error); }
-        Snapshots.Dispose();
-        Journal.Dispose();
-        Files.Dispose();
+        Close();
+        return true;
+    }
+
+    private void Close()
+    {
+        if (Interlocked.Exchange(ref closed, 1) != 0) return;
+        for (var i = stores.Length - 1; i >= 0; i--)
+        {
+            try { stores[i].Dispose(); }
+            catch (Exception error) when (error is IOException or ObjectDisposedException) { }
+        }
+        lock (Held) Held.Remove(Root);
     }
 }
