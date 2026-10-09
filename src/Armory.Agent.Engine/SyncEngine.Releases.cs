@@ -147,7 +147,7 @@ public sealed partial class SyncEngine
     // mode before this reader) and whose copy here is those same bytes is read, once per content
     // hash. The view then shows its year, and a year above the project's pin is a notice. A loop
     // pass gives way to a window action and reads for at most ReleaseAuditSlice; the next pass
-    // goes on from there.
+    // goes on from there. A window action's own pass does not read them.
     private async Task AuditReleasesAsync(CancellationToken ct)
     {
         if (deps.ReleaseReader is null) return;

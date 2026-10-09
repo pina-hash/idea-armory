@@ -539,8 +539,9 @@ public sealed partial class SyncEngine : IAsyncDisposable
                 await FinishRequestsAsync(ct);
             }
         }
-        // The team's versions the server never checked, read from the identical copies here (B5).
-        if (online == true) await AuditReleasesAsync(ct);
+        // The team's versions the server never checked, read from the identical copies here (B5);
+        // never in a window action's pass, which moves only its own files.
+        if (online == true && passScope is null) await AuditReleasesAsync(ct);
         // Known folders with nothing left in them go, on every computer (decision D17).
         if (online == true) TidyFolders();
         // The read-only rule holds offline too, from the last ownership this computer knew.

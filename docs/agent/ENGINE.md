@@ -681,7 +681,7 @@ The activity panel's words are in Activity above. No view field carries a season
 - **B5: files uploaded before the reader.** At the end of each online pass (phase D), every
   SolidWorks file whose current server version has `release_checked` false and whose copy here
   has the same hash is read, once per hash. A loop pass reads for at most 2 seconds and gives
-  way to a window action; the next pass goes on. The view then carries the year on the row and
+  way to a window action; the next pass goes on. A window action's own pass reads none. The view then carries the year on the row and
   File detail (`savedRelease`, `newerThanPin`), a count per project (`newerThanPinCount`) and one
   `newerRelease` notice (docs/agent/BRIDGE.md): needing the student (`look`) on a computer that
   can fix them or that no link describes, news (`info`) on one the link says cannot. The
