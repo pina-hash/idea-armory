@@ -72,6 +72,8 @@ internal static unsafe class Program
         CoRegisterMessageFilter(filterInterface, out var previousFilter);
         var registration = Register();
         if (registration == 0) return 3;
+        // The strong connections the registration itself holds: what is left once every client let go.
+        var registered = Volatile.Read(ref app.Connections);
         Say("ready " + Environment.ProcessId);
         var handles = new[] { arrived.SafeWaitHandle.DangerousGetHandle() };
         while (!exiting)
@@ -91,9 +93,10 @@ internal static unsafe class Program
             MsgWaitForMultipleObjectsEx(1, handles, 50, 0x04FF, 0x0004);
             Pump();
         }
-        // SolidWorks closing: DestroyNotify told the link; give it a moment to let go.
+        // SolidWorks closing: DestroyNotify told the link; give it a moment to let go of its sinks
+        // and then of the application (that release comes after its last Unadvise).
         var until = Environment.TickCount64 + 5000;
-        while (Environment.TickCount64 < until && Sinks() > 0)
+        while (Environment.TickCount64 < until && (Sinks() > 0 || Volatile.Read(ref app.Connections) > registered))
         {
             MsgWaitForMultipleObjectsEx(0, [], 20, 0x04FF, 0x0004);
             Pump();
