@@ -145,6 +145,15 @@ public sealed partial class SyncEngine
             {
                 foreach (var entry in mine) Carry(entry);
                 carried = mine.Count;
+                // The slice is over: the downloads it planned and did not start go on starting as
+                // lanes free while the next pass scans and reads the server (Feed).
+                if (actionsWaiting == 0 && !paused)
+                {
+                    for (var i = next; i < run.Count; i++)
+                        if (run[i].All(p => p.Plan.Actions.All(a => a.Kind is SyncActionKind.None or SyncActionKind.Download)) &&
+                            run[i].Any(p => p.Plan.Actions.Any(a => a.Kind == SyncActionKind.Download))) pending.Enqueue(run[i]);
+                    feeding = pending.Count > 0;
+                }
                 break;
             }
             // A unit ends (a lane to fill), a reason to stop starting comes, or the slice may be
@@ -164,6 +173,41 @@ public sealed partial class SyncEngine
         return (next, carried);
 
         bool Cut() => actionsWaiting > 0 || paused || SliceOver(started, events, live);
+    }
+
+    // The downloads the last slice planned and did not start (only downloads: their write rechecks
+    // that the file is closed and unchanged, and nothing of the team's is sent). The queue starts
+    // them itself, carried, as lanes free, until the next loop pass has read the server (its moves
+    // and plans come after that): the scan and the read of the server, 0.4 to 1.7 seconds a pass in
+    // the field, no longer leave every lane idle. The next pass plans the rest again.
+    private readonly Queue<List<Planned>> pending = new();
+    private bool feeding, fed;
+
+    private void Feed()
+    {
+        // A unit that ends at once ends here again (Ended): the loop below goes on from it.
+        if (fed) return;
+        fed = true;
+        try
+        {
+            var concurrency = Math.Max(1, options.TransferConcurrency);
+            while (feeding && pending.Count > 0 && queue.Count < concurrency && online == true && !paused && actionsWaiting == 0 &&
+                   queueFatal is null && !failing && !stopping.IsCancellationRequested)
+            {
+                var unit = pending.Dequeue();
+                if (StartQueued(unit) is { } entry) Carry(entry);
+            }
+            if (pending.Count == 0) feeding = false;
+        }
+        finally { fed = false; }
+    }
+
+    // The next pass has read the server (or another kind of pass starts): what the slice left is
+    // its to plan again.
+    private void StopFeeding()
+    {
+        feeding = false;
+        pending.Clear();
     }
 
     // A loop pass's slice: PassSlice, or with live updates until a live event after PassSlice and
@@ -232,6 +276,7 @@ public sealed partial class SyncEngine
         }
         if (entry.Carried) Landed(entry);
         QueueChanged();
+        Feed();
     }
 
     // The pass that started it ended while it ran: it goes on, and this pass and the next leave
@@ -264,6 +309,7 @@ public sealed partial class SyncEngine
     // Every queued unit stops at its next step and has ended; the next unit gets a new token.
     private async Task StopQueueAsync()
     {
+        StopFeeding();
         if (queue.Count > 0)
         {
             try { queueStop?.Cancel(); }

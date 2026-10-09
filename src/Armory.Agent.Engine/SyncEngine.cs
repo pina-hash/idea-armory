@@ -424,7 +424,11 @@ public sealed partial class SyncEngine : IAsyncDisposable
         // has stopped. A whole pass first lets every carried unit end, an action's pass the ones
         // holding its files; the loop's own pass leaves them alone (the fence).
         await SettleQueueFailureAsync();
-        if (!loopPass) await AwaitCarriedAsync(scope is null ? null : entry => scope.Covers(entry.Unit));
+        if (!loopPass)
+        {
+            StopFeeding();
+            await AwaitCarriedAsync(scope is null ? null : entry => scope.Covers(entry.Unit));
+        }
         RebuildFence();
         var failed = true;
         failing = false;
@@ -455,9 +459,10 @@ public sealed partial class SyncEngine : IAsyncDisposable
         {
             ScanTakenIn();
             // The run goes on: the loop's pass left files for the next one or carried some, or
-            // this action came in the middle of the loop's run. A pass offline, or one that
-            // failed, ends it.
-            var continues = !failed && online != false && (scope is null ? cutShort || CarriedCount > 0 : continuing || CarriedCount > 0);
+            // this action came in the middle of the loop's run. A whole pass, a pass offline and
+            // one that failed end it.
+            var continues = !failed && online != false &&
+                (loopPass ? cutShort || CarriedCount > 0 : scope is not null ? continuing || CarriedCount > 0 : CarriedCount > 0);
             LogPass(failed, scope is not null, continues);
             RecordPass(kind, failed);
             passScope = null;
@@ -570,6 +575,9 @@ public sealed partial class SyncEngine : IAsyncDisposable
         if (GiveWay()) return GaveWay(0, scan);
 
         using (Step("Asking Armory what changed")) online = await RefreshAsync(ct, mayGiveWay: true);
+        // The server is read: the downloads the last slice left are this pass's to plan again
+        // (the queue started them itself until now: SyncEngine.Queue.cs, Feed).
+        StopFeeding();
         if (refreshCut) return GaveWay(0, scan);
         // What was deleted forever leaves this computer (v0.3), before anything is planned.
         DropPurged();
