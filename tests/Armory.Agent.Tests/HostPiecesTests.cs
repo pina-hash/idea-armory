@@ -93,6 +93,36 @@ public sealed class HostPiecesTests
             Assert.DoesNotContain(word, (title + text + taken + why).ToLowerInvariant());
     }
 
+    // 0.3.3: a run that had begun to quit (it logged "quitting", or that Windows was ending the
+    // session) and was ended before "stopped" was stopped on purpose: never a crash incident, and
+    // the next start says so in the log instead.
+    [Fact]
+    public void A_run_ended_while_quitting_is_not_a_crash()
+    {
+        string[] quit = ["2026-10-08T22:00:00.000Z started 0.3.1", "2026-10-08T22:00:32.619Z pass: ended after 28000 ms (loop), 0 downloaded, 0 uploaded, 0 kept copies, 0 refused",
+            "2026-10-08T22:01:06.398Z quitting"];
+        Assert.Null(AgentLog.UncleanEnd(quit));
+        Assert.Equal(new RunEnd(quit[1], Quitting: true), AgentLog.EndOf(quit));
+        string[] sessionEnded = ["2026-10-08T22:00:00.000Z started 0.3.3", "2026-10-08T22:00:10.000Z " + AgentLog.SessionEndingLine + " (SystemShutdown)"];
+        Assert.Null(AgentLog.UncleanEnd(sessionEnded));
+        Assert.True(AgentLog.EndOf(sessionEnded)!.Quitting);
+        // A crash after a run that quit cleanly is still a crash.
+        Assert.Equal("2026-10-08T22:05:00.000Z pass: moving 3 of 3 files (loop)", AgentLog.UncleanEnd([.. quit, "2026-10-08T22:01:07.000Z stopped",
+            "2026-10-08T22:04:00.000Z started 0.3.3", "2026-10-08T22:05:00.000Z pass: moving 3 of 3 files (loop)"]));
+
+        var folder = Path.Combine(Path.GetTempPath(), "armory-log-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var first = new AgentLog(Path.Combine(folder, "agent.log"), Path.Combine(folder, "crash.log"));
+            first.Info("started 0.3.3");
+            first.Info(AgentLog.SessionEndingLine + " (Logoff)");
+            var second = new AgentLog(Path.Combine(folder, "agent.log"), Path.Combine(folder, "crash.log"));
+            Assert.Null(second.PreviousRunEndedUnexpectedly());
+            Assert.True(second.PreviousRun()!.Quitting);
+        }
+        finally { Directory.Delete(folder, true); }
+    }
+
     // v0.2.1: a run that ended without "stopped" (a stack overflow or a native crash, which no
     // handler can log) is named by the next start, with its last pass line.
     [Fact]

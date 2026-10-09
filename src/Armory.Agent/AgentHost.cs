@@ -160,6 +160,29 @@ internal sealed partial class AgentHost : IAsyncDisposable
 
     // "Report a problem" (docs/agent/TELEMETRY.md): the words and a fresh incident, saved here
     // and sent when the site can take them. Never an error for a site that isn't ready.
+    // Windows is ending the session (a restart, a shut down, a sign out) and ends this process as
+    // soon as its handler returns (TrayApp): the line that says so (the next start reads it: not a
+    // crash), the last flight, then the stop, waited for at most `wait` on the caller's thread.
+    internal void EndSession(string reason, TimeSpan wait)
+    {
+        log.Info(AgentLog.SessionEndingLine + " (" + reason + ")");
+        Telemetry.LastFlight.Write();
+        try
+        {
+            if (!StopAsync().Wait(wait)) log.Info("the session ended before Armory finished stopping");
+        }
+        catch (AggregateException error) { log.Error("stop at the end of the session failed", error.InnerException); }
+    }
+
+    // The computer went to sleep or woke (0.3.3): in the flight (a pass that spans it is not a
+    // slow pass) and the log; on waking, the engine looks for the team's changes at once.
+    internal void PowerChanged(bool resumed)
+    {
+        Telemetry.Recorder.Power(resumed ? "resume" : "suspend");
+        log.Info(resumed ? "the computer woke up" : "the computer is going to sleep");
+        if (resumed) Wake();
+    }
+
     internal async Task<ActionResult> ReportProblemAsync(string? kind, string? body)
     {
         try
@@ -386,24 +409,39 @@ internal sealed partial class AgentHost : IAsyncDisposable
         RaiseView();
     }
 
-    internal async Task StopAsync()
+    // One stop, however many ask for it (Quit, and Windows ending the session, which waits on it
+    // from its own thread: 0.3.3), run off the window's thread so that a thread blocked waiting
+    // for it never holds it up.
+    internal Task StopAsync()
+    {
+        lock (gate) return stopped ??= Task.Run(StopOnceAsync);
+    }
+
+    private Task? stopped;
+
+    private async Task StopOnceAsync()
     {
         hintTimer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         CancelConnect();
-        // A clean stop says so to the team ("offline-soon"), within a few seconds at most.
-        if (!running.IsCancellationRequested)
-        {
-            await running.CancelAsync();
-            if (beating is not null) { try { await beating.ConfigureAwait(false); } catch (OperationCanceledException) { } }
-            if (beating is not null) await Heartbeat.SayGoodbyeAsync(GoodbyeDeadline).ConfigureAwait(false);
-        }
-        await lifecycle.WaitAsync();
+        // A clean stop says so to the team ("offline-soon"), within a few seconds at most, while
+        // the engine stops (0.3.3: one after the other, a quit took up to 3 seconds longer).
+        var goodbye = GoodbyeAsync();
+        await lifecycle.WaitAsync().ConfigureAwait(false);
         try
         {
             var old = Interlocked.Exchange(ref runtime, null);
-            if (old is not null) await StopRuntimeAsync(old);
+            if (old is not null) await StopRuntimeAsync(old).ConfigureAwait(false);
         }
         finally { lifecycle.Release(); }
+        await goodbye.ConfigureAwait(false);
+    }
+
+    private async Task GoodbyeAsync()
+    {
+        if (running.IsCancellationRequested) return;
+        await running.CancelAsync().ConfigureAwait(false);
+        if (beating is not null) { try { await beating.ConfigureAwait(false); } catch (OperationCanceledException) { } }
+        if (beating is not null) await Heartbeat.SayGoodbyeAsync(GoodbyeDeadline).ConfigureAwait(false);
     }
 
     private async Task RestartRuntimeAsync(AgentSettings target)
@@ -453,10 +491,10 @@ internal sealed partial class AgentHost : IAsyncDisposable
         try
         {
             var stop = old.Engine.StopAsync();
-            if (await Task.WhenAny(stop, Task.Delay(StopTimeout)) != stop) log.Error("the sync engine did not stop within " + StopTimeout.TotalSeconds + " seconds");
+            if (await Task.WhenAny(stop, Task.Delay(StopTimeout)).ConfigureAwait(false) != stop) log.Error("the sync engine did not stop within " + StopTimeout.TotalSeconds + " seconds");
         }
         catch (Exception error) when (error is not OutOfMemoryException) { LogEngineFailure("stop", error); }
-        await old.DisposeAsync(log, StopTimeout);
+        await old.DisposeAsync(log, StopTimeout).ConfigureAwait(false);
     }
 
     private void OnEngineView(AgentView view)

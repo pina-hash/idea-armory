@@ -62,6 +62,8 @@ internal sealed class TrayApp : ApplicationContext
         host.ViewChanged += OnViewChanged;
         SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
         SystemEvents.SessionEnding += OnSessionEnding;
+        SystemEvents.SessionEnded += OnSessionEnded;
+        SystemEvents.PowerModeChanged += OnPowerModeChanged;
         showWait = ThreadPool.RegisterWaitForSingleObject(instance.ShowSignal, (_, _) => Post(OpenWindow), null, Timeout.Infinite, executeOnlyOnce: false);
         quitWait = ThreadPool.RegisterWaitForSingleObject(instance.QuitSignal, (_, _) => Post(Quit), null, Timeout.Infinite, executeOnlyOnce: false);
 
@@ -111,6 +113,17 @@ internal sealed class TrayApp : ApplicationContext
 
     // Sign-out or shutdown: stop the engine the same way Quit does, while Windows waits.
     private void OnSessionEnding(object? sender, SessionEndingEventArgs e) => Post(Quit);
+
+    // Windows ends this process as soon as this returns (0.3.3: a quit still under way was cut off
+    // and reported as a crash), so the stop is waited for here, for a few seconds at most.
+    private static readonly TimeSpan SessionEndWait = TimeSpan.FromSeconds(4);
+    private void OnSessionEnded(object? sender, SessionEndedEventArgs e) => host.EndSession(e.Reason.ToString(), SessionEndWait);
+
+    // Sleep and wake: a pass the computer slept through is not a slow pass.
+    private void OnPowerModeChanged(object? sender, PowerModeChangedEventArgs e)
+    {
+        if (e.Mode is PowerModes.Suspend or PowerModes.Resume) host.PowerChanged(e.Mode == PowerModes.Resume);
+    }
 
     private void UpdateMenu(AgentView view)
     {
@@ -206,6 +219,8 @@ internal sealed class TrayApp : ApplicationContext
         {
             SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
             SystemEvents.SessionEnding -= OnSessionEnding;
+            SystemEvents.SessionEnded -= OnSessionEnded;
+            SystemEvents.PowerModeChanged -= OnPowerModeChanged;
             showWait.Unregister(null);
             quitWait.Unregister(null);
             host.ViewChanged -= OnViewChanged;
