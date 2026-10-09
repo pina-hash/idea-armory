@@ -25,6 +25,8 @@ internal sealed class MainWindow : Form, IBridgeWindow
     private string? pendingActivity;
     private bool activityPostScheduled;
     private readonly object viewGate = new();
+    // A shared computer: a window left open overnight goes to the picker on the new day.
+    private readonly System.Windows.Forms.Timer dayTimer = new() { Interval = 60_000 };
 
     internal MainWindow(AgentHost host, AgentPaths paths, AgentLog log, Icon icon)
     {
@@ -40,10 +42,15 @@ internal sealed class MainWindow : Form, IBridgeWindow
         BackColor = Background(host.EffectiveTheme);
         host.ViewChanged += OnViewChanged;
         host.ActivityChanged += OnActivityChanged;
+        dayTimer.Tick += (_, _) => { if (Visible) host.ShowPicker(Armory.Core.PickerTrigger.Activated); };
+        dayTimer.Start();
     }
 
     internal void Open()
     {
+        // A computer shared by several students opens on the picker whenever the window was
+        // hidden: closed with X, never shown, or started in the background (decision F6).
+        if (!Visible) host.ShowPicker(Armory.Core.PickerTrigger.ShownFromHidden);
         if (!Visible) Show();
         if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
         Activate();
@@ -59,6 +66,13 @@ internal sealed class MainWindow : Form, IBridgeWindow
     {
         allowClose = true;
         Close();
+    }
+
+    // Brought to the front or restored: the picker only on the first open of a new day.
+    protected override void OnActivated(EventArgs e)
+    {
+        base.OnActivated(e);
+        host.ShowPicker(Armory.Core.PickerTrigger.Activated);
     }
 
     protected override void OnFormClosing(FormClosingEventArgs e)
@@ -78,6 +92,7 @@ internal sealed class MainWindow : Form, IBridgeWindow
         {
             host.ViewChanged -= OnViewChanged;
             host.ActivityChanged -= OnActivityChanged;
+            dayTimer.Dispose();
             web?.Dispose();
         }
         base.Dispose(disposing);

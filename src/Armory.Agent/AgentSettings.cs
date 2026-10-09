@@ -24,20 +24,25 @@ public static class Themes
     };
 }
 
-// %LOCALAPPDATA%\IDEA Armory\settings.json holds exactly these three values.
+// %LOCALAPPDATA%\IDEA Armory\settings.json holds exactly these values. SharedComputer is "This
+// computer is shared by several students" (docs/agent/PROFILES.md), off unless it says true, so
+// every settings.json written before 0.3.3 keeps one student per computer; it is written only
+// while on, so with it off the file is the same three values as before. With it on, VaultRoot is
+// the computer's one shared Armory folder.
 public sealed record AgentSettings(
     [property: JsonPropertyName("vaultRoot")] string VaultRoot,
     [property: JsonPropertyName("startAtSignIn")] bool StartAtSignIn,
-    [property: JsonPropertyName("theme")] string Theme)
+    [property: JsonPropertyName("theme")] string Theme,
+    [property: JsonPropertyName("sharedComputer"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool SharedComputer = false)
 {
     public const string DefaultVaultRoot = @"C:\IDEA\Armory";
     public static AgentSettings Default { get; } = new(DefaultVaultRoot, true, Themes.System);
 
-    public SettingsView ToView() => new(VaultRoot, StartAtSignIn, Theme);
+    public SettingsView ToView() => new(VaultRoot, StartAtSignIn, Theme, SharedComputer);
 
     // An unknown theme becomes "system"; an unusable vault root becomes the default.
     public AgentSettings Normalize()
-        => new(TryNormalizeVaultRoot(VaultRoot, out var root, out _) ? root! : DefaultVaultRoot, StartAtSignIn, Themes.Normalize(Theme));
+        => new(TryNormalizeVaultRoot(VaultRoot, out var root, out _) ? root! : DefaultVaultRoot, StartAtSignIn, Themes.Normalize(Theme), SharedComputer);
 
     // The vault must be a folder on a local drive letter, below the drive's root, with every
     // folder name valid under Armory.Core's VaultPath rules. A drive root would put the
@@ -98,7 +103,9 @@ public sealed class SettingsStore(string path)
             var start = root.TryGetProperty("startAtSignIn", out var s) && s.ValueKind is JsonValueKind.True or JsonValueKind.False
                 ? s.GetBoolean() : AgentSettings.Default.StartAtSignIn;
             var theme = root.TryGetProperty("theme", out var t) && t.ValueKind == JsonValueKind.String ? t.GetString() : null;
-            return new AgentSettings(vault ?? AgentSettings.DefaultVaultRoot, start, theme ?? Themes.System).Normalize();
+            // Only a true turns several students on; anything else (missing, false, a word) is one student.
+            var shared = root.TryGetProperty("sharedComputer", out var c) && c.ValueKind == JsonValueKind.True;
+            return new AgentSettings(vault ?? AgentSettings.DefaultVaultRoot, start, theme ?? Themes.System, shared).Normalize();
         }
         catch (JsonException) { return AgentSettings.Default; }
     }

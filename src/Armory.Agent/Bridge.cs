@@ -49,7 +49,7 @@ internal interface IBridgeWindow
 // resolves only a valid VaultPath inside the vault root, openVault opens only the
 // configured root, and every path, folder, name and id of an action is checked here
 // before the host sees it.
-internal sealed class Bridge(AgentHost host, IBridgeWindow window, AgentLog log)
+internal sealed partial class Bridge(AgentHost host, IBridgeWindow window, AgentLog log)
 {
     // Every page-to-host type and the record its fields are read into (null: no fields).
     internal static readonly IReadOnlyDictionary<string, Type?> MessageRecords = new Dictionary<string, Type?>(StringComparer.Ordinal)
@@ -83,6 +83,18 @@ internal sealed class Bridge(AgentHost host, IBridgeWindow window, AgentLog log)
         [BridgeMessages.TakeBackAll] = typeof(TakeBackAllMessage),
         [BridgeMessages.TakeOverFolder] = typeof(TakeOverFolderMessage),
         [BridgeMessages.SwitchAccount] = null,
+        // Several students on one computer (Bridge.Profiles.cs).
+        [BridgeMessages.ShowPicker] = null,
+        [BridgeMessages.PickProfile] = typeof(PickProfileMessage),
+        [BridgeMessages.EnterPin] = typeof(EnterPinMessage),
+        [BridgeMessages.SetPin] = typeof(SetPinMessage),
+        [BridgeMessages.AddProfile] = typeof(AddProfileMessage),
+        [BridgeMessages.ForgotPin] = typeof(ForgotPinMessage),
+        [BridgeMessages.CancelPicker] = null,
+        [BridgeMessages.ChooseFolder] = typeof(ChooseFolderMessage),
+        [BridgeMessages.RemoveProfile] = typeof(RemoveProfileMessage),
+        [BridgeMessages.SetSharedComputer] = typeof(SetSharedComputerMessage),
+        [BridgeMessages.SetPinsRequired] = typeof(SetPinsRequiredMessage),
     };
 
     // The answer to an action the window sent with something unusable in it.
@@ -282,6 +294,20 @@ internal sealed class Bridge(AgentHost host, IBridgeWindow window, AgentLog log)
                     Directory.CreateDirectory(host.Telemetry.IncidentsFolder);
                     Shell.OpenFolder(host.Telemetry.IncidentsFolder);
                     break;
+                // Several students on one computer: the picker, PINs, adding and removing students.
+                case BridgeMessages.ShowPicker:
+                case BridgeMessages.PickProfile:
+                case BridgeMessages.EnterPin:
+                case BridgeMessages.SetPin:
+                case BridgeMessages.AddProfile:
+                case BridgeMessages.ForgotPin:
+                case BridgeMessages.CancelPicker:
+                case BridgeMessages.ChooseFolder:
+                case BridgeMessages.RemoveProfile:
+                case BridgeMessages.SetSharedComputer:
+                case BridgeMessages.SetPinsRequired:
+                    await HandleProfilesAsync(type, message, asked);
+                    break;
                 default:
                     log.Info("ignored a window message of unknown type " + type);
                     return;
@@ -362,7 +388,7 @@ internal sealed class Bridge(AgentHost host, IBridgeWindow window, AgentLog log)
 
     private void OpenVault()
     {
-        var root = host.Settings.VaultRoot;
+        var root = host.VaultFolder;
         Directory.CreateDirectory(root);
         Shell.OpenFolder(root);
     }
@@ -376,7 +402,7 @@ internal sealed class Bridge(AgentHost host, IBridgeWindow window, AgentLog log)
 
     private void ShowInFolder(ShowInFolderMessage? request)
     {
-        var root = host.Settings.VaultRoot;
+        var root = host.VaultFolder;
         if (request is null || !VaultLocator.TryResolve(root, request.Path, out var file)) return;
         if (File.Exists(file)) { Shell.SelectInExplorer(file!); return; }
         // Not on this computer yet: open the nearest folder that exists inside the vault.

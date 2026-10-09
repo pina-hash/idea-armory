@@ -4,7 +4,8 @@ using System.Text;
 namespace Armory.Agent;
 
 // The per-user data folder, %LOCALAPPDATA%\IDEA Armory: settings.json, logs\, secrets\,
-// incidents\ (docs/agent/TELEMETRY.md) and WebView2\. ARMORY_DATA_DIR replaces it for automated tests only, so a test instance never
+// incidents\ (docs/agent/TELEMETRY.md), WebView2\, and profiles\ on a computer shared by several
+// students (docs/agent/PROFILES.md; never made or read while it is not). ARMORY_DATA_DIR replaces it for automated tests only, so a test instance never
 // shares a sign-in, settings or the single-instance guard with a real one.
 public sealed record AgentPaths(string DataFolder, bool IsOverridden)
 {
@@ -17,6 +18,7 @@ public sealed record AgentPaths(string DataFolder, bool IsOverridden)
     public string LogFile => Path.Combine(LogFolder, "agent.log");
     public string CrashFile => Path.Combine(LogFolder, "crash.log");
     public string SecretsFolder => Path.Combine(DataFolder, "secrets");
+    public string ProfilesFolder => Path.Combine(DataFolder, "profiles");
     public string IncidentsFolder => Path.Combine(DataFolder, "incidents");
     public string LastFlightFile => Path.Combine(IncidentsFolder, "last-flight.json.gz");
     public string WebView2Folder => Path.Combine(DataFolder, "WebView2");
