@@ -112,26 +112,31 @@ internal static class ShellIdentity
     private static extern void SetCurrentProcessExplicitAppUserModelID(string appId);
 }
 
-// System.AppUserModel.ID on a .lnk, through the shell's property store. Only a shortcut that
-// exists and points to this IdeaArmory.exe is touched, and only when its value differs.
+// System.AppUserModel.ID on a .lnk, the way Windows documents it: the shortcut loaded through the
+// shell's own link object (IShellLinkW), its target read there, and the value written through
+// that object's property store and saved. Only a shortcut that exists and points to this
+// IdeaArmory.exe is touched, and only when its value differs.
 [SupportedOSPlatform("windows")]
 internal static class ShortcutAppId
 {
     private static readonly PropertyKey AppIdKey = new(new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"), 5);
-    private static readonly PropertyKey TargetKey = new(new Guid("B9B4B3FC-2B51-4A42-B5D8-324146AFCF25"), 2);
-    private const int ReadWrite = 2;
+    private const int ReadWriteMode = 2; // STGM_READWRITE
     private const ushort StringType = 31; // VT_LPWSTR
 
     // True when it wrote the value.
     internal static bool Stamp(string shortcut, string exe, string appId)
     {
         if (!File.Exists(shortcut)) return false;
-        var iid = typeof(IPropertyStore).GUID;
-        SHGetPropertyStoreFromParsingName(shortcut, IntPtr.Zero, ReadWrite, ref iid, out var store);
+        var link = (IShellLinkW)new ShellLinkObject();
         try
         {
-            var target = Read(store, TargetKey);
-            if (target is null || !string.Equals(LinkForwarder.LongName(Path.GetFullPath(target)), LinkForwarder.LongName(Path.GetFullPath(exe)), StringComparison.OrdinalIgnoreCase)) return false;
+            var file = (System.Runtime.InteropServices.ComTypes.IPersistFile)link;
+            file.Load(shortcut, ReadWriteMode);
+            var buffer = new System.Text.StringBuilder(32768);
+            link.GetPath(buffer, buffer.Capacity, IntPtr.Zero, 0);
+            var target = buffer.ToString();
+            if (target.Length == 0 || !string.Equals(LinkForwarder.LongName(Path.GetFullPath(target)), LinkForwarder.LongName(Path.GetFullPath(exe)), StringComparison.OrdinalIgnoreCase)) return false;
+            var store = (IPropertyStore)link;
             if (string.Equals(Read(store, AppIdKey), appId, StringComparison.Ordinal)) return false;
             var value = new PropVariant { Type = StringType, Pointer = Marshal.StringToCoTaskMemUni(appId) };
             try
@@ -141,21 +146,37 @@ internal static class ShortcutAppId
                 Marshal.ThrowExceptionForHR(store.Commit());
             }
             finally { PropVariantClear(ref value); }
+            file.Save(shortcut, true);
             return true;
         }
-        finally { Marshal.ReleaseComObject(store); }
+        finally { Marshal.FinalReleaseComObject(link); }
     }
 
-    // A string property, or null.
-    internal static string? Read(string shortcut, Guid formatId, int propertyId)
+    // The shortcut's AppUserModelID, or null.
+    internal static string? ReadAppId(string shortcut)
     {
-        var iid = typeof(IPropertyStore).GUID;
-        SHGetPropertyStoreFromParsingName(shortcut, IntPtr.Zero, 0, ref iid, out var store);
-        try { return Read(store, new PropertyKey(formatId, propertyId)); }
-        finally { Marshal.ReleaseComObject(store); }
+        var link = (IShellLinkW)new ShellLinkObject();
+        try
+        {
+            ((System.Runtime.InteropServices.ComTypes.IPersistFile)link).Load(shortcut, 0);
+            return Read((IPropertyStore)link, AppIdKey);
+        }
+        finally { Marshal.FinalReleaseComObject(link); }
     }
 
-    internal static string? ReadAppId(string shortcut) => Read(shortcut, AppIdKey.FormatId, AppIdKey.PropertyId);
+    // CLSID_ShellLink.
+    [ComImport]
+    [Guid("00021401-0000-0000-C000-000000000046")]
+    private class ShellLinkObject { }
+
+    // IShellLinkW: only its first member is used, so only it is declared.
+    [ComImport]
+    [Guid("000214F9-0000-0000-C000-000000000046")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IShellLinkW
+    {
+        void GetPath([Out, MarshalAs(UnmanagedType.LPWStr)] System.Text.StringBuilder file, int size, IntPtr findData, uint flags);
+    }
 
     private static string? Read(IPropertyStore store, PropertyKey key)
     {
@@ -186,10 +207,6 @@ internal static class ShortcutAppId
         [PreserveSig] int SetValue(ref PropertyKey key, ref PropVariant value);
         [PreserveSig] int Commit();
     }
-
-    [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
-    private static extern void SHGetPropertyStoreFromParsingName(string path, IntPtr bindContext, int flags, ref Guid iid,
-        [MarshalAs(UnmanagedType.Interface)] out IPropertyStore store);
 
     [DllImport("ole32.dll")]
     private static extern int PropVariantClear(ref PropVariant value);
