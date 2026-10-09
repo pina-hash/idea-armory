@@ -64,7 +64,7 @@ foreach ($check in $checks) {
 $publishFiles = @(Get-ChildItem -LiteralPath $publish -Recurse -File -Force)
 $forbidden = @($publishFiles | Where-Object {
         $_.Extension -match '^\.(sldprt|sldasm|slddrw|prtdot|asmdot|drwdot|step|stp|iges|igs|x_t|x_b)$' -or
-        $_.Name -like 'SolidWorks.Interop*' -or $_.Name -ieq 'settings.json' })
+        $_.Name -like 'SolidWorks.Interop*' -or $_.Name -ieq 'settings.json' -or $_.Name -ieq 'solidworks.json' })
 if ($forbidden.Count -gt 0) { throw ('These must never ship (CAD files, SolidWorks DLLs or per-user settings): ' + (($forbidden | ForEach-Object { $_.Name }) -join ', ')) }
 if (Test-Path -LiteralPath (Join-Path $publish 'scripts')) { throw 'The publish folder already has a scripts folder; the installer scripts go there.' }
 

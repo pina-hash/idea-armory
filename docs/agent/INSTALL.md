@@ -14,7 +14,7 @@ laptops run Windows 10 or 11 with SolidWorks 2026. Installing needs no internet.
 | Start menu shortcut, this account only | `%APPDATA%\Microsoft\Windows\Start Menu\Programs\IDEA Armory.lnk` |
 | Start at sign-in | `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, value `IDEA Armory` = `"<exe>" --background` |
 | Apps entry (Settings > Apps) | `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\IDEA Armory` (flash drive) or `...\Uninstall\{28A1D010-82E3-4294-9676-83AC0AA1F5D3}_is1` (setup.exe), with DisplayName, Publisher, DisplayVersion, DisplayIcon, UninstallString, QuietUninstallString, NoModify, NoRepair and EstimatedSize |
-| Per-account data, written by the app | `%LOCALAPPDATA%\IDEA Armory\`: `settings.json`, `logs\agent.log`, `secrets\` (this computer's sign-in, protected with Windows DPAPI), `WebView2\` |
+| Per-account data, written by the app | `%LOCALAPPDATA%\IDEA Armory\`: `settings.json`, `logs\agent.log`, `secrets\` (this computer's sign-in, protected with Windows DPAPI), `WebView2\`, `solidworks.json` (0.3.3: the SolidWorks link keeps the student's own Save to Version setting there while Armory changed it, docs/agent/SOLIDWORKS.md) |
 | The vault, created and synced by the app | `C:\IDEA\Armory\` (or `vaultRoot` in settings.json), with one folder per project and the agent's hidden `.armory\` folder (journal, saved copies, sync state) |
 
 Nothing goes under `Program Files`, `HKLM` or another account's profile. The app needs no

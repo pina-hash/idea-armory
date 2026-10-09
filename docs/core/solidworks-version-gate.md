@@ -96,7 +96,7 @@ truncations and bit flips (never another year, never an exception).
 
 ## Stamps and the rule that combines them (0.3.3)
 
-The SolidWorks link (built separately) records a `ReleaseStamp` right after each save it
+The SolidWorks link (docs/agent/SOLIDWORKS.md) records a `ReleaseStamp` right after each save it
 watches (research section 2): the bytes' SHA-256, the year (`SavedReleaseRule.StampYear`:
 what SolidWorks' own `VersionHistory` reads in the bytes on disk, when that is the year the
 link meant to save in, or when it meant nothing, as on open; otherwise null), the writer's
@@ -114,7 +114,16 @@ for exactly those bytes, reader)`:
 
 A year before 1995 counts as unknown. `SavedReleaseRule.Merge` keeps the newer of two stamps
 for the same bytes, unless their known years differ, which makes the year unknown.
-`SavedReleaseRuleTests` holds the table, `StampYear` and `Merge`.
+
+`VersionHistory.LastYear(entries)` reads `ISldWorks.VersionHistory`, one entry per release
+the file was saved in ("13000[2020/296]"): the year of the last entry's major code, or null
+(the bracket is a build date, never the release). `SavedReleaseRule.UnverifiedSaveDown(stamp)`
+is true for a stamp whose save had Save to Version on (`SaveToVersionYear` set) and whose year
+SolidWorks did not confirm: the engine keeps those bytes on this computer in both gate modes
+(a strengthening: a Warn project would otherwise upload them as "release not checked"), so a
+save that couldn't be written in the pinned year is never uploaded as the newer one.
+`SavedReleaseRuleTests` holds the table, `StampYear`, `Merge`, `LastYear` and
+`UnverifiedSaveDown`.
 
 ## Revisions and saving down (0.3.3)
 
@@ -130,5 +139,16 @@ pinned release: `NotNeeded` (the running release is at or below the pin), `Penul
 `TooFarApart` (more than two releases), `OldServicePack` (2026 before SP3, revision below
 34.3) or `Unsupported` (an older release, or no valid pin). `SaveDown.Plan(revision, pin)`
 reads the option from the revision; a release after 2026 is taken to have it from its first
-build (reasoned). `SaveDownPlanTests` holds the table. The engine uses the plan for its words
-only; the link uses it to set the option.
+build (reasoned). The engine uses the plan for its words; the link uses it to set the option.
+
+`SaveDown.Support(running, enumsKnown, readBack, saveDownFailed)` is what the link found at
+attach: `Available`, `OldServicePack` (2026 before SP3), `NotConfigured` (the two preference
+numbers are unknown here: Armory never guesses one), `NotLicensed` (they didn't read back, or a
+save with the option on still wrote this release, B4) or `Unsupported` (before 2026); anything
+but `Available` means no save down. `SaveDown.Choose(plan, optionUsable, vaultDocument,
+blocked, keepLocal)` is what Save to Version should be while a document is active: the
+student's own setting except for a vault document whose plan can save on a SolidWorks where
+the option is usable; there `SaveDown`, or `Off` when SolidWorks' own check says it can't go
+back (blocked) or the student keeps it on this computer (the save writes this release and
+stays a private draft). The invariant, tested over every input: the option is on only where a
+save down can happen. `SaveDownPlanTests` holds the tables.

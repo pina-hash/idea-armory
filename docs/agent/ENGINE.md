@@ -27,6 +27,7 @@ var engine = new SyncEngine(new EngineOptions { VaultRoot = @"C:\IDEA\Armory", T
     Log = log.Info,                   // the raw text of each problem, once; the window gets plain words
     Recorder = telemetry.Recorder,    // the flight recorder (docs/agent/TELEMETRY.md); null records nothing
     Live = new RealtimeFeed(sessions),// v0.3 live updates (below); null: the poll alone
+    SolidWorks = solidWorksLink,      // 0.3.3: ISolidWorksLink (docs/agent/SOLIDWORKS.md); null: markers only
 });
 engine.ViewChanged += view => bridge.Post(BridgeMessages.ViewMessage(view));
 engine.ActivityChanged += activity => bridge.Post(BridgeMessages.ActivityMessage(activity)); // at most 4 a second
@@ -58,14 +59,24 @@ await engine.StopAsync();
 engine.RecordReleaseStamp(stamp);     // after a save it watched: Core ReleaseStamp for exactly those bytes
 await engine.RecordReleaseStampAsync(stamp); // the same, true once kept (false: not a SHA-256)
 engine.SolidWorksAttached("34.4.1", saveDownWorks: true); // ISldWorks.RevisionNumber; false once SolidWorks would not save down
-engine.SolidWorksDetached();
+engine.SolidWorksDetached();          // (with EngineDependencies.SolidWorks the link's records do both)
+
+// Host-facing, for Windows notifications (C5, B2; "SolidWorks opened a file" below), not in the page contract.
+engine.OpenPrompts;                   // IReadOnlyList<OpenPrompt>: files SolidWorks opened that this computer hasn't checked out
+engine.OpenPromptsChanged += prompts => notifications.Show(prompts); // raised on the engine thread
+engine.SaveDownPrompts;               // IReadOnlyList<SaveDownPrompt>: what a save down drops, asked before the save
+await engine.CheckOutAndReopenAsync(paths);   // = CheckOutAsync(paths, open: true): writable in SolidWorks, in place
+await engine.KeepLocalAsync(paths);           // "Keep this file on this computer only" (keep: false undoes it)
+await engine.AnswerSaveDownAsync(path, keepLocal); // a SaveDownPrompt's two buttons
+await engine.SaveDownNowAsync(paths);         // "Save it in 2025 now": SolidWorks saves the open file in its pinned year
 ```
 
 `View` is the window's `AgentView` (docs/agent/BRIDGE.md); `OpenWithoutCheckOut` lists the
 open files this computer has not checked out, for the tray's one quiet balloon per opened
-file (D13). Every method marshals onto the engine's own thread (see Threading), so the
+file (D13); `OpenPrompts` is the same question for Windows notifications, grouped. Every method marshals onto the engine's own thread (see Threading), so the
 window's UI thread only awaits: it never scans, hashes, saves the state or waits on a pass.
-`View`, `IsPaused` and `OpenWithoutCheckOut` are published values, read without the engine.
+`View`, `IsPaused`, `OpenWithoutCheckOut`, `OpenPrompts` and `SaveDownPrompts` are published
+values, read without the engine.
 
 ## One pass
 
@@ -357,8 +368,9 @@ on the next pass, through the crash points every write already has (`before-lock
   rest is refused in a sentence: someone else has it ("Plate.SLDPRT is checked out by Maria
   Lopez on LAB-PC-07."), a newer version waits behind an open file, it was removed here, the
   server has no live version. Taking the lock makes the file writable at once; "Check out
-  and open" then opens it, unless SolidWorks still has it open ("Close Plate.SLDPRT in
-  SolidWorks first"). A folder is every live file under it: "Checked out 12 of 14 files.
+  and open" (C5's "Check out and reopen") then opens a file that isn't open, and makes one
+  SolidWorks has open writable there through the SolidWorks link, or opens it again once it
+  is closed ("SolidWorks opened a file" below). A folder is every live file under it: "Checked out 12 of 14 files.
   Maria Lopez has 2 of them checked out." The rest name where they are: up to three people
   ("Maria Lopez and Sam Lee have 3 of them checked out.") and my other computer ("1 is
   checked out on your other computer, LAB-PC-07."). A file SolidWorks has open read-only
@@ -666,9 +678,11 @@ The activity panel's words are in Activity above. No view field carries a season
   those bytes reach the server from here (a commit, a kept copy, an earlier save), the stamp
   is marked committed; it is pruned 30 days after that, or 90 days after it was recorded if
   they never do. A stamp wakes the loop: a file held as unknown may go now.
-- **What runs here.** `SolidWorksAttached(revision, saveDownWorks)` and `SolidWorksDetached()`
-  say which SolidWorks the link sees; Core's `SaveDown.Plan` then says whether this computer
-  saves down to a project's pin. Only the words use it.
+- **What runs here.** The SolidWorks link's `LinkAttached` and `LinkDetached` records (or, with
+  no link, `SolidWorksAttached(revision, saveDownWorks)` and `SolidWorksDetached()`) say which
+  SolidWorks runs here; Core's `SaveDown.Plan` and the link's `SaveToVersionSupport` then say
+  whether this computer saves down to a project's pin. The words use it, and the link sets
+  Save to Version by it ("The SolidWorks link" below).
 - **Words** (research section 6). A file newer than the pin: "Saved in SolidWorks 2026, and
   Robot 2027 uses SolidWorks 2025. Open it in SolidWorks 2026 and click Save: Armory saves it
   as 2025, then it uploads by itself." only where saving down works; otherwise "... It stays
@@ -692,6 +706,104 @@ The activity panel's words are in Activity above. No view field carries a season
   (82 ms after a restart with the reader); the one-time B5 pass that read all 1,500 (and
   downloaded them) took 2.7 s against 2.4 s for the same first pass without the reader. Real
   files cost about 0.6 ms each to read (158 public files in 94 ms, docs/spike/saved-release.md).
+
+## The SolidWorks link (0.3.3)
+
+`SyncEngine.Open.cs`; the link is `EngineDependencies.SolidWorks` (`ISolidWorksLink`,
+`SolidWorksLink.cs`; on Windows `Armory.SolidWorks.SolidWorksLink`, docs/agent/SOLIDWORKS.md;
+in tests an in-memory fake). Null-safe: without it everything below falls back to SolidWorks'
+`~$` markers, as before.
+
+- **One pump.** `Start()` starts a task that reads the link's records in order and handles
+  each on the engine thread (`OnLinkRecord`), then asks the link to `Replay()` what is true now
+  (an engine started after a vault root change missed the earlier records). A record that
+  fails is a flight-recorder exception and a log line, never the end of the pump.
+  `StopAsync` waits for it. Tests wait on `LinkSettledAsync()`.
+- **What the engine keeps.** The attached SolidWorks sessions (the newest one is "the running
+  SolidWorks" for the words), the ones that ran as administrator (`LinkRefused`), and each open
+  vault document per session: type, read-only, a newer year (`IsFutureVersion`), whether the
+  student opened it, whether it changed, its last compatibility check, whether the student
+  keeps it here, and the save in progress. A document open in a linked SolidWorks counts as
+  open for write safety (`IsOpenNow`) beside the platform's own answer.
+- **Pins.** After every read of the server that changed them, each project's folder, pinned
+  year and gate mode go to the link (`SetPins`), so it sets Save to Version for the active
+  document (Core's `SaveDown.Choose`).
+- **Saving holds.** `LinkSaving` holds that path: no capture and no plan for it until
+  `LinkSaved`, `LinkSaveCanceled`, the document's close or two minutes (`SavingHeldFor`), so
+  the bytes are decided with their stamp. A hold never stops other files.
+- **Stamps.** `LinkSaved` and `LinkStamped` carry a `ReleaseStamp`, kept exactly as
+  `RecordReleaseStamp` keeps one ("The SolidWorks year" above), and wake the loop.
+- **An unverified save down stays here** (strengthens the gate). A stamp whose save had Save
+  to Version on and whose year SolidWorks didn't confirm (`SavedReleaseRule.UnverifiedSaveDown`)
+  makes the gate Enforce for those bytes in a Warn project too (`GateModeFor`): a private
+  draft, never "release not checked". The refusal words come from the link when it knows
+  better (`LinkGateWords`): an unverified save down, a document blocked by SolidWorks' own
+  check (in its words), or one the student keeps on this computer.
+- **The `solidWorks` notice** (one card, an item per document, `LinkNotices`): SolidWorks ran
+  as administrator; a save down SolidWorks canceled ("isn't saved yet", `bad`); a file newer
+  than this computer's SolidWorks (B5 on a 2025 computer); a blocked document; a document kept
+  here (button "Save it in 2025 now", `saveDown`); a checked-out document saved in 2026 that
+  this computer can save down (the same button); and, before the save, what a save down drops
+  (button "Keep this file on this computer only", `keepLocal`), each drop list once (answered
+  or saved with, it doesn't ask again). The words are in docs/agent/SOLIDWORKS.md section 3.
+  The drops question is also `SaveDownPrompts`, for a notification with "Save in 2025" and
+  "Keep this file on this computer only" (`AnswerSaveDownAsync`).
+- **The actions.** `KeepLocalAsync(paths, keep)`: "Plate.SLDPRT stays on this computer only
+  when you save it. Nobody else gets those changes until it is saved in SolidWorks 2025."
+  `SaveDownNowAsync(paths)`: "Saved Plate.SLDPRT in SolidWorks 2025.", or why not ("Check out
+  Plate.SLDPRT first: SolidWorks has it read-only.", "Open Plate.SLDPRT in SolidWorks first.",
+  the cases of SOLIDWORKS.md section 3); 15 seconds per file at most.
+- **Settings line** (`AgentView.solidWorks`, docs/agent/BRIDGE.md): none, attached ("Linked to
+  SolidWorks 2026 SP4.1. It saves team files in 2025."), cantSaveDown (with why) or
+  administrator; null with no link.
+- **Tests** (`SolidWorksLinkTests`, end to end with the fake link): the C5 questions and check
+  out and reopen (below), a save down uploaded by its stamp, a blocked document a private
+  draft in both modes, an unverified save down never uploaded as 2026 in Warn, the drops
+  question and keeping a file here, and the Settings line.
+
+## SolidWorks opened a file (C5, 0.3.3)
+
+Nothing is ever checked out because SolidWorks opened a file: Armory asks. Core decides what
+to ask (`OpenAsk.Decide(ownership, openedReadOnly, topLevel, tracked)`): nobody has it,
+CheckOut; this computer has it but SolidWorks opened it read-only, Reopen; someone else,
+HeldByOther (who); the same person on another computer, HeldOnMyOtherComputer; a reference an
+assembly or a drawing loaded, or a file the team doesn't have, nothing.
+
+- **With the link**, only documents the student opened (SolidWorks' active document at the
+  open, or one that became active; never a reference) ask, once per document per SolidWorks
+  session (`OpenAskOnce`, keyed by path and process), grouped when asked within 1.5 seconds of
+  the group's first (`OpenBursts.LinkGroups`: a multi-select open from File Explorer is one
+  notification). The window's question (`AgentView.prompt`) and `OpenWithoutCheckOut` take
+  their files from the link too, so opening an assembly asks about the assembly.
+- **Without it**, the `~$` markers as before; for notifications, markers first seen within 3
+  seconds of the previous one, for at most 60 seconds, are one burst
+  (`OpenBursts.MarkerBursts`).
+- **`OpenPrompts`**: `OpenPrompt(Path, Name, FileId, CheckedOutBy, ViaSolidWorks, Group, Kind)`,
+  ordered by group; prompts with the same `Group` are one notification; a prompt stays while
+  its file is open and not checked out here, and a host shows each (Path, Group) once.
+  `OpenPromptsChanged` says when the list changed. The notifications themselves are the host's
+  (not built here).
+- **Check out and reopen** (`CheckOutAndReopenAsync(paths)`, the same as `CheckOutAsync(paths,
+  open: true)`). The check out runs as always; then, after the action gate is let go, each
+  checked-out file a linked SolidWorks has open is made writable there
+  (`ISolidWorksLink.MakeWritableAsync`, 15 seconds at most each; Core's `WritablePlan`: in place
+  first, keeping unsaved changes; a reload or a drawing's close and reopen only for a document
+  nobody changed; never closing a document, never discarding a change). Without the link, or
+  when it couldn't, a file still open is opened again once the student closes it in SolidWorks,
+  once, within five minutes of the click (`ReopenWhenClosedFor`); after that nothing opens by
+  surprise. A file not open opens as "Check out and open" always did. The answer is one
+  sentence: "Checked out Bracket.SLDPRT. You can save it in SolidWorks now."; "Checked out
+  Bracket.SLDPRT. SolidWorks still has it read-only. To save, close it in SolidWorks and open it
+  again from Armory. Changes made before the check out can't be saved to it."; "Checked out
+  Bracket.SLDPRT. Close it in SolidWorks and Armory opens it again, ready to save."; for
+  several, "Checked out 3 files. You can save them in SolidWorks now." or which ones are still
+  read-only.
+- **Tests**: `OpenAskTests`, `WritablePlanTests` (Core); `SolidWorksLinkTests` (end to end):
+  only the student's opens ask, once per session; check out and reopen in place with no
+  launch; a changed document never reloaded, closed or discarded; an unchanged one reloaded or
+  reopened without discarding; someone else's file never made writable and the question says
+  who; without the link, a file closed within five minutes opens again once; a burst of markers
+  is one question.
 
 ## Operation ids (crash safety)
 

@@ -54,7 +54,8 @@ internal static class SolidWorksProcesses
             if (!Native.OpenProcessToken(process, Native.TOKEN_QUERY, out var token)) return new(pid, Owner.Elevated, path);
             try
             {
-                var me = WindowsIdentity.GetCurrent().User;
+                using var current = WindowsIdentity.GetCurrent();
+                var me = current.User;
                 var owner = TokenUser(token);
                 if (owner is null || me is null || !owner.Equals(me)) return new(pid, owner is null ? Owner.Elevated : Owner.Other, path);
                 return new(pid, Elevated(token) && !Elevated() ? Owner.Elevated : Owner.Mine, path);

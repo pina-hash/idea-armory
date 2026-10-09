@@ -265,6 +265,7 @@ internal sealed class SaveDownManager
         var plan = PlanFor(path);
         if (!plan.CanSave() || Support != SaveToVersionSupport.Available) return null;
         var value = plan.SaveToVersionValue()!.Value;
+        var took = System.Diagnostics.Stopwatch.StartNew();
         CompatibilityResult? result;
         try { result = calls.CheckCompatibility(path, value); }
         catch (Exception error) when (Com.IsComFailure(error)) { result = null; log?.Invoke($"solidworks: couldn't check {path}: {error.Message}"); }
@@ -277,6 +278,9 @@ internal sealed class SaveDownManager
         else if (result is { Result: SwConstants.CompatibilityCompleted }) blocked.Remove(key);
         var drops = inventory.Concat((result?.Warnings ?? []).Where(w => !string.IsNullOrWhiteSpace(w)).Select(w => new DropItem(DropItem.Warning, 1, w))).ToList();
         var record = new LinkCompatibility(pid, path, running.Year - value, result is { Result: SwConstants.CompatibilityCompleted } || items.Count > 0, items, drops);
+        // Lab steps L7 and L8 read this line: SolidWorks' answer and how long the check took.
+        log?.Invoke($"solidworks: checked {Path.GetFileName(path)} for {running.Year - value}: result {result?.Result.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "none"}, " +
+            $"{items.Count} blocked, {drops.Count} dropped, {took.ElapsedMilliseconds} ms");
         if (LinkPolicy.SamePath(path, active)) Apply();
         return record;
     }
