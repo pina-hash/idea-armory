@@ -11,6 +11,8 @@ public sealed class CheckOutTests
 {
     private const string Bracket = "Robot 2027/Drivetrain/Bracket.SLDPRT";
 
+    private static List<Armory.Telemetry.FlightEvent> Since(Computer c, long sequence) => c.Flight.Snapshot().Where(e => e.Sequence > sequence).ToList();
+
     private static void NoViolations(params Computer[] computers)
     {
         foreach (var c in computers)
@@ -744,6 +746,239 @@ public sealed class CheckOutTests
         Assert.Contains(Alex + "|lock broken", await t.SideAuthors(file)); // the bytes the check in would have shared are kept
         Assert.False(t.A.Disk.IsReadOnly(Plate));
         Assert.Equal("Checked out by you", Assert.Single(t.A.Engine.View.MyFiles).Checkout.Label);
+        NoViolations(t.A);
+    }
+
+    // ---- Check in when closed (feedback N4) --------------------------------------------------
+
+    // Feedback N4, as it happened on IDEA-06 in 0.3.1: SolidWorks holds a checked-out part open
+    // for writing, the student saves and clicks Check in. The scan can't read the part and kept
+    // its old hash, so the check in let the lock go with nothing uploaded ("Checked in
+    // Plate.SLDPRT."), SolidWorks went on saving through its handle, and once it closed, the
+    // saves were put aside as a kept copy and the old shared version was written over them. This
+    // failed before 0.3.3 (disk 'v1', server still v1) and passes since.
+    [PostgresFact]
+    public async Task Check_in_while_SolidWorks_holds_the_file_never_loses_the_saved_edits()
+    {
+        await using var t = await TeamAsync();
+        t.A.Write(Plate, "v1");
+        await t.A.SyncAsync();
+        var file = await t.FileId("Plate.SLDPRT");
+        Assert.True((await t.A.CheckOutAsync(Plate)).Ok);
+        Assert.False(t.A.Disk.IsReadOnly(Plate));
+        t.A.Disk.Hold(Plate);
+        t.A.Save(Plate, "Alex's edits");
+        await t.A.SyncAsync(); // a loop pass while it is open
+        var answer = await t.A.CheckInAsync(Plate);
+        await t.A.SyncAsync(); // a loop pass, still open
+        t.A.Disk.Unhold(Plate);
+        await t.A.SyncAsync();
+        var summary = $"answer '{answer.Message}', disk '{t.A.Text(Plate)}', kept copies [{string.Join("; ", await t.SideAuthors(file))}]";
+        // The edits are never replaced on disk by the older shared version...
+        Assert.True(t.A.Text(Plate) == "Alex's edits" || await t.CurrentHash(file) == Hash("Alex's edits"), summary);
+        // ...and "Checked in" is only said when the edits are the shared version.
+        if (answer.Ok && answer.Message.StartsWith("Checked in", StringComparison.Ordinal))
+            Assert.True(await t.CurrentHash(file) == Hash("Alex's edits"), summary);
+        Assert.Equal(Hash("Alex's edits"), await t.CurrentHash(file));
+        Assert.DoesNotContain(Alex + "|changed without a check out", await t.SideAuthors(file));
+        NoViolations(t.A);
+    }
+
+    // The check in waits while SolidWorks has the part: the lock stays, the file stays writable
+    // (SolidWorks can go on saving), the window says so in one sentence and shows it as
+    // checking in when closed, and the first pass after it is closed shares the last save and
+    // lets the lock go. Nothing is ever said to be checked in before it is.
+    [PostgresFact]
+    public async Task A_check_in_while_SolidWorks_holds_the_file_waits_and_then_shares_the_saved_edits()
+    {
+        await using var t = await TeamAsync();
+        t.A.Write(Plate, "v1");
+        await t.A.SyncAsync();
+        await t.B.SyncAsync();
+        var file = await t.FileId("Plate.SLDPRT");
+        Assert.True((await t.A.CheckOutAsync(Plate)).Ok);
+        t.A.Disk.Hold(Plate);
+        t.A.Save(Plate, "edit 1");
+        await t.A.SyncAsync();
+        var before = t.A.Flight.Recorded;
+        var answer = await t.A.CheckInAsync(Plate);
+        Assert.True(answer.Ok);
+        Assert.Equal("Plate.SLDPRT is open in SolidWorks. Save it there and close it; Armory checks it in as soon as it's closed.", answer.Message);
+        Assert.Equal((1L, 1L, Alex), (await t.Versions(file), await t.LiveLocks(file), await t.Holder(file)));
+        Assert.False(t.A.Disk.IsReadOnly(Plate)); // SolidWorks can go on saving
+        var mine = Assert.Single(t.A.Engine.View.MyFiles);
+        Assert.Equal((FileStatuses.CheckingInWhenClosed, "Checks in as soon as you close it in SolidWorks."), (mine.Status, mine.Note));
+        Assert.Equal(FileStatuses.CheckingInWhenClosed, t.A.Row(Plate).Status);
+        // More saves while it is open, and loop passes: still waiting, nothing shared, nothing kept aside.
+        t.A.Save(Plate, "edit 2");
+        await t.A.SyncTimesAsync(2);
+        Assert.Equal((1L, 1L), (await t.Versions(file), await t.LiveLocks(file)));
+        Assert.False(t.A.Disk.IsReadOnly(Plate));
+        Assert.Single(Since(t.A, before), e => e.Kind == Armory.Telemetry.FlightKind.Note && e.Name == "checkInWaits" && e.Detail == Plate + ": open");
+        Assert.DoesNotContain(Since(t.A, before), e => e.Kind == Armory.Telemetry.FlightKind.ReadOnlyBroken);
+        // Closed: the next pass shares the last save, then lets go.
+        t.A.Disk.Unhold(Plate);
+        await t.A.SyncAsync();
+        Assert.Equal((2L, 0L), (await t.Versions(file), await t.LiveLocks(file)));
+        Assert.Equal(Hash("edit 2"), await t.CurrentHash(file));
+        Assert.Equal("edit 2", t.A.Text(Plate));
+        Assert.True(t.A.Disk.IsReadOnly(Plate));
+        Assert.Empty(t.A.Engine.View.MyFiles);
+        Assert.Equal(FileStatuses.Synced, t.A.Row(Plate).Status);
+        Assert.DoesNotContain(await t.SideAuthors(file), s => s.EndsWith("|changed without a check out", StringComparison.Ordinal));
+        await t.B.SyncAsync();
+        Assert.Equal("edit 2", t.B.Text(Plate));
+        NoViolations(t.A, t.B);
+    }
+
+    // Check in all (or a folder): the closed files are checked in at once, in one batch; the ones
+    // SolidWorks has open wait, each checked in by the first pass after it is closed. Words say
+    // exactly how many of each.
+    [PostgresFact]
+    public async Task Check_in_all_checks_in_closed_files_and_waits_for_open_ones()
+    {
+        await using var t = await TeamAsync();
+        await ArmoryV3StandIn.ApplyCoreAsync(t.World.Database);
+        const string Parts = "Robot 2027/Intake";
+        string[] parts = [.. Enumerable.Range(1, 5).Select(i => $"{Parts}/Roller{i}.SLDPRT")];
+        foreach (var part in parts) t.A.Write(part, "v1 " + part);
+        await t.A.SyncAsync();
+        Assert.Equal("Checked out 5 files.", (await t.A.CheckOutAsync(Parts)).Message);
+        // Three saved and closed; two saved while SolidWorks still has them open.
+        foreach (var part in parts[..3]) t.A.Save(part, "edit " + part);
+        foreach (var part in parts[3..])
+        {
+            t.A.Disk.Hold(part);
+            t.A.Save(part, "edit " + part);
+        }
+        var answer = await t.A.CheckInAsync(Parts);
+        Assert.True(answer.Ok);
+        Assert.Equal("Checked in 3 of 5 files. 2 are open in SolidWorks: Armory checks them in as you close them.", answer.Message);
+        foreach (var part in parts)
+        {
+            var id = await t.FileId(part[(part.LastIndexOf('/') + 1)..]);
+            var open = Array.IndexOf(parts, part) >= 3;
+            Assert.Equal((open ? Hash("v1 " + part) : Hash("edit " + part), open ? 1L : 0L), (await t.CurrentHash(id), await t.LiveLocks(id)));
+            Assert.Equal(!open, t.A.Disk.IsReadOnly(part));
+        }
+        Assert.Equal([FileStatuses.CheckingInWhenClosed, FileStatuses.CheckingInWhenClosed], t.A.Engine.View.MyFiles.Select(f => f.Status));
+        // Each one as it is closed.
+        t.A.Disk.Unhold(parts[3]);
+        await t.A.SyncAsync();
+        Assert.Equal(parts[4], Assert.Single(t.A.Engine.View.MyFiles).Path);
+        t.A.Disk.Unhold(parts[4]);
+        await t.A.SyncAsync();
+        Assert.Empty(t.A.Engine.View.MyFiles);
+        foreach (var part in parts)
+        {
+            var id = await t.FileId(part[(part.LastIndexOf('/') + 1)..]);
+            Assert.Equal((Hash("edit " + part), 0L), (await t.CurrentHash(id), await t.LiveLocks(id)));
+            Assert.True(t.A.Disk.IsReadOnly(part));
+        }
+        Assert.Equal(0, await t.World.CountAsync("select count(*) from armory_side_versions where reason='changed without a check out'"));
+        // All of them open: no "Checked in 0 of 2".
+        Assert.Equal("Checked out 2 files.", (await t.A.CheckOutAsync(parts[0], parts[1])).Message);
+        t.A.Disk.Hold(parts[0]);
+        t.A.Disk.Hold(parts[1]);
+        Assert.Equal("These 2 files are open in SolidWorks. Save them there and close them; Armory checks each one in as soon as it's closed.",
+            (await t.A.CheckInAsync(parts[0], parts[1])).Message);
+        t.A.Disk.Unhold(parts[0]);
+        t.A.Disk.Unhold(parts[1]);
+        await t.A.SyncAsync();
+        Assert.Empty(t.A.Engine.View.MyFiles);
+        NoViolations(t.A);
+    }
+
+    // A check in never lets the lock go over bytes it could not read at that moment: not over
+    // the hash an earlier scan left for a file another program holds (a backup or a virus scan
+    // the open-file check does not see), nor when the file can't be read just before the
+    // release, nor when it changed since the scan. Each waits, and a later pass shares the bytes
+    // first and then lets go.
+    [PostgresFact]
+    public async Task A_check_in_never_lets_go_over_bytes_it_could_not_read()
+    {
+        await using var t = await TeamAsync();
+        t.A.Write(Plate, "v1");
+        await t.A.SyncAsync();
+        var file = await t.FileId("Plate.SLDPRT");
+
+        // Saved in SolidWorks, closed, and grabbed by another program before Armory read it.
+        Assert.True((await t.A.CheckOutAsync(Plate)).Ok);
+        t.A.Disk.Hold(Plate);
+        t.A.Save(Plate, "saved before the backup grabbed it");
+        await t.A.SyncAsync();
+        t.A.Disk.Unhold(Plate);
+        t.A.Disk.HoldUnreadable(Plate);
+        var answer = await t.A.CheckInAsync(Plate);
+        Assert.True(answer.Ok);
+        Assert.Equal("Armory couldn't read Plate.SLDPRT just now, so it is still checked out by you. Close any program that might be using it; Armory checks it in as soon as it can.", answer.Message);
+        await t.A.SyncAsync();
+        Assert.Equal((1L, 1L), (await t.Versions(file), await t.LiveLocks(file)));
+        var mine = Assert.Single(t.A.Engine.View.MyFiles);
+        Assert.Equal((FileStatuses.CheckingInWhenClosed, "Checks in as soon as Armory can read it. Close any program that might be using it."), (mine.Status, mine.Note));
+        t.A.Disk.Unhold(Plate);
+        await t.A.SyncAsync();
+        Assert.Equal((Hash("saved before the backup grabbed it"), 0L), (await t.CurrentHash(file), await t.LiveLocks(file)));
+        Assert.True(t.A.Disk.IsReadOnly(Plate));
+
+        // The scan read it, and it could not be read just before the release.
+        Assert.True((await t.A.CheckOutAsync(Plate)).Ok);
+        t.A.Engine.CrashPoint = p => { if (p == "after-capture") t.A.Disk.HoldUnreadable(Plate); };
+        Assert.StartsWith("Armory couldn't read Plate.SLDPRT just now", (await t.A.CheckInAsync(Plate)).Message);
+        t.A.Engine.CrashPoint = null;
+        Assert.Equal(1L, await t.LiveLocks(file));
+        t.A.Disk.Unhold(Plate);
+        await t.A.SyncAsync();
+        Assert.Equal(0L, await t.LiveLocks(file));
+
+        // Saved between the scan and the release: shared first, then let go.
+        Assert.True((await t.A.CheckOutAsync(Plate)).Ok);
+        t.A.Engine.CrashPoint = p => { if (p == "after-capture") t.A.Save(Plate, "saved just after the scan"); };
+        var late = await t.A.CheckInAsync(Plate);
+        t.A.Engine.CrashPoint = null;
+        Assert.False(late.Message.StartsWith("Checked in", StringComparison.Ordinal), late.Message);
+        Assert.Equal(1L, await t.LiveLocks(file));
+        await t.A.SyncAsync();
+        Assert.Equal((Hash("saved just after the scan"), 0L), (await t.CurrentHash(file), await t.LiveLocks(file)));
+        Assert.Equal("saved just after the scan", t.A.Text(Plate));
+        Assert.Equal(0, await t.World.CountAsync("select count(*) from armory_side_versions where reason='changed without a check out'"));
+        NoViolations(t.A);
+    }
+
+    // Undo of a file the scan could not read waits too: its bytes are unknown, so it is never put
+    // back over them. Once read, they are kept as a kept copy first (never discarded), then the
+    // shared version comes back and the lock goes.
+    [PostgresFact]
+    public async Task Undo_of_a_file_the_scan_could_not_read_waits()
+    {
+        await using var t = await TeamAsync();
+        t.A.Write(Plate, "v1");
+        await t.A.SyncAsync();
+        var file = await t.FileId("Plate.SLDPRT");
+        Assert.True((await t.A.CheckOutAsync(Plate)).Ok);
+        t.A.Disk.Hold(Plate);
+        t.A.Save(Plate, "an idea that did not work");
+        await t.A.SyncAsync();
+        // Open in SolidWorks: refused, as always.
+        Assert.Equal("Close Plate.SLDPRT in SolidWorks first.", (await t.A.UndoCheckOutAsync(Plate)).Message);
+        // Closed, and grabbed by another program before Armory read it (a loop pass sees it closed).
+        t.A.Disk.Unhold(Plate);
+        t.A.Disk.HoldUnreadable(Plate);
+        await t.A.SyncAsync();
+        var answer = await t.A.UndoCheckOutAsync(Plate);
+        Assert.True(answer.Ok, answer.Message);
+        Assert.Equal("Armory couldn't read Plate.SLDPRT just now, so it is still checked out by you. Close any program that might be using it; Armory undoes the check out as soon as it can.", answer.Message);
+        await t.A.SyncAsync();
+        Assert.Equal("an idea that did not work", t.A.Text(Plate));
+        Assert.Equal((1L, 0L), (await t.LiveLocks(file), await t.Sides(file)));
+        Assert.Equal("The check out is undone as soon as Armory can read it. Close any program that might be using it.", Assert.Single(t.A.Engine.View.MyFiles).Note);
+        t.A.Disk.Unhold(Plate);
+        await t.A.SyncAsync();
+        Assert.Equal("v1", t.A.Text(Plate));
+        Assert.True(t.A.Disk.IsReadOnly(Plate));
+        Assert.Equal((0L, 1L), (await t.LiveLocks(file), await t.Versions(file)));
+        Assert.Equal(1, await t.World.CountAsync("select count(*) from armory_side_versions where file_id=@f and content_sha256=@h and reason='kept when the check out was undone'",
+            ("f", file), ("h", Hash("an idea that did not work"))));
         NoViolations(t.A);
     }
 }

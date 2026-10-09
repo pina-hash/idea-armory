@@ -71,10 +71,13 @@ public static class SyncStates
 }
 public static class FileStatuses
 {
+    // CheckingInWhenClosed: checked out by you and asked to be checked in, but open in SolidWorks
+    // (or unreadable) now, so it is checked in as soon as it is closed (feedback N4).
     public const string Synced = "synced", Changed = "changed", Uploading = "uploading", Downloading = "downloading", Waiting = "waiting",
-        NewerWaiting = "newerWaiting", KeptCopy = "keptCopy", NotInArmory = "notInArmory", NotOnThisComputer = "notOnThisComputer";
+        NewerWaiting = "newerWaiting", KeptCopy = "keptCopy", NotInArmory = "notInArmory", NotOnThisComputer = "notOnThisComputer",
+        CheckingInWhenClosed = "checkingInWhenClosed";
     public static readonly IReadOnlySet<string> All = new HashSet<string>(StringComparer.Ordinal)
-        { Synced, Changed, Uploading, Downloading, Waiting, NewerWaiting, KeptCopy, NotInArmory, NotOnThisComputer };
+        { Synced, Changed, Uploading, Downloading, Waiting, NewerWaiting, KeptCopy, NotInArmory, NotOnThisComputer, CheckingInWhenClosed };
 }
 public static class CheckoutStates
 {

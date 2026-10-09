@@ -15,9 +15,16 @@ public sealed partial class SyncEngine
     private enum CheckOutOutcome { Unknown, Done, AlreadyMine, Held, Waiting, ChangedHere, CloseFirst, Removed, NotShared, CantRead, Refused }
     // armory_break_lock's refusal for a caller who may not (P0001, unchanged in 0233).
     internal const string TakeBackRefused = "only a mentor or cad_lead may break a lock";
-    private enum ReleaseOutcome { Unknown, Released, TakenBack, Refused }
+    // WaitingForClose: the file is open (SolidWorks has it), so the lock stays and the file stays
+    // writable until it is closed (CheckInStep.WaitForClose). CantRead: it could not be read just
+    // now (CheckInStep.ReadAgain). Either way the request stays and a later pass finishes it.
+    private enum ReleaseOutcome { Unknown, Released, TakenBack, Refused, WaitingForClose, CantRead }
     private readonly Dictionary<FileState, CheckOutOutcome> checkOutResults = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<FileState, ReleaseOutcome> releaseResults = new(ReferenceEqualityComparer.Instance);
+    // The files whose check in, undo or add's automatic check in the last pass's requests left
+    // waiting (open, or unreadable), by file id: the view shows a waiting check in as "Checking in
+    // when closed", and the flight recorder notes each one once when it starts to wait.
+    private readonly Dictionary<Guid, ReleaseOutcome> releasesWaiting = [];
     private readonly HashSet<string> dismissedPrompts = new(StringComparer.OrdinalIgnoreCase);
     internal const string PromptPrefix = "prompt:";
 
@@ -227,36 +234,51 @@ public sealed partial class SyncEngine
         finally { LeaveAction(); }
     }
 
+    // "Checked in" is said only of a file whose lock went after a read of it just now matched the
+    // shared version (CheckoutRules.NextCheckInStep): never of one still open or unreadable.
     private ActionResult ReleaseAnswer(List<(FileState State, VaultPath Path)> targets, bool undo, List<VaultPath> open, bool kept)
     {
         var done = targets.Where(t => releaseResults.GetValueOrDefault(t.State) == ReleaseOutcome.Released).ToList();
-        var pending = targets.Where(t => t.State.Request != CheckoutRequest.None).ToList();
+        var waiting = targets.Where(t => t.State.Request != CheckoutRequest.None && releaseResults.GetValueOrDefault(t.State) == ReleaseOutcome.WaitingForClose).ToList();
+        var unread = targets.Where(t => t.State.Request != CheckoutRequest.None && releaseResults.GetValueOrDefault(t.State) == ReleaseOutcome.CantRead).ToList();
+        var pending = targets.Where(t => t.State.Request != CheckoutRequest.None).Except(waiting).Except(unread).ToList();
         string message;
         if (targets.Count == 1 && open.Count == 0)
         {
             var (st, path) = targets[0];
             var outcome = releaseResults.GetValueOrDefault(st);
+            if (st.Request == CheckoutRequest.None && outcome is ReleaseOutcome.WaitingForClose or ReleaseOutcome.CantRead) outcome = ReleaseOutcome.Unknown;
             message = outcome switch
             {
                 ReleaseOutcome.Released when undo => kept ? $"Undid the check out of {path.Name}. Your changes are kept as your own copy." : $"Undid the check out of {path.Name}.",
                 ReleaseOutcome.Released => $"Checked in {path.Name}.",
                 ReleaseOutcome.TakenBack => $"{path.Name} was force checked in by a mentor before {(undo ? "the check out was undone" : "it was checked in")}. Your changes are kept in its history.",
                 ReleaseOutcome.Refused => $"{path.Name} can't be checked in. {st.Refusal} It stays checked out by you.",
+                // Feedback N4: SolidWorks keeps saving a part it has open, so it is checked in once closed.
+                ReleaseOutcome.WaitingForClose when undo => $"{path.Name} is open in SolidWorks. Close it there; Armory undoes the check out as soon as it's closed.",
+                ReleaseOutcome.WaitingForClose => $"{path.Name} is open in SolidWorks. Save it there and close it; Armory checks it in as soon as it's closed.",
+                ReleaseOutcome.CantRead => $"Armory couldn't read {path.Name} just now, so it is still checked out by you. Close any program that might be using it; Armory {(undo ? "undoes the check out" : "checks it in")} as soon as it can.",
                 _ when online != true => $"You're offline. {path.Name} is {(undo ? "put back" : "checked in")} as soon as this computer is back online.",
                 _ => $"Armory couldn't finish {(undo ? "undoing" : "checking in")} {path.Name} yet. It tries again by itself.",
             };
             return new(st.Request != CheckoutRequest.None || outcome == ReleaseOutcome.Released, message);
         }
+        if (!undo && done.Count == 0 && waiting.Count == targets.Count)
+            return new(true, $"These {targets.Count:N0} files are open in SolidWorks. Save them there and close them; Armory checks each one in as soon as it's closed.");
         message = undo
             ? (done.Count == targets.Count && open.Count == 0 ? $"Undid {Count(done.Count, "check out", "check outs")}." : $"Undid {done.Count:N0} of {Count(targets.Count + open.Count, "check out", "check outs")}.")
             : (done.Count == targets.Count ? $"Checked in {Count(done.Count, "file", "files")}." : $"Checked in {done.Count:N0} of {Count(targets.Count, "file", "files")}.");
         if (undo && kept) message += " Your changes are kept as your own copies.";
+        if (waiting.Count > 0)
+            message += $" {waiting.Count:N0} {(waiting.Count == 1 ? "is" : "are")} open in SolidWorks: Armory {(undo ? "undoes" : "checks")} {(waiting.Count == 1 ? "it" : "them")}{(undo ? "" : " in")} as you close {(waiting.Count == 1 ? "it" : "them")}.";
+        if (unread.Count > 0)
+            message += $" Armory couldn't read {unread.Count:N0} of them just now. Close any program that might be using {(unread.Count == 1 ? "it" : "them")}; Armory {(undo ? "undoes" : "checks")} {(unread.Count == 1 ? "it" : "them")}{(undo ? "" : " in")} as soon as it can.";
         if (pending.Count > 0)
             message += online != true ? $" The other {Count(pending.Count, "file finishes", "files finish")} when this computer is back online." : $" Armory finishes the other {Count(pending.Count, "file", "files")} by itself.";
         var refusedCount = targets.Count(t => releaseResults.GetValueOrDefault(t.State) == ReleaseOutcome.Refused);
         if (refusedCount > 0) message += $" {Count(refusedCount, "file", "files")} can't be uploaded and {(refusedCount == 1 ? "stays" : "stay")} checked out by you.";
         if (open.Count > 0) message += $" Close {(open.Count == 1 ? open[0].Name : Count(open.Count, "file", "files"))} in SolidWorks first to undo {(open.Count == 1 ? "it" : "them")}.";
-        return new(done.Count > 0 || pending.Count > 0, message);
+        return new(done.Count > 0 || pending.Count + waiting.Count + unread.Count > 0, message);
     }
 
     // Force check in (armory_break_lock; "take back" until v0.2.1), when the server says can_take_back
@@ -561,14 +583,20 @@ public sealed partial class SyncEngine
     // After the plans ran and the server was read again: check ins, undos, closed adds and
     // locks taken only for a move or a removal let their lock go once the file is clean, and
     // asked-for check outs take theirs. File by file in path order, each lock to let go is made
-    // ready (read-only first) and each asked-for check out is noted; the check outs are then
-    // taken, and once the releases' in-flight records are saved together (once), the releases
-    // are sent, both EngineOptions.TransferConcurrency at a time like the units. What a check in
-    // or an add waits for shows as "Checking in 412 of 4,900 files" in the upload direction.
+    // ready and each asked-for check out is noted. Whether the files are open is asked once for
+    // the check outs and the check ins together; the check outs are then taken. A check in, an
+    // undo or an add's automatic check in of a file on this disk is then decided by a read of
+    // the file (ReadBeforeReleaseAsync, feedback N4): never while it is open, never over bytes
+    // not read just now. Once the releases' in-flight records are saved together (once), the
+    // releases are sent, both EngineOptions.TransferConcurrency at a time like the units. What a
+    // check in or an add waits for shows as "Checking in 412 of 4,900 files" in the upload direction.
     private async Task FinishRequestsAsync(CancellationToken ct)
     {
         List<(FileState State, Inflight Flight)> releases = [];
+        List<ReleaseCheck> checks = [];
         List<FileState> checkOuts = [];
+        waitedBefore = new(releasesWaiting);
+        releasesWaiting.Clear();
         foreach (var st in state.Files.Values.ToArray())
         {
             try
@@ -577,7 +605,7 @@ public sealed partial class SyncEngine
                 // a check in or undo waiting on a lock it no longer holds is over.
                 if (st.CheckOut is null)
                 {
-                    if (PrepareRelease(st) is { } flight) releases.Add((st, flight));
+                    if (PrepareRelease(st, checks) is { } flight) releases.Add((st, flight));
                 }
                 else
                 {
@@ -596,9 +624,12 @@ public sealed partial class SyncEngine
         checkOutsLogged = checkOuts.Count;
         List<VaultPath> onDisk = [];
         foreach (var st in checkOuts) if (TryLocal(st.Path, out var here)) onDisk.Add(here.Path);
-        // Only while the check outs are decided: nothing after this writes on what it says.
-        using (KnowOpen(onDisk))
+        var open = new HashSet<ReleaseCheck>(ReferenceEqualityComparer.Instance);
+        // Only while the check outs are decided (and the check ins' files are asked about):
+        // nothing after this writes on what it says.
+        using (KnowOpen(onDisk.Concat(checks.Select(c => c.File.Path))))
         {
+            foreach (var check in checks) if (IsOpenNow(check.File.Path)) open.Add(check);
             await RunConcurrentlyAsync(checkOuts, async (st, token) =>
             {
                 try { await FinishCheckOutAsync(st, token, toLock); }
@@ -609,6 +640,8 @@ public sealed partial class SyncEngine
             }, notStarted: null, ct);
         }
         if (toLock is { Count: > 0 } && online == true) await LockBatchAsync(toLock, ct);
+        await ReadBeforeReleaseAsync(checks, open, releases, ct);
+        if (releasesWaiting.Count + waitedBefore.Count > 0) viewWanted = true;
         foreach (var (st, _) in releases)
             if (st.Request == CheckoutRequest.CheckIn || (st.AutoCheckIn && st.Request == CheckoutRequest.None && !st.TransientLock)) activity.Expect(ActivityTracker.CheckIn, st.Path, 0);
         if (releases.Count > 0 && online == true) await FlushAsync();
@@ -641,9 +674,100 @@ public sealed partial class SyncEngine
         }, ct);
     }
 
-    // A check in, an undo, a closed add or a lock held only for a move or a removal, once the file
-    // is clean: made read-only, and its release recorded in flight (null when it is not ready).
-    private Inflight? PrepareRelease(FileState st)
+    // A check in, an undo or an add's automatic check in of a file on this disk that the server
+    // still has: RecordPath is where its record is, File where it is on disk now (as this pass's
+    // scan found it), Clean whether that scan found the shared version and no save waiting.
+    private sealed record ReleaseCheck(FileState State, VaultPath RecordPath, LocalFile File, Guid Id, RemoteLock Held, bool Clean);
+
+    // How many files the running lines last said were being read before a check in (once, not every pass).
+    private int checkInsLogged;
+    // The releases that were waiting when this pass's requests started (releasesWaiting before).
+    private Dictionary<Guid, ReleaseOutcome> waitedBefore = [];
+
+    // CheckoutRules.NextCheckInStep for each release a read decides (feedback N4). An open file
+    // keeps its lock and its request, and stays writable (DesiredOwnership), so SolidWorks can go
+    // on saving it; the first pass after it closes shares what was saved and then lets go
+    // ("check in when closed"). A file the scan could not read is never let go over what an
+    // earlier scan read. Every other file is made read-only first, so nothing can open it for
+    // writing between the read and the release, then read where it is now: only the shared
+    // version lets the lock go. Bytes that changed since the scan wait for the next pass, which
+    // shares them first (or keeps them as a kept copy, for an undo).
+    private async Task ReadBeforeReleaseAsync(List<ReleaseCheck> checks, HashSet<ReleaseCheck> open, List<(FileState State, Inflight Flight)> releases, CancellationToken ct)
+    {
+        List<ReleaseCheck> toRead = [];
+        foreach (var check in checks)
+        {
+            var (st, file) = (check.State, check.File);
+            var isOpen = open.Contains(check);
+            // Bytes the scan found changed are the plan's to share first: this pass's plan tried.
+            if (!isOpen && !check.Clean) continue;
+            switch (CheckoutRules.NextCheckInStep(st.BaseHash, file.Hash, read: !file.Unread, isOpen))
+            {
+                case CheckInStep.WaitForClose: Wait(check, ReleaseOutcome.WaitingForClose); continue;
+                // The scan's entry is the last one it could read, not the disk's now.
+                case CheckInStep.ReadAgain: Wait(check, ReleaseOutcome.CantRead); continue;
+            }
+            toRead.Add(check);
+        }
+        if (toRead.Count > 1 && toRead.Count != checkInsLogged) activity.Log($"Getting {Count(toRead.Count, "file", "files")} ready to check in");
+        checkInsLogged = toRead.Count;
+        var ready = new Inflight?[toRead.Count];
+        await RunConcurrentlyAsync([.. toRead.Select((check, i) => (Check: check, Index: i))], async (item, token) =>
+        {
+            try { ready[item.Index] = await ReadyToReleaseAsync(item.Check, token); }
+            catch (Exception error) when (error is ArmoryClientException or IOException or UnauthorizedAccessException)
+            { FileProblem(item.Check.State.Path, error); }
+            catch (Exception error) when (StopSaving(error)) { throw; }
+        }, notStarted: null, ct);
+        // In path order, as the scan listed them.
+        for (var i = 0; i < toRead.Count; i++) if (ready[i] is { } flight) releases.Add((toRead[i].State, flight));
+    }
+
+    // Read-only first (a bit that can't be set now keeps the lock until a later pass can set it),
+    // then the bytes where the file is now, hashed: the release is recorded in flight only when
+    // they are the shared version.
+    private async Task<Inflight?> ReadyToReleaseAsync(ReleaseCheck check, CancellationToken ct)
+    {
+        var st = check.State;
+        if (!SetAttribute(check.RecordPath, st, LockOwnership.Free)) return null;
+        string? hash = null;
+        var read = true;
+        try
+        {
+            await using var stream = fs.OpenRead(check.File.Path);
+            hash = await ContentAddress.ComputeAsync(stream, ct);
+        }
+        catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException) { } // gone since the scan: the removal goes first
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            read = false;
+            deps.Log?.Invoke($"check in: {check.File.Path}: {error.Message}");
+        }
+        switch (CheckoutRules.NextCheckInStep(st.BaseHash, hash, read, isOpen: false))
+        {
+            case CheckInStep.LetGo: return ReleaseFlight(st, check.Id, check.Held);
+            case CheckInStep.ReadAgain: Wait(check, ReleaseOutcome.CantRead); return null;
+            default: return null; // CommitFirst: saved since the scan; the next pass shares it, then lets go
+        }
+    }
+
+    // A release that waits (the file is open, or could not be read): its request stays. The
+    // flight recorder notes it once, when it starts to wait.
+    private void Wait(ReleaseCheck check, ReleaseOutcome outcome)
+    {
+        var st = check.State;
+        if (st.Request != CheckoutRequest.None) releaseResults[st] = outcome;
+        releasesWaiting[check.Id] = outcome;
+        if (waitedBefore.GetValueOrDefault(check.Id) != outcome)
+            flight?.Note("checkInWaits", check.File.Path.Value + (outcome == ReleaseOutcome.WaitingForClose ? ": open" : ": unreadable"));
+    }
+
+    // A check in, an undo, a closed add or a lock held only for a move or a removal: its release
+    // recorded in flight once the file is clean and read-only (null when it is not ready). A
+    // check in, an undo or an add's automatic check in of a file on this disk is decided by a read
+    // of it instead (added to checks): this pass's scan keeps the last hash it read of a file
+    // another program holds, so it never decides alone (feedback N4).
+    private Inflight? PrepareRelease(FileState st, List<ReleaseCheck> checks)
     {
         if (st.Inflight is not null || st.FileId is not { } id || !remoteById.TryGetValue(id, out var remote)) return null;
         var asked = st.Request != CheckoutRequest.None || st.AutoCheckIn || st.TransientLock;
@@ -659,7 +783,6 @@ public sealed partial class SyncEngine
         if (!VaultPath.TryCreate(st.Path, out var path, out _, options.VaultRoot)) return null;
         // A removed file has nothing left to check out, whoever's lock removed it.
         if (!asked && !remote.File.Deleted) return null;
-        if (st.AutoCheckIn && st.Request == CheckoutRequest.None && !st.TransientLock && !remote.File.Deleted && IsOpenNow(TryLocal(st.Path, out var where) ? where.Path : path)) return null; // an add stays checked out while open
         if (state.Moves.Any(m => m.FileId == id) || st.LocalMoveTo is not null) return null;
         // Bytes Armory can't take can never be checked in: the file stays checked out.
         if (st.RefusalKind is GateKind or TooLargeKind && (st.Request == CheckoutRequest.CheckIn || st.AutoCheckIn))
@@ -674,11 +797,23 @@ public sealed partial class SyncEngine
         // is on disk: Core planned the file as nobody's, so bytes saved meanwhile are kept as a
         // kept copy and never wait on this lock.
         var transientOnly = st.TransientLock && st.Request == CheckoutRequest.None && !st.AutoCheckIn;
+        if (!transientOnly && !remote.File.Deleted && file is not null)
+        {
+            // Decided by a read of it, after the open question (an add stays checked out while
+            // it is open, and so now does a check in or an undo).
+            checks.Add(new(st, path, file, id, held, file.Hash == st.BaseHash && st.Entries.Count == 0));
+            return null;
+        }
         var clean = transientOnly || (remote.File.Deleted ? file is null : file?.Hash == st.BaseHash && st.Entries.Count == 0);
         if (!clean) return null;
         // Read-only before the lock goes, so the file is never writable without a check out. A
         // bit that can't be set now keeps the lock until a later pass can set it.
         if (file is not null && !remote.File.Deleted && !SetAttribute(path, st, LockOwnership.Free)) return null;
+        return ReleaseFlight(st, id, held);
+    }
+
+    private static Inflight ReleaseFlight(FileState st, Guid id, RemoteLock held)
+    {
         var flight = new Inflight("release", OperationIds.Derive("release", held.HolderDeviceId.ToString(), id.ToString(), held.AcquiredAt.UtcTicks.ToString(CultureInfo.InvariantCulture)),
             null, st.ProjectId, id, Device: held.HolderDeviceId);
         st.Inflight = flight;

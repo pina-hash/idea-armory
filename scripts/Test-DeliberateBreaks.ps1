@@ -66,6 +66,21 @@ $cases = @(
         Filter = 'Seeded_explicit_checkout_scenarios'
         Before = 'if (localHash is not null && localHash != baseRevision?.Hash) return CheckOutStep.KeepChangesFirst; // MUTATION: check out over unshared bytes'
         After = 'if (localHash is not null && baseRevision is null) return CheckOutStep.KeepChangesFirst; // MUTATION: check out over unshared bytes'
+    },
+    @{
+        # Feedback N4: a check in trusts the hash an earlier scan left for a file it could not read.
+        Name = 'explicit-check-in-over-bytes-not-read'
+        File = 'src/Armory.Core/Checkout.cs'
+        Filter = 'Seeded_explicit_checkout_scenarios'
+        Before = 'if (!read) return CheckInStep.ReadAgain; // MUTATION: let go over bytes not read'
+        After = 'if (!read && isOpen) return CheckInStep.ReadAgain; // MUTATION: let go over bytes not read'
+    },
+    @{
+        Name = 'explicit-check-in-while-open'
+        File = 'src/Armory.Core/Checkout.cs'
+        Filter = 'Seeded_explicit_checkout_scenarios'
+        Before = 'if (isOpen) return CheckInStep.WaitForClose; // MUTATION: let go while open'
+        After = 'if (isOpen && read && !read) return CheckInStep.WaitForClose; // MUTATION: let go while open'
     }
 )
 $results = @()

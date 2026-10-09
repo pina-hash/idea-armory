@@ -70,7 +70,9 @@ public sealed partial class SyncEngine
             if (st.CheckOut is not null) checkOuts++;
             if (st.Request == CheckoutRequest.CheckIn) checkIns++;
             if (st.Request == CheckoutRequest.Undo) undos++;
-            if (st.AutoCheckIn) autoCheckIns++;
+            // An add checked in once it is closed, and (feedback N4) a check in or an undo waiting
+            // for its file to close or to be read.
+            if (st.AutoCheckIn || (st.Request != CheckoutRequest.None && st.FileId is { } id && releasesWaiting.ContainsKey(id))) autoCheckIns++;
             if (st.TransientLock) transient++;
             if (st.LocalMoveTo is not null) moves++;
             if (st.Inflight is not null) inflight++;

@@ -47,7 +47,10 @@ uses a demo transport that answers from `wwwroot/demo/states.js`. See "The demo"
 - **File detail**: the file's display (its state and who has it), Open as the primary
   key, then Check out, Check out and open, Check in, Undo check out or Force check in as its
   state allows, Show in folder as a quiet link, Checked out (the person and computer,
-  or "Available. Check it out to make changes."), and the history.
+  or "Available. Check it out to make changes."), and the history. Left for the page (0.3.3,
+  the host's half is in): the status `checkingInWhenClosed` gets its chip ("Checks in when
+  closed", tone look) in the page's status words; until then such a row shows no chip
+  (`MyFileView.note` carries the words).
 - **Settings** is a sheet over Home with exactly the folder (and Change), Start Armory
   when I sign in, and the theme.
 - **The small dialog** (`<dialog id="ask">`) asks New folder, Rename folder, Delete
@@ -166,6 +169,10 @@ CheckoutView {
 }
 
 MyFileView { fileId: string | null, path: string, name: string, project: string, status: FileStatus, note: string | null, checkout: CheckoutView }
+  // note: what is under way for it, or null: "Checking in.", "Undoing the check out.", "Checks in as
+  // soon as you close it in SolidWorks." (0.3.3, with status checkingInWhenClosed), "Checks in as soon
+  // as Armory can read it. Close any program that might be using it.", "You added it while it was
+  // open. It is checked in by itself when you close it.", or the offline words.
 ProjectView {
   id: string, name: string,
   archived: boolean,                // shown as "Archived. It no longer updates." with no keys
@@ -187,6 +194,8 @@ FileRowView {
 }
 FileStatus = "synced" | "changed" | "uploading" | "downloading" | "waiting" | "newerWaiting"
            | "keptCopy" | "notInArmory" | "notOnThisComputer"
+           | "checkingInWhenClosed"   // 0.3.3: checked out by you and asked to be checked in, but open in
+                                      // SolidWorks (or unreadable) now; checked in as soon as it is closed
 SettingsView { vaultRoot: string, startAtSignIn: boolean, theme: "system" | "idea" | "spaceWhite" }
 
 FileDetailView {
@@ -259,7 +268,7 @@ replaces all of it. The spinner holds still under `prefers-reduced-motion`.
 | `launchFile` | `path`, `requestId` | Open (rows, File detail, a notice) | opens the file in its own program (SolidWorks for a part); refuses programs and scripts |
 | `showInFolder` | `path` | Show in folder, a row for a file that isn't in Armory | opens File Explorer with the file selected |
 | `checkOut` | `paths`, `open`, `requestId` | Check out (a file row, File detail, the selection bar), Check out and open on File detail and Check out and reopen on the question (`open: true`), Check out all after the small dialog (the folder's path) | takes each file to change it, makes it writable here, downloads a newer version first; with `open`, then opens it (asking first for SolidWorks to close it, if it has it open) |
-| `checkIn` | `paths`, `requestId` | Check in (a file row, File detail, My files, the selection bar), Check in all | uploads the changes, makes the file read-only, lets it go |
+| `checkIn` | `paths`, `requestId` | Check in (a file row, File detail, My files, the selection bar), Check in all | uploads the changes, makes the file read-only, reads it again and lets it go only over what it shared; a file open in SolidWorks stays checked out and writable and is checked in as soon as it is closed (0.3.3): "Plate.SLDPRT is open in SolidWorks. Save it there and close it; Armory checks it in as soon as it's closed.", "Checked in 12 of 15 files. 3 are open in SolidWorks: Armory checks them in as you close them." |
 | `undoCheckOut` | `paths`, `requestId` | Undo check out (File detail, the selection bar) | puts back the version from before the check out (changes are kept in the history), lets it go |
 | `takeBack` | `fileId`, `requestId` | Force check in of one file (a file row, File detail, the selection bar), after the small dialog asks (mentors and CAD leads) | ends the check out for its holder (the type keeps its old name); anything they hadn't checked in is kept as their own copy |
 | `takeBackAll` | `fileIds`, `requestId` | Force check in of more than one file (Force check in all, the selection bar), after the small dialog asks; at most 20,000 ids | one action: each lock broken as for one file (16 at a time), then one pass for all of them, and one sentence back (since 0.3.1; before, the page sent one `takeBack` per file and each ran a whole pass) |

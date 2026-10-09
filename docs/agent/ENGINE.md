@@ -154,8 +154,12 @@ A pass has four phases. A, B and D run one step at a time; C moves files several
    undo and a closed add let their lock go once the file is clean, and a lock taken only for
    a move or a removal as soon as that is done, whatever is on disk; always read-only first,
    then the release, and a read-only bit that can't be set keeps the lock until a later pass
-   can set it. An asked-for check out keeps any lock this computer holds and otherwise takes
-   its own (see Check out). The check outs are then taken, and the releases' in-flight
+   can set it. A check in, an undo or an add of a file on this disk is decided by a read of
+   it, never by the scan alone: never while it is open, never over bytes not read just now
+   ("Check in when closed", under Check out). An asked-for check out keeps any lock this
+   computer holds and otherwise takes its own (see Check out). Whether the files are open is
+   asked once for the check outs and the check ins together. The check outs are then taken,
+   the check ins' files read, and the releases' in-flight
    records saved together, once, and the releases sent, both `TransferConcurrency` at a
    time like the units (a crash or the connection stops them as it stops the units). The
    locks a check in or an add lets go of show in the upload direction as "Checking in 412 of
@@ -167,7 +171,9 @@ A pass has four phases. A, B and D run one step at a time; C moves files several
    last knew (its own lock changes of the pass included; offline since the start, the
    ownership it last applied, and none known means nobody's): every file the server has a
    live version of is read-only unless this computer has it checked out; a file it is
-   letting go of is read-only already. Files the server does
+   letting go of is read-only already, unless it is open (a check in waiting for it to close
+   keeps it writable). A file the scan could not read is left as it is until a pass can read
+   it (its read-only bit in the scan is the last one read). Files the server does
    not have (not added yet, a refused name, a release-gate draft, too large) are never
    touched. A bit the scan finds cleared is set again. One batch per pass
    (`ApplyLockAttributes`, one manifest write); a download sets the bit on the staged copy
@@ -360,13 +366,16 @@ on the next pass, through the crash points every write already has (`before-lock
   out is refused and the check in or undo still waits). A lock taken just before the
   connection dropped is a check out all the same, and the answer says so.
 - **Check in** (`Request = CheckIn`): Core uploads the bytes on disk if they changed (a commit
-  on the base, under this computer's lock); then the file is made read-only; then the lock is
-  released. Offline, the request waits and finishes when the computer is back online. Bytes
-  Armory can't take (the release gate, too large) can't be checked in: the request is
-  dropped and the file stays checked out.
+  on the base, under this computer's lock); then the file is made read-only, read again, and
+  the lock is released only over the shared version (`CheckoutRules.NextCheckInStep`, 0.3.3).
+  A file open in SolidWorks is checked in when it is closed ("Check in when closed" below).
+  Offline, the request waits and finishes when the computer is back online. Bytes Armory
+  can't take (the release gate, too large) can't be checked in: the request is dropped and
+  the file stays checked out.
 - **Undo check out** (`Request = Undo`): refused while the file is open. Core keeps unsent
   bytes as a kept copy (`SideVersionReason.UndoCheckOut`), the shared version is put back,
-  the file is made read-only, then the lock is released.
+  the file is made read-only, then the lock is released. Bytes the scan could not read are
+  never put back over: the undo waits until a pass can read them, and then keeps them first.
 - **Saves while checked out** (D1): each is kept on the server at the next online pass as a
   kept copy, "saved while checked out", so every save is on the server; the shared file
   advances only at check in.
@@ -397,6 +406,83 @@ on the next pass, through the crash points every write already has (`before-lock
   (`LockOwnership.Free`), so bytes saved without a check out before a rename are one kept copy
   ("changed without a check out") and the checked-in version comes back, never a shared
   version nobody checked in.
+
+### Check in when closed (0.3.3, feedback N4)
+
+The field report (IDEA-06, 0.3.1): "After checking out a component, then editing it, then
+checking it back in, the part isn't saving the changes. The file on my computer is
+overwritten by the previous version." SolidWorks holds a part it opened while it was
+writable with a write handle. The Windows scan opens files sharing read and delete only, so
+it could not open the part, and it carried the previous scan's entry over (old hash, old
+read-only bit) with nothing to say so. The check in compared that stale hash with the shared
+version, found it "clean", made the file read-only (the bit is set through a handle that a
+write handle does not block), let the lock go with nothing uploaded and answered "Checked in
+Plate.SLDPRT." SolidWorks went on saving through its handle (the read-only bit is checked
+only when a file is opened). Once it closed, the next pass found changed bytes on a file
+nobody had checked out: it kept them as a kept copy ("changed without a check out") and put
+the old shared version back over the student's file. The same stale bit made every pass
+report the bit as cleared (the `readOnlyBroken` incidents). Nothing was destroyed (the kept
+copy is committed before the download), but the working copy was reverted.
+
+What holds since:
+
+- **The scan says what it could not read.** `LocalFile.Unread` (and
+  `LocalFileState.Unread` in `Armory.Platform.Windows`): the entry is the last one read, not
+  the disk's now. The first scan that can read the file again hashes it, whatever its size
+  and time say (docs/platform/local-changes.md).
+- **A lock is let go only over bytes read at that moment, and never while the file is
+  open.** A check in, an undo, a Check in all, a batch release and an add's automatic check
+  in all go through `PrepareRelease` and `ReadBeforeReleaseAsync`: whether the files are open
+  is asked once for all of them (with the check outs, one `KnowOpen` scope); an open file
+  waits (`CheckInStep.WaitForClose`); a file the scan could not read waits
+  (`ReadAgain`); every other file is made read-only first, then read where it is now and
+  hashed, and its release is recorded in flight only when those bytes are the shared version
+  (`LetGo`). Bytes saved since the scan (`CommitFirst`) wait for the next pass, which shares
+  them first (or keeps them, for an undo). A read that fails waits (`ReadAgain`). A lock taken
+  only for a move or a removal, and a removed file's, are let go as before (nothing on disk is
+  shared by them).
+- **Read-only before the read.** So nothing can open the file for writing between the read
+  and the release. The limit stays explicit, as for replacement (docs/platform/safe-replace.md):
+  a program that already had the file open for writing without the scan or the read seeing it
+  (one that shares reading, unlike SolidWorks) can still write after the release. Only
+  coordination with the application (the SolidWorks add-in) closes that.
+- **A waiting check in keeps the file writable.** `DesiredOwnership` makes a file read-only
+  for a pending check in, undo or add only while it is closed, so SolidWorks can go on saving
+  an open one; the request stays, and the first pass after it closes commits what was saved
+  and then lets go ("check in when closed", the same rule an add has always had).
+- **`ApplyReadOnly` leaves a file the scan could not read as it is**: no `readOnlyBroken` from
+  a stale bit, and no attribute applied over what wasn't read; a later pass that can read it
+  applies the rule. A bit someone really cleared is still recorded and put back.
+- **Words.** "Checked in" is said only of a file whose lock went after such a read. One file
+  open: "Plate.SLDPRT is open in SolidWorks. Save it there and close it; Armory checks it in as
+  soon as it's closed." (an undo: "Close it there; Armory undoes the check out as soon as it's
+  closed."). One file unreadable: "Armory couldn't read Plate.SLDPRT just now, so it is still
+  checked out by you. Close any program that might be using it; Armory checks it in as soon as
+  it can." Many: "Checked in 12 of 15 files. 3 are open in SolidWorks: Armory checks them in
+  as you close them." and "Armory couldn't read 2 of them just now. Close any program that
+  might be using them; Armory checks them in as soon as it can."; all of them open: "These 15
+  files are open in SolidWorks. Save them there and close them; Armory checks each one in as
+  soon as it's closed." A waiting request answers `ok: true` (it is under way).
+- **The view.** A file this computer has checked out whose check in waits shows the status
+  `checkingInWhenClosed` (its row and My files), never `synced`; its My files note says "Checks
+  in as soon as you close it in SolidWorks." (or "... as soon as Armory can read it. Close any
+  program that might be using it."; an undo: "The check out is undone as soon as ..."). The
+  kept-copy card no longer says the student "saved without a check out": "It changed while it
+  wasn't checked out, so the checked-in version was put back. Your change is in its history."
+- **Telemetry.** Each release that starts to wait is noted once (`note`, name `checkInWaits`,
+  detail "<path>: open" or "<path>: unreadable"), and the snapshot's
+  `pendingRequests.checkInWhenClosed` counts waiting check ins and undos with the adds.
+
+Tests: `CheckOutTests.Check_in_while_SolidWorks_holds_the_file_never_loses_the_saved_edits`
+(the field report: it failed before 0.3.3 with the disk back at "v1"),
+`A_check_in_while_SolidWorks_holds_the_file_waits_and_then_shares_the_saved_edits`,
+`Check_in_all_checks_in_closed_files_and_waits_for_open_ones`,
+`A_check_in_never_lets_go_over_bytes_it_could_not_read`,
+`Undo_of_a_file_the_scan_could_not_read_waits`,
+`TelemetryTests.An_unreadable_file_never_reports_readOnlyBroken`, Core's `CheckoutTests` (one
+per step of the rule) and the strengthened `CheckoutSimulationTests` (docs/core/simulation.md).
+The end-to-end file system models the write hold (`PortableVaultFileSystem.Hold`: open,
+unreadable, saves go through; `HoldUnreadable`: another program, not open).
 
 ### Every lock this computer holds is its check out (v0.2.1)
 

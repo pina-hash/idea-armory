@@ -189,10 +189,10 @@ public sealed partial class SyncEngine
                         "Someone else checked it in first. Your change is in its history.", Flavor: "conflict"));
                 else if (putBack && kept.Hash == file!.Hash)
                     Add(NoticeKinds.KeptCopy, new RawItem($"kept:{kept.VersionId}", st.FileId, st.Path,
-                        $"Saved without a check out. The checked-in version comes back when you close {name}.", Flavor: "waiting"));
+                        $"It changed while it wasn't checked out. The checked-in version comes back when you close {name}.", Flavor: "waiting"));
                 else
                     Add(NoticeKinds.KeptCopy, new RawItem($"kept:{kept.VersionId}", st.FileId, st.Path,
-                        "Saved without a check out, so the checked-in version was put back. Your change is in its history.", Flavor: "forced"));
+                        "It changed while it wasn't checked out, so the checked-in version was put back. Your change is in its history.", Flavor: "forced"));
             }
         }
         foreach (var group in groups.Values)
@@ -249,8 +249,8 @@ public sealed partial class SyncEngine
             NoticeKinds.KeptCopy => (items.Any(i => i.Flavor is "conflict" or "waiting") ? NoticeTones.Look : NoticeTones.Info,
                 n == 1 ? $"Your change to {name} was kept as your own copy" : $"Your changes to {n:N0} files were kept as your own copies",
                 n == 1 ? first.Detail ?? ""
-                    : items.All(i => i.Flavor == "forced") ? "They were saved without a check out, so the checked-in versions were put back. Nothing was lost: each change is in its file's history."
-                    : items.All(i => i.Flavor is "forced" or "waiting") ? "They were saved without a check out. The checked-in versions come back as you close them. Nothing was lost: each change is in its file's history."
+                    : items.All(i => i.Flavor == "forced") ? "They changed while they weren't checked out, so the checked-in versions were put back. Nothing was lost: each change is in its file's history."
+                    : items.All(i => i.Flavor is "forced" or "waiting") ? "They changed while they weren't checked out. The checked-in versions come back as you close them. Nothing was lost: each change is in its file's history."
                     : items.All(i => i.Flavor == "conflict") ? "Someone else checked these in first, so your changes were kept in each file's history. Nothing was lost. Ask your CAD lead which one to keep."
                     : "Nothing was lost: each change is in its file's history.", new NoticeActionView("OK", BridgeMessages.DismissNotice, [])),
             NoticeKinds.TakenBack => (NoticeTones.Look,
@@ -356,8 +356,16 @@ public sealed partial class SyncEngine
             else if (st.BaseHash is not null && (KnownOwnership(st) == LockOwnership.ThisDevice || st.AutoCheckIn))
                 (checkout, status) = (KnownCheckout(st), KnownStatus(st, file, LockOwnership.ThisDevice));
             else continue;
-            var note = st.Request == CheckoutRequest.CheckIn ? (online == true ? "Checking in." : "Checks in when this computer is back online.")
-                : st.Request == CheckoutRequest.Undo ? (online == true ? "Undoing the check out." : "The check out is undone when this computer is back online.")
+            // A request waiting for the file to close, or for Armory to read it (feedback N4).
+            var waits = releasesWaiting.GetValueOrDefault(id);
+            var note = st.Request == CheckoutRequest.CheckIn ? (online != true ? "Checks in when this computer is back online."
+                    : waits == ReleaseOutcome.WaitingForClose ? "Checks in as soon as you close it in SolidWorks."
+                    : waits == ReleaseOutcome.CantRead ? "Checks in as soon as Armory can read it. Close any program that might be using it."
+                    : "Checking in.")
+                : st.Request == CheckoutRequest.Undo ? (online != true ? "The check out is undone when this computer is back online."
+                    : waits == ReleaseOutcome.WaitingForClose ? "The check out is undone as soon as you close it in SolidWorks."
+                    : waits == ReleaseOutcome.CantRead ? "The check out is undone as soon as Armory can read it. Close any program that might be using it."
+                    : "Undoing the check out.")
                 : st.AutoCheckIn ? "You added it while it was open. It is checked in by itself when you close it."
                 : null;
             mine.Add(new MyFileView(id.ToString(), st.Path, NameOf(st.Path), ProjectName(st), status, note, checkout));
@@ -444,6 +452,10 @@ public sealed partial class SyncEngine
             return online == true ? FileStatuses.Uploading : FileStatuses.Waiting;
         }
         if (st?.Inflight is { Kind: "create" or "commit" or "side" or "archive" }) return FileStatuses.Uploading;
+        // Asked to be checked in, and open in SolidWorks (or unreadable) now: what is on disk is
+        // shared once it is closed, so it is never shown as up to date meanwhile (feedback N4).
+        if (st is { Request: CheckoutRequest.CheckIn, FileId: { } waiting } && ownership == LockOwnership.ThisDevice && releasesWaiting.ContainsKey(waiting))
+            return FileStatuses.CheckingInWhenClosed;
         if (st?.NewerWaiting == true)
             return file is not null && st.Preserved == file.Hash && remote.Current?.Hash == st.BaseHash ? FileStatuses.KeptCopy : FileStatuses.NewerWaiting;
         if (file is null) return remote.Current is null ? FileStatuses.Uploading : FileStatuses.NotOnThisComputer;

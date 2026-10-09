@@ -40,7 +40,7 @@
 	 * @typedef {'idle' | 'waitingForBrowser' | 'finishing' | 'failed'} ConnectPhase
 	 * @typedef {'synced' | 'syncing' | 'offline' | 'paused' | 'attention'} SyncState
 	 * @typedef {'synced' | 'changed' | 'uploading' | 'downloading' | 'waiting' | 'newerWaiting'
-	 *   | 'keptCopy' | 'notInArmory' | 'notOnThisComputer'} FileStatus
+	 *   | 'keptCopy' | 'notInArmory' | 'notOnThisComputer' | 'checkingInWhenClosed'} FileStatus
 	 * @typedef {'available' | 'mine' | 'other' | 'myOtherComputer'} CheckoutState
 	 * @typedef {'upload' | 'download' | 'move'} Direction
 	 * @typedef {'info' | 'look' | 'bad'} NoticeTone

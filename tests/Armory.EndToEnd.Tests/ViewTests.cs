@@ -106,7 +106,8 @@ public sealed class ViewTests
         var item = Assert.Single(card.Items);
         Assert.Equal(Plate, item.Path);
         Assert.Equal("Your change to Plate.SLDPRT was kept as your own copy", card.Title);
-        Assert.Equal("Saved without a check out. The checked-in version comes back when you close Plate.SLDPRT.", card.Detail);
+        // What happened, never who is to blame (feedback N4: Armory itself once let a lock go).
+        Assert.Equal("It changed while it wasn't checked out. The checked-in version comes back when you close Plate.SLDPRT.", card.Detail);
         Assert.Equal(NoticeTones.Look, card.Tone); // the checked-in version still waits for the file to close
         Assert.Equal(BridgeMessages.DismissNotice, card.Action!.Command);
         t.B.Close(Plate);
@@ -114,6 +115,7 @@ public sealed class ViewTests
         Assert.Equal("v1", t.B.Text(Plate));
         card = t.B.Card(NoticeKinds.KeptCopy)!;
         Assert.Equal(NoticeTones.Info, card.Tone); // news now: nothing waits on the student
+        Assert.Equal("It changed while it wasn't checked out, so the checked-in version was put back. Your change is in its history.", card.Detail);
         Assert.Equal(SyncStates.Synced, t.B.Engine.View.Sync.State);
         await t.B.Engine.DismissNoticeAsync(card.Key);
         await t.B.SyncAsync();
