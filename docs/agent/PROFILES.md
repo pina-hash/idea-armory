@@ -57,7 +57,7 @@ that for the time it is used:
   the Windows sign-in, so a part the last student left open can be the one Jordan's assembly uses.
 - If the computer's SolidWorks lists `C:\IDEA\Armory` under File Locations > Referenced Documents,
   that folder wins over Jordan's.
-- An assembly Jordan saves from his folder stores `C:\IDEA\Armory-jordan\...` paths. Other computers
+- An assembly Jordan saves from that own folder stores `C:\IDEA\Armory-jordan\...` paths. Other computers
   still open it (they find the parts in their own `C:\IDEA\Armory`), and the paths are put right the
   next time it is saved from `C:\IDEA\Armory`.
 

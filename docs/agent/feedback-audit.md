@@ -7,115 +7,115 @@ grouped: an incident row names every incident id (first 8 characters) it covers.
 date, version, device and note number. "Found" is the state at 0.3.2; "0.3.3" is the state now.
 Statuses: Done, Partly done, Not done, Not reproducible, Won't do (only for safety or cost, with why).
 
-Totals at 0.3.3: 105 In progress.
+Totals at 0.3.3: 99 Done, 2 Not reproducible, 4 Partly done.
 
 | Key | What | Who, device, version, date | Refs | Found | 0.3.3 | Where it is now, and how it was verified |
 |---|---|---|---|---|---|---|
-| [N1](#n1) | A styled tooltip on every button after about a second of hover | MR. PINA; DESKTOP-QH30N35; 0.3.2; 2026-10-09T05:59Z | N1 | Partly done | In progress | Pending. |
-| [N2](#n2) | Running lines say 'Sync finished' after every slice while hundreds of files remain | MR. PINA; DESKTOP-QH30N35; 0.3.2; 2026-10-09T05:54Z | N2,N3,7a6c7d95,c5dd91d2 | Not done | In progress | Pending. |
-| [N3](#n3) | A 1,400-file download stops and starts, showing 'Checking for changes' between batches | MR. PINA; DESKTOP-QH30N35; 0.3.2; 2026-10-09T05:53Z | N3,N2,7a6c7d95,c5dd91d2 | Not done | In progress | Pending. |
-| [N4](#n4) | Check in after editing a saved part does not save the changes; the file on disk is replaced by the previous version | Abraham Jette-Kouri; IDEA-06; 0.3.1 reported; reproduced at HEAD 8d90d63 (0.3.2); 2026-10-08 21:32Z to 23:16Z (feedback 23:16:27Z) | N4, 7352f99d, 25d938f6, e07af0ab, a6f9e941, 2cf39a10, 12ae9081, 6d145628, ee443a83 | Not done | In progress | Pending. |
-| [N5](#n5) | Let people organize files others have checked out; instructor override to check in others' files | Abraham Jette-Kouri; IDEA-06; 0.3.1; 2026-10-08T19:52:23Z (sent while 15 of his own Check in row clicks were still queued, see I-checkIn-IDEA-06-0.3.1) | N5 | Partly done | In progress | Pending. |
-| [N6](#n6) | No button or action should feel laggy | MR. PINA; IDEA-00; 0.3.1; 2026-10-08T19:33:45Z | N6, c5dd91d2 (reference only), all 22 slowAction incidents | Partly done | In progress | Pending. |
-| [N7](#n7) | Switching themes is slow and glitchy | Abraham Jette-Kouri; IDEA-06; 0.3.0; 2026-10-08T18:42:56Z | N7, b500df79 | Partly done | In progress | Pending. |
-| [N8](#n8) | Show progress and running lines during long operations | MR. PINA; IDEA-00; 0.3.1; 2026-10-08T18:37:27Z | N8, 58d06041, aa236105, c5dd91d2 | Partly done | In progress | Pending. |
-| [N9](#n9) | Bulk keys were under the 1,400-file list; the UI must handle thousands of files without confusion | MR. PINA; IDEA-00; 0.3.1; 2026-10-08T18:34:48Z | N9, 6d8e6ddc | Partly done | In progress | Pending. |
-| [N10](#n10) | Several students in one Armory folder on one computer, and a quick account switch | MR. PINA (apina@boscotech.edu); IDEA-00; 0.3.1 (note); 0.3.2 current; 2026-10-08T18:33:04Z | N10, 2d479aea, 87fa2b3d, 428a0f6f, 968cc0cd | Partly done | In progress | Pending. |
-| [N11](#n11) | After checking everything out, only a file list and no bulk keys | MR. PINA; IDEA-00; 0.3.1; 2026-10-08T18:31:32Z | N11, ed7dc8f8 | Done | In progress | Pending. |
-| [N12](#n12) | No way to bulk check in | MR. PINA; IDEA-00; 0.3.1; 2026-10-08T18:30:02Z | N12, 809ae174 | Done | In progress | Pending. |
-| [N13](#n13) | Send feedback said it could not send (feedback that had in fact been sent) | MR. PINA (IDEA-00); Abraham Jette-Kouri saw the same on IDEA-06 (N15, N5); IDEA-00, IDEA-06; 0.3.0, 0.3.1 (bug); 0.3.2 (fixed); 2026-10-08T17:52:46Z, 18:24:58Z, 19:52:23Z | N13, N14, N15, N5, 6be92c08, aa236105, 68bee25b, bcb16c24, 012e24c7, 2ab514eb, c5dd91d2 | Done | In progress | Pending. |
-| [N14](#n14) | Send feedback should match the website's (0235 contract) | MR. PINA (apina@boscotech.edu); IDEA-00; 0.3.1 (note); 0.3.2 current; 2026-10-08T18:25:47Z | N14 | Not done | In progress | Pending. |
-| [N15](#n15) | A thumbnail of each part | Abraham Jette-Kouri; IDEA-06; 0.3.0 (note); 0.3.2 current; 2026-10-08T17:52:46Z | N15 | Partly done | In progress | Pending. |
-| [I-checkIn-IDEA-00-0.3.1](#i-checkin-idea-00-0.3.1) | Folder check in of 1,424 files waited 14.8 s | MR. PINA; IDEA-00; 0.3.1; asked 2026-10-08T19:43:39.4Z answered 19:43:54.2Z | c2d5d46c | Partly done | In progress | Pending. |
-| [I-checkIn-IDEA-06-0.3.1](#i-checkin-idea-06-0.3.1) | Check in row clicks queued: 15 and 16 clicks answered one pass apart (up to 658 s) | Abraham Jette-Kouri; IDEA-06; 0.3.1; bcb16c24: 15 clicks 2026-10-08T19:47:32-19:47:37Z answered 19:48:24-19:56:33Z; ccf970d7/428a0f6f: 16 clicks 21:01:38-21:01:51Z answered 21:02:19-21:12:49Z; ee443a83: 23:09:37Z to 23:10:49Z | bcb16c24, ccf970d7, 428a0f6f, ee443a83 | Not done | In progress | Pending. |
-| [I-checkOut-IDEA-00-0.3.1](#i-checkout-idea-00-0.3.1) | Folder check out of 1,424 files waited 124-133 s | MR. PINA; IDEA-00; 0.3.1; aa236105 asked 2026-10-08T18:22:57Z answered 18:25:10.6Z; 68bee25b asked 18:35:22.8Z answered 18:37:27.3Z | aa236105, 68bee25b | Partly done | In progress | Pending. |
-| [I-checkOut-IDEA-06-0.3.1](#i-checkout-idea-06-0.3.1) | Check out waited 44-72 s (one file, and 16 files once) | Abraham Jette-Kouri; IDEA-06; 0.3.1; 2026-10-08T19:45:11Z, 20:17:39Z, 20:49:40Z, 22:38:35Z, 22:59:16Z | f4ea534f, ea2b2a2c, 968cc0cd, 6d145628, 12ae9081 | Partly done | In progress | Pending. |
-| [I-crash-DESKTOP-F41DB2R-0.3.1](#i-crash-desktop-f41db2r-0.3.1) | DESKTOP-F41DB2R 0.3.1 two crash reports: killed right after 'quitting' | MR. PINA; DESKTOP-F41DB2R; 0.3.1; 2026-10-08T22:01Z, 2026-10-09T00:12Z | 62f377c1, e5e6e9f3 | Partly done | In progress | Pending. |
-| [I-crash-IDEA-00-0.2.1](#i-crash-idea-00-0.2.1) | IDEA-00 0.2.1 'previous run ended unexpectedly' after quitting during a 39 s plan | MR. PINA; IDEA-00; 0.2.1; 2026-10-08T14:41Z | 7aa938ba | Partly done | In progress | Pending. |
-| [I-crash-IDEA-06-0.3.0](#i-crash-idea-06-0.3.0) | Crash 2ab514eb: the app was ended during a ~60 s pass after 'quitting' | Abraham Jette-Kouri; IDEA-06; 0.3.0; 2026-10-08T18:56Z | 2ab514eb, 030b06da | Partly done | In progress | Pending. |
-| [I-crash-IDEA-06-0.3.0-slowpa](#i-crash-idea-06-0.3.0-slowpa) | IDEA-06 0.3.0 crash report: killed 0-15 s after 'quitting' during a stale-marker scan or plan (sign-out) | Abraham Jette-Kouri; IDEA-06; 0.3.0; 2026-10-08T18:56Z | 2ab514eb, 184c9e24 | Partly done | In progress | Pending. |
-| [I-crash-IDEA-06-0.3.1](#i-crash-idea-06-0.3.1) | IDEA-06 (Seraj) crash report about a 0.2.0 run with no evidence | Seraj Arteaga; IDEA-06 (Seraj's computer); 0.2.0 run, reported by 0.3.1; 2026-10-08T19:06Z-20:52Z | 87fa2b3d | Not done | In progress | Pending. |
-| [I-launchFile-IDEA-06-0.3.1](#i-launchfile-idea-06-0.3.1) | Open (launchFile) waited 13-31 s | Abraham Jette-Kouri (3), Seraj Arteaga (2d479aea); IDEA-06; 0.3.1; 2026-10-08T19:31:52Z, 20:55:36Z, 21:29:29Z, 22:27:56Z | d5c6825d, 2d479aea, 1400e8b8, 4a444b9a | Partly done | In progress | Pending. |
-| [I-readOnlyBroken-IDEA-06-0.3.0](#i-readonlybroken-idea-06-0.3.0) | readOnlyBroken on Hook V3.SLDPRT right after a release | Abraham Jette-Kouri; IDEA-06; 0.3.0; 2026-10-08 17:52Z | 6be92c08 | Not done | In progress | Pending. |
-| [I-readOnlyBroken-IDEA-06-0.3.1](#i-readonlybroken-idea-06-0.3.1) | readOnlyBroken on Toparmredesign, Toparmredesignnoscrewpocket and SmallFlywheel V3 (12 incidents) | Abraham Jette-Kouri; IDEA-06; 0.3.1; 2026-10-08 21:12Z to 23:08Z | 1c1b1c5b, 012e24c7, a6f9e941, 7be63dcf, 40a07aa9, e0722b64, 88fc8771, 3aa1ef68, 7352f99d, 25d938f6, e07af0ab, 2cf39a10 | Not done | In progress | Pending. |
-| [I-slowAction-DESKTOP-QH30N35-0.3.2](#i-slowaction-desktop-qh30n35-0.3.2) | slowAction c5dd91d2: Check out of 1 file took 15.2 s on an idle computer | MR. PINA; DESKTOP-QH30N35; 0.3.2; 2026-10-09T05:55:56Z | c5dd91d2,N1,N3 | Not done | In progress | Pending. |
-| [I-slowAction-IDEA-06-0.3.1](#i-slowaction-idea-06-0.3.1) | Slow check in and check out actions on IDEA-06 (timeline evidence for N4) | Abraham Jette-Kouri; IDEA-06; 0.3.1; 2026-10-08 19:46Z to 23:10Z | f4ea534f, bcb16c24, ea2b2a2c, 968cc0cd, 428a0f6f, ccf970d7, 6d145628, 12ae9081, ee443a83 | Partly done | In progress | Pending. |
-| [I-slowPass-DESKTOP-F41DB2R-0.3.1](#i-slowpass-desktop-f41db2r-0.3.1) | DESKTOP-F41DB2R 0.3.1 passes of 62-90 s during the first full download and after a restart | MR. PINA; DESKTOP-F41DB2R; 0.3.1; 2026-10-08T21:03Z-22:09Z | N3, 4a5a4860, d3e64083, 1de30671, 8adfb590 | Partly done | In progress | Pending. |
-| [I-slowPass-DESKTOP-QH30N35-0.3.2](#i-slowpass-desktop-qh30n35-0.3.2) | slowPass 7a6c7d95: a 94.5 s loop pass held by one straggling 31.5 MB download | MR. PINA; DESKTOP-QH30N35; 0.3.2; 2026-10-09T05:50:47Z | 7a6c7d95,N3 | Not done | In progress | Pending. |
-| [I-slowPass-DESKTOP-QH30N35-0.3.2-slowpa](#i-slowpass-desktop-qh30n35-0.3.2-slowpa) | DESKTOP-QH30N35 0.3.2 download pass 'still going after 94 s': one stalled 31.6 MB download held the pass | MR. PINA; DESKTOP-QH30N35; 0.3.2; 2026-10-09T05:49Z-05:56Z | N3, N6, 7a6c7d95, c5dd91d2 | Not done | In progress | Pending. |
-| [I-slowPass-IDEA-00-0.3.0](#i-slowpass-idea-00-0.3.0) | IDEA-00 0.3.0 loop pass of 67.5 s with 2 large downloads | MR. PINA; IDEA-00; 0.3.0; 2026-10-08T18:09Z | 58d36379 | Partly done | In progress | Pending. |
-| [I-slowPass-IDEA-00-0.3.1](#i-slowpass-idea-00-0.3.1) | IDEA-00 0.3.1 quiet loop passes of 60-82 s (0 moved), 22:16Z to 01:54Z | MR. PINA; IDEA-00; 0.3.1; 2026-10-08T22:16Z to 2026-10-09T01:54Z | N6, 4cd9eae5, 8cb7df1d, 3c2c8c20, 42136488, e3ead3f1, b603a79e, 14d13f99, 1e6ba2cd, 9c3bf2db, 1f4c1092, b41a2f31, 8add4e24, c681d282, 57f69630, 76cc8f4b, 2e8f7fb1, 36077bff, 71b59d78, 32118ea1, f7bc5be4, 056b7c00 | Partly done | In progress | Pending. |
-| [I-slowPass-IDEA-00-0.3.1-action](#i-slowpass-idea-00-0.3.1-action) | IDEA-00 0.3.1 action passes of 92-94 s (Check out of a whole folder) | MR. PINA; IDEA-00; 0.3.1; 2026-10-08T18:23Z-18:38Z | N6, N11, 1f22e3a0, 9e2aca4c, aa236105, 68bee25b | Partly done | In progress | Pending. |
-| [I-slowPass-IDEA-06-0.3.0](#i-slowpass-idea-06-0.3.0) | IDEA-06 (Abraham) 0.3.0 first pass after a restart and new sign-in took 129 s | Abraham Jette-Kouri; IDEA-06; 0.3.0; 2026-10-08T17:45Z-17:48Z | 610eed69 | Partly done | In progress | Pending. |
-| [I-slowPass-IDEA-06-0.3.1](#i-slowpass-idea-06-0.3.1) | IDEA-06: the same 142 files refused on every pass are name-taken copies, re-planned forever (not the year check) | Abraham Jette-Kouri; IDEA-06; 0.2.0-0.3.1 observed; unchanged at 0.3.2 and HEAD 0ef1ae0 (reproduced); 2026-10-07 (0.2.x refusals already present) through 2026-10-09T03:21Z | 3b6e0912, 68d7a9d4, f9912084, 030b06da, 184c9e24, 2ab514eb, 610eed69, N4 (its log shows the same 142 refused every ~50 s) | Not done | In progress | Pending. |
-| [I-slowPass-IDEA-06-0.3.1-slowpa](#i-slowpass-idea-06-0.3.1-slowpa) | IDEA-06 (Seraj) 0.3.1 loop pass of 3134.6 s: the process was frozen for 52 minutes | Seraj Arteaga; IDEA-06 (Seraj's computer); 0.3.1; 2026-10-08T22:00Z-22:52Z | 5da43de6, 87fa2b3d | Not done | In progress | Pending. |
-| [I-slowPass-IDEA-06-142refused](#i-slowpass-idea-06-142refused) | IDEA-06 (Abraham) passes with 126-142 refused (audited by another agent); phase pointer only | Abraham Jette-Kouri; IDEA-06; 0.3.0, 0.3.1; 2026-10-08T18:00Z-2026-10-09T03:21Z | 3b6e0912, 68d7a9d4, f9912084, 030b06da, 184c9e24, 2ab514eb | Partly done | In progress | Pending. |
-| [I-takeBack-IDEA-00-0.2.1](#i-takeback-idea-00-0.2.1) | takeBack waited 35.5 s (0.2.1) | MR. PINA; IDEA-00; 0.2.1; asked 2026-10-07T23:38:51Z, answered 23:39:26.9Z (uploaded 2026-10-08T14:41Z) | 9059fddb | Partly done | In progress | Pending. |
-| [I-takeBack-IDEA-00-0.3.0](#i-takeback-idea-00-0.3.0) | takeBack waits of 24 s to 2,450 s: Force check in all queued 225 single-file actions | MR. PINA; IDEA-00; 0.3.0; 2026-10-08T17:10:08Z to 17:51:00Z | 80c8eb79, 80a6bce8, e77b8de4, 9ed90e42, 8bbe9bd5 | Partly done | In progress | Pending. |
-| [C-0.2.1-action-never-waits](#c-0.2.1-action-never-waits) | ENGINE.md 712-737: 'An action never waits behind a whole pass' | 0.2.1 to 0.3.2 | N6, all slowAction groups | Not done | In progress | Pending. |
-| [C-0.2.1-file-detail-never-waits](#c-0.2.1-file-detail-never-waits) | ENGINE.md 212-214: 'File detail never waits for a pass' | 0.3.2 | c5dd91d2 (reference), N6 | Not done | In progress | Pending. |
-| [C-0.3.0-batches](#c-0.3.0-batches) | 0.3.0 batch check out/in (armory_lock_files, armory_release_locks) | 0.3.0 | aa236105 | Done | In progress | Pending. |
-| [C-0.3.0-cantakeback](#c-0.3.0-cantakeback) | 0.3.0 can_take_back decides who sees Force check in | 0.3.0 | N11 | Done | In progress | Pending. |
-| [C-0.3.0-deleteforever](#c-0.3.0-deleteforever) | 0.3.0 delete forever (project and folder purges) | 0.3.0 |  | Done | In progress | Pending. |
-| [C-0.3.0-live](#c-0.3.0-live) | 0.3.0 live updates (RealtimeFeed) | 0.3.0 | N12, 809ae174 | Done | In progress | Pending. |
-| [C-0.3.0-send-feedback](#c-0.3.0-send-feedback) | 0.3.0: Send feedback goes straight to the IDEA team | 0.3.0 to 0.3.2 | N13, N14, 6be92c08, aa236105, 68bee25b, f9912084, c2d5d46c, bcb16c24, c5dd91d2 | Done | In progress | Pending. |
-| [C-0.3.0-teamstatus](#c-0.3.0-teamstatus) | 0.3.0 team status (armory_heartbeat) | 0.3.0 | N7 | Done | In progress | Pending. |
-| [C-0.3.1-force-all-fast](#c-0.3.1-force-all-fast) | Release notes 0.3.1: Force check in all is one go | 0.3.1, 0.3.2 | 80a6bce8, e77b8de4, 9ed90e42, 8bbe9bd5 | Done | In progress | Pending. |
-| [C-0.3.1-forcemany](#c-0.3.1-forcemany) | 0.3.1 Force check in of many files is one action and one pass | 0.3.1 | 80a6bce8, e77b8de4, 9ed90e42, 8bbe9bd5 | Done | In progress | Pending. |
-| [C-0.3.2-batched-open-checks](#c-0.3.2-batched-open-checks) | 0.3.2 claim: batched open-file checks end the 40 s passes, a quiet sync takes a second or two, clicks answer right away | 0.3.2 | N6, 7a6c7d95, c5dd91d2, 1f22e3a0, 4cd9eae5 | Partly done | In progress | Pending. |
-| [C-0.3.2-fast-passes](#c-0.3.2-fast-passes) | 0.3.2 release note: a sync with nothing to do takes a second or two and clicks answer right away | MR. PINA; DESKTOP-QH30N35; 0.3.2; 2026-10-09 | c5dd91d2,7a6c7d95,N1,N3 | Partly done | In progress | Pending. |
-| [C-0.3.2-feedback-sent](#c-0.3.2-feedback-sent) | 0.3.2: Send feedback no longer says 'couldn't send' for notes that were sent | 0.3.2 | N13, N14, N15, N5 | Done | In progress | Pending. |
-| [C-0.3.2-folder-handover](#c-0.3.2-folder-handover) | 0.3.2: Use this folder hand-over plus Switch account | 0.3.2 | N10 | Partly done | In progress | Pending. |
-| [C-0.3.2-minekeys](#c-0.3.2-minekeys) | 0.3.2 Check in all and Undo all in My files, with its own scroll box | 0.3.2 | N11, N12 | Done | In progress | Pending. |
-| [C-0.3.2-pinnedkeys](#c-0.3.2-pinnedkeys) | 0.3.2 folder keys pinned while scrolling | 0.3.2 | N9 | Done | In progress | Pending. |
-| [C-0.3.2-quick-quit](#c-0.3.2-quick-quit) | 0.3.2 claim: quitting is quick again, so Windows no longer forces Armory closed (crash reports) | 0.3.2 | 7aa938ba, 2ab514eb, 62f377c1, e5e6e9f3 | Partly done | In progress | Pending. |
-| [C-0.3.2-responds-right-away](#c-0.3.2-responds-right-away) | Release notes 0.3.2: 'Everything responds right away... a sync with nothing to do takes a second or two and your clicks answer right away' | 0.3.2 | c5dd91d2 (reference), N6 | Partly done | In progress | Pending. |
-| [C-0.3.2-runninglines](#c-0.3.2-runninglines) | 0.3.2 'What Armory is doing' running lines | 0.3.2 | N8, c5dd91d2 | Partly done | In progress | Pending. |
-| [C-0.3.2-slice-counts](#c-0.3.2-slice-counts) | ENGINE.md: the activity panel keeps its counts across slices; the server is read again about every 10 s | MR. PINA; DESKTOP-QH30N35; 0.3.2; 2026-10-09 | N3,N2 | Partly done | In progress | Pending. |
-| [C-0.3.2-theme](#c-0.3.2-theme) | 0.3.2 instant theme switching | 0.3.2 | N7 | Partly done | In progress | Pending. |
-| [C-0.3.2-thumbnails](#c-0.3.2-thumbnails) | 0.3.2: pictures of parts from Windows' thumbnail handlers | 0.3.2 | N15 | Partly done | In progress | Pending. |
-| [X-142-ui-uploading-0-of-142](#x-142-ui-uploading-0-of-142) | Window: status cycles 'Checking for changes.' / flash of 'Uploading 0 of 142 files, 260.9 MB left' / 'A few files need you', and the incident snapshot froze the flash | Abraham Jette-Kouri; IDEA-06; 0.3.0, 0.3.1; same code at HEAD; 2026-10-08..09 | 68d7a9d4, 184c9e24, f9912084, N2, N8 | Not done | In progress | Pending. |
-| [X-38-uploading-forever](#x-38-uploading-forever) | 38 files read 'uploading' forever on every computer (IDEA-00, IDEA-06, DESKTOP-F41DB2R, DESKTOP-QH30N35) | everyone in FRC 2026 Off-Season; all four; 0.2.1-0.3.2; 2026-10-08..09 | 58d36379, 4a5a4860, 7a6c7d95, c5dd91d2, 184c9e24 and every snapshot after 18:10Z (45 on IDEA-00 at 0.2.1) | Not done | In progress | Pending. |
-| [X-6-extra-nameShared-archived](#x-6-extra-nameshared-archived) | 148 nameShared items vs 142 refused per pass: refusals in a project that is later archived are never cleared; never-added files there read 'uploading' | Abraham Jette-Kouri; IDEA-06; 0.3.0-HEAD; 2026-10-08..09 | 68d7a9d4, 184c9e24, 1c1b1c5b (nameShared 148, refused 142) | Not done | In progress | Pending. |
-| [X-N5a-organize-checked-out](#x-n5a-organize-checked-out) | N5(a): moving or renaming a file or folder someone else has checked out | 0.3.2 (HEAD 8d90d63) | N5 | Not done | In progress | Pending. |
-| [X-N5b-force-check-in](#x-n5b-force-check-in) | N5(b): instructor override (Force check in) for single files, folders and selections, and how it reads for the holder | 0.3.2 | N5 | Partly done | In progress | Pending. |
-| [X-break-locks-batch-unused](#x-break-locks-batch-unused) | armory_break_locks (migration 0234) not adopted | 0.3.2 | 8bbe9bd5 | Not done | In progress | Pending. |
-| [X-checkin-release-guard](#x-checkin-release-guard) | PrepareRelease lets a lock go over bytes it never read and ignores an open file for check in, undo and Check in all | IDEA-06; 0.3.0 to 0.3.2 (unchanged since 0bc573f; git diff 0bc573f..HEAD touches only KnowOpen batching) | N4, 7352f99d, a6f9e941, 1c1b1c5b | Not done | In progress | Pending. |
-| [X-checkout-rehash](#x-checkout-rehash) | Check out reads and hashes every target file again | 0.3.2 | aa236105, 68bee25b | Not done | In progress | Pending. |
-| [X-checkout-rehash-slowpa](#x-checkout-rehash-slowpa) | Checking out many files re-hashes every one of them |  | N11, 1f22e3a0, 9e2aca4c | Not done | In progress | Pending. |
-| [X-download-cycle](#x-download-cycle) | Downloads run only about 45% of the time: each 8 s slice is followed by a full rescan and 10.5 s plan (N3) |  | N3, c5dd91d2, 7a6c7d95 | Not done | In progress | Pending. |
-| [X-feedback-snapshot-lost](#x-feedback-snapshot-lost) | Feedback and incident snapshots lost when the engine is busy | 0.3.1, 0.3.2 | N4, N5, N7, N9, N13, 12ae9081, 428a0f6f, 6d145628, 968cc0cd, bcb16c24, ccf970d7, ea2b2a2c, ee443a83, f4ea534f | Not done | In progress | Pending. |
-| [X-full-render](#x-full-render) | Every view re-renders all of Home; slow with thousands of files and thumbnails blink | 0.3.2 | N6, N7, N9, c5dd91d2 | Not done | In progress | Pending. |
-| [X-hash-cache-not-persisted](#x-hash-cache-not-persisted) | First scan after every start re-hashes the whole vault (10-38 s) |  | 8adfb590, 030b06da, 610eed69, 1f22e3a0, 68bee25b | Not done | In progress | Pending. |
-| [X-kept-save-every-pass](#x-kept-save-every-pass) | A checked-out file whose save is already kept counts as 'moving 1' and flashes 'Uploading 0 of 1 file' every pass | MR. PINA; DESKTOP-QH30N35; 0.3.2; 2026-10-09T05:57:45Z onward | N1 | Not done | In progress | Pending. |
-| [X-long-passes-1108s](#x-long-passes-1108s) | The 1,108.8 s and 369.9 s passes were the computer asleep or frozen, not sync work | Abraham Jette-Kouri; IDEA-06; 0.3.0; 2026-10-08T18:24-18:49Z | 68d7a9d4, f9912084 | Not reproducible | In progress | Pending. |
-| [X-no-version-uploading](#x-no-version-uploading) | 38 team files with no current version show 'Uploading' forever on a computer that uploads nothing | MR. PINA; DESKTOP-QH30N35; 0.3.2; 2026-10-09 | N2,N3 | Not done | In progress | Pending. |
-| [X-open-files-question](#x-open-files-question) | 'Restart Manager did not answer within 10 s': the open-files question over every file blocks the engine thread every pass | MR. PINA; DESKTOP-QH30N35; 0.3.2; 2026-10-09T05:51:37Z | N3,N2,N1,7a6c7d95,c5dd91d2 | Not done | In progress | Pending. |
-| [X-openamong-blocks-engine](#x-openamong-blocks-engine) | Windows open-file question blocks the engine thread up to 10 s every pass | DESKTOP-QH30N35; 0.3.2 | c5dd91d2 (reference), N6, N5 context | Not done | In progress | Pending. |
-| [X-owner-name](#x-owner-name) | The folder-taken screen never names the real owner, and flashes the new student as the owner | 0.3.1, 0.3.2 | N10 | Not done | In progress | Pending. |
-| [X-parked-writable](#x-parked-writable) | While another account (or nobody) is signed in, the owner's checked-out files stay writable and unwatched | 0.3.2 | N10 | Not done | In progress | Pending. |
-| [X-pass-48-60s](#x-pass-48-60s) | Why each IDEA-06 pass took 48-60 s: per-file open checks in the plan phase, not the refusals; 0.3.2 only partly fixes it | Abraham Jette-Kouri; MR. PINA (0.3.2 data); IDEA-06; DESKTOP-QH30N35 for 0.3.2 data; 0.3.0, 0.3.1 (slow); 0.3.2 (better, still ~16 ms per local file); 2026-10-08..09 | 68d7a9d4, f9912084, 184c9e24, 2ab514eb, 030b06da, 7a6c7d95 (0.3.2 field data) | Partly done | In progress | Pending. |
-| [X-pending-count](#x-pending-count) | Folder-wide actions overcount and mark every row as being worked on | 0.3.2 | N9, N11, N12 | Not done | In progress | Pending. |
-| [X-readonly-manifest-per-file](#x-readonly-manifest-per-file) | Bulk check out/in rewrites the durable read-only manifest once per file | 0.3.1, 0.3.2 | aa236105, 68bee25b, c2d5d46c | Not done | In progress | Pending. |
-| [X-recovery](#x-recovery) | Abraham's work is recoverable from server kept copies (and local snapshots); the app has no restore | Abraham Jette-Kouri; IDEA-06; 0.3.1; 2026-10-08 22:40Z to 23:11Z | N4, 12ae9081, 184c9e24 | Partly done | In progress | Pending. |
-| [X-responsiveness-test-gap](#x-responsiveness-test-gap) | No window action is latency-tested on a large vault | 0.3.2 | N6 | Not done | In progress | Pending. |
-| [X-signed-out-as-refusal](#x-signed-out-as-refusal) | A sign-out during a pass is recorded as a permanent-looking refusal with wrong words (explains cantSend 574 -> 344 -> 0 on IDEA-06) | Abraham Jette-Kouri; IDEA-06; 0.2.0-HEAD; 2026-10-08 | 610eed69, 6be92c08, 3b6e0912 | Not done | In progress | Pending. |
-| [X-stale-markers](#x-stale-markers) | 224 stale ~$ markers on IDEA-06 are asked about every pass |  | 184c9e24, 2ab514eb | Partly done | In progress | Pending. |
-| [X-stale-unread-entry](#x-stale-unread-entry) | The Windows scan reuses the previous hash and read-only flag for a file it cannot open, with no marker | IDEA-06; all through 0.3.2 | N4, all 13 readOnlyBroken incidents | Not done | In progress | Pending. |
-| [X-sticky-focus](#x-sticky-focus) | Arrow keys move focus onto rows hidden under the pinned folder keys | 0.3.2 | N9 | Not done | In progress | Pending. |
-| [X-telemetry-refusals](#x-telemetry-refusals) | Incidents cannot name the refused files: refusals are never in the flight, the 200-notice cap is spent on stale ~$ markers, snapshots carry only notice counts | IDEA-06; 0.3.0-HEAD; 2026-10-08..09 | 68d7a9d4, f9912084, 184c9e24, 2ab514eb | Not done | In progress | Pending. |
-| [X-test-doubles-blind](#x-test-doubles-blind) | Neither the end-to-end file system nor the Core checkout simulation can see this bug |  | N4 | Not done | In progress | Pending. |
-| [X-two-computers-named-IDEA-06](#x-two-computers-named-idea-06) | Two different computers report the device name IDEA-06 |  | N10, 5da43de6, 87fa2b3d, 25d938f6, 428a0f6f, 2d479aea | Not done | In progress | Pending. |
-| [X-two-idea-06](#x-two-idea-06) | IDEA-06 is two different computers with the same name | Abraham Jette-Kouri, Seraj Arteaga; IDEA-06; 0.3.0, 0.3.1; 2026-10-08T20:42Z to 21:02Z | 2d479aea, 87fa2b3d, 968cc0cd, 428a0f6f, 2ab514eb | Not done | In progress | Pending. |
-| [X-two-idea06-engines](#x-two-idea06-engines) | Two engines report device IDEA-06 at the same time with separate vaults | Seraj Arteaga, Abraham Jette-Kouri; IDEA-06; 0.3.1 | 87fa2b3d, 2d479aea, 5da43de6 | Not reproducible | In progress | Pending. |
-| [X-ui-checks-coverage](#x-ui-checks-coverage) | UI checks miss the N7 to N12 behaviors and do not run in CI | 0.3.2 | N7, N8, N9, N11, N12 | Not done | In progress | Pending. |
-| [X-uploading-vs-saved](#x-uploading-vs-saved) | Rows say Uploading while the status says Everything is saved | IDEA-00; 0.3.1 | N11, N12, ed7dc8f8, 809ae174, aa236105 | Not done | In progress | Pending. |
-| [X-version-40](#x-version-40) | armory_heartbeat refuses app_version over 40; nothing holds Armory's version to 40 | 0.3.0 to 0.3.2 |  | Not done | In progress | Pending. |
-| [X-view-open-per-file](#x-view-open-per-file) | Files added while open cost one Restart Manager session each on every view build and twice more per pass |  | N6, 610eed69 | Not done | In progress | Pending. |
-| [X-wrong-words](#x-wrong-words) | The window says 'Checked in' when nothing was shared, and then blames the student for saving without a check out | IDEA-06; 0.3.1, 0.3.2 | N4 | Not done | In progress | Pending. |
-| [X-year-check-docs](#x-year-check-docs) | Docs, screens and UI text that imply the year check works (to correct) | docs at HEAD | user statement | Not done | In progress | Pending. |
-| [X-year-check-off](#x-year-check-off) | The SolidWorks year check is off in the shipped app: ReleaseReader = null, so warn uploads 2026 files unchecked and enforce refuses every SolidWorks file | user report; all; 0.1.0-HEAD; since 0.1.0 | user statement; no incident | Not done | In progress | Pending. |
-| [X-year-find-2026](#x-year-find-2026) | Can Armory find files already uploaded as SolidWorks 2026? Not today; the server stores null for every version | 0.1.0-HEAD | user question | Not done | In progress | Pending. |
+| [N1](#n1) | A styled tooltip on every button after about a second of hover | MR. PINA; DESKTOP-QH30N35; 0.3.2; 2026-10-09T05:59Z | N1 | Partly done | Done | One styled tooltip (#tip, theme tokens, both themes) on every control after 750 ms of hover or 300 ms after keyboard focus, kept inside the window; keys that are off say why; tray items and the WebView2 fallback button have tooltips too (app.js TIPS, HostTips). Verified: check-ui tips rule: every control in every rendered state has a tip (planted controls without one are caught), tooltip flows by mouse and keyboard; HostPiecesTests.Every_tray_item_and_the_webview2_button_say_what_they_do. |
+| [N2](#n2) | Running lines say 'Sync finished' after every slice while hundreds of files remain | MR. PINA; DESKTOP-QH30N35; 0.3.2; 2026-10-09T05:54Z | N2,N3,7a6c7d95,c5dd91d2 | Not done | Done | No more 'Sync finished' after each slice: progress lines every 10 s ('Downloaded 600 of 1,429 files'), one end line per run ('Finished: 1,429 files downloaded in 7 min.'), and how far it got on pause or going offline (SyncEngine.Lines.cs). Verified: ContinuousTransferTests.A_long_download_says_it_finished_once_at_the_end and Pausing_a_long_download_says_how_far_it_got. |
+| [N3](#n3) | A 1,400-file download stops and starts, showing 'Checking for changes' between batches | MR. PINA; DESKTOP-QH30N35; 0.3.2; 2026-10-09T05:53Z | N3,N2,7a6c7d95,c5dd91d2 | Not done | Done | An engine-owned transfer queue: a slice's transfers carry into the next pass instead of being awaited, unstarted downloads keep starting while the next pass reads the server, the view stays on Downloading between passes, a stalled transfer is retried once with a fresh URL after 30 s without bytes, and a downloaded file is not read again by the next scan (SyncEngine.Queue.cs, BlobClient.StallAfter, LocalChangeDetector.Seed). Verified: ContinuousTransferTests.A_big_download_never_pauses_between_slices (1,500 files: no second without a download running), A_stalled_download_does_not_hold_the_others, A_downloaded_file_is_not_read_again_by_the_next_scan; ClientTests stall test; Windows CI LocalStateTests.A_file_armory_wrote_is_not_read_again_until_it_changes. |
+| [N4](#n4) | Check in after editing a saved part does not save the changes; the file on disk is replaced by the previous version | Abraham Jette-Kouri; IDEA-06; 0.3.1 reported; reproduced at HEAD 8d90d63 (0.3.2); 2026-10-08 21:32Z to 23:16Z (feedback 23:16:27Z) | N4, 7352f99d, 25d938f6, e07af0ab, a6f9e941, 2cf39a10, 12ae9081, 6d145628, ee443a83 | Not done | Done | A check in (single, undo, Check in all, batch, an add's automatic check in) never lets the lock go while SolidWorks has the file open or over bytes not read at that moment: Core rule CheckoutRules.NextCheckInStep (src/Armory.Core/Checkout.cs), the engine guard in PrepareRelease (src/Armory.Agent.Engine/SyncEngine.Checkout.cs), the scan's Unread flag (src/Armory.Platform.Windows/LocalChangeDetector.cs, Platform.cs). An open file waits and is checked in by the first pass after it closes; the answer says so. A kept copy can be put back from File detail (SyncEngine.PutBackKeptCopyAsync). Verified: The field reproduction (tests/Armory.EndToEnd.Tests, a SolidWorks write hold in PortableVaultFileSystem) fails on 0.3.2 and passes; seven new end-to-end tests; the Core checkout simulation now models write-held and unreadable files with three new invariants, and two deliberate breaks of the guard are caught (seeds 12 and 46). A Windows platform test for the Unread flag runs on CI. |
+| [N5](#n5) | Let people organize files others have checked out; instructor override to check in others' files | Abraham Jette-Kouri; IDEA-06; 0.3.1; 2026-10-08T19:52:23Z (sent while 15 of Abraham's own Check in row clicks were still queued, see I-checkIn-IDEA-06-0.3.1) | N5 | Partly done | Partly done | (a) Mentors and CAD leads can rename or delete a folder, rename or move a file that others have checked out: the window offers 'Force check in 3 files and rename', which force checks in those files (their unsaved work kept as their own copies) and does the rename in one action. Students' refusals say they can ask a mentor or CAD lead to force check in. (b) The instructor override is Force check in, which the server gives to mentors, CAD leads and site admins (single files, folders, selections, Force check in all); the holder's notice names who did it and adds 'use Save As' when the file is still open. Verified: End-to-end ForceOrganizeTests and HonestyTests; check-ui clicks both keys. |
+| [N6](#n6) | No button or action should feel laggy | MR. PINA; IDEA-00; 0.3.1; 2026-10-08T19:33:45Z | N6, c5dd91d2 (reference only), all 22 slowAction incidents | Partly done | Done | Every click answers at once: the key is busy the moment it is pressed, a running line names the action within milliseconds, the request is recorded without waiting for a pass, clicks join one action pass, and Open, File detail, Pause and Send feedback never wait for the engine thread. Verified: LargeVaultResponsivenessTests: 22 window actions on a 1,500-file vault with school latency, each within 1 s plus its own server calls and transfers, running line within 49 ms (docs/agent/responsiveness-0.3.3.md); ResponsivenessTests. |
+| [N7](#n7) | Switching themes is slow and glitchy | Abraham Jette-Kouri; IDEA-06; 0.3.0; 2026-10-08T18:42:56Z | N7, b500df79 | Partly done | Done | A theme pick paints in the next frame with transitions off; a view that changes only settings updates in place; an identical view is never posted twice; other views are morphed in and rows and thumbnails are kept. Verified: check-ui drawing block with a 4x CPU throttle and theme flows; HostPiecesTests.An_identical_view_is_posted_once; bbox-diff: identical geometry in both themes. |
+| [N8](#n8) | Show progress and running lines during long operations | MR. PINA; IDEA-00; 0.3.1; 2026-10-08T18:37:27Z | N8, 58d06041, aa236105, c5dd91d2 | Partly done | Done | Long operations show their own counts and running lines (check out, undo, Force check in, reads, folder moves), and the newest running line is always in sight. Verified: RunningLineTests (three tests); check-ui running-lines flow. |
+| [N9](#n9) | Bulk keys were under the 1,400-file list; the UI must handle thousands of files without confusion | MR. PINA; IDEA-00; 0.3.1; 2026-10-08T18:34:48Z | N9, 6d8e6ddc | Partly done | Done | Only files the action can change show as working and the keys and question say how many; Select all in this folder; keyboard focus never goes under the pinned keys; Force check in names are capped. Verified: check-ui flows: only touched rows show as working, the working line and the question agree, select all, focus clear of pinned keys, Force check in names. |
+| [N10](#n10) | Several students in one Armory folder on one computer, and a quick account switch | MR. PINA (apina@boscotech.edu); IDEA-00; 0.3.1 (note); 0.3.2 current; 2026-10-08T18:33:04Z | N10, 2d479aea, 87fa2b3d, 428a0f6f, 968cc0cd | Partly done | Done | Settings: 'This computer is shared by several students' (off by default; off changes nothing). On a shared computer the window opens on a picker like Chrome's (name, initials, Add a student); each student's profile keeps its own sign-in, so switching needs no browser; a 4-digit PIN guards each switch (Mr. Pina can turn PINs off from a mentor's profile). One shared Armory folder is handed over with the 0.3.2 rule; when the last student has work waiting, their tile says so and the next student can wait or use a folder of their own; their waiting work stays theirs and they are moved back to the shared folder once it is done. A switch stops the last student's sync for good before the next one starts. Files: src/Armory.Agent/Profiles.cs, AgentHost.Profiles.cs, Bridge.Profiles.cs, src/Armory.Core/SharedComputer.cs, PinHash.cs, SyncEngine.Stopping.cs, wwwroot picker. docs/agent/PROFILES.md. Verified: Core rule tests; engine tests that a stop during a download or a check in writes nothing afterward (byte for byte); host tests for the picker, PIN right/wrong/waits (surviving a restart), switching with and without waiting work and mid-sync, the own-folder round trip, a second runtime refused, add, remove, on/off migration, and single-user mode unchanged; check-ui flows for the picker. DPAPI and the real Windows stores run on CI only. |
+| [N11](#n11) | After checking everything out, only a file list and no bulk keys | MR. PINA; IDEA-00; 0.3.1; 2026-10-08T18:31:32Z | N11, ed7dc8f8 | Done | Done | Unchanged since 0.3.2 (My files with Check in all and Undo all in their own scroll box); the counts are now right (X-pending-count). Verified: check-ui keys-in-sight flows. |
+| [N12](#n12) | No way to bulk check in | MR. PINA; IDEA-00; 0.3.1; 2026-10-08T18:30:02Z | N12, 809ae174 | Done | Done | Unchanged since 0.3.2 (three ways to check in many files). Verified: check-ui; end-to-end batch tests. |
+| [N13](#n13) | Send feedback said it could not send (feedback that had in fact been sent) | MR. PINA (IDEA-00); Abraham Jette-Kouri saw the same on IDEA-06 (N15, N5); IDEA-00, IDEA-06; 0.3.0, 0.3.1 (bug); 0.3.2 (fixed); 2026-10-08T17:52:46Z, 18:24:58Z, 19:52:23Z | N13, N14, N15, N5, 6be92c08, aa236105, 68bee25b, bcb16c24, 012e24c7, 2ab514eb, c5dd91d2 | Done | Done | The 0.3.2 fix stands; 0.3.3 also keeps a note's words in the dialog whenever it can't go, and a busy Storage no longer reads as a refused picture. Verified: Existing and new feedback tests. |
+| [N14](#n14) | Send feedback should match the website's (0235 contract) | MR. PINA (apina@boscotech.edu); IDEA-00; 0.3.1 (note); 0.3.2 current; 2026-10-08T18:25:47Z | N14 | Not done | Done | Send feedback now matches the website's 0235 form: kinds Bug, Idea, Praise, Other; 'What did you try?' (1,000 characters, live count); the area filled in by the page; an optional picture of the Armory window only (thumbnails hidden and every address shown as •••@domain while it is taken; scaled down to fit 2 MiB; shown exactly as sent; never written to disk) uploaded to armory-feedback-shots at <auth uid>/<uuid>.png, then the eight-argument armory_submit_app_feedback. 22023 bad_path/not_found/in_use keeps the note and offers 'Send without the picture'; PT429 waits retry_after_seconds; PGRST202 falls back to the five-argument form with praise sent as 'other' and the new fields kept in the context. 'Your feedback' lists your notes and their status from armory_my_app_feedback and is hidden on PGRST202; it says plainly there are no replies in Armory. Files: src/Armory.Client/FeedbackSender.cs, FeedbackScreenshots.cs, src/Armory.Agent/FeedbackDesk.cs, AgentHost.Feedback.cs, MainWindow.cs (capture), wwwroot/app.js. Verified: Client tests for every refusal shape and fallback, including a busy Storage read as 'try again' (a bug found and fixed while building); FeedbackDeskTests; end-to-end feedback tests at school latency; check-ui flows for the dialog, masking during capture, the offer and Your feedback. Not run: a live WebView2 capture and a real upload to the website's bucket (lab checklist). |
+| [N15](#n15) | A thumbnail of each part | Abraham Jette-Kouri; IDEA-06; 0.3.0 (note); 0.3.2 current; 2026-10-08T17:52:46Z | N15 | Partly done | Partly done | Thumbnails never hold the window: each answers within 5 s or returns nothing, a stuck handler is left behind and logged (agent.log and the flight recorder), the queue keeps the newest 64, duplicate asks share one picture, a missing picture is retried after a minute, and pictures are cached by the browser (ShellThumbnails.cs). Verified: ShellThumbnailsTests (hung handler, stuck handler, bounded queue, dedup, retry, cache key), Windows CI. |
+| [I-checkIn-IDEA-00-0.3.1](#i-checkin-idea-00-0.3.1) | Folder check in of 1,424 files waited 14.8 s | MR. PINA; IDEA-00; 0.3.1; asked 2026-10-08T19:43:39.4Z answered 19:43:54.2Z | c2d5d46c | Partly done | Done | Check in all records its request at once and runs in one action pass with batched releases. Verified: LargeVaultResponsivenessTests: check in all of 100 files 1,707 ms with its 6,967 ms of server calls overlapping. |
+| [I-checkIn-IDEA-06-0.3.1](#i-checkin-idea-06-0.3.1) | Check in row clicks queued: 15 and 16 clicks answered one pass apart (up to 658 s) | Abraham Jette-Kouri; IDEA-06; 0.3.1; bcb16c24: 15 clicks 2026-10-08T19:47:32-19:47:37Z answered 19:48:24-19:56:33Z; ccf970d7/428a0f6f: 16 clicks 21:01:38-21:01:51Z answered 21:02:19-21:12:49Z; ee443a83: 23:09:37Z to 23:10:49Z | bcb16c24, ccf970d7, 428a0f6f, ee443a83 | Not done | Done | Row clicks coalesce: clicks waiting at the same time share one action pass and one armory_release_locks call, each with its own outcome. Verified: ResponsivenessTests.Ten_check_in_clicks_waiting_for_a_pass_are_one_pass_and_one_release_call; LargeVaultResponsivenessTests: 10 row clicks 1,667 ms. |
+| [I-checkOut-IDEA-00-0.3.1](#i-checkout-idea-00-0.3.1) | Folder check out of 1,424 files waited 124-133 s | MR. PINA; IDEA-00; 0.3.1; aa236105 asked 2026-10-08T18:22:57Z answered 18:25:10.6Z; 68bee25b asked 18:35:22.8Z answered 18:37:27.3Z | aa236105, 68bee25b | Partly done | Done | A folder check out reuses the scan's hash for unchanged files, sets read-only bits in one call per chunk, and asks the open-files question once, off the engine thread. Verified: LargeVaultResponsivenessTests: check out of a 500-file folder 922 ms; ResponsivenessTests.A_folder_check_out_reads_no_unchanged_file_and_sets_bits_in_batches; RunningLineTests.A_check_out_of_1400_files_shows_a_count. |
+| [I-checkOut-IDEA-06-0.3.1](#i-checkout-idea-06-0.3.1) | Check out waited 44-72 s (one file, and 16 files once) | Abraham Jette-Kouri; IDEA-06; 0.3.1; 2026-10-08T19:45:11Z, 20:17:39Z, 20:49:40Z, 22:38:35Z, 22:59:16Z | f4ea534f, ea2b2a2c, 968cc0cd, 6d145628, 12ae9081 | Partly done | Done | As I-slowAction-DESKTOP-QH30N35-0.3.2: scoped plans and an open-files question about the clicked files only. Verified: LargeVaultResponsivenessTests: checkOut 495 ms. |
+| [I-crash-DESKTOP-F41DB2R-0.3.1](#i-crash-desktop-f41db2r-0.3.1) | DESKTOP-F41DB2R 0.3.1 two crash reports: killed right after 'quitting' | MR. PINA; DESKTOP-F41DB2R; 0.3.1; 2026-10-08T22:01Z, 2026-10-09T00:12Z | 62f377c1, e5e6e9f3 | Partly done | Done | Quit cancels at once, Windows ending the session is waited for, and a quit is not a crash. Verified: HostPiecesTests.A_run_ended_while_quitting_is_not_a_crash; ResponsivenessTests.Stopping_while_the_open_files_question_is_slow_returns_at_once. |
+| [I-crash-IDEA-00-0.2.1](#i-crash-idea-00-0.2.1) | IDEA-00 0.2.1 'previous run ended unexpectedly' after quitting during a 39 s plan | MR. PINA; IDEA-00; 0.2.1; 2026-10-08T14:41Z | 7aa938ba | Partly done | Done | Quit cancels at once and a run that logged 'quitting' is not reported as a crash. Verified: HostPiecesTests.A_run_ended_while_quitting_is_not_a_crash. |
+| [I-crash-IDEA-06-0.3.0](#i-crash-idea-06-0.3.0) | Crash 2ab514eb: the app was ended during a ~60 s pass after 'quitting' | Abraham Jette-Kouri; IDEA-06; 0.3.0; 2026-10-08T18:56Z | 2ab514eb, 030b06da | Partly done | Done | Quit cancels the pass at once from any thread (SyncEngine.StopAsync), the scan and open-files question honor it, Windows ending the session is waited for up to 4 s (TrayApp OnSessionEnded), and a run that logged 'quitting' or the session-ending line is not reported as a crash at the next start (AgentLog.PreviousRun). Verified: HostPiecesTests.A_run_ended_while_quitting_is_not_a_crash; ResponsivenessTests.Stopping_while_the_open_files_question_is_slow_returns_at_once. |
+| [I-crash-IDEA-06-0.3.0-slowpa](#i-crash-idea-06-0.3.0-slowpa) | IDEA-06 0.3.0 crash report: killed 0-15 s after 'quitting' during a stale-marker scan or plan (sign-out) | Abraham Jette-Kouri; IDEA-06; 0.3.0; 2026-10-08T18:56Z | 2ab514eb, 184c9e24 | Partly done | Done | As I-crash-IDEA-06-0.3.0: a quick quit, the session-end wait, and a quit that is not called a crash. Verified: HostPiecesTests.A_run_ended_while_quitting_is_not_a_crash; ResponsivenessTests.Stopping_while_the_open_files_question_is_slow_returns_at_once. |
+| [I-crash-IDEA-06-0.3.1](#i-crash-idea-06-0.3.1) | IDEA-06 (Seraj) crash report about a 0.2.0 run with no evidence | Seraj Arteaga; IDEA-06 (Seraj's computer); 0.2.0 run, reported by 0.3.1; 2026-10-08T19:06Z-20:52Z | 87fa2b3d | Not done | Not reproducible | No evidence exists for that 0.2.0 run. 0.3.3 keeps the last flight, logs Windows ending the session and does not call a quit a crash, so a future report can be told apart. Verified: HostPiecesTests.A_run_ended_while_quitting_is_not_a_crash. |
+| [I-launchFile-IDEA-06-0.3.1](#i-launchfile-idea-06-0.3.1) | Open (launchFile) waited 13-31 s | Abraham Jette-Kouri (3), Seraj Arteaga (2d479aea); IDEA-06; 0.3.1; 2026-10-08T19:31:52Z, 20:55:36Z, 21:29:29Z, 22:27:56Z | d5c6825d, 2d479aea, 1400e8b8, 4a444b9a | Partly done | Done | Open of a file already on this disk never touches the engine thread. Verified: LargeVaultResponsivenessTests: launchFile 7 ms; ResponsivenessTests.Open_detail_pause_and_check_out_answer_while_the_open_files_question_is_slow. |
+| [I-readOnlyBroken-IDEA-06-0.3.0](#i-readonlybroken-idea-06-0.3.0) | readOnlyBroken on Hook V3.SLDPRT right after a release | Abraham Jette-Kouri; IDEA-06; 0.3.0; 2026-10-08 17:52Z | 6be92c08 | Not done | Done | Same cause and fix as the 0.3.1 group. Verified: As above. |
+| [I-readOnlyBroken-IDEA-06-0.3.1](#i-readonlybroken-idea-06-0.3.1) | readOnlyBroken on Toparmredesign, Toparmredesignnoscrewpocket and SmallFlywheel V3 (12 incidents) | Abraham Jette-Kouri; IDEA-06; 0.3.1; 2026-10-08 21:12Z to 23:08Z | 1c1b1c5b, 012e24c7, a6f9e941, 7be63dcf, 40a07aa9, e0722b64, 88fc8771, 3aa1ef68, 7352f99d, 25d938f6, e07af0ab, 2cf39a10 | Not done | Done | These 12 reports were false alarms from a stale cached read-only flag on a file SolidWorks held after a release made while it was open (the N4 mechanism). Unread entries no longer report readOnlyBroken, and the release that caused them can no longer happen. Verified: End-to-end test An_unreadable_file_never_reports_readOnlyBroken; the real cleared-bit test still passes. |
+| [I-slowAction-DESKTOP-QH30N35-0.3.2](#i-slowaction-desktop-qh30n35-0.3.2) | slowAction c5dd91d2: Check out of 1 file took 15.2 s on an idle computer | MR. PINA; DESKTOP-QH30N35; 0.3.2; 2026-10-09T05:55:56Z | c5dd91d2,N1,N3 | Not done | Done | A one-file check out plans only that file and asks the open-files question about it alone, off the engine thread. Verified: LargeVaultResponsivenessTests: checkOut 495 ms on a 1,500-file vault with school latency. |
+| [I-slowAction-IDEA-06-0.3.1](#i-slowaction-idea-06-0.3.1) | Slow check in and check out actions on IDEA-06 (timeline evidence for N4) | Abraham Jette-Kouri; IDEA-06; 0.3.1; 2026-10-08 19:46Z to 23:10Z | f4ea534f, bcb16c24, ea2b2a2c, 968cc0cd, 428a0f6f, ccf970d7, 6d145628, 12ae9081, ee443a83 | Partly done | Done | Clicks no longer wait behind the loop's pass: a click records its request at once, the loop gives way to it, the action's pass plans only its own files, and clicks waiting together share one pass (SyncEngine JoinActionPassAsync). Verified: LargeVaultResponsivenessTests (checkIn 1,098 ms, checkOut 495 ms on 1,500 files with school latency); ResponsivenessTests.Ten_check_in_clicks_waiting_for_a_pass_are_one_pass_and_one_release_call. |
+| [I-slowPass-DESKTOP-F41DB2R-0.3.1](#i-slowpass-desktop-f41db2r-0.3.1) | DESKTOP-F41DB2R 0.3.1 passes of 62-90 s during the first full download and after a restart | MR. PINA; DESKTOP-F41DB2R; 0.3.1; 2026-10-08T21:03Z-22:09Z | N3, 4a5a4860, d3e64083, 1de30671, 8adfb590 | Partly done | Done | The first scan after a start reuses the hashes kept in .armory/file-hashes.json; the first download is continuous (N3). Verified: Windows CI platform test for the kept hash map; ContinuousTransferTests. |
+| [I-slowPass-DESKTOP-QH30N35-0.3.2](#i-slowpass-desktop-qh30n35-0.3.2) | slowPass 7a6c7d95: a 94.5 s loop pass held by one straggling 31.5 MB download | MR. PINA; DESKTOP-QH30N35; 0.3.2; 2026-10-09T05:50:47Z | 7a6c7d95,N3 | Not done | Done | A straggling download no longer holds the pass (it is carried while other lanes move), and a transfer with no bytes for 30 s is tried once more with a fresh URL. Verified: ContinuousTransferTests.A_stalled_download_does_not_hold_the_others; ClientTests stall test. |
+| [I-slowPass-DESKTOP-QH30N35-0.3.2-slowpa](#i-slowpass-desktop-qh30n35-0.3.2-slowpa) | DESKTOP-QH30N35 0.3.2 download pass 'still going after 94 s': one stalled 31.6 MB download held the pass | MR. PINA; DESKTOP-QH30N35; 0.3.2; 2026-10-09T05:49Z-05:56Z | N3, N6, 7a6c7d95, c5dd91d2 | Not done | Done | As I-slowPass-DESKTOP-QH30N35-0.3.2: carried stragglers and the 30 s stall retry. Verified: ContinuousTransferTests.A_stalled_download_does_not_hold_the_others. |
+| [I-slowPass-IDEA-00-0.3.0](#i-slowpass-idea-00-0.3.0) | IDEA-00 0.3.0 loop pass of 67.5 s with 2 large downloads | MR. PINA; IDEA-00; 0.3.0; 2026-10-08T18:09Z | 58d36379 | Partly done | Done | Large downloads are carried between passes (N3) instead of holding a pass. Verified: ContinuousTransferTests. |
+| [I-slowPass-IDEA-00-0.3.1](#i-slowpass-idea-00-0.3.1) | IDEA-00 0.3.1 quiet loop passes of 60-82 s (0 moved), 22:16Z to 01:54Z | MR. PINA; IDEA-00; 0.3.1; 2026-10-08T22:16Z to 2026-10-09T01:54Z | N6, 4cd9eae5, 8cb7df1d, 3c2c8c20, 42136488, e3ead3f1, b603a79e, 14d13f99, 1e6ba2cd, 9c3bf2db, 1f4c1092, b41a2f31, 8add4e24, c681d282, 57f69630, 76cc8f4b, 2e8f7fb1, 36077bff, 71b59d78, 32118ea1, f7bc5be4, 056b7c00 | Partly done | Done | Quiet passes ask about no file and reuse the kept hash map. Verified: LargeVaultResponsivenessTests quiet pass 385 ms. |
+| [I-slowPass-IDEA-00-0.3.1-action](#i-slowpass-idea-00-0.3.1-action) | IDEA-00 0.3.1 action passes of 92-94 s (Check out of a whole folder) | MR. PINA; IDEA-00; 0.3.1; 2026-10-08T18:23Z-18:38Z | N6, N11, 1f22e3a0, 9e2aca4c, aa236105, 68bee25b | Partly done | Done | A folder check out's pass plans only its own files, reuses hashes and batches bits. Verified: LargeVaultResponsivenessTests: 500-file folder check out 922 ms. |
+| [I-slowPass-IDEA-06-0.3.0](#i-slowpass-idea-06-0.3.0) | IDEA-06 (Abraham) 0.3.0 first pass after a restart and new sign-in took 129 s | Abraham Jette-Kouri; IDEA-06; 0.3.0; 2026-10-08T17:45Z-17:48Z | 610eed69 | Partly done | Done | The first pass after a restart reuses the kept hash map and asks no per-file open question. Verified: Windows CI platform test for the kept hash map; ResponsivenessTests. |
+| [I-slowPass-IDEA-06-0.3.1](#i-slowpass-idea-06-0.3.1) | IDEA-06: the same 142 files refused on every pass are name-taken copies, re-planned forever (not the year check) | Abraham Jette-Kouri; IDEA-06; 0.2.0-0.3.1 observed; unchanged at 0.3.2 and HEAD 0ef1ae0 (reproduced); 2026-10-07 (0.2.x refusals already present) through 2026-10-09T03:21Z | 3b6e0912, 68d7a9d4, f9912084, 030b06da, 184c9e24, 2ab514eb, 610eed69, N4 (its log shows the same 142 refused every ~50 s) | Not done | Done | Cause found: the 142 were copies whose names were already used by other files in the project (names are unique per project), re-planned as uploads and refused again on every pass; not the year check. A name-taken copy is now refused once at plan time, never counted as moving or expected as an upload, counted only when its refusal starts or changes, skipped by the archive of earlier saves, and goes in by itself when the namesake is renamed or removed or the copy is renamed or deleted. The card says what a SolidWorks copy needs; the status line says how many files can't be added until they have names of their own. Files: SyncEngine.cs (plan), SyncEngine.Actions.cs (SetRefusal), SyncEngine.View.cs. Verified: End-to-end HonestyTests (A_name_taken_copy_is_refused_once_and_left_alone, ..._goes_in_when_its_namesake_is_renamed, ..._is_never_counted_as_moving, ..._is_not_retried_by_the_archive_of_earlier_saves); disabling the plan-time refusal makes them fail. |
+| [I-slowPass-IDEA-06-0.3.1-slowpa](#i-slowpass-idea-06-0.3.1-slowpa) | IDEA-06 (Seraj) 0.3.1 loop pass of 3134.6 s: the process was frozen for 52 minutes | Seraj Arteaga; IDEA-06 (Seraj's computer); 0.3.1; 2026-10-08T22:00Z-22:52Z | 5da43de6, 87fa2b3d | Not done | Done | The 3,134 s 'pass' was the computer asleep or frozen; sleep and wake are now recorded and such a pass is not filed as slow. Verified: GlitchRuleTests.A_pass_the_computer_slept_through_is_not_a_slow_pass. |
+| [I-slowPass-IDEA-06-142refused](#i-slowpass-idea-06-142refused) | IDEA-06 (Abraham) passes with 126-142 refused (audited by another agent); phase pointer only | Abraham Jette-Kouri; IDEA-06; 0.3.0, 0.3.1; 2026-10-08T18:00Z-2026-10-09T03:21Z | 3b6e0912, 68d7a9d4, f9912084, 030b06da, 184c9e24, 2ab514eb | Partly done | Done | The refusals are fixed (name-taken copies refused once at the plan, E2) and the speed parts by N6's work (stale markers remembered, open question narrowed, hashes kept). Verified: End-to-end name-taken tests (E2); ResponsivenessTests.Stale_markers_are_not_asked_about_again_until_they_change. |
+| [I-takeBack-IDEA-00-0.2.1](#i-takeback-idea-00-0.2.1) | takeBack waited 35.5 s (0.2.1) | MR. PINA; IDEA-00; 0.2.1; asked 2026-10-07T23:38:51Z, answered 23:39:26.9Z (uploaded 2026-10-08T14:41Z) | 9059fddb | Partly done | Done | Force check in no longer waits behind a pass; many files go in armory_break_locks batches of 500 with one pass after. Verified: LargeVaultResponsivenessTests: takeBack 406 ms, takeBackAll of 100 files 470 ms. |
+| [I-takeBack-IDEA-00-0.3.0](#i-takeback-idea-00-0.3.0) | takeBack waits of 24 s to 2,450 s: Force check in all queued 225 single-file actions | MR. PINA; IDEA-00; 0.3.0; 2026-10-08T17:10:08Z to 17:51:00Z | 80c8eb79, 80a6bce8, e77b8de4, 9ed90e42, 8bbe9bd5 | Partly done | Done | Force check in all is one action: armory_break_locks in batches of 500, then one pass (D1), live counts while it works. Verified: LargeVaultResponsivenessTests: takeBackAll of 100 files 470 ms; RunningLineTests.Force_check_in_running_lines_arrive_while_locks_break; end-to-end break_locks tests. |
+| [C-0.2.1-action-never-waits](#c-0.2.1-action-never-waits) | ENGINE.md 712-737: 'An action never waits behind a whole pass' | 0.2.1 to 0.3.2 | N6, all slowAction groups | Not done | Done | Now true: the loop's pass gives way to a waiting click after its scan, between projects, every 100 paths while planning and during its open-files question (ENGINE.md, 'Every click at once'). Verified: ResponsivenessTests.A_check_out_answers_while_hundreds_of_files_download and A_check_in_answers_while_hundreds_of_files_upload. |
+| [C-0.2.1-file-detail-never-waits](#c-0.2.1-file-detail-never-waits) | ENGINE.md 212-214: 'File detail never waits for a pass' | 0.3.2 | c5dd91d2 (reference), N6 | Not done | Done | Now true: File detail reads published data and fetches history off the engine thread. Verified: LargeVaultResponsivenessTests: openFile 68 ms; ResponsivenessTests.Open_detail_pause_and_check_out_answer_while_the_open_files_question_is_slow. |
+| [C-0.3.0-batches](#c-0.3.0-batches) | 0.3.0 batch check out/in (armory_lock_files, armory_release_locks) | 0.3.0 | aa236105 | Done | Done | Unchanged and still true; check in and Force check in now also coalesce clicks. Verified: End-to-end batch tests pass in 0.3.3. |
+| [C-0.3.0-cantakeback](#c-0.3.0-cantakeback) | 0.3.0 can_take_back decides who sees Force check in | 0.3.0 | N11 | Done | Done | Unchanged and still true; File Explorer's Force check in item follows the same can_take_back. Verified: End-to-end and ShellDeskTests.Force_check_in_takes_back_only_files_someone_else_has_and_asks_first_naming_them. |
+| [C-0.3.0-deleteforever](#c-0.3.0-deleteforever) | 0.3.0 delete forever (project and folder purges) | 0.3.0 |  | Done | Done | Unchanged and still true. Verified: End-to-end purge tests pass in 0.3.3. |
+| [C-0.3.0-live](#c-0.3.0-live) | 0.3.0 live updates (RealtimeFeed) | 0.3.0 | N12, 809ae174 | Done | Done | Unchanged and still true. Verified: End-to-end V3Tests.Live_updates_wake_another_computer_and_every_subscription_is_filtered passes in 0.3.3. |
+| [C-0.3.0-send-feedback](#c-0.3.0-send-feedback) | 0.3.0: Send feedback goes straight to the IDEA team | 0.3.0 to 0.3.2 | N13, N14, 6be92c08, aa236105, 68bee25b, f9912084, c2d5d46c, bcb16c24, c5dd91d2 | Done | Done | Unchanged and extended by N14. Verified: Existing tests still pass. |
+| [C-0.3.0-teamstatus](#c-0.3.0-teamstatus) | 0.3.0 team status (armory_heartbeat) | 0.3.0 | N7 | Done | Done | Unchanged and still true; the app version stays within the heartbeat's 40 characters (D4). Verified: HostPiecesTests.The_app_version_fits_the_heartbeats_40_characters; end-to-end heartbeat tests. |
+| [C-0.3.1-force-all-fast](#c-0.3.1-force-all-fast) | Release notes 0.3.1: Force check in all is one go | 0.3.1, 0.3.2 | 80a6bce8, e77b8de4, 9ed90e42, 8bbe9bd5 | Done | Done | Still one action and one pass, now through armory_break_locks. Verified: End-to-end tests. |
+| [C-0.3.1-forcemany](#c-0.3.1-forcemany) | 0.3.1 Force check in of many files is one action and one pass | 0.3.1 | 80a6bce8, e77b8de4, 9ed90e42, 8bbe9bd5 | Done | Done | As above. Verified: End-to-end tests. |
+| [C-0.3.2-batched-open-checks](#c-0.3.2-batched-open-checks) | 0.3.2 claim: batched open-file checks end the 40 s passes, a quiet sync takes a second or two, clicks answer right away | 0.3.2 | N6, 7a6c7d95, c5dd91d2, 1f22e3a0, 4cd9eae5 | Partly done | Done | Now true, and narrower: one question only where the plan depends on it. Verified: ResponsivenessTests; LargeVaultResponsivenessTests. |
+| [C-0.3.2-fast-passes](#c-0.3.2-fast-passes) | 0.3.2 release note: a sync with nothing to do takes a second or two and clicks answer right away | MR. PINA; DESKTOP-QH30N35; 0.3.2; 2026-10-09 | c5dd91d2,7a6c7d95,N1,N3 | Partly done | Done | Now true: a quiet pass asks about no file and plans without per-file Restart Manager sessions. Verified: LargeVaultResponsivenessTests: a quiet pass 385 ms on 1,500 files. |
+| [C-0.3.2-feedback-sent](#c-0.3.2-feedback-sent) | 0.3.2: Send feedback no longer says 'couldn't send' for notes that were sent | 0.3.2 | N13, N14, N15, N5 | Done | Done | Unchanged. Verified: Existing tests still pass. |
+| [C-0.3.2-folder-handover](#c-0.3.2-folder-handover) | 0.3.2: Use this folder hand-over plus Switch account | 0.3.2 | N10 | Partly done | Done | Kept, and extended by profiles (N10): the owner is named, waiting work is offered a wait or an own folder, and the owner's checked-out files are sealed read-only while someone else works in their own folder. Verified: As N10. |
+| [C-0.3.2-minekeys](#c-0.3.2-minekeys) | 0.3.2 Check in all and Undo all in My files, with its own scroll box | 0.3.2 | N11, N12 | Done | Done | Unchanged and still true. Verified: check-ui keys-in-sight flows. |
+| [C-0.3.2-pinnedkeys](#c-0.3.2-pinnedkeys) | 0.3.2 folder keys pinned while scrolling | 0.3.2 | N9 | Done | Done | Still true, and keyboard focus now stays clear of them (X-sticky-focus). Verified: check-ui folder keys in sight and focus flows. |
+| [C-0.3.2-quick-quit](#c-0.3.2-quick-quit) | 0.3.2 claim: quitting is quick again, so Windows no longer forces Armory closed (crash reports) | 0.3.2 | 7aa938ba, 2ab514eb, 62f377c1, e5e6e9f3 | Partly done | Done | Now true: StopAsync cancels at once from any thread and the session end is handled. Verified: ResponsivenessTests.Stopping_while_the_open_files_question_is_slow_returns_at_once; HostPiecesTests.A_run_ended_while_quitting_is_not_a_crash. |
+| [C-0.3.2-responds-right-away](#c-0.3.2-responds-right-away) | Release notes 0.3.2: 'Everything responds right away... a sync with nothing to do takes a second or two and your clicks answer right away' | 0.3.2 | c5dd91d2 (reference), N6 | Partly done | Done | Now true, by N6's work. Verified: LargeVaultResponsivenessTests. |
+| [C-0.3.2-runninglines](#c-0.3.2-runninglines) | 0.3.2 'What Armory is doing' running lines | 0.3.2 | N8, c5dd91d2 | Partly done | Done | Now complete: N2 and N8. Verified: ContinuousTransferTests, RunningLineTests, check-ui running-lines flow. |
+| [C-0.3.2-slice-counts](#c-0.3.2-slice-counts) | ENGINE.md: the activity panel keeps its counts across slices; the server is read again about every 10 s | MR. PINA; DESKTOP-QH30N35; 0.3.2; 2026-10-09 | N3,N2 | Partly done | Done | Carried transfers keep their activity lanes and counts between passes; the next pass prunes only what it no longer plans. Verified: StateAndActivityTests.Carried_downloads_stay_visible_between_continuation_passes. |
+| [C-0.3.2-theme](#c-0.3.2-theme) | 0.3.2 instant theme switching | 0.3.2 | N7 | Partly done | Done | Now instant in the page: N7. Verified: check-ui drawing block and theme flows. |
+| [C-0.3.2-thumbnails](#c-0.3.2-thumbnails) | 0.3.2: pictures of parts from Windows' thumbnail handlers | 0.3.2 | N15 | Partly done | Partly done | The robustness N15 asked for is built (timeouts, bounded queue, logging, retry). Verified: ShellThumbnailsTests. |
+| [X-142-ui-uploading-0-of-142](#x-142-ui-uploading-0-of-142) | Window: status cycles 'Checking for changes.' / flash of 'Uploading 0 of 142 files, 260.9 MB left' / 'A few files need you', and the incident snapshot froze the flash | Abraham Jette-Kouri; IDEA-06; 0.3.0, 0.3.1; same code at HEAD; 2026-10-08..09 | 68d7a9d4, 184c9e24, f9912084, N2, N8 | Not done | Done | Name-blocked files are never expected as uploads, so no 'Uploading 0 of N'; the status line names the count and the reason; the incident snapshot is built from a freshly published view. Verified: A view test that no activity line starts with 'Uploading' for name-blocked files. |
+| [X-38-uploading-forever](#x-38-uploading-forever) | 38 files read 'uploading' forever on every computer (IDEA-00, IDEA-06, DESKTOP-F41DB2R, DESKTOP-QH30N35) | everyone in FRC 2026 Off-Season; all four; 0.2.1-0.3.2; 2026-10-08..09 | 58d36379, 4a5a4860, 7a6c7d95, c5dd91d2, 184c9e24 and every snapshot after 18:10Z (45 on IDEA-00 at 0.2.1) | Not done | Done | A server record with no version reads 'No first version' (File detail: 'Added without its first version'), never 'Uploading'; the computer that made it removes the empty record after two scans without the file. Records whose computer never comes back stay: removing them is website request 2 (docs/agent/website-requests-v0.3.3.md). Verified: End-to-end A_create_without_a_first_version_is_not_shown_uploading and the removal test. |
+| [X-6-extra-nameShared-archived](#x-6-extra-nameshared-archived) | 148 nameShared items vs 142 refused per pass: refusals in a project that is later archived are never cleared; never-added files there read 'uploading' | Abraham Jette-Kouri; IDEA-06; 0.3.0-HEAD; 2026-10-08..09 | 68d7a9d4, 184c9e24, 1c1b1c5b (nameShared 148, refused 142) | Not done | Done | Refusals in an archived project are no longer notices; a never-added file there reads notInArmory. Verified: End-to-end tests. |
+| [X-N5a-organize-checked-out](#x-n5a-organize-checked-out) | N5(a): moving or renaming a file or folder someone else has checked out | 0.3.2 (HEAD 8d90d63) | N5 | Not done | Partly done | See N5 (a). Verified: ForceOrganizeTests. |
+| [X-N5b-force-check-in](#x-n5b-force-check-in) | N5(b): instructor override (Force check in) for single files, folders and selections, and how it reads for the holder | 0.3.2 | N5 | Partly done | Done | See N5 (b); BrokenBy from the lock_broken payload; 'your changes' only when the file had changed; armory_break_locks adopted. Verified: End-to-end tests. |
+| [X-break-locks-batch-unused](#x-break-locks-batch-unused) | armory_break_locks (migration 0234) not adopted | 0.3.2 | 8bbe9bd5 | Not done | Done | Force check in of many files uses armory_break_locks, 500 per call in id order, with the PGRST202 fallback, bounded 40P01/40001 retries (each round's operation id chained from the call that answered busy), and one result sentence. Verified: Engine end-to-end tests: 1,200 files in 3 calls, fallback, mixed results, retry, replay after a crash. |
+| [X-checkin-release-guard](#x-checkin-release-guard) | PrepareRelease lets a lock go over bytes it never read and ignores an open file for check in, undo and Check in all | IDEA-06; 0.3.0 to 0.3.2 (unchanged since 0bc573f; git diff 0bc573f..HEAD touches only KnowOpen batching) | N4, 7352f99d, a6f9e941, 1c1b1c5b | Not done | Done | See N4: fresh read with read-only set first, one open-files question for all releases, WaitForClose/ReadAgain steps, writable while a check in waits on an open file. Verified: End-to-end tests A_check_in_while_SolidWorks_holds_the_file_waits_and_then_shares_the_saved_edits, Check_in_all_checks_in_closed_files_and_waits_for_open_ones, A_check_in_never_lets_go_over_bytes_it_could_not_read (in tests/GUARDS.txt). |
+| [X-checkout-rehash](#x-checkout-rehash) | Check out reads and hashes every target file again | 0.3.2 | aa236105, 68bee25b | Not done | Done | A check out reuses the scan's hash when the file is unchanged since the scan (same NTFS id, size and last-write time). Verified: ResponsivenessTests.A_folder_check_out_reads_no_unchanged_file_and_sets_bits_in_batches. |
+| [X-checkout-rehash-slowpa](#x-checkout-rehash-slowpa) | Checking out many files re-hashes every one of them |  | N11, 1f22e3a0, 9e2aca4c | Not done | Done | As X-checkout-rehash. Verified: ResponsivenessTests.A_folder_check_out_reads_no_unchanged_file_and_sets_bits_in_batches. |
+| [X-download-cycle](#x-download-cycle) | Downloads run only about 45% of the time: each 8 s slice is followed by a full rescan and 10.5 s plan (N3) |  | N3, c5dd91d2, 7a6c7d95 | Not done | Done | The transfer queue keeps downloads running between slices (N3). Verified: ContinuousTransferTests.A_big_download_never_pauses_between_slices. |
+| [X-feedback-snapshot-lost](#x-feedback-snapshot-lost) | Feedback and incident snapshots lost when the engine is busy | 0.3.1, 0.3.2 | N4, N5, N7, N9, N13, 12ae9081, 428a0f6f, 6d145628, 968cc0cd, bcb16c24, ccf970d7, ea2b2a2c, ee443a83, f4ea534f | Not done | Done | A feedback or incident snapshot waits 500 ms for the engine, then uses the window's last view, marked engineBusy. Verified: LargeVaultResponsivenessTests: sendFeedback snapshot 47 ms; incident tests. |
+| [X-full-render](#x-full-render) | Every view re-renders all of Home; slow with thousands of files and thumbnails blink | 0.3.2 | N6, N7, N9, c5dd91d2 | Not done | Done | Views are morphed in by key, rows are reused, thumbnails are kept, identical views are skipped. Verified: check-ui drawing block (4x CPU throttle) and thumbnail-kept check. |
+| [X-hash-cache-not-persisted](#x-hash-cache-not-persisted) | First scan after every start re-hashes the whole vault (10-38 s) |  | 8adfb590, 030b06da, 610eed69, 1f22e3a0, 68bee25b | Not done | Done | The scan's hashes are kept in .armory/file-hashes.json (atomic replace) and reused after a start when the NTFS id, size and last-write time match outside the racy window. Verified: Windows CI platform tests. |
+| [X-kept-save-every-pass](#x-kept-save-every-pass) | A checked-out file whose save is already kept counts as 'moving 1' and flashes 'Uploading 0 of 1 file' every pass | MR. PINA; DESKTOP-QH30N35; 0.3.2; 2026-10-09T05:57:45Z onward | N1 | Not done | Done | A save that is already kept is not planned, counted as moving or preserved again (SyncEngine Moves and AlreadyKept). Verified: ContinuousTransferTests.A_save_already_kept_is_never_moving_again. |
+| [X-long-passes-1108s](#x-long-passes-1108s) | The 1,108.8 s and 369.9 s passes were the computer asleep or frozen, not sync work | Abraham Jette-Kouri; IDEA-06; 0.3.0; 2026-10-08T18:24-18:49Z | 68d7a9d4, f9912084 | Not reproducible | Done | Still not an Armory slowdown (the computer was asleep or frozen), but 0.3.3 records sleep and wake as power events and never files a slowPass for a pass the computer slept through (GlitchRules.SlowPass slept), so such reports stop. Verified: GlitchRuleTests.A_pass_the_computer_slept_through_is_not_a_slow_pass. |
+| [X-no-version-uploading](#x-no-version-uploading) | 38 team files with no current version show 'Uploading' forever on a computer that uploads nothing | MR. PINA; DESKTOP-QH30N35; 0.3.2; 2026-10-09 | N2,N3 | Not done | Done | See X-38-uploading-forever: status noVersion. Verified: End-to-end tests. |
+| [X-open-files-question](#x-open-files-question) | 'Restart Manager did not answer within 10 s': the open-files question over every file blocks the engine thread every pass | MR. PINA; DESKTOP-QH30N35; 0.3.2; 2026-10-09T05:51:37Z | N3,N2,N1,7a6c7d95,c5dd91d2 | Not done | Done | See X-pass-48-60s: one question, off the engine thread, only where it matters, 2 s budget; Restart Manager one query at a time. Verified: ResponsivenessTests; Windows CI ReplaceAndLockTests.The_open_files_question_keeps_its_budget_and_runs_one_query_at_a_time. |
+| [X-openamong-blocks-engine](#x-openamong-blocks-engine) | Windows open-file question blocks the engine thread up to 10 s every pass | DESKTOP-QH30N35; 0.3.2 | c5dd91d2 (reference), N6, N5 context | Not done | Done | IVaultFileSystem.OpenAmongAsync runs on worker threads within a budget; a waiting click cancels the loop's question at once. Verified: ResponsivenessTests.Stopping_while_the_open_files_question_is_slow_returns_at_once; Windows CI open-files budget test. |
+| [X-owner-name](#x-owner-name) | The folder-taken screen never names the real owner, and flashes the new student as the owner | 0.3.1, 0.3.2 | N10 | Not done | Done | FolderOwnerView (email, name, waiting) in the view, filled by the engine from the folder itself; the folder-taken screen uses it. Verified: Engine and contract tests. |
+| [X-parked-writable](#x-parked-writable) | While another account (or nobody) is signed in, the owner's checked-out files stay writable and unwatched | 0.3.2 | N10 | Not done | Done | SealCheckOutsAsync makes the last student's check outs read-only while the next works in an own folder, undone when they return. Verified: End-to-end and host tests. |
+| [X-pass-48-60s](#x-pass-48-60s) | Why each IDEA-06 pass took 48-60 s: per-file open checks in the plan phase, not the refusals; 0.3.2 only partly fixes it | Abraham Jette-Kouri; MR. PINA (0.3.2 data); IDEA-06; DESKTOP-QH30N35 for 0.3.2 data; 0.3.0, 0.3.1 (slow); 0.3.2 (better, still ~16 ms per local file); 2026-10-08..09 | 68d7a9d4, f9912084, 184c9e24, 2ab514eb, 030b06da, 7a6c7d95 (0.3.2 field data) | Partly done | Done | The open-files question is asked once per pass, off the engine thread, within a 2 s budget, and only about files whose plan depends on it (Core Reconciler.OpenMatters; SyncEngine.cs AskOpenAsync; Windows OpenFileDetector.OpenAmongAsync runs one Restart Manager query at a time). A quiet pass asks about no file; stale ~$ markers are remembered by their stamp and not asked about again. Verified: Core property test for OpenMatters (whole small state space); ResponsivenessTests.Views_and_a_quiet_pass_never_ask_whether_a_file_is_open_one_by_one and Stale_markers_are_not_asked_about_again_until_they_change; LargeVaultResponsivenessTests: a quiet pass over 1,500 files 385 ms (docs/agent/responsiveness-0.3.3.md); Windows CI: ReplaceAndLockTests.The_open_files_question_keeps_its_budget_and_runs_one_query_at_a_time. |
+| [X-pending-count](#x-pending-count) | Folder-wide actions overcount and mark every row as being worked on | 0.3.2 | N9, N11, N12 | Not done | Done | Folder-wide actions count and mark only the files they can change (app.js affectedOf). Verified: check-ui stand-in host checks: only touched rows show as working; the working line and the question agree on the count. |
+| [X-readonly-manifest-per-file](#x-readonly-manifest-per-file) | Bulk check out/in rewrites the durable read-only manifest once per file | 0.3.1, 0.3.2 | aa236105, 68bee25b, c2d5d46c | Not done | Done | Read-only bits go in one ApplyLockAttributesNow call per chunk of locks or releases, still before each release. Verified: ResponsivenessTests.A_folder_check_out_reads_no_unchanged_file_and_sets_bits_in_batches; Windows platform tests. |
+| [X-recovery](#x-recovery) | Abraham's work is recoverable from server kept copies (and local snapshots); the app has no restore | Abraham Jette-Kouri; IDEA-06; 0.3.1; 2026-10-08 22:40Z to 23:11Z | N4, 12ae9081, 184c9e24 | Partly done | Done | Abraham's edits are on the server as kept copies (side versions). Armory can put one of your kept copies back on this computer, checked out to you (SyncEngine.PutBackKeptCopyAsync, bridge putBackKeptCopy, key on File detail); it keeps any unsaved bytes first and refuses an open file or someone else's copy. Verified: End-to-end tests. |
+| [X-responsiveness-test-gap](#x-responsiveness-test-gap) | No window action is latency-tested on a large vault | 0.3.2 | N6 | Not done | Done | LargeVaultResponsivenessTests (22 tests, a 1,500-file vault, school latency, modeled open-files cost) and ResponsivenessTests; the table is docs/agent/responsiveness-0.3.3.md. Verified: Run in the whole suite (EndToEnd 213 of 213 passed after the merge). |
+| [X-signed-out-as-refusal](#x-signed-out-as-refusal) | A sign-out during a pass is recorded as a permanent-looking refusal with wrong words (explains cantSend 574 -> 344 -> 0 on IDEA-06) | Abraham Jette-Kouri; IDEA-06; 0.2.0-HEAD; 2026-10-08 | 610eed69, 6be92c08, 3b6e0912 | Not done | Done | A sign-out during a pass is a stop like offline: the in-flight write is kept and goes again once connected. A related bug found while testing is fixed too: a resent commit named the new device instead of the lock holder's. Verified: Guarded end-to-end A_sign_out_mid_upload_is_not_a_refusal. |
+| [X-stale-markers](#x-stale-markers) | 224 stale ~$ markers on IDEA-06 are asked about every pass |  | 184c9e24, 2ab514eb | Partly done | Done | A stale ~$ marker is remembered by its stamp and not asked about again until it changes, reaches the flight recorder once, and is never deleted. Verified: ResponsivenessTests.Stale_markers_are_not_asked_about_again_until_they_change. |
+| [X-stale-unread-entry](#x-stale-unread-entry) | The Windows scan reuses the previous hash and read-only flag for a file it cannot open, with no marker | IDEA-06; all through 0.3.2 | N4, all 13 readOnlyBroken incidents | Not done | Done | LocalFileState/LocalFile carry Unread; the next readable scan hashes again even with the same size and time; ApplyReadOnly skips unread entries. Verified: Windows platform test A_file_held_open_for_writing_is_marked_unread_and_hashed_again_once_readable (CI) and end-to-end tests. |
+| [X-sticky-focus](#x-sticky-focus) | Arrow keys move focus onto rows hidden under the pinned folder keys | 0.3.2 | N9 | Not done | Done | scroll-padding-top from the pinned keys' height keeps keyboard focus visible. Verified: check-ui focus-clear-of-pinned-keys flow. |
+| [X-telemetry-refusals](#x-telemetry-refusals) | Incidents cannot name the refused files: refusals are never in the flight, the 200-notice cap is spent on stale ~$ markers, snapshots carry only notice counts | IDEA-06; 0.3.0-HEAD; 2026-10-08..09 | 68d7a9d4, f9912084, 184c9e24, 2ab514eb | Not done | Done | A refusal flight event (path, kind, namesake) when a refusal starts, changes or ends; stale ~$ markers recorded once; the snapshot lists the first 20 items per card and refusals by kind; tools/read-incident prints them. Verified: RefusalEventTests. |
+| [X-test-doubles-blind](#x-test-doubles-blind) | Neither the end-to-end file system nor the Core checkout simulation can see this bug |  | N4 | Not done | Done | PortableVaultFileSystem.Hold/Unhold/HoldUnreadable; the Core checkout simulation models write-held and unreadable files. Verified: The new tests fail on 0.3.2 and pass now. |
+| [X-two-computers-named-IDEA-06](#x-two-computers-named-idea-06) | Two different computers report the device name IDEA-06 |  | N10, 5da43de6, 87fa2b3d, 25d938f6, 428a0f6f, 2d479aea | Not done | Done | As X-two-idea-06. Verified: As X-two-idea-06. |
+| [X-two-idea-06](#x-two-idea-06) | IDEA-06 is two different computers with the same name | Abraham Jette-Kouri, Seraj Arteaga; IDEA-06; 0.3.0, 0.3.1; 2026-10-08T20:42Z to 21:02Z | 2d479aea, 87fa2b3d, 968cc0cd, 428a0f6f, 2ab514eb | Not done | Done | Incidents carry a machineId (a hash of Windows' MachineGuid), and two computers with one name read 'IDEA-06 (a030)' in check-out lines and refusals. Team status lives on the website: showing the id there is a website request. Renaming one of the computers is a school IT task (Mr. Pina's call). Verified: MachineIdTests; the Windows registry read itself runs only on Windows (CI). |
+| [X-two-idea06-engines](#x-two-idea06-engines) | Two engines report device IDEA-06 at the same time with separate vaults | Seraj Arteaga, Abraham Jette-Kouri; IDEA-06; 0.3.1 | 87fa2b3d, 2d479aea, 5da43de6 | Not reproducible | Not reproducible | No Armory defect: two different computers share the name IDEA-06. 0.3.3 tells same-named computers apart in the window and in incidents (X-two-idea-06). Verified: See X-two-idea-06. |
+| [X-ui-checks-coverage](#x-ui-checks-coverage) | UI checks miss the N7 to N12 behaviors and do not run in CI | 0.3.2 | N7, N8, N9, N11, N12 | Not done | Done | check-ui covers the N7 to N12 behaviors (86 flows) and runs on CI in the new Agent window checks workflow (ui.yml) whenever the page or the tools change. Verified: check-ui PASS; ui.yml on main. |
+| [X-uploading-vs-saved](#x-uploading-vs-saved) | Rows say Uploading while the status says Everything is saved | IDEA-00; 0.3.1 | N11, N12, ed7dc8f8, 809ae174, aa236105 | Not done | Done | Rows no longer say Uploading while the status line says everything is saved (archived, name-blocked and versionless files have their own statuses). Verified: End-to-end tests. |
+| [X-version-40](#x-version-40) | armory_heartbeat refuses app_version over 40; nothing holds Armory's version to 40 | 0.3.0 to 0.3.2 |  | Not done | Done | TeamHeartbeat.MaximumVersionCharacters = 40, the heartbeat cuts its version to 40 and stops sending a version the server refused; the app version is 0.3.3. Verified: Guarded test HostPiecesTests.The_app_version_fits_the_heartbeats_40_characters and V3 client tests. |
+| [X-view-open-per-file](#x-view-open-per-file) | Files added while open cost one Restart Manager session each on every view build and twice more per pass |  | N6, 610eed69 | Not done | Done | Views, My files and the read-only rule read the last pass's answers (KnownOpen) instead of asking per file. Verified: ResponsivenessTests.Views_and_a_quiet_pass_never_ask_whether_a_file_is_open_one_by_one. |
+| [X-wrong-words](#x-wrong-words) | The window says 'Checked in' when nothing was shared, and then blames the student for saving without a check out | IDEA-06; 0.3.1, 0.3.2 | N4 | Not done | Done | 'Checked in' only after a fresh read matched; 'Plate.SLDPRT is open in SolidWorks. Save it there and close it; Armory checks it in as soon as it's closed.'; the kept-copy card no longer blames the student. Verified: End-to-end tests assert the sentences. |
+| [X-year-check-docs](#x-year-check-docs) | Docs, screens and UI text that imply the year check works (to correct) | docs at HEAD | user statement | Not done | Done | Corrected docs/core/solidworks-version-gate.md, docs/spike/saved-release.md (superseded line), ENGINE.md, BRIDGE.md, PROOF.md, docs/platform/audit.md, validation.md, docs/core/integration.md and the demo card; the 0.3.3 release notes say plainly that earlier versions never checked the year. Verified: Read back; check-ui passes. |
+| [X-year-check-off](#x-year-check-off) | The SolidWorks year check is off in the shipped app: ReleaseReader = null, so warn uploads 2026 files unchecked and enforce refuses every SolidWorks file | user report; all; 0.1.0-HEAD; since 0.1.0 | user statement; no incident | Not done | Done | AgentHost passes SolidWorksSavedReleaseReader (src/Armory.Core/SolidWorksFileRelease.cs), which reads the year from the file itself with no key and answers unknown unless two independent fields agree. A file newer than the pin is refused in Warn and Enforce and stays a private draft. Verified: Core tests on synthetic containers for every code 8000 to 20000 and every malformed case; 158 public files from 2017 to 2025 all read correctly (outside the repo); 6,320 corrupted copies gave 0 wrong years; end-to-end ReleaseTests (a 2026 draft never reaches the server). No real 2026 file was available: lab checklist. |
+| [X-year-find-2026](#x-year-find-2026) | Can Armory find files already uploaded as SolidWorks 2026? Not today; the server stores null for every version | 0.1.0-HEAD | user question | Not done | Done | After each loop pass Armory reads identical local copies of versions the server holds as 'release not checked' and flags those saved in 2026: rows and File detail carry savedRelease/newerThanPin, and a notice says how many and what a person on a 2026 computer must do. The server's rows are immutable, so the flag is per computer; a website table to share it is listed as a request. Verified: End-to-end ReleaseTests; at most 2 s per pass, never during a click. |
 
 ## Notes, one per row
 
@@ -127,7 +127,9 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Read code: enumerated all 41 '<button' literals (one is inside key()) and all 23 key({...}) calls in app.js with grep -n and read each site's attributes; index.html read whole; TrayApp.cs and MainWindow.cs read for WinForms controls; app.css 1705-1730 and 4114-4135 read for which keys hide their words in a narrow window (all icon-only keys do have a title). No custom tooltip code exists (grep tooltip/data-tip in app.js, app.css, bridge.js: comments only).
 - Cause: Tooltips were added ad hoc via the title attribute only where a key could become icon-only in a narrow window; there is no tooltip component and no rule or check requiring one per control.
 - Missing at 0.3.2: A designed tooltip (theme tokens, consistent delay about 700-800 ms, shows on keyboard focus, readable width, positioned inside the window) and plain-words text for all 75 controls; tips on disabled keys (Chromium sends no pointer events to a disabled button, so a custom tip needs aria-disabled or a wrapper); tray menu tooltips; the WebView2 fallback button tooltip; a UI check that fails when a control has no tip. key()'s comment (app.js:360-361) promises the word 'stays in the tooltip' but 11 key() calls pass no title.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. One styled tooltip (#tip, theme tokens, both themes) on every control after 750 ms of hover or 300 ms after keyboard focus, kept inside the window; keys that are off say why; tray items and the WebView2 fallback button have tooltips too (app.js TIPS, HostTips).
+- Verified in 0.3.3 by: check-ui tips rule: every control in every rendered state has a tip (planted controls without one are caught), tooltip flows by mouse and keyboard; HostPiecesTests.Every_tray_item_and_the_webview2_button_say_what_they_do.
+- Still missing, and why: Seen only in headless Chromium, not by a person in WebView2 on Windows.
 
 ### N2
 
@@ -137,7 +139,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Read code (LogPass, LoopAsync, RunUnitsAsync, PassLockedAsync, ActivityTracker). N2 Context: lastPasses all cutShort true with 83/80/78 downloaded, snapshot sync.line 'Checking for changes.', activity null, 28 files notOnThisComputer and 106 still moving at the pass that preceded the report. Reproduced the tracker sequence in a throwaway test N123ProbeTests.Between_continuation_passes_the_download_lane_is_hidden in worktree scratchpad/wt-n123 (dotnet test tests/Armory.Agent.Engine.Tests --filter N123ProbeTests: passed): after a cut-short pass the newest line is 'Sync finished: 20 files downloaded.' while 80 of 100 files are left and Line/Download are null.
 - Cause: LogPass treats every pass as a complete unit of work; the slice design (PassSlice) made a long download many passes, but the running line was never made aware of cutShort.
 - Missing at 0.3.2: A finished line only when the whole run is done (not cut short, nothing left), one line for the whole run instead of one per slice, progress lines in its place, wording without 'sync', a test.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. No more 'Sync finished' after each slice: progress lines every 10 s ('Downloaded 600 of 1,429 files'), one end line per run ('Finished: 1,429 files downloaded in 7 min.'), and how far it got on pause or going offline (SyncEngine.Lines.cs).
+- Verified in 0.3.3 by: ContinuousTransferTests.A_long_download_says_it_finished_once_at_the_end and Pausing_a_long_download_says_how_far_it_got.
 
 ### N3
 
@@ -147,7 +150,9 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Read code (LoopAsync, PassLockedAsync, PassAsync, PlanAllAsync, KnowOpen, RunUnitsAsync, RunConcurrentlyAsync, ActivityTracker, BuildView, TrayApp, MainWindow view coalescing, OpenFileDetector, WindowsVaultFileSystem). Flight recorder of c5dd91d2 (whole download) and 7a6c7d95 analyzed with scratchpad/tools/n123-passes.py (per-pass phase ms) and n123-gaps.py (time with zero downloads running): 1,429 downloads, 2.08 GB, wall 421.2 s, no download running for 170.7 s (41%), 18 gaps growing from 3.1 s to 11-12 s, mean concurrency 2.41 of 6; plan phases total 151.7 s, move phases total 251.9 s. Reproduced the hidden lane and fallback line with throwaway N123ProbeTests in worktree wt-n123 (passed).
 - Cause: The engine's unit of work is a whole pass (scan, server read, plan of every path, transfers, finish). Slicing a long download into 8 s passes makes every boundary pay the full fixed cost, and 0.3.2's batched open-files question made that fixed cost grow with the files already downloaded (about 14.6 ms per file, capped at the 10 s Restart Manager budget), all on the engine thread. The activity tracker drops the not-started work at each boundary and the pass end publishes a non-syncing view, so the window shows the stop.
 - Missing at 0.3.2: A transfer pipeline that keeps running across pass boundaries; planning that does not ask the open-files question for files whose plan cannot depend on it; the open-files question off the engine thread; a status that stays 'Downloading N of M' between continuation passes; no synced/All saved view between continuation passes; no rescan or re-plan of everything when nothing changed; refill of idle lanes during a slow file; stall detection for a stuck download.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. An engine-owned transfer queue: a slice's transfers carry into the next pass instead of being awaited, unstarted downloads keep starting while the next pass reads the server, the view stays on Downloading between passes, a stalled transfer is retried once with a fresh URL after 30 s without bytes, and a downloaded file is not read again by the next scan (SyncEngine.Queue.cs, BlobClient.StallAfter, LocalChangeDetector.Seed).
+- Verified in 0.3.3 by: ContinuousTransferTests.A_big_download_never_pauses_between_slices (1,500 files: no second without a download running), A_stalled_download_does_not_hold_the_others, A_downloaded_file_is_not_read_again_by_the_next_scan; ClientTests stall test; Windows CI LocalStateTests.A_file_armory_wrote_is_not_read_again_until_it_changes.
+- Still missing, and why: Not timed on a lab computer with the school's real network.
 
 ### N4
 
@@ -157,7 +162,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Read the code paths above. Reconstructed the field timeline from all 13 readOnlyBroken incidents, the 9 slowAction incidents and the N4 log (per-person flight merge; see notes). Reproduced in a private worktree (scratchpad/wt-n4, detached at 8d90d63) with a throwaway PostgreSQL 16 cluster: added a SolidWorks write-hold model to tests/Armory.EndToEnd.Tests/PortableVaultFileSystem.cs (scan keeps the previous entry and reports 'being used by another process', OpenRead throws, IsOpen true, mirroring LocalChangeDetector.cs:172-178) and N4ReproTests.Check_in_while_SolidWorks_holds_the_file_never_loses_the_saved_edits. At HEAD it FAILS: check in answer ok=True 'Checked in Plate.SLDPRT.'; server current still v1, live locks 0, read-only set; after close and one pass disk='v1', side version 'alex.kim@students.test/changed without a check out', edits on server=True. With a prototype fix (scratchpad/n4-prototype-fix.patch) both repro tests pass and all 120 other EndToEnd tests pass (103 + 17).
 - Cause: PrepareRelease decides 'clean' from the scan's hash, and the Windows scan silently reuses the previous hash (and read-only flag) for a file it cannot open. A part that SolidWorks holds open for writing is therefore always 'unchanged' to Armory, so its check in releases the lock without uploading. SolidWorks then saves in place through its existing write handle (the read-only bit is only checked at open), and when the document is closed the first readable pass treats the saves as 'changed without a check out': it keeps them as a side version and downloads the old shared version over the file.
 - Missing at 0.3.2: (1) A check in (and Check in all, undo, an add's automatic check in) must never let go of a lock on bytes it did not read at that moment, and must wait while the file is open in SolidWorks. (2) The scan must say which entries it could not read. (3) The answer must not say 'Checked in' when nothing was shared; the kept-copy card must not blame the student. (4) Test doubles and the Core simulation do not model a file held open for writing, so no existing test can see this.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. A check in (single, undo, Check in all, batch, an add's automatic check in) never lets the lock go while SolidWorks has the file open or over bytes not read at that moment: Core rule CheckoutRules.NextCheckInStep (src/Armory.Core/Checkout.cs), the engine guard in PrepareRelease (src/Armory.Agent.Engine/SyncEngine.Checkout.cs), the scan's Unread flag (src/Armory.Platform.Windows/LocalChangeDetector.cs, Platform.cs). An open file waits and is checked in by the first pass after it closes; the answer says so. A kept copy can be put back from File detail (SyncEngine.PutBackKeptCopyAsync).
+- Verified in 0.3.3 by: The field reproduction (tests/Armory.EndToEnd.Tests, a SolidWorks write hold in PortableVaultFileSystem) fails on 0.3.2 and passes; seven new end-to-end tests; the Core checkout simulation now models write-held and unreadable files with three new invariants, and two deliberate breaks of the guard are caught (seeds 12 and 46). A Windows platform test for the Unread flag runs on CI.
 
 ### N5
 
@@ -167,7 +173,9 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Read app.js, Bridge.cs, SyncEngine.Checkout/Actions/Folders and the server SQL (0232:265-350, 0233:718-742, 819-850, 1007) and ARMORY.md 381-386 and 542-592; existing tests CheckOutTests.A_mentor_takes_back_a_check_out_and_nothing_is_lost and Force_check_in_of_many_files_is_one_action_and_one_pass cover (b) functionally. N5's own context snapshot is 'the engine did not answer within 3 seconds' (engine thread busy).
 - Cause: The server contract requires the lock holder for armory_move_file and refuses folder rename/delete over anyone else's lock, with no role bypass; the app mirrors that. Force check in follows can_take_back, which excludes the instructor role.
 - Missing at 0.3.2: (a) entirely: see X-N5a-organize-checked-out. (b) gaps: the 'instructor' member role cannot force a check in (server can_take_back is mentor/cad_lead/admin only); the holder's notice does not say who forced it, says 'took it back' and 'force checked in' for the same thing, and the app offers no way to get the kept copy back; see X-N5b-force-check-in.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Partly done**. (a) Mentors and CAD leads can rename or delete a folder, rename or move a file that others have checked out: the window offers 'Force check in 3 files and rename', which force checks in those files (their unsaved work kept as their own copies) and does the rename in one action. Students' refusals say they can ask a mentor or CAD lead to force check in. (b) The instructor override is Force check in, which the server gives to mentors, CAD leads and site admins (single files, folders, selections, Force check in all); the holder's notice names who did it and adds 'use Save As' when the file is still open.
+- Verified in 0.3.3 by: End-to-end ForceOrganizeTests and HonestyTests; check-ui clicks both keys.
+- Still missing, and why: Moving a file while someone else keeps it checked out (no force) needs a server change: armory_move_file allows only the lock holder. An 'instructor' role is not in the server contract (it has mentor, CAD lead, student and site admin). Both are written as website requests in docs/agent/website-requests-v0.3.3.md; nothing here changes the server.
 
 ### N6
 
@@ -177,7 +185,9 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Read Bridge.cs, AgentHost.cs, EngineThread.cs, SyncEngine.cs (EnterActionAsync 301-306, LoopPassAsync 267-280, PassLockedAsync 373-415, PassAsync 423-549, PlanAllAsync 958-985, RunUnitsAsync 1118-1134), Checkout.cs, Batches.cs, OpenFileDetector.cs, ReadOnlyPolicy.cs. Field: 0.3.2 DESKTOP-QH30N35 plan phase median 10,443 ms, p90 10,515, max 10,526 over 24 passes, with the log line 'open files: Restart Manager did not answer within 10 s; exclusive-open probe used.' at 2026-10-09T05:51:37Z; c5dd91d2 single check out 15.2 s; armory_file_history recorded 10,586 ms behind a plan. Reproduced in a private worktree (throwaway N56saProbeTests, PortableVaultFileSystem with a 2 s whole-vault open-question cost, 301-file vault, real PostgreSQL 16): idle single check out 2.09 s and check in 2.07 s each with one 301-path open question; launchFile 1.90 s and file detail 1.91 s while the loop planned; 5 concurrent row Check in clicks answered at 3.56, 5.61, 7.65, 9.69, 11.74 s with 5 whole-vault questions.
 - Cause: Design: an action is 'take the pass gate, run a pass' rather than 'record the request, finish it in the next pass'; the plan (whole vault) is the expensive phase and is neither scoped for actions nor interruptible for the loop; open-file detection is synchronous on the single engine thread and, on Windows, Restart Manager's halving search exceeds its 10 s budget on a 1,467-file vault every pass.
 - Missing at 0.3.2: 1) Every gated action (checkOut, checkIn, undoCheckOut, takeBack, takeBackAll, renameFile, create/rename/deleteFolder, addFiles, dropFiles, takeOverFolder, launch of a file not on disk) waits for the loop pass's phases A and B (the loop only yields in phase C, SyncEngine.cs:1128) and then runs its own pass whose scan and PLAN are whole-vault (SyncEngine.cs:724-727 doc, 958-985). 2) The plan is synchronous on the engine thread and OpenAmong blocks it up to the 10 s budget (OpenFileDetector.cs:71, WindowsVaultFileSystem.cs:129), so launchFile, file detail, notice OK, Pause/Resume and feedback snapshots (3 s deadline, IncidentReporter.cs:18, 70-81) all wait; 5 of 15 feedback notes lost their snapshot this way. 3) Waiting actions never coalesce: N row clicks are N passes. 4) Bulk check out/in write the durable read-only manifest once per file (ReadOnlyPolicy.cs:42-48, 209-237) and check out rehashes every file (Checkout.cs:716-724). 5) Notice OK and Pause have no optimistic page update (app.js:2318-2319, 2927-2931). 6) No test measures any window action on a large synced vault with a realistic open-file cost.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Every click answers at once: the key is busy the moment it is pressed, a running line names the action within milliseconds, the request is recorded without waiting for a pass, clicks join one action pass, and Open, File detail, Pause and Send feedback never wait for the engine thread.
+- Verified in 0.3.3 by: LargeVaultResponsivenessTests: 22 window actions on a 1,500-file vault with school latency, each within 1 s plus its own server calls and transfers, running line within 49 ms (docs/agent/responsiveness-0.3.3.md); ResponsivenessTests.
+- Still missing, and why: Measured in the test world with Windows' costs modeled, not on a lab computer.
 
 ### N7
 
@@ -187,7 +197,9 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Read code (app.js, AgentHost.cs, Bridge.cs, MainWindow.cs, app.css) and git history (0.3.0 app.js 'theme' case only sent saveSettings and waited for the host view). Ran check-ui.mjs on a private worktree (PASS; its flow asserts the theme is worn before the host answers). Playwright probe (scratchpad/tools/uibulk-probe.mjs, uibulk-probe4.mjs) on demo states: at 1x CPU a theme click is followed by one full render 86 to 114 ms later costing about 100 to 134 ms with 1,401 to 5,000 files; with CDP CPU throttle 4x the full render is a 497 to 538 ms long task and the first painted frame after the click came at 523 to 569 ms (the demo answers with setTimeout 0, so the view lands before the next frame).
 - Cause: 0.3.0: the page waited for the host's view and the host took the theme from the engine, whose thread was busy in 57 s and 1,108 s passes (N7 log 18:41:35, 18:42:28-29 'settings saved'), so the switch waited for the pass and flickered. That is fixed. Residual: settings changes go through the same full-view pipeline as everything else, views are never de-duplicated, render() rebuilds the whole DOM, and CSS transitions apply to only some elements.
 - Missing at 0.3.2: (1) No settings-only fast path: a theme click causes 2 to 3 full Home re-renders on the real host (Bridge PostView + RaiseView + the engine's republish), each about 0.5 s on a slow lab CPU with 1,400+ files. (2) If a view message lands before the next frame, the new theme is not painted until the full render finishes, so 'instant' is not guaranteed. (3) Mixed-state frames: keys, pads and rows ease for 120 ms while panels switch instantly. (4) Every full render recreates row thumbnails; the host serves them with Cache-Control: no-cache (MainWindow.cs:229), so they blink back to the glyph until reloaded. (5) No check-ui assertion on re-render count or switch latency with a big view.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. A theme pick paints in the next frame with transitions off; a view that changes only settings updates in place; an identical view is never posted twice; other views are morphed in and rows and thumbnails are kept.
+- Verified in 0.3.3 by: check-ui drawing block with a 4x CPU throttle and theme flows; HostPiecesTests.An_identical_view_is_posted_once; bbox-diff: identical geometry in both themes.
+- Still missing, and why: Not timed on a slow lab computer in WebView2.
 
 ### N8
 
@@ -197,7 +209,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Read code. Ran a throwaway end-to-end test in a private worktree against a private PostgreSQL 16 cluster (tests/Armory.EndToEnd.Tests/UiBulkProbeTests.cs in scratchpad/wt-uibulk, School latency, 160 files, 3 s idle before each action): Check out with the 0233 stand-in got live events at +268 ms 'Asking the server to check out 160 files' and +767 ms 'Checked out 160 of 160 files', activity.Line null throughout and the status line 'Checking for changes.'; Force check in of 160 files got ONE activity event at +1,085 ms, after all 160 armory_break_lock calls and after the action answered (1,051 ms), carrying all 11 Force lines at once. Playwright probe: on 'transferring' at 1280x800 the Right now panel is at y 201 to 707 at open and at y -629 to -123 after scrolling the column 1,500 px. Incident timelines: aa236105 (0.3.1, Check out all of 1,424 files, 133 s) and c5dd91d2 (0.3.2, plan phase 10.5 s on every pass with 1,467 files; snapshot activity null).
 - Cause: Running lines were added as log entries on top of a transfer-oriented tracker: only uploads, downloads, moves and check-in releases have lanes, and the publishing timer is tied to passes and folder moves, not to actions that do their work before their pass.
 - Missing at 0.3.2: (1) Force check in lines are not live: TakeBackAsync(list) logs outside a pass and never starts the activity timer, so nothing reaches the window until the closing pass. (2) Check out and Undo have no progress lane: no bar, no 'X of N' count and the big status line says 'Checking for changes.' (SyncEngine.View.cs:43) for the whole check out. (3) Silent stretches before the first line: waiting for the loop pass, scan, server read and plan (10.5 s per pass on DESKTOP-QH30N35 0.3.2) and per-file hashing in FinishCheckOutAsync (Checkout.cs:721) emit no line. (4) No lines at all for folder rename/move (only a lane), Delete folder, Add files' copy phase (Folders.cs:1250-1290), scans or server reads. (5) The panel lives at the top of the scrolling column, so it scrolls out of sight while the student works in a long folder (the left status shows only lane lines). (6) patchActivity rebuilds the list and jumps to the end on every change (app.js:972-977), so older lines cannot be read while lines arrive. (7) 'Sync finished: N files downloaded.' is logged after a cut-short loop pass that continues at once (SyncEngine.cs:579; see N2). (8) No demo state shows check-out running lines (demo/states.js only has transfer lines in TRANSFERS) and check-ui never asserts #act-log.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Long operations show their own counts and running lines (check out, undo, Force check in, reads, folder moves), and the newest running line is always in sight.
+- Verified in 0.3.3 by: RunningLineTests (three tests); check-ui running-lines flow.
 
 ### N9
 
@@ -207,7 +220,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Read app.js, index.html, app.css. Ran check-ui.mjs (PASS: 184 pages, 44 flows). Playwright probes on demo states: manyMine at 1280x800 has Check in all/Undo all at y 237 to 281 (in view at open) and Team files' label at y 702; at 420x720 the keys are at y 336 to 380. bigProject: after scrolling 3,000 px the folder keys are at y 238 (1280) and y 146 (420), position sticky. Shift-select of a whole 5,000-file folder works ('5,000 selected', about 100 to 170 ms per click). Pending-label probes (uibulk-probe2.mjs, uibulk-probe3.mjs) and keyboard probe (uibulk-probe5.mjs) listed under the X items.
 - Cause: 0.3.1: My files listed every check out as a page-height row (no own box, no keys) above Team files, whose keys were at the top of a list that scrolled away. Fixed in 0.3.2. The remaining items come from the window treating a folder path as 'every file under it' when it reports work in progress, from the sticky head not being taken into account by keyboard scrolling, and from render() rebuilding everything on every view.
 - Missing at 0.3.2: Concrete remaining problems with thousands of files (each detailed as an X item): (a) the working line and the row labels during a folder-wide or 'all my files' action count and mark every file under the folder: My files Check in all says 'Checking in 5,018 files...' when 1,401 are mine, folder Check in all says 'Checking in 5,000 files...' with one file mine, Check out all's dialog says 6 files but the foot says 'Checking out 8 files...', and other people's rows read 'Checking in...' with their holder hidden (X-pending-count); (b) arrow keys move focus onto rows hidden under the pinned folder keys (X-sticky-focus); (c) every view re-renders the whole Home, about 0.5 s on a slow CPU with 1,400 to 5,000 files, up to twice a second during passes, and thumbnails blink (X-full-render); (d) Right now scrolls away (N8); (e) rows/sync disagree: 38 files 'uploading' while the status says 'Everything is saved to Armory.' in the N11/N12 snapshots (X-uploading-vs-saved); (f) no Select all; (g) two keys both labeled 'Check in all' with different scopes on one screen (My files vs the folder); (h) a long action's final answer fades after 8 s (app.js:2302-2304) and is kept nowhere; (i) Force check in all names every holder in one sentence (app.js:2089-2090), unbounded with many students; (j) no CI runs the UI checks.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Only files the action can change show as working and the keys and question say how many; Select all in this folder; keyboard focus never goes under the pinned keys; Force check in names are capped.
+- Verified in 0.3.3 by: check-ui flows: only touched rows show as working, the working line and the question agree, select all, focus clear of pinned keys, Force check in names.
 
 ### N10
 
@@ -217,7 +231,9 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Read code (engine, host, bridge, page, settings, lock files). Compared the 0.3.1 page with git show v0.3.1. Read the guarded Postgres tests tests/Armory.EndToEnd.Tests/AccountTests.cs:24-106 (not run: no PostgreSQL cluster reachable from the sandbox; the local cluster is down and the scratchpad is not readable by the postgres user). Read the N10 context: IDEA-00, vault C:\IDEA\Armory, checkedOutHere 1423, files 1471; its log tail has no account switch (only restarts at 18:20:58Z and 18:29:49Z, both 'session loaded for apina@boscotech.edu').
 - Cause: The folder belongs to exactly one account (state.Email in .armory\state.json) and the engine has no notion of a second account's work in the same folder: a different signed-in email makes PassAsync return at once (SyncEngine.cs:432), and the only transition is a whole-folder hand-over that requires the owner to have nothing waiting (SyncEngine.Accounts.cs:32-33). SessionManager holds one session, so a switch can never be quick.
 - Missing at 0.3.2: (a) Shared use while the first student has anything waiting. On IDEA-00 itself (N10 snapshot: 1,423 files checked out here by apina) Use this folder is refused ('Apina still has 1,423 files checked out in this folder...'), so a student is still sent to a second folder and a second full download, which is N10's complaint. (b) Remembered profiles: one session per Windows user, so every switch is a full browser sign-in, and every connect registers a new device row. (c) A PIN (or Windows Hello) to protect a remembered profile on a shared Windows login. (d) A picker ('Who is using Armory?') listing remembered accounts and what each has waiting. (e) Hand-over with waiting work: parking the first student's check outs and unsent saves (read-only, kept, sent under their own name when they return) instead of refusing. (f) The folder owner's name is never shown in production (see X-owner-name). (g) Nothing protects the parked owner's writable files (see X-parked-writable). (h) On the folder-taken screen Send feedback and Settings are unreachable (header key only when signedIn, app.js:554; openSettings returns unless signedIn, app.js:1769-1770). (i) Separate Windows users: a second Windows user whose Armory starts while the first user's Armory still runs (fast user switching) gets runtimeProblem 'Armory can't use the folder C:\IDEA\Armory. Choose another folder in Settings.' (AgentHost.cs:427-432) with no word that another Windows user holds it. (j) Switching does not ask the student to save and close SolidWorks files first.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Settings: 'This computer is shared by several students' (off by default; off changes nothing). On a shared computer the window opens on a picker like Chrome's (name, initials, Add a student); each student's profile keeps its own sign-in, so switching needs no browser; a 4-digit PIN guards each switch (Mr. Pina can turn PINs off from a mentor's profile). One shared Armory folder is handed over with the 0.3.2 rule; when the last student has work waiting, their tile says so and the next student can wait or use a folder of their own; their waiting work stays theirs and they are moved back to the shared folder once it is done. A switch stops the last student's sync for good before the next one starts. Files: src/Armory.Agent/Profiles.cs, AgentHost.Profiles.cs, Bridge.Profiles.cs, src/Armory.Core/SharedComputer.cs, PinHash.cs, SyncEngine.Stopping.cs, wwwroot picker. docs/agent/PROFILES.md.
+- Verified in 0.3.3 by: Core rule tests; engine tests that a stop during a download or a check in writes nothing afterward (byte for byte); host tests for the picker, PIN right/wrong/waits (surviving a restart), switching with and without waiting work and mid-sync, the own-folder round trip, a second runtime refused, add, remove, on/off migration, and single-user mode unchanged; check-ui flows for the picker. DPAPI and the real Windows stores run on CI only.
+- Still missing, and why: Profile pictures (initials only) and a team-wide PIN switch on the website are left out; lab checks owed are in PROFILES.md.
 
 ### N11
 
@@ -226,7 +242,8 @@ Totals at 0.3.3: 105 In progress.
 - Found at 0.3.2: **Done**. My files: Check in all and Undo all above the list when there is more than one file (app.js:1243-1252), list in its own scroll box over 6 rows (app.js:1253-1271, app.css:3583-3590); the selection bar (app.js:1504-1526) and the pinned folder keys (app.css:3571) also offer bulk check in.
 - How it was verified then: Playwright probe on demo state manyMine (1,401 files mine): keys in view at open at both window sizes (y 237 to 281 at 1280x800, y 336 to 380 at 420x720), My files box 370 px, Team files label at y 702. check-ui flow (check-ui.mjs:1348-1360) asserts the box, that Check in all sends checkIn of the project folder and Undo all asks first; check-ui PASS on HEAD. Engine side: CheckInAsync takes only this computer's check outs under the paths (Checkout.cs:181-196, MyCheckOuts).
 - Cause: 0.3.1 listed 1,400 rows in My files before any key; fixed in 0.3.2 (commit 6a9779f).
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Unchanged since 0.3.2 (My files with Check in all and Undo all in their own scroll box); the counts are now right (X-pending-count).
+- Verified in 0.3.3 by: check-ui keys-in-sight flows.
 
 ### N12
 
@@ -235,7 +252,8 @@ Totals at 0.3.3: 105 In progress.
 - Found at 0.3.2: **Done**. Three ways now: My files Check in all (app.js:1249, 2845-2847, sends every project folder with a file of mine, mineFolders at 1280-1286), the folder's Check in all (app.js:1427, 2841-2844, pinned at the top of a long folder by app.css:3571) and the selection bar's Check in (app.js:1520, 2791-2800). The engine checks in only this computer's check outs under the paths, in batches of 500 (Checkout.cs:181-196, Batches.cs:157-240).
 - How it was verified then: Read code; Playwright probe (keys in view at open in manyMine); check-ui PASS; end-to-end test Check_out_check_in_and_undo_of_many_files_each_take_one_batch_and_one_pass passed on a private PostgreSQL cluster.
 - Cause: 0.3.1: the only bulk check in keys were below 1,400 My files rows; fixed in 0.3.2.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Unchanged since 0.3.2 (three ways to check in many files).
+- Verified in 0.3.3 by: check-ui; end-to-end batch tests.
 
 ### N13
 
@@ -244,7 +262,8 @@ Totals at 0.3.3: 105 In progress.
 - Found at 0.3.2: **Done**. IncidentUploader.SendFeedbackNowAsync (src/Armory.Client/IncidentUploader.cs:104-119) now checks feedbackSent first (line 112): a note the background round already sent answers Sent. SendAsync adds the file to feedbackSent right after the RPC answers (IncidentUploader.cs:175-178), before Rewrite and Mark(.sent) (179-186). AgentTelemetry maps Sent to 'Sent. Thank you for the feedback.' (AgentTelemetry.cs:150). Guarded test tests/Armory.Client.Tests/V3ClientTests.cs:417-439 A_note_the_background_round_already_sent_is_sent_not_held.
 - How it was verified then: Logs and flights of the 77 incidents and the 15 notes (script n1015-grep.py): every armory_submit_app_feedback RPC answered 200 (11 calls, 98 to 287 ms); three sends answered Held right after a successful RPC (IDEA-06 0.3.0 17:52:46Z = N15, IDEA-00 0.3.1 18:24:58Z local = N14, IDEA-06 0.3.1 19:52:23Z = N5), each with 'could not be read (FileNotFoundException); it is kept as held'. Reproduced in throwaway worktrees (removed afterward) with a live race test (RunAsync running, note saved, Wake, SendFeedbackNowAsync, 60 rounds): v0.3.1 code answered Held 42 times and Sent 18 times with exactly 60 feedback RPCs (every note was sent once); HEAD 8d90d63 answered Sent 60 of 60, one RPC each, no 'held' line. Also ran the guarded A_note_the_background_round_already_sent_is_sent_not_held and A_note_on_its_own_sends_its_words_and_no_incident: pass.
 - Cause: A race inside the app, not the server. Saving the note fires Reporter.Saved, which wakes the background uploader (AgentTelemetry.cs:44, IncidentReporter.cs:157). When the uploader was idle (no transfer running and its one-a-minute slot free), its round took the gate first, sent the note-only file and renamed it .sent (IncidentUploader.cs:182-186). SendFeedbackNowAsync then read the old path, got FileNotFoundException, tried to mark it held and returned Held (0.3.1 lines equivalent to 148-163), so the window said 'Armory couldn't send that feedback. It is kept in the incidents folder.' The first note after a quiet minute hit it; later ones in the same minute won the gate (TooSoon) and said Sent. Timeline on IDEA-00: N14 at 18:24:58Z local said Held; 46 s later Mr. Pina wrote N13 ('i have not been able to send any feedback'), which itself said Sent. The 0.3.2 fix addresses this exact cause.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. The 0.3.2 fix stands; 0.3.3 also keeps a note's words in the dialog whenever it can't go, and a busy Storage no longer reads as a refused picture.
+- Verified in 0.3.3 by: Existing and new feedback tests.
 
 ### N14
 
@@ -254,7 +273,9 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Read code (ArmoryApi.cs, IncidentUploader.cs, AgentTelemetry.cs, Bridge.cs, bridge.js, app.js); grep for p_tried, p_area, p_screenshot, praise, armory_my_app_feedback, storage/v1, armory-feedback-shots across src, tests and docs: the only hit is a 0233 stand-in test that expects praise to be refused (V3StandInTests.cs:58). Read the contract (ARMORY.md 'The v0.3.2 server contract (migration 0235)', item 5) and the migration (0235_armory_app_feedback_v2.sql:59-90, 112-201, 260-293), and the website's form (src/lib/feedback/FeedbackBox.svelte, feedback.ts:27-32, 81, screenshot.ts:44).
 - Cause: Not built: 0235 was written for 0.3.2 but the 0.3.2 client still calls only 0233's five-argument form; nothing in Armory.Client, Armory.Agent or the page calls the eight-argument form, armory_my_app_feedback or Supabase Storage.
 - Missing at 0.3.2: Field by field against 0235: p_kind praise not offered (app kinds bug/idea/other; AgentTelemetry would turn praise into other). p_tried (What did you try?, up to 1000): no field, not in the note record, not in the API. p_area (window or view name, up to 120): not sent; the page knows its screen and project/folder. p_screenshot: no capture, no Storage client, no upload to armory-feedback-shots at <auth uid>/<uuid>.png (PNG, at most 2 MiB); the session has SupabaseUrl, AnonKey and AccessToken (Session.cs:8-10) but no user id (it is the JWT sub). Refusals 22023 bad_path / not_found / in_use and too_long for tried/area: not handled; today any of them would hold the whole note (IncidentUploader.cs:216-227) instead of dropping or redoing the screenshot. Eight-to-five fallback on PGRST202: absent (only the six-hour wait for the five-argument form). armory_my_app_feedback 'Your feedback' list with status new/seen/resolved/closed: absent, and must hide on PGRST202. Website extras with no 0235 field: horizon (now / long term), dictation (Ctrl+Shift+Space with a level meter; in WebView2 Windows voice typing Win+H is the practical route), Ctrl+Enter to send, paste or drop a picture, Send another / Done. Privacy for a screenshot: File detail shows another person's address (app.js:1681 who-email), which 0235 forbids in a screenshot. Send feedback is unreachable on the folder-taken screen.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Send feedback now matches the website's 0235 form: kinds Bug, Idea, Praise, Other; 'What did you try?' (1,000 characters, live count); the area filled in by the page; an optional picture of the Armory window only (thumbnails hidden and every address shown as •••@domain while it is taken; scaled down to fit 2 MiB; shown exactly as sent; never written to disk) uploaded to armory-feedback-shots at <auth uid>/<uuid>.png, then the eight-argument armory_submit_app_feedback. 22023 bad_path/not_found/in_use keeps the note and offers 'Send without the picture'; PT429 waits retry_after_seconds; PGRST202 falls back to the five-argument form with praise sent as 'other' and the new fields kept in the context. 'Your feedback' lists your notes and their status from armory_my_app_feedback and is hidden on PGRST202; it says plainly there are no replies in Armory. Files: src/Armory.Client/FeedbackSender.cs, FeedbackScreenshots.cs, src/Armory.Agent/FeedbackDesk.cs, AgentHost.Feedback.cs, MainWindow.cs (capture), wwwroot/app.js.
+- Verified in 0.3.3 by: Client tests for every refusal shape and fallback, including a busy Storage read as 'try again' (a bug found and fixed while building); FeedbackDeskTests; end-to-end feedback tests at school latency; check-ui flows for the dialog, masking during capture, the offer and Your feedback. Not run: a live WebView2 capture and a real upload to the website's bucket (lab checklist).
+- Still missing, and why: A live capture at 100% and 150% scaling and one real upload are lab checks.
 
 ### N15
 
@@ -264,7 +285,9 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Read code and tests. Not run on Windows here. Never checked with real SolidWorks files: the only Windows test uses a generated BMP (ShellThumbnailsTests.cs:9-31), and AGENTS.md forbids committing team CAD files.
 - Cause: Not a bug report: the feature exists but is unverified. Design risks: one serial STA thread with no timeout, no logging, and negative answers cached by path, size and time.
 - Missing at 0.3.2: A lab check with real SolidWorks files (it was never done). Robustness: (1) No timeout: one hung handler stops every later picture and leaves WebView2 deferrals open forever (ShellThumbnails.cs:54-72). (2) The queue is unbounded and never drops requests for rows already scrolled away. (3) It is constructed without a log (AgentHost.cs:138 'new()'), so handler failures never reach agent.log or incidents. (4) A null answer is cached for that (path, size, time), so a file that was locked by SolidWorks keeps its glyph until it changes. (5) The cache key is taken after Make (line 64), so a picture made from old bytes can be stored under the new key. (6) Crash risk: if SolidWorks' handler opts out of process isolation it runs inside IdeaArmory.exe, and an access violation there ends Armory (not catchable in .NET). (7) No picture on a computer without SolidWorks' handler (eDrawings only or nothing), and unknown for 2026-saved files on a 2025 computer. (8) Long paths over 260 characters through the shell API are untested.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Partly done**. Thumbnails never hold the window: each answers within 5 s or returns nothing, a stuck handler is left behind and logged (agent.log and the flight recorder), the queue keeps the newest 64, duplicate asks share one picture, a missing picture is retried after a minute, and pictures are cached by the browser (ShellThumbnails.cs).
+- Verified in 0.3.3 by: ShellThumbnailsTests (hung handler, stuck handler, bounded queue, dedup, retry, cache key), Windows CI.
+- Still missing, and why: Never checked with real SLDPRT, SLDASM and SLDDRW files: this computer has no SolidWorks and AGENTS.md forbids committing team CAD files. It is on the lab checklist.
 
 ### I-checkIn-IDEA-00-0.3.1
 
@@ -274,7 +297,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Flight: no wait (loop pass had just ended at 19:43:37.7); action pass plan 7,502 ms; then 6.1 s from move (19:43:47.288) to the first armory_release_locks (19:43:53.437): PrepareRelease's per-file SetAttribute (Checkout.cs:675) for 1,424 files; three release_locks 340-396 ms; finish 6,891 ms. Read current code.
 - Cause: Per-file ReadOnlyPolicy.Apply persists the whole manifest with WriteThrough each time; whole-vault plan per action.
 - Missing at 0.3.2: 0.3.2 keeps the per-file durable manifest write in PrepareRelease and the whole plan per action; estimated 18-29 s on DESKTOP-QH30N35 (10.5 s plan, possible loop wait, about 6 s attributes).
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Check in all records its request at once and runs in one action pass with batched releases.
+- Verified in 0.3.3 by: LargeVaultResponsivenessTests: check in all of 100 files 1,707 ms with its 6,967 ms of server calls overlapping.
 
 ### I-checkIn-IDEA-06-0.3.1
 
@@ -284,7 +308,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Logs: 'window: check in done' every 34.6-35.3 s from 19:48:24 to 19:56:33 (15) and every 38-40 s from 21:02:19 to 21:12:49 (16), each after its own 'action' pass (plan 29-33 s). N5 was written at 19:52:22 while this queue ran. ee443a83: single check in, 26 s wait plus a 45 s action pass. Reproduced on HEAD: 5 concurrent single-file check ins with a 2 s whole-vault open question answered at 3.56, 5.61, 7.65, 9.69, 11.74 s, with 5 whole-vault questions.
 - Cause: Action model 'gate then pass' per click; check-in requests are durable flags that one pass could finish together.
 - Missing at 0.3.2: No coalescing of waiting actions: each click enters the pass gate alone (SyncEngine.cs:301-306) and runs its own pass (Checkout.cs:194); phase D already finishes every flagged request in state, but each action waits for its own pass.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Row clicks coalesce: clicks waiting at the same time share one action pass and one armory_release_locks call, each with its own outcome.
+- Verified in 0.3.3 by: ResponsivenessTests.Ten_check_in_clicks_waiting_for_a_pass_are_one_pass_and_one_release_call; LargeVaultResponsivenessTests: 10 row clicks 1,667 ms.
 
 ### I-checkOut-IDEA-00-0.3.1
 
@@ -294,7 +319,9 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Flight aa236105: waited 33 s for the loop pass's plan (ended 18:23:30.5); action pass: plan 41,284 ms, then 44 s before the first armory_lock_files (per-file IsOpenNow plus rehash), lock_files at 18:24:56.1, 18:24:58.7, 18:25:01.2 (about 2.5 s apart = 500 per-file SetAttribute durable manifest writes each), finish 50,746 ms, pass 92,400 ms, then 7.6 s more before the answer (per-file open check in CheckOutAnswer). 68bee25b: same shape (plan 42,340 ms, finish 51,177 ms, lock_files 18:37:12.2/14.7/17.2, 8.3 s after passEnd). Snapshot checkedOutHere 1424. Read current code.
 - Cause: Whole-vault work per action; per-file durable attribute writes; rehash of every target; open checks bounded only by a 10 s synchronous budget.
 - Missing at 0.3.2: In 0.3.2 the same click still costs: wait for the loop plan (up to about 10.5 s), its own whole plan (about 10.5 s), a 1,424-file OpenAmong in FinishRequestsAsync (up to the 10 s budget), a full rehash of all 1,424 files (Checkout.cs:716-724), 1,424 durable manifest rewrites (Batches.cs:95 -> Actions.cs:1004-1019 -> ReadOnlyPolicy.cs:42-48, 209-237, measured about 5 ms each in these logs) and another 1,424-file OpenAmong in CheckOutAnswer (Checkout.cs:130). Estimated 30-50 s on that PC.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. A folder check out reuses the scan's hash for unchanged files, sets read-only bits in one call per chunk, and asks the open-files question once, off the engine thread.
+- Verified in 0.3.3 by: LargeVaultResponsivenessTests: check out of a 500-file folder 922 ms; ResponsivenessTests.A_folder_check_out_reads_no_unchanged_file_and_sets_bits_in_batches; RunningLineTests.A_check_out_of_1400_files_shows_a_count.
+- Still missing, and why: Not timed with 1,424 files on IDEA-00 itself.
 
 ### I-checkOut-IDEA-06-0.3.1
 
@@ -304,7 +331,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Flights: each waited for the running loop pass's plan (16-23 s), then an action pass: scan 4.96-5.97 s (about 200 'Armory is treating X as closed' stale ~$ marker notices per scan, each marker asked per file in 0.3.1), plan 29.3-37.8 s, finish 0.18-0.85 s (armory_acquire_lock or armory_lock_files about 100 ms). 12ae9081 also downloaded one file and kept one copy before locking. 6d145628 was refused after 43.7 s (reason not in the data). Every loop pass refused 142 files (another audit's topic). 7 of these IDEA-06 incidents have no snapshot (engine busy). c5dd91d2 on 0.3.2 (reference only) shows the remaining shape: 3.8 s wait plus an 11.2 s action pass with a 10.5 s plan.
 - Cause: As N6: actions run whole-vault plans and wait behind the loop's; open checks are synchronous and slow on Windows.
 - Missing at 0.3.2: Per click in 0.3.2: up to one loop plan of wait plus a whole-vault plan of its own, about 11-22 s on a 1,500-file vault where Restart Manager hits its budget.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. As I-slowAction-DESKTOP-QH30N35-0.3.2: scoped plans and an open-files question about the clicked files only.
+- Verified in 0.3.3 by: LargeVaultResponsivenessTests: checkOut 495 ms.
 
 ### I-crash-DESKTOP-F41DB2R-0.3.1
 
@@ -314,7 +342,9 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: 62f377c1: pass ended 22:00:32.619, next pass due 22:00:42 with plans of 28-30 s on this computer; 'quitting' 22:01:06.398 (inside that plan); no 15 s warning, no 'stopped'; next start 22:07:31. e5e6e9f3: pass ended 00:12:11.163; 'quitting' 00:12:18.490 (in the 10 s idle wait or in a pass a file hint started early); no 'stopped'; next start 00:13:28 (70 s, like a restart). Last flights end 21:59:53 and 00:11:29 (written once a minute). On IDEA-00 a quit during the idle wait took 4.1 s (18:29:25 -> 18:29:29 'stopped'), so e5e6e9f3 shows even a short quit is cut off at session end.
 - Cause: Windows ended the session (restart or sign-out) and terminated the process before the asynchronous Quit finished; not an Armory crash.
 - Missing at 0.3.2: Same as C-0.3.2-quick-quit: the session-end path is unchanged at HEAD.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Quit cancels at once, Windows ending the session is waited for, and a quit is not a crash.
+- Verified in 0.3.3 by: HostPiecesTests.A_run_ended_while_quitting_is_not_a_crash; ResponsivenessTests.Stopping_while_the_open_files_question_is_slow_returns_at_once.
+- Still missing, and why: Not exercised by a real Windows sign-out.
 
 ### I-crash-IDEA-00-0.2.1
 
@@ -324,7 +354,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Log: pass ended 14:41:06.414; next loop pass due ~14:41:16; 'quitting' 14:41:47.553; no 'the sync engine did not stop within 15 seconds' (due 14:42:02.5, AgentHost.cs:454) and no 'stopped'; next start 14:42:39. Last flight (written 14:41:06.380, once a minute by LastFlight.cs:13) shows plans of 28.4 s and 39.1 s. No managed crash incident (CrashNow) exists for that run.
 - Cause: Not a crash: the process was terminated within 15 s of 'quitting' while the engine thread was inside a plan (0.2.1 had no cancellation there). The kill within seconds and the restart 52 s later match Windows ending the session (restart or sign-out): TrayApp only posts Quit on SessionEnding and nothing holds WM_ENDSESSION.
 - Missing at 0.3.2: Session end still kills the app (see C-0.3.2-quick-quit), and the incident still calls it a crash.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Quit cancels at once and a run that logged 'quitting' is not reported as a crash.
+- Verified in 0.3.3 by: HostPiecesTests.A_run_ended_while_quitting_is_not_a_crash.
 
 ### I-crash-IDEA-06-0.3.0
 
@@ -334,7 +365,9 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Read the log tail in 2ab514eb/030b06da; read AgentHost stop path; diffed v0.3.0..HEAD.
 - Cause: Slow, uncancellable plan phase (see X-pass-48-60s), not a code crash.
 - Missing at 0.3.2: Stop latency is still bounded by OpenAmong (up to 10 s) and a pass in progress.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Quit cancels the pass at once from any thread (SyncEngine.StopAsync), the scan and open-files question honor it, Windows ending the session is waited for up to 4 s (TrayApp OnSessionEnded), and a run that logged 'quitting' or the session-ending line is not reported as a crash at the next start (AgentLog.PreviousRun).
+- Verified in 0.3.3 by: HostPiecesTests.A_run_ended_while_quitting_is_not_a_crash; ResponsivenessTests.Stopping_while_the_open_files_question_is_slow_returns_at_once.
+- Still missing, and why: The session-end handler was not exercised by a real Windows sign-out (only unit tests).
 
 ### I-crash-IDEA-06-0.3.0-slowpa
 
@@ -344,7 +377,9 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Log: pass ended 18:55:50.016 (62.2 s, 142 refused); 'quitting' 18:56:10.730, about 10 s into the next pass (scan 8.2 s of stale-marker RM checks, then a 53 s plan); no 15 s stop warning, no 'stopped'; next start 19:25:01 (29 min later, the same student). Last flight written 18:55:50.056.
 - Cause: Windows ended the session (most likely Abraham signing out) and terminated Armory while its quit waited behind uninterruptible open-file checks.
 - Missing at 0.3.2: Session end still kills the process; at HEAD the engine thread can still be blocked up to ~10 s in each OpenAmong (markers, plan) and cannot see the stop until it returns.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. As I-crash-IDEA-06-0.3.0: a quick quit, the session-end wait, and a quit that is not called a crash.
+- Verified in 0.3.3 by: HostPiecesTests.A_run_ended_while_quitting_is_not_a_crash; ResponsivenessTests.Stopping_while_the_open_files_question_is_slow_returns_at_once.
+- Still missing, and why: Not exercised by a real Windows sign-out.
 
 ### I-crash-IDEA-06-0.3.1
 
@@ -354,7 +389,9 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Trigger lastLogLine '19:06:43.587Z vault runtime started' (0.2.0), lastFlightWrittenAt null, 0 flight events; reported by the first 0.3.1 run at 20:52:02 (just installed). Log also shows 8 starts of 0.2.0 between 20:53 and 20:59 on 10-07 with no 'quitting' or 'stopped'.
 - Cause: Unknown (0.2.0, ended between 19:06:43 and 20:52:02 without 'quitting').
 - Missing at 0.3.2: Cause unknowable from the incident: it carries no crash.log tail, and quiet 0.2.0 passes wrote nothing. A hard kill (power, forced restart, Task Manager, or the 0.3.1 installer's Stop-Process after --quit, Setup.ps1:283-300) cannot be told apart from a native crash.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Not reproducible**. No evidence exists for that 0.2.0 run. 0.3.3 keeps the last flight, logs Windows ending the session and does not call a quit a crash, so a future report can be told apart.
+- Verified in 0.3.3 by: HostPiecesTests.A_run_ended_while_quitting_is_not_a_crash.
+- Still missing, and why: The cause of that one 0.2.0 run can't be known.
 
 ### I-launchFile-IDEA-06-0.3.1
 
@@ -364,7 +401,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Each answer came 30-100 ms after the loop pass's plan phase ended: plan end 19:32:05.445 / answer 19:32:05.548; 20:56:07.965 / 20:56:08.039; 21:29:53.691 / 21:29:53.721; 22:28:24.374 / 22:28:24.439 (plans 29-42 s). In 6d145628 a launch answered 39 ms after a scan phase ended. Reproduced on HEAD: with a 2 s whole-vault open question, launchFile took 1.90-1.91 s in 3 of 3 rounds while the loop planned.
 - Cause: Single engine thread runs the plan synchronously; LaunchAsync needs that thread only to resolve the path and check Exists.
 - Missing at 0.3.2: The engine thread is still blocked for the whole plan (synchronous loop over AllPaths with no await; OpenAmong waits synchronously up to 10 s), so Open still waits up to about 10.5 s on DESKTOP-QH30N35, and file detail, notice OK and Pause likewise.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Open of a file already on this disk never touches the engine thread.
+- Verified in 0.3.3 by: LargeVaultResponsivenessTests: launchFile 7 ms; ResponsivenessTests.Open_detail_pause_and_check_out_answer_while_the_open_files_question_is_slow.
 
 ### I-readOnlyBroken-IDEA-06-0.3.0
 
@@ -374,7 +412,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Abraham's flight and log around 17:51-17:53; no later kept copy or download for Hook V3 in any incident.
 - Cause: Stale cached flag for a file unreadable in one scan (SolidWorks or another program held it just after the release).
 - Missing at 0.3.2: Same as the 0.3.1 group; no evidence that Hook V3 bytes were changed or lost.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Same cause and fix as the 0.3.1 group.
+- Verified in 0.3.3 by: As above.
 
 ### I-readOnlyBroken-IDEA-06-0.3.1
 
@@ -384,7 +423,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Per-pass table from Abraham's merged flight: every readOnlyBroken path was held by SolidWorks in the same pass, each run starts in the pass after a release_lock while held and ends when the file becomes readable (Toparmredesign 21:12:09-21:29:54, Toparmredesignnoscrewpocket 21:34:37-23:10:49 (102 events), SmallFlywheel V3 22:32:10-23:04:50 (26 events)). Reproduced by the second repro test. SolidWorks temp-file-plus-rename saving is not supported by the data: the files stayed continuously 'being used' and no fresh read ever showed the bit cleared.
 - Cause: Stale cached ReadOnly flag for an unreadable file (X-stale-unread-entry), present only because the lock had been released while the file was held (X-checkin-release-guard).
 - Missing at 0.3.2: These are false alarms about the bit, but they are a reliable signature of the N4 release. After the fix they should stop; a real cleared bit must still be reported.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. These 12 reports were false alarms from a stale cached read-only flag on a file SolidWorks held after a release made while it was open (the N4 mechanism). Unread entries no longer report readOnlyBroken, and the release that caused them can no longer happen.
+- Verified in 0.3.3 by: End-to-end test An_unreadable_file_never_reports_readOnlyBroken; the real cleared-bit test still passes.
 
 ### I-slowAction-DESKTOP-QH30N35-0.3.2
 
@@ -394,7 +434,9 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Flight recorder of c5dd91d2 with scratchpad/tools/n123-passes.py; read EnterActionAsync (SyncEngine.cs:301-306), PassLockedAsync with a scope (phase B is whole, SyncEngine.cs:373-415, 958-985), KnowOpen, GetFileDetailAsync.
 - Cause: X-open-files-question: the synchronous 10 s Restart Manager budget on the engine thread, paid once by the loop pass the action waits for and again by the action's own pass.
 - Missing at 0.3.2: An action that does not wait behind or repeat the all-files open question.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. A one-file check out plans only that file and asks the open-files question about it alone, off the engine thread.
+- Verified in 0.3.3 by: LargeVaultResponsivenessTests: checkOut 495 ms on a 1,500-file vault with school latency.
+- Still missing, and why: Not timed on DESKTOP-QH30N35.
 
 ### I-slowAction-IDEA-06-0.3.1
 
@@ -404,7 +446,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Flight passPhase timings and windowAction ms from the incidents; 0.3.2 change read in code only, not measured here.
 - Cause: Per-file Restart Manager sessions in the plan phase (0.3.1) plus one pass per action.
 - Missing at 0.3.2: Not measured on 0.3.2 hardware (a 0.3.2 slowAction c5dd91d2 still waited 15.2 s for a check out). Slowness is for the responsiveness auditor; the N4-relevant part is that the CantRead answer pushes the student to close a file whose lock Armory already let go of.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Clicks no longer wait behind the loop's pass: a click records its request at once, the loop gives way to it, the action's pass plans only its own files, and clicks waiting together share one pass (SyncEngine JoinActionPassAsync).
+- Verified in 0.3.3 by: LargeVaultResponsivenessTests (checkIn 1,098 ms, checkOut 495 ms on 1,500 files with school latency); ResponsivenessTests.Ten_check_in_clicks_waiting_for_a_pass_are_one_pass_and_one_release_call.
 
 ### I-slowPass-DESKTOP-F41DB2R-0.3.1
 
@@ -414,7 +457,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Flight per incident: 4a5a4860 plan 1.5 s, move 67.5 s, one 45.9 MB download took 62.3 s after the slice; d3e64083 plan 23.8 s, move 65.1 s (135.7 MB file in 56 s); 1de30671 plan 34.2 s, move 27.3 s (317.5 MB in 23.3 s); 8adfb590 scan 38.4 s (first pass after the 22:07:31 restart), plan 26.0 s. Plan grew 22-30 ms per local read-only file as downloads landed (regression over 36 passes, 0 -> 1,413 local files, 0.4 -> 34 s).
 - Cause: Three causes: per-file RM in plan; a cut-short pass waits for every in-flight download (RunConcurrentlyAsync only stops starting units); the hash cache of LocalChangeDetector lives only in memory (LocalChangeDetector.cs:47; only the folder map is persisted, :77), so the first scan after every start re-hashes the vault.
 - Missing at 0.3.2: At HEAD: d3e64083 would still be ~73 s and 4a5a4860 ~73 s (move phase unchanged); 8adfb590 would still spend 38 s re-hashing on the first scan after a start.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. The first scan after a start reuses the hashes kept in .armory/file-hashes.json; the first download is continuous (N3).
+- Verified in 0.3.3 by: Windows CI platform test for the kept hash map; ContinuousTransferTests.
 
 ### I-slowPass-DESKTOP-QH30N35-0.3.2
 
@@ -424,7 +468,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Flight recorder of 7a6c7d95 summarized with scratchpad/tools/n123-passes.py (phases, yield, transfers, slowest transfers); read RunUnitsAsync/RunConcurrentlyAsync (SyncEngine.cs:1118-1177) and BlobClient.
 - Cause: startNoMore (SyncEngine.cs:1128) stops new units after PassSlice and the pass awaits every in-flight unit, so one slow transfer holds the pass, the server re-read and the next pass; nothing detects a stalled body.
 - Missing at 0.3.2: Refill of idle lanes while a straggler runs (or a continuous queue), stall detection and retry.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. A straggling download no longer holds the pass (it is carried while other lanes move), and a transfer with no bytes for 30 s is tried once more with a fresh URL.
+- Verified in 0.3.3 by: ContinuousTransferTests.A_stalled_download_does_not_hold_the_others; ClientTests stall test.
 
 ### I-slowPass-DESKTOP-QH30N35-0.3.2-slowpa
 
@@ -434,7 +479,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Flight of 7a6c7d95: scan 0.24 s, server 0.83 s, plan 7.6 s, move 85.7 s. 68 downloads ended by 05:49:29.8 (slice over), then one 31,555,430-byte download ended at 05:50:47.1 after 83,492 ms while two other ~31 MB files took 1.8 s and 2.5 s. Log: 'pass: still going after 94 s' at 05:50:47.220, 54 ms before the end. Same run (c5dd91d2 flight): every download cycle was plan ~10.4 s + 8.5 s of downloading, then quiet passes of 11.0-12.3 s with plan 10.505-10.526 s.
 - Cause: A stalled or throttled connection on one presigned GET (a per-connection problem: the same size took 2 s on other connections) combined with a pass that cannot end before its in-flight units.
 - Missing at 0.3.2: No stall detection or resume; a pass, and any click waiting for the gate, waits for the slowest in-flight transfer (up to 2 hours). The window shows nothing about it.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. As I-slowPass-DESKTOP-QH30N35-0.3.2: carried stragglers and the 30 s stall retry.
+- Verified in 0.3.3 by: ContinuousTransferTests.A_stalled_download_does_not_hold_the_others.
 
 ### I-slowPass-IDEA-00-0.3.0
 
@@ -444,7 +490,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Flight: scan 0.35 s, server 0.6 s, plan 40.2 s, move 26.3 s (downloads of 127.6 MB in 14.5 s and 317.5 MB in 25.7 s), finish 0.04 s. All 142 IDEA-00 0.3.0 passes: plan median 22.5 s.
 - Cause: Per-file RM open checks (40 s) plus bandwidth-bound large downloads (26 s).
 - Missing at 0.3.2: Plan would be ~10.5 s at HEAD, so this pass would be ~37 s (under the 60 s rule). The 317 MB download still holds the pass, and a click waits for it (actions do not start until running units end).
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Large downloads are carried between passes (N3) instead of holding a pass.
+- Verified in 0.3.3 by: ContinuousTransferTests.
 
 ### I-slowPass-IDEA-00-0.3.1
 
@@ -454,7 +501,9 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Read flight passPhase events of all 21 incidents (scan 0.10-0.14 s, server 0.55-1.35 s, plan 59.4-81.8 s, move/finish under 0.7 s). Aggregated all 577 IDEA-00 0.3.1 passes found in the flight recorders: 571 quiet, median 47.3 s, plan median 46.6 s, p90 70.2 s. Read 0.3.1 code (git show 0bc573f): PlanPathAsync called IsOpenNow -> fs.IsOpen -> OpenFileDetector.Inspect, one RM session plus a probe per file. Compared with 0.3.2 field data from DESKTOP-QH30N35 (plan plateau 10.42-10.53 s). The ~10 minute spacing is the incident throttle (Glitches.cs:134), not the pass cadence: every pass was slow.
 - Cause: Plan phase = one Restart Manager session + exclusive probe per file (0.3.1), 40-55 ms per read-only file on IDEA-00 (1,476 files -> 60-82 s; varied with machine load over the evening). The same machine planned in 7.2-7.9 s (about 5 ms per file) whenever the files were checked out (writable): 18:37:27 to 19:43:54, and 18:29:50 to 18:34:18, back to 41-43 s minutes after each check in. RM is roughly 5x slower on read-only files, and Armory makes every file not checked out read-only (D4). 0.3.2's batching keeps that per-file cost (about 14.7 ms per read-only file batched), so it only bounds the pass by the 10 s budget.
 - Missing at 0.3.2: At HEAD a quiet pass on ~1,500 files still takes about 11-12 s, almost all of it the 10 s Restart Manager budget expiring on the engine thread, and every pass leaves the abandoned RM query running on a thread-pool thread. No IDEA-00 0.3.2 data exists yet; there the per-file RM cost was 2-3x DESKTOP-QH30N35's, so the abandoned attributions of consecutive passes would overlap.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Quiet passes ask about no file and reuse the kept hash map.
+- Verified in 0.3.3 by: LargeVaultResponsivenessTests quiet pass 385 ms.
+- Still missing, and why: Not timed on IDEA-00.
 
 ### I-slowPass-IDEA-00-0.3.1-action
 
@@ -464,7 +513,9 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Flight: 1f22e3a0 scan 0.10 s, server 0.26 s, plan 41.3 s, move 0.01 s, finish 50.7 s with 3 armory_lock_files calls (1.6 s); 9e2aca4c plan 42.3 s, finish 51.2 s. The window waited 133.3 s (aa236105) = the in-progress loop pass (42.7 s, uninterruptible plan) + the 92.4 s action pass. Read 0.3.1 FinishCheckOutAsync: per check out a full SHA-256 of the file (SyncEngine.Checkout.cs:722-727 at HEAD) and an IsOpenNow RM session (:731 area, NextCheckOutStep).
 - Cause: Finish phase 50.7 s = ~1,400 x (RM session ~28 ms + full re-hash ~8 ms). Plan 41 s = per-file RM over 1,473 read-only files. An action pass is a whole pass (PassLockedAsync with a scope only filters phase C).
 - Missing at 0.3.2: At HEAD an action pass still runs phases A and B for every file (plan ~10.5 s with the RM budget), and FinishCheckOutAsync still re-hashes every file being checked out (IDEA-00 re-hashed its 1,473 files in 10.9 s on the 18:29:50 first scan), plus a second KnowOpen (up to another ~10.5 s). Estimated 1,400-file check out at HEAD: about 30 s, not instant.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. A folder check out's pass plans only its own files, reuses hashes and batches bits.
+- Verified in 0.3.3 by: LargeVaultResponsivenessTests: 500-file folder check out 922 ms.
+- Still missing, and why: Not timed on IDEA-00.
 
 ### I-slowPass-IDEA-06-0.3.0
 
@@ -474,7 +525,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Flight: started 0.3.0 at 17:44:59, signed in 17:45:52; first real pass: scan 25.5 s, server 24.2 s (only 4 RPCs totaling 0.7 s), plan 32.5 s, move 23.3 s (no transfers, 1 heartbeat RPC, yielded with 1,461 units left), finish 23.6 s (2 release_locks calls 0.5 s). Snapshot: 1,624 files, 703 notInArmory, 714 savesWaiting, 55 checkInWhenClosed.
 - Cause: First scan after a start re-hashes every file (hash cache not persisted); plan = per-file RM; server phase = local capture/import work for 703 new files (the 142-refused audit owns why they were never accepted); move/finish = local per-unit and per-view work on the engine thread (AutoCheckIn files cost one RM session each per view build, reproduced in X-view-open-per-file).
 - Missing at 0.3.2: At HEAD the plan drops to ~10.5 s, but the first-scan re-hash (25 s) and the local work in server/move/finish phases remain; per-file IsOpen for the 55 files added while open still runs on every view build and in PrepareRelease/DesiredOwnership.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. The first pass after a restart reuses the kept hash map and asks no per-file open question.
+- Verified in 0.3.3 by: Windows CI platform test for the kept hash map; ResponsivenessTests.
 
 ### I-slowPass-IDEA-06-0.3.1
 
@@ -484,7 +536,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Read code at HEAD and v0.3.0/v0.3.1 (git show). Incident flight data (tools/i142-*.py): every IDEA-06 rpc and transfer in 47,005 distinct events is 200 OK except 2 offline heartbeats and 1 offline incident upload, so no 23505, PT429, 22023 release error, not-a-member, blob 4xx or rate limit; steady passes (68d7a9d4, f9912084, 184c9e24) make zero armory_create_file calls and the move phase takes 9-26 ms; log 'pass: moving 142 of 1,604 files' with '142 refused' every pass, so moving == refused == 142; snapshots from 18:42 on have no cantSend card (gate, too-large and server refusals all land in cantSend), only nameShared 148, so every refusal is a name refusal. Reproduced at HEAD in a throwaway E2E test (scratchpad/i142-repro-tests.cs, A_name_taken_file_is_planned_expected_and_refused_again_on_every_pass): 4 passes, each Refused=1, log 'pass: moving 1 of 3 files' each pass, activity at the step 'Uploading 0 of 1 file, 9 bytes left', 0 create calls, 4 state saves.
 - Cause: The name check runs only at execution time (EnsureServerFileAsync) and the refusal is wiped at the start of every execution (SyncEngine.cs:1216), so a refusal that cannot change until a person acts (rename or delete the copy, or the namesake is renamed or removed) is re-derived every pass and reported as fresh work: 'moving 142', '142 refused', an expected upload of 260.9 MB, and the record dirtied twice per file (Refusal set to null then back). It cost no server calls and almost no time; it is noise that hides real state and keeps the window in 'syncing'. The user is right that it is not the year check: with ReleaseReader = null and the project in warn (server default, 0231_armory.sql:82; the website has no switch), SolidWorksVersionGate.Decide returns Allowed+ReleaseNotChecked, and a gate refusal would be a cantSend item, which was absent.
 - Missing at 0.3.2: A standing refusal: nothing remembers that this file is blocked by a live namesake, so it is planned, counted as moving, expected as an upload, cleared, refused and re-saved every pass forever (since 0.2.0; 132 such items already existed when 0.3.0 started at 17:48). The exact 148 paths are not in any incident (see X-telemetry-refusals); on IDEA-06 they are the records with "refusalKind":"nameTaken" in C:\IDEA\Armory\.armory\state.json (camelCase, EngineState.cs:181), each refusal text naming the folder of the file that holds the name. Folder names in the data (Full Assembly, MISC/Prototypes/Francis, 2nd Climb, Turret V3, IntakeCYCLODIALREDESIGN) and COTS names (WCP-xxxx, REV-11-1850, TTB-0300, Thunderhex bearings, spur gears, MK5n) point to copied subassembly folders and vendor parts that already exist elsewhere in FRC 2026 Off-Season (inference).
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Cause found: the 142 were copies whose names were already used by other files in the project (names are unique per project), re-planned as uploads and refused again on every pass; not the year check. A name-taken copy is now refused once at plan time, never counted as moving or expected as an upload, counted only when its refusal starts or changes, skipped by the archive of earlier saves, and goes in by itself when the namesake is renamed or removed or the copy is renamed or deleted. The card says what a SolidWorks copy needs; the status line says how many files can't be added until they have names of their own. Files: SyncEngine.cs (plan), SyncEngine.Actions.cs (SetRefusal), SyncEngine.View.cs.
+- Verified in 0.3.3 by: End-to-end HonestyTests (A_name_taken_copy_is_refused_once_and_left_alone, ..._goes_in_when_its_namesake_is_renamed, ..._is_never_counted_as_moving, ..._is_not_retried_by_the_archive_of_earlier_saves); disabling the plan-time refusal makes them fail.
 
 ### I-slowPass-IDEA-06-0.3.1-slowpa
 
@@ -494,7 +547,9 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Flight: scan 0.1 s, server 0.6 s, plan 3,133.9 s. No flight event of any kind from 22:00:06.7 to 22:52:02, although the heartbeat runs on its own thread-pool task every ~45 s (AgentHost.cs:126, TeamHeartbeat.cs RunAsync) and beat at 21:57:43, 21:58:28, 21:59:13, 21:59:58, then 22:52:02. The log shows only 'live updates: WebSocketException: The remote party closed the WebSocket connection' at 22:51:48, then the pass ended at 22:52:20. The 15 passes before took 48.4-50.2 s (plan 48-49.6 s).
 - Cause: The whole process stopped (no thread recorded anything), almost certainly the computer sleeping, and the stopwatch includes the suspended time (3,134,550 ms equals the wall-clock span exactly). Note: Abraham's IDEA-06 agent was active during the same 52 minutes on a C:\IDEA\Armory vault with a different file count, so Seraj's IDEA-06 is a different physical computer (see X-two-computers-named-IDEA-06).
 - Missing at 0.3.2: Sleep is counted as pass time, so a sleeping laptop or lab PC files a false slowPass. The real cost of this pass (~49 s of per-file RM) drops to ~11 s at HEAD.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. The 3,134 s 'pass' was the computer asleep or frozen; sleep and wake are now recorded and such a pass is not filed as slow.
+- Verified in 0.3.3 by: GlitchRuleTests.A_pass_the_computer_slept_through_is_not_a_slow_pass.
+- Still missing, and why: The sleep hook was not exercised on a real computer going to sleep.
 
 ### I-slowPass-IDEA-06-142refused
 
@@ -504,7 +559,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Flight phases only: 3b6e0912 scan 6.4 s, plan 39.9 s, move 13.5 s (26 uploads); 68d7a9d4 move 1,050 s (owned by the refusals audit); f9912084 scan 8.9 s, plan 55.3 s; 030b06da scan 37.1 s (first pass after the 19:25 restart, re-hash), plan 26.5 s; 184c9e24 scan 6.3 s, plan 62.2 s. 184c9e24 snapshot: 'SolidWorks may have closed unexpectedly with 224 files open'. 2ab514eb flight shows the stale-marker notices 43 ms apart (two RM sessions per marker).
 - Cause: Per-file RM in plan, 224 stale ~$ markers checked twice each per pass in the scan phase, re-hash after restarts.
 - Missing at 0.3.2: The refusals themselves: see the 142-refused audit. Speed part: stale markers are still asked every pass (448 paths, up to its own 10 s budget), plan ~10.5 s, first-scan re-hash 37 s.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. The refusals are fixed (name-taken copies refused once at the plan, E2) and the speed parts by N6's work (stale markers remembered, open question narrowed, hashes kept).
+- Verified in 0.3.3 by: End-to-end name-taken tests (E2); ResponsivenessTests.Stale_markers_are_not_asked_about_again_until_they_change.
 
 ### I-takeBack-IDEA-00-0.2.1
 
@@ -514,7 +570,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Flight: loop pass 23:38:30.456-23:38:59.019 (plan 28,275 ms); asked 23:38:51.4, so 7.6 s waiting; armory_break_lock 138 ms; then an 'action' pass 27,715 ms (plan 27,085 ms) on 917 records. Snapshot engine.actionsWaiting = 98: the 0.2.1 window had queued one takeBack per file. Read current code.
 - Cause: Then: per-file Restart Manager in the plan (28 s per pass) plus one pass per file. Now: whole-vault plan per action plus OpenAmong hitting the 10 s budget.
 - Missing at 0.3.2: A single Force check in still waits for the loop's plan and runs its own whole-vault plan (Checkout.cs:305 PassLockedAsync(PassScope.File)), about 11 to 22 s on a 1,467-file vault like DESKTOP-QH30N35 (estimated from its 10.5 s plans).
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Force check in no longer waits behind a pass; many files go in armory_break_locks batches of 500 with one pass after.
+- Verified in 0.3.3 by: LargeVaultResponsivenessTests: takeBack 406 ms, takeBackAll of 100 files 470 ms.
 
 ### I-takeBack-IDEA-00-0.3.0
 
@@ -524,7 +581,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Flight of 8bbe9bd5: 225 takeBack window actions asked between 17:10:08.566 and 17:10:09 (one per file); 104 answered ok one after another, each armory_break_lock about 110 ms plus an action pass about 22.5 s (plan 21.3-23.3 s on 917 records), so the n-th answer waited about n x 22.6 s (24.1, 631.4, 1246.7, 1849.5, 2450.1 s); 121 were answered refused in bursts at 17:47-17:50 (no longer checked out). Read current code and test.
 - Cause: 0.3.0 window sent one takeBack per file and each ran a whole pass whose plan asked Restart Manager per file.
 - Missing at 0.3.2: The one remaining pass of a takeBackAll is whole-vault (plan) and waits behind the loop's plan; armory_break_locks (0234) not used; a mentor clicking Force check in on many single rows still queues one pass per click.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Force check in all is one action: armory_break_locks in batches of 500, then one pass (D1), live counts while it works.
+- Verified in 0.3.3 by: LargeVaultResponsivenessTests: takeBackAll of 100 files 470 ms; RunningLineTests.Force_check_in_running_lines_arrive_while_locks_break; end-to-end break_locks tests.
 
 ### C-0.2.1-action-never-waits
 
@@ -534,7 +592,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Code: phases A, B and D of the loop pass run whole before the gate is handed over, and the action's own pass runs whole A, B, D (ENGINE.md 724 says so). Field: every 0.3.1 slowAction waited for the loop's plan; c5dd91d2 waited 3.8 s for it. Reproduced: the first of 5 row clicks answered at 3.56 s with a 2 s plan cost.
 - Cause: Only phase C was made interruptible/scoped; phase B became the expensive phase.
 - Missing at 0.3.2: Yielding before or during phase B; a scoped plan for actions.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Now true: the loop's pass gives way to a waiting click after its scan, between projects, every 100 paths while planning and during its open-files question (ENGINE.md, 'Every click at once').
+- Verified in 0.3.3 by: ResponsivenessTests.A_check_out_answers_while_hundreds_of_files_download and A_check_in_answers_while_hundreds_of_files_upload.
 
 ### C-0.2.1-file-detail-never-waits
 
@@ -544,7 +603,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Field: armory_file_history recorded 10,586 ms on 0.3.2 (sent 05:55:34.6Z, completed 05:55:45.19Z, right after the plan ended). Reproduced: 1.91 s of a 2 s blocked plan, 3 rounds out of 3. ConcurrencyTests.File_detail_answers_while_a_pass_moves_files only covers phase C.
 - Cause: Engine-thread affinity of DetailAsync plus a synchronous plan.
 - Missing at 0.3.2: Detail during a plan phase.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Now true: File detail reads published data and fetches history off the engine thread.
+- Verified in 0.3.3 by: LargeVaultResponsivenessTests: openFile 68 ms; ResponsivenessTests.Open_detail_pause_and_check_out_answer_while_the_open_files_question_is_slow.
 
 ### C-0.3.0-batches
 
@@ -552,7 +612,8 @@ Totals at 0.3.3: 105 In progress.
 
 - Found at 0.3.2: **Done**. ArmoryApi.LockFilesAsync/ReleaseLocksAsync (ArmoryApi.cs:151-161, 500 files per call); SyncEngine.Batches.cs LockBatchAsync (36-107) and ReleaseBatchAsync (157-240) with per-file answers, crash-safe in-flight records and a one-by-one fallback on PGRST202 (BatchesMissing, retried hourly). Server functions in 0233 (migration lines 1283, 1309).
 - How it was verified then: Read code; ran CheckOutTests.Check_out_check_in_and_undo_of_many_files_each_take_one_batch_and_one_pass, V3Tests.Several_check_outs_go_in_one_batch_and_each_file_answers_on_its_own and V3Tests.Without_the_batch_rpcs_the_files_go_one_by_one (all passed). Field: incident aa236105 shows three armory_lock_files calls for 1,424 files.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Unchanged and still true; check in and Force check in now also coalesce clicks.
+- Verified in 0.3.3 by: End-to-end batch tests pass in 0.3.3.
 
 ### C-0.3.0-cantakeback
 
@@ -560,7 +621,8 @@ Totals at 0.3.3: 105 In progress.
 
 - Found at 0.3.2: **Done**. ArmoryApi.cs:138 reads can_take_back (null from an older server); EngineState.cs:265 CanTakeBack => TakeBack ?? role mentor/cad_lead; refused in TakeBackAsync (Checkout.cs:276, 340); window shows Force keys only when project.canTakeBack (app.js:1215, 1429, 1512-1522, 1617).
 - How it was verified then: Read code; ran V3Tests.Force_check_in_shows_exactly_when_the_server_says_can_take_back and V3ClientTests.My_projects_carries_can_take_back_and_an_older_server_does_not (passed). N11 snapshot: projects canTakeBack true for a mentor.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Unchanged and still true; File Explorer's Force check in item follows the same can_take_back.
+- Verified in 0.3.3 by: End-to-end and ShellDeskTests.Force_check_in_takes_back_only_files_someone_else_has_and_asks_first_naming_them.
 
 ### C-0.3.0-deleteforever
 
@@ -568,7 +630,8 @@ Totals at 0.3.3: 105 In progress.
 
 - Found at 0.3.2: **Done**. SyncEngine.Purge.cs (armory_project_purged asked once per start, folder_purged change moves files aside), ArmoryApi.cs:143 ProjectPurgedAsync, notice kind projectDeleted rendered as one line (app.js:99, 1026).
 - How it was verified then: Read code; ran V3Tests.A_folder_deleted_forever_leaves_every_computer_and_is_never_sent_again, A_project_deleted_forever_leaves_this_computer_with_one_line, Removed_from_a_project_is_handled_as_before_and_asked_once_per_start, A_not_a_member_answer_from_the_change_feed_asks_whether_it_was_deleted and V3ClientTests.Purged_is_a_time_or_null_and_folder_purged_names_its_files (passed).
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Unchanged and still true.
+- Verified in 0.3.3 by: End-to-end purge tests pass in 0.3.3.
 
 ### C-0.3.0-live
 
@@ -576,7 +639,8 @@ Totals at 0.3.3: 105 In progress.
 
 - Found at 0.3.2: **Done**. Armory.Client/RealtimeFeed.cs (phx_join per project on armory_change_feed filtered by project_id, lines 75-90; Changed raised on postgres_changes at 204-205); engine wakes a pass on a change (SyncEngine.cs:188-194 OnLiveChange); host creates it per runtime (AgentHost.cs RestartRuntimeAsync, new RealtimeFeed).
 - How it was verified then: Read code; ran V3Tests.Live_updates_wake_another_computer_and_every_subscription_is_filtered (passed). Field evidence: N12 snapshot engine.live {events: 1426, joined: 1, connections: 1}.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Unchanged and still true.
+- Verified in 0.3.3 by: End-to-end V3Tests.Live_updates_wake_another_computer_and_every_subscription_is_filtered passes in 0.3.3.
 
 ### C-0.3.0-send-feedback
 
@@ -584,7 +648,8 @@ Totals at 0.3.3: 105 In progress.
 
 - Found at 0.3.2: **Done**. Header key and Settings key, dialog, sendFeedback bridge message, note saved then sent through armory_submit_app_feedback (five arguments) with version and context, no incident after it (app.js:554-557, 1761, 1831-1836, 1968-1977; Bridge.cs:276-279; AgentTelemetry.cs:128-160; IncidentReporter.cs:126-131; IncidentUploader.cs:182-187; ArmoryApi.cs:125-127).
 - How it was verified then: Read code; field evidence: 11 armory_submit_app_feedback RPCs, all 200, and all 15 notes in the export arrived, including the three the app called Held.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Unchanged and extended by N14.
+- Verified in 0.3.3 by: Existing tests still pass.
 
 ### C-0.3.0-teamstatus
 
@@ -592,7 +657,8 @@ Totals at 0.3.3: 105 In progress.
 
 - Found at 0.3.2: **Done**. Armory.Client/TeamHeartbeat.cs (state syncing/idle, PGRST202 retry), ArmoryApi.cs:149, AgentHost.cs:39 and TeamState (476-482) set 'syncing' while files move.
 - How it was verified then: Read code; ran V3ClientTests.Heartbeats_carry_the_device_version_and_state_go_at_once_on_a_change_and_never_throw (passed). Field: N7 log '2026-10-08T18:24:05.890Z team status: offline'.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Unchanged and still true; the app version stays within the heartbeat's 40 characters (D4).
+- Verified in 0.3.3 by: HostPiecesTests.The_app_version_fits_the_heartbeats_40_characters; end-to-end heartbeat tests.
 
 ### C-0.3.1-force-all-fast
 
@@ -600,7 +666,8 @@ Totals at 0.3.3: 105 In progress.
 
 - Found at 0.3.2: **Done**. app.js:2008-2011 sends one takeBackAll; Checkout.cs:324-399 breaks 16 at a time then one pass.
 - How it was verified then: Read code; existing test CheckOutTests.Force_check_in_of_many_files_is_one_action_and_one_pass asserts 40 break_lock calls and 1-2 list_changes reads.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Still one action and one pass, now through armory_break_locks.
+- Verified in 0.3.3 by: End-to-end tests.
 
 ### C-0.3.1-forcemany
 
@@ -609,7 +676,8 @@ Totals at 0.3.3: 105 In progress.
 - Found at 0.3.2: **Done**. Window sends one takeBackAll with only the held files (app.js:2079-2106, 2004-2011); Bridge.cs:199-208 (up to 20,000 ids) calls host.TakeBackAsync(list); SyncEngine.Checkout.cs:324-398 breaks locks 16 at a time (TakeBackConcurrency, 318) with per-file operation ids and then runs ONE scoped pass.
 - How it was verified then: Read code; ran CheckOutTests.Force_check_in_of_many_files_is_one_action_and_one_pass (passed: 40 armory_break_lock calls, 1 to 2 list_changes reads). My throwaway probe: 160 files answered in about 1.05 s with School latency. Incidents 80a6bce8 to 8bbe9bd5 (0.3.0) show the old per-file behavior waiting 631 to 2,450 s.
 - Cause: 0234 landed after the 0.3.1 client change; the client was not updated to adopt it.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. As above.
+- Verified in 0.3.3 by: End-to-end tests.
 
 ### C-0.3.2-batched-open-checks
 
@@ -619,7 +687,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: 0.3.2 field data (same run, 7a6c7d95 and c5dd91d2): plan rose linearly by 14.7 ms per local read-only file (490 ms at 38 files -> 9.6 s at 656) then sat at 10.42-10.53 s from ~712 files on; log '05:51:37.363Z open files: Restart Manager did not answer within 10 s; exclusive-open probe used.'; quiet passes 10.97-12.31 s; an action pass 11.16 s (plan 10.53 s); Check out waited 15.2 s. Probe + resolve + Core for 1,467 files = plan minus budget = 0.42-0.53 s (about 0.3 ms per file). Compared with 0.3.1 on DESKTOP-F41DB2R: 22-30 ms per local file. Read the code; ran the existing reasoning against the throwaway EndToEnd test SpcAuditTests (OpenAmong once per plan confirmed).
 - Cause: The 0.3.2 change assumed per-session overhead dominated; field data show RM costs per file (and about 5x more on read-only files), so batching halved the cost and the 10 s budget became the floor of every pass on a full vault.
 - Missing at 0.3.2: Quiet passes are ~11-12 s, not 1-2 s; every click runs a full plan (~10.5 s) after waiting for the loop's plan; RM work continues after the budget on a thread-pool thread (about 21.6 s of RM per 1,467 files, so it runs nearly continuously); the existing Windows test uses 40 writable files with a 30 s budget and never covers read-only files, the budget path or the leak. Probe side effect: an exclusive handle on every vault file every pass, so SolidWorks or Explorer opening that file at that instant gets a sharing violation (also true in 0.3.1).
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Now true, and narrower: one question only where the plan depends on it.
+- Verified in 0.3.3 by: ResponsivenessTests; LargeVaultResponsivenessTests.
 
 ### C-0.3.2-fast-passes
 
@@ -629,7 +698,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Flight data from DESKTOP-QH30N35 at 1,467 files: idle passes 10,966-12,310 ms with plan 10,505-10,526 ms; check out 15.2 s; code as in X-open-files-question.
 - Cause: Batching reduced the per-file cost from about 28 ms to about 14.6 ms but kept the question over every file, and the budget turns the excess into a fixed 10 s wait.
 - Missing at 0.3.2: The claim holds only below about 600 files on disk on this machine.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Now true: a quiet pass asks about no file and plans without per-file Restart Manager sessions.
+- Verified in 0.3.3 by: LargeVaultResponsivenessTests: a quiet pass 385 ms on 1,500 files.
 
 ### C-0.3.2-feedback-sent
 
@@ -638,7 +708,8 @@ Totals at 0.3.3: 105 In progress.
 - Found at 0.3.2: **Done**. IncidentUploader.cs:109-112 (feedbackSent checked first), 175-178 (set right after the RPC answers); guarded test V3ClientTests.cs:417-439.
 - How it was verified then: Reproduced the field race in a throwaway worktree: v0.3.1 Held 42 of 60 with 60 RPCs (every note sent); HEAD Sent 60 of 60 with one RPC each. Ran the guarded test: pass.
 - Cause: Background round and Send feedback raced for the same note file (see N13).
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Unchanged.
+- Verified in 0.3.3 by: Existing tests still pass.
 
 ### C-0.3.2-folder-handover
 
@@ -648,7 +719,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Read code and tests (Postgres tests not run here).
 - Cause: One owner per folder and one session per Windows user (see N10).
 - Missing at 0.3.2: Works only when the owner has nothing waiting (N10 (a)); Switch account is a full browser sign-in, not quick; the owner's name never shows (X-owner-name); the owner's checked-out files stay writable and unwatched while another account is signed in (X-parked-writable).
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Kept, and extended by profiles (N10): the owner is named, waiting work is offered a wait or an own folder, and the owner's checked-out files are sealed read-only while someone else works in their own folder.
+- Verified in 0.3.3 by: As N10.
 
 ### C-0.3.2-minekeys
 
@@ -656,7 +728,8 @@ Totals at 0.3.3: 105 In progress.
 
 - Found at 0.3.2: **Done**. app.js:1243-1276 (keys when more than one file, own box over 6 rows, data-scroll-own), app.css:3580-3590; Undo all asks with the count (app.js:1846-1852, 2848-2853).
 - How it was verified then: Playwright probe (manyMine: keys in view at open, box 370 px, Team files directly below) and check-ui PASS (flow at check-ui.mjs:1348-1360).
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Unchanged and still true.
+- Verified in 0.3.3 by: check-ui keys-in-sight flows.
 
 ### C-0.3.2-pinnedkeys
 
@@ -665,7 +738,8 @@ Totals at 0.3.3: 105 In progress.
 - Found at 0.3.2: **Done**. app.css:3568-3576 '.recess-scroll:not(:has(.sel-bar)) .browser-head { position: sticky; top: -19px }', narrow offsets at 4041-4054; while files are picked the sticky selection bar takes the place (app.css:3597).
 - How it was verified then: Playwright probe on bigProject: after scrolling 3,000 px the folder keys are still at the top (y 238 at 1280x800, y 146 at 420x720).
 - Cause: n/a for the claim; see X-sticky-focus.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Still true, and keyboard focus now stays clear of them (X-sticky-focus).
+- Verified in 0.3.3 by: check-ui folder keys in sight and focus flows.
 
 ### C-0.3.2-quick-quit
 
@@ -675,7 +749,9 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Read code; reproduced in a throwaway EndToEnd test (SpcQuitTests, patch saved at scratchpad/spc-repro.patch, worktree scratchpad/wt-spc): with the fake file system's OpenAmong blocking 6 s, Engine.StopAsync asked 1 s into it took 5,007 ms. All four quitting-then-killed incidents above show no 15 s warning, i.e. the kill came within 15 s.
 - Cause: Quit is asynchronous and cooperative, and the engine thread runs long synchronous steps; Windows does not wait for an async quit at session end.
 - Missing at 0.3.2: 1) The cancel cannot run while the engine thread is blocked: in OpenAmong (up to 10 s + probe, plan, markers, check outs), in fs.Scan (25-38 s re-hash on the first pass after a start, no ct). 2) Session end: nothing blocks WM_ENDSESSION (no SessionEnded handler, no ShutdownBlockReasonCreate), so Windows terminates the process right after the end-session messages regardless of engine speed. 3) AgentLog.UncleanEnd (AgentLog.cs:100-119) ignores 'quitting' and reports the last pass line, so every such kill is still a 'crash'. 4) LastFlight is written at most once a minute (LastFlight.cs:13) and not at quit, so the last minute is missing from these incidents.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Now true: StopAsync cancels at once from any thread and the session end is handled.
+- Verified in 0.3.3 by: ResponsivenessTests.Stopping_while_the_open_files_question_is_slow_returns_at_once; HostPiecesTests.A_run_ended_while_quitting_is_not_a_crash.
+- Still missing, and why: Not exercised by a real Windows sign-out.
 
 ### C-0.3.2-responds-right-away
 
@@ -685,7 +761,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Field 0.3.2 DESKTOP-QH30N35: quiet loop passes 10,966-12,310 ms with plan 10,505-10,526 ms; 'Restart Manager did not answer within 10 s' logged 05:51:37Z; single check out 15.2 s; file history 10.6 s. Reproduction on HEAD as in N6.
 - Cause: Batch Restart Manager query exceeds its 10 s budget every pass and the wait is synchronous on the engine thread; actions still plan the whole vault.
 - Missing at 0.3.2: Quiet passes are about 11 s on that PC, not 1-2 s; clicks wait 11-22 s.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Now true, by N6's work.
+- Verified in 0.3.3 by: LargeVaultResponsivenessTests.
 
 ### C-0.3.2-runninglines
 
@@ -695,7 +772,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Throwaway end-to-end probe (live check-out lines at +268 ms and +767 ms; Force check in lines delivered only once, after the action answered); code read; incident c5dd91d2 (0.3.2) shows a 10.5 s plan phase per pass with no line.
 - Cause: Timer tied to passes; only transfers and check-in releases have lanes.
 - Missing at 0.3.2: Not live for Force check in; nothing during the wait, scan, server read, plan and hashing that precede a check out; no count or bar for check out/undo; panel scrolls out of sight; see N8.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Now complete: N2 and N8.
+- Verified in 0.3.3 by: ContinuousTransferTests, RunningLineTests, check-ui running-lines flow.
 
 ### C-0.3.2-slice-counts
 
@@ -705,7 +783,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Code read plus throwaway N123ProbeTests in wt-n123 (passed: Line and Download null between passes, back after Expect); N2 snapshot (sync.line 'Checking for changes.', activity null while 106 files were still moving).
 - Cause: Drop is used both for files that will never move and for files merely postponed to the next slice.
 - Missing at 0.3.2: Visible counts between slices; a test of the in-between state.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Carried transfers keep their activity lanes and counts between passes; the next pass prunes only what it no longer plans.
+- Verified in 0.3.3 by: StateAndActivityTests.Carried_downloads_stay_visible_between_continuation_passes.
 
 ### C-0.3.2-theme
 
@@ -715,7 +794,9 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: check-ui flow (check-ui.mjs:1588-1599, PASS); Playwright with 4x CPU throttle on manyMine/bigProject: a 500 ms full render follows the click and, when the view lands before the next frame, the new theme is first painted after it (523 to 569 ms).
 - Cause: No settings-only path or view de-duplication; partial CSS transitions.
 - Missing at 0.3.2: Settings-only views still re-render all of Home 2 to 3 times; transitions on keys/pads/rows make a mixed frame; thumbnails blink. See N7.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Now instant in the page: N7.
+- Verified in 0.3.3 by: check-ui drawing block and theme flows.
+- Still missing, and why: Not timed on a lab computer in WebView2.
 
 ### C-0.3.2-thumbnails
 
@@ -725,7 +806,9 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Read code and tests; the only Windows test uses a BMP. Never checked with real SolidWorks files.
 - Cause: Unverified, not known broken.
 - Missing at 0.3.2: Lab check with SLDPRT, SLDASM and SLDDRW; timeout, bounded queue, logging, short-lived null cache (N15).
-- 0.3.3: **In progress**. 
+- 0.3.3: **Partly done**. The robustness N15 asked for is built (timeouts, bounded queue, logging, retry).
+- Verified in 0.3.3 by: ShellThumbnailsTests.
+- Still missing, and why: The lab check with real SolidWorks files is still to do (lab checklist).
 
 ### X-142-ui-uploading-0-of-142
 
@@ -735,7 +818,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Read code; timing reasoning from flight phases (plan 41-62 s, move 9-26 ms); both snapshots taken at passEnd show sync.line and activity 'Uploading 0 of 142 files, 260.9 MB left' with state syncing, which is the view published at the first unit, still current while the engine awaited SettleAsync (the incident's DescribeAsync ran on the engine thread at that await). The repro test shows views alternating syncing 'Checking for changes.' and attention 'Everything else is saved. A few files need you.' every pass and the activity at the refused step reading 'Uploading 0 of 1 file, 9 bytes left'.
 - Cause: Files that will be refused without a call are planned and expected as uploads; the status line and running lines have no notion of 'blocked, waiting for you'; the incident snapshot uses a stale published view.
 - Missing at 0.3.2: What a student saw on IDEA-06 in 0.3.0/0.3.1: about 50 s 'Checking for changes.', a brief 'Uploading 0 of 142 files, 260.9 MB left', about 10 s of 'Everything else is saved. A few files need you.', repeat, so the app never looked settled and never said why. Nothing in the running lines (SyncEngine.cs:582 logs only moved files) mentions the 148 blocked files.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Name-blocked files are never expected as uploads, so no 'Uploading 0 of N'; the status line names the count and the reason; the incident snapshot is built from a freshly published view.
+- Verified in 0.3.3 by: A view test that no activity line starts with 'Uploading' for name-blocked files.
 
 ### X-38-uploading-forever
 
@@ -745,7 +829,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Snapshot filesByStatus across all 77 incidents (tools/i142-status.py): uploading 38 on all four computers, including a fresh 0.3.2 install that has only downloaded (DESKTOP-QH30N35), so they are server records, not local files. Read code for the status rule.
 - Cause: Create and first commit are separate calls; an interrupted add leaves an empty record that every computer shows as uploading and that holds the name (unique index 0231_armory.sql:112-113).
 - Missing at 0.3.2: The list of the 38 (server query: select folder, name, created_at from armory_files where project_id='e7db2770-7680-4f67-98cb-2d0839e18589' and deleted_at is null and current_version_id is null). Hypothesis to check with that query: they are adds whose create landed but whose first version never did (a stop or sign-out between armory_create_file and the commit, then the local copy renamed or deleted), and each one still holds its name, so it can also cause name refusals.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. A server record with no version reads 'No first version' (File detail: 'Added without its first version'), never 'Uploading'; the computer that made it removes the empty record after two scans without the file. Records whose computer never comes back stay: removing them is website request 2 (docs/agent/website-requests-v0.3.3.md).
+- Verified in 0.3.3 by: End-to-end A_create_without_a_first_version_is_not_shown_uploading and the removal test.
 
 ### X-6-extra-nameShared-archived
 
@@ -755,7 +840,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Reproduced (throwaway E2E An_archived_projects_never_added_files_keep_old_refusals_and_read_uploading): a copy refused for its name, then the project archived: after two passes the nameShared card still has it ('1 file shares a name...'), the window stays 'attention'; a file written offline and never added reads 'uploading' while the line says the project is saved. Applying this to IDEA-06 (projects 'test' archived and 'FRC 2026 Off-Season') is an inference: 6 nameShared items are never re-planned, and the archived 'test' project is the one place the code leaves a refusal standing.
 - Cause: Archived projects are skipped by planning but not by the notice and status builders.
 - Missing at 0.3.2: Proof of which 6 items (state.json on IDEA-06 would show their paths).
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Refusals in an archived project are no longer notices; a never-added file there reads notInArmory.
+- Verified in 0.3.3 by: End-to-end tests.
 
 ### X-N5a-organize-checked-out
 
@@ -765,7 +851,9 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Read the SQL and ARMORY.md; read the engine paths named; traced the Explorer path DetectLocalMoves (Actions.cs:796-819) to ExecutePendingMovesAsync and FinishLocalMove.
 - Cause: Server rule (holder-only moves, folder ops refused over others' locks). The app cannot move a file someone else holds without first breaking their lock; doing it silently would turn the holder's unsaved check-in into a kept copy and break their open SolidWorks document's path.
 - Missing at 0.3.2: Any way to organize around someone else's check out: no lead path (force then rename), no queued 'rename when they check in', no window Move action (only Explorer can move a file between folders), no hint that a mentor can help.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Partly done**. See N5 (a).
+- Verified in 0.3.3 by: ForceOrganizeTests.
+- Still missing, and why: See N5.
 
 ### X-N5b-force-check-in
 
@@ -775,7 +863,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Read app.js, Bridge.cs, engine and Core code; existing EndToEnd tests CheckOutTests.A_mentor_takes_back_a_check_out_and_nothing_is_lost (holder notice title and kept copy) and Force_check_in_of_many_files_is_one_action_and_one_pass; server SQL 0233:729-731 and 1007.
 - Cause: Role policy is the server's; the app's holder-side wording was written before 'Force check in' replaced 'take back' and before lock_broken carried 'by'.
 - Missing at 0.3.2: 1) A project member with role 'instructor' never gets can_take_back (0233:1007 'm.role in (mentor, cad_lead) or v_admin') and armory_break_lock refuses them (0233:729-731); Mr. Pina works because he is 'mentor' on FRC 2026 Off-Season. 2) The holder is never told who forced it although lock_broken carries {by} (the app reads only former_device_id). 3) 'took it back' and 'force checked in' name the same event. 4) Between the lock_broken read and the next pass, a holder with NO changes briefly sees 'Armory is keeping your changes that weren't checked in' (View.cs:182-184). 5) No word that a file still open in SolidWorks is now read-only (saves fail; Save As is the way out). 6) No way in the app to get the kept copy back (history shows it, nothing downloads it). 7) Force check in of many files does not use armory_break_locks (0234), and single-row clicks queue one whole pass each.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. See N5 (b); BrokenBy from the lock_broken payload; 'your changes' only when the file had changed; armory_break_locks adopted.
+- Verified in 0.3.3 by: End-to-end tests.
 
 ### X-break-locks-batch-unused
 
@@ -785,7 +874,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: grep: no armory_break_locks in src/ (only docs/agent/website-requests-v0.3.2.md:23).
 - Cause: Batch RPC arrived after 0.3.1's design.
 - Missing at 0.3.2: Client method and engine use.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Force check in of many files uses armory_break_locks, 500 per call in id order, with the PGRST202 fallback, bounded 40P01/40001 retries (each round's operation id chained from the call that answered busy), and one result sentence.
+- Verified in 0.3.3 by: Engine end-to-end tests: 1,200 files in 3 calls, fallback, mixed results, retry, replay after a crash.
 
 ### X-checkin-release-guard
 
@@ -795,7 +885,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Code read; field evidence: release_lock at 22:31:27.756Z, 22:45:15.326Z, 23:04:06.500Z (SmallFlywheel V3) and 21:33:57.025Z (Toparmredesignnoscrewpocket), each in an action pass whose own scan logged 'being used by another process' for that file and uploaded 0. Repro test fails at HEAD; prototype passes all EndToEnd tests.
 - Cause: Release readiness trusts the pass's scan hash, which can be stale (see X-stale-unread-entry), and a check in has no 'close first' rule.
 - Missing at 0.3.2: Fresh read and open check before every requested release; a waiting state and answer for an open file; writable while a check in waits on an open file.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. See N4: fresh read with read-only set first, one open-files question for all releases, WaitForClose/ReadAgain steps, writable while a check in waits on an open file.
+- Verified in 0.3.3 by: End-to-end tests A_check_in_while_SolidWorks_holds_the_file_waits_and_then_shares_the_saved_edits, Check_in_all_checks_in_closed_files_and_waits_for_open_ones, A_check_in_never_lets_go_over_bytes_it_could_not_read (in tests/GUARDS.txt).
 
 ### X-checkout-rehash
 
@@ -805,7 +896,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Read code.
 - Cause: Guard against bytes changing between scan and lock, applied to every file.
 - Missing at 0.3.2: Reuse of the scan hash when unchanged.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. A check out reuses the scan's hash when the file is unchanged since the scan (same NTFS id, size and last-write time).
+- Verified in 0.3.3 by: ResponsivenessTests.A_folder_check_out_reads_no_unchanged_file_and_sets_bits_in_batches.
 
 ### X-checkout-rehash-slowpa
 
@@ -815,7 +907,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Read code; IDEA-00 hashes its vault in about 11 s (first-scan timing), included in the 50.7 s finish of 1f22e3a0.
 - Cause: Defensive re-hash for a race that a stat comparison can detect.
 - Missing at 0.3.2: Reuse of the scan's hash when the file is provably unchanged.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. As X-checkout-rehash.
+- Verified in 0.3.3 by: ResponsivenessTests.A_folder_check_out_reads_no_unchanged_file_and_sets_bits_in_batches.
 
 ### X-download-cycle
 
@@ -825,7 +918,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: c5dd91d2 flight 05:50:47-05:54:27: each pass scan 0.2-0.8 s, server 0.2-0.9 s, plan 10.4-10.5 s, move 8.3-8.6 s (69-89 files each).
 - Cause: The slice re-runs phases A and B, whose cost is dominated by the open-file budget.
 - Missing at 0.3.2: Continuous downloading while the server is re-read.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. The transfer queue keeps downloads running between slices (N3).
+- Verified in 0.3.3 by: ContinuousTransferTests.A_big_download_never_pauses_between_slices.
 
 ### X-feedback-snapshot-lost
 
@@ -835,7 +929,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: 5 of 15 feedback notes and 9 of 23 slowAction incidents carry {'unavailable': 'the engine did not answer within 3 seconds'}; sendFeedback window actions took 1.8-3.1 s in those flights.
 - Cause: Engine thread blocked by the synchronous plan.
 - Missing at 0.3.2: A snapshot that does not need the engine thread.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. A feedback or incident snapshot waits 500 ms for the engine, then uses the window's last view, marked engineBusy.
+- Verified in 0.3.3 by: LargeVaultResponsivenessTests: sendFeedback snapshot 47 ms; incident tests.
 
 ### X-full-render
 
@@ -845,7 +940,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Playwright timing: one full render with manyMine/bigProject costs about 100 to 134 ms at 1x and 497 to 538 ms (a single long task) at 4x CPU throttle. Code read for publishing cadence and thumbnail headers.
 - Cause: The page was designed for a whole-view model; with 1,400 to 5,000 rows the index rebuild and DOM rebuild dominate.
 - Missing at 0.3.2: Incremental updates for big views.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Views are morphed in by key, rows are reused, thumbnails are kept, identical views are skipped.
+- Verified in 0.3.3 by: check-ui drawing block (4x CPU throttle) and thumbnail-kept check.
 
 ### X-hash-cache-not-persisted
 
@@ -855,7 +951,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Read code; flight: first-pass scan after a start 38.4 s (8adfb590, DESKTOP-F41DB2R), 37.1 s (030b06da), 25.5 s (610eed69), 11.1 s and 10.9 s (IDEA-00 18:20:59 and 18:29:50) versus 0.05-0.4 s on later scans.
 - Cause: Design: cache rebuilt per process.
 - Missing at 0.3.2: A durable hash cache keyed by path, NTFS file id, size and last-write time.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. The scan's hashes are kept in .armory/file-hashes.json (atomic replace) and reused after a start when the NTFS id, size and last-write time match outside the racy window.
+- Verified in 0.3.3 by: Windows CI platform tests.
 
 ### X-kept-save-every-pass
 
@@ -865,7 +962,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Read code; N1 Context log lines and snapshot.
 - Cause: ExpectTransfers and LogPassStart count every non-None action, not actions that will send bytes.
 - Missing at 0.3.2: No expectation or 'moving' count for a preservation that is already met.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. A save that is already kept is not planned, counted as moving or preserved again (SyncEngine Moves and AlreadyKept).
+- Verified in 0.3.3 by: ContinuousTransferTests.A_save_already_kept_is_never_moving_again.
 
 ### X-long-passes-1108s
 
@@ -875,7 +973,9 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Flight events read in full for that window.
 - Cause: Machine sleep (network dropped, no heartbeats); the slowPass rule counts suspended time.
 - Missing at 0.3.2: 
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Still not an Armory slowdown (the computer was asleep or frozen), but 0.3.3 records sleep and wake as power events and never files a slowPass for a pass the computer slept through (GlitchRules.SlowPass slept), so such reports stop.
+- Verified in 0.3.3 by: GlitchRuleTests.A_pass_the_computer_slept_through_is_not_a_slow_pass.
+- Still missing, and why: The Windows sleep/wake hook (SystemEvents.PowerModeChanged) was not exercised on a real computer going to sleep.
 
 ### X-no-version-uploading
 
@@ -885,7 +985,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Read StatusOf (SyncEngine.View.cs:435-454) and Unsent (58-66): pendingCount 0 rules out local new files, journal entries and in-flight writes, which leaves server rows with no current version not on this disk. The 38 rows themselves were not inspected (no server access).
 - Cause: StatusOf maps 'no current version' to Uploading regardless of which computer, if any, is uploading it.
 - Missing at 0.3.2: An honest status for a team file whose first upload never finished elsewhere.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. See X-38-uploading-forever: status noVersion.
+- Verified in 0.3.3 by: End-to-end tests.
 
 ### X-open-files-question
 
@@ -895,7 +996,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Read code. Flight data: plan phase rose by about 14.6 ms per file on disk ((9620-1818) ms over 534 files) and is 10,422-10,526 ms in every pass from 05:51:25 to 05:55:56, including the 6 passes with nothing to move (12.3, 11.7, 11.0, 11.7, 11.2 s total) and the check out's own action pass; the one log line at 05:51:37.363 is the 10-minute rate limit hiding the rest. armory_file_history in c5dd91d2 measured 10,586 ms (its continuation waits for the engine thread; PostgrestClient has no ConfigureAwait(false)). Searched all 77 incidents: the line appears only in this device's 0.3.2 log. Existing tests never see the cost: PortableVaultFileSystem.OpenAmong answers instantly (tests/Armory.EndToEnd.Tests/PortableVaultFileSystem.cs:177-185) and the Windows test uses 40 files with a 30 s budget (tests/Armory.Platform.Windows.Tests/ReplaceAndLockTests.cs:290-307).
 - Cause: 0.3.2 replaced one Restart Manager session per file with batches of 500 but still asks about every file every pass; RmGetList cost grows with the files registered (about 14.6 ms each here), so 1,467 files need about 21 s and always hit the 10 s budget, which the engine thread waits out synchronously. The abandoned query overlaps the next pass's query, which slows both. The per-file exclusive probe on every file every pass also briefly takes an exclusive handle on files SolidWorks may be opening (not observed in these logs, a risk).
 - Missing at 0.3.2: Narrow question, off-thread execution, cancellation of the abandoned query, a shorter budget for planning, telemetry for every overrun, a scale test.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. See X-pass-48-60s: one question, off the engine thread, only where it matters, 2 s budget; Restart Manager one query at a time.
+- Verified in 0.3.3 by: ResponsivenessTests; Windows CI ReplaceAndLockTests.The_open_files_question_keeps_its_budget_and_runs_one_query_at_a_time.
 
 ### X-openamong-blocks-engine
 
@@ -905,7 +1007,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Field plan phase pinned at 10.4-10.5 s for 23 of 24 passes on 0.3.2 plus the 'did not answer within 10 s' log line; code read. Consequences reproduced with a simulated cost (N6).
 - Cause: A held file costs about 2 x log2(500) Restart Manager sessions in the halving search, so a SolidWorks assembly with dozens of parts open (or a thumbnail handler holding files, unverified hypothesis) exceeds 10 s; the query also keeps running on the pool after the budget, one more per pass.
 - Missing at 0.3.2: Async, bounded and minimal open checks; diagnostics naming the holders.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. IVaultFileSystem.OpenAmongAsync runs on worker threads within a budget; a waiting click cancels the loop's question at once.
+- Verified in 0.3.3 by: ResponsivenessTests.Stopping_while_the_open_files_question_is_slow_returns_at_once; Windows CI open-files budget test.
 
 ### X-owner-name
 
@@ -915,7 +1018,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Read code: the vaultOwnedByOther view is published during the finishing phase (OnEngineView settles on VaultOwnedByOther, AgentHost.cs:453-458), so for a moment the page parses the new account's own address and says 'This folder belongs to <you>', then shows 'someone else' once the phase goes idle.
 - Cause: The page parses a free-text sentence for the owner, and the engine never puts the owner in the view.
 - Missing at 0.3.2: The owner's identity and waiting summary in the view.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. FolderOwnerView (email, name, waiting) in the view, filled by the engine from the folder itself; the folder-taken screen uses it.
+- Verified in 0.3.3 by: Engine and contract tests.
 
 ### X-parked-writable
 
@@ -925,7 +1029,9 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Read code (SyncEngine.cs:423-441, SyncEngine.Accounts.cs header comment lines 6-13).
 - Cause: The engine only acts for the folder's owner, and protection (read-only rule) is part of the pass it skips.
 - Missing at 0.3.2: Protection of the parked owner's files. A second student who opens one of those files in SolidWorks can save into it; when the owner signs back in, the pass sees the changed bytes of the owner's own check out and captures them as the owner's save, sent under the owner's name at check in. The comment says two accounts in one folder is never allowed because the second would see the first one's work as its own; the actual hazard is the reverse.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. SealCheckOutsAsync makes the last student's check outs read-only while the next works in an own folder, undone when they return.
+- Verified in 0.3.3 by: End-to-end and host tests.
+- Still missing, and why: What SolidWorks does with a file made read-only while it has it open is a lab check.
 
 ### X-pass-48-60s
 
@@ -935,17 +1041,20 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Flight passPhase events: on IDEA-06 (1,604 paths) scan 6.0-8.9 s, server 0.2-0.8 s, plan 41.4-55.3 s, move 9-26 ms: about 26 ms per local file in plan, matching the ~28 ms per Restart Manager session the 0.3.2 comment cites. ReleaseReader is null so no file is read for its release. 0.3.2 field data (DESKTOP-QH30N35, 7a6c7d95): plan grows with local files: 1,818 ms at ~84, 2,782 at ~163, 3,897 at ~238, 5,354 at ~329, 6,695 at ~402, 7,644 at ~480, i.e. still about 16 ms per local file (computed by tools/i142 script from passEnd downloaded counts).
 - Cause: Every pass asks the open state of every local file, though Core's plan only depends on IsOpen for files with something to do (Refresh, Recover, removal of an open file).
 - Missing at 0.3.2: At 0.3.2 rates a 1,600-file vault like IDEA-06's would still spend roughly 25 s per pass in plan (estimate, not measured on IDEA-06). The remaining per-file cost is inside OpenAmong (exclusive probe or Restart Manager), not separated by measurement.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. The open-files question is asked once per pass, off the engine thread, within a 2 s budget, and only about files whose plan depends on it (Core Reconciler.OpenMatters; SyncEngine.cs AskOpenAsync; Windows OpenFileDetector.OpenAmongAsync runs one Restart Manager query at a time). A quiet pass asks about no file; stale ~$ markers are remembered by their stamp and not asked about again.
+- Verified in 0.3.3 by: Core property test for OpenMatters (whole small state space); ResponsivenessTests.Views_and_a_quiet_pass_never_ask_whether_a_file_is_open_one_by_one and Stale_markers_are_not_asked_about_again_until_they_change; LargeVaultResponsivenessTests: a quiet pass over 1,500 files 385 ms (docs/agent/responsiveness-0.3.3.md); Windows CI: ReplaceAndLockTests.The_open_files_question_keeps_its_budget_and_runs_one_query_at_a_time.
+- Still missing, and why: Timed in the test world with Windows' measured cost modeled, not on IDEA-06 itself (lab checklist).
 
 ### X-pending-count
 
 **Folder-wide actions overcount and mark every row as being worked on** (other; refs N9, N11, N12).
 
 - Found at 0.3.2: **Not done**. workingOf() (app.js:2218-2252) words the foot line with filesWords(paths) (app.js:2203-2215), which counts every indexed path under a folder path; pendingOf() (app.js:2142-2150) marks every row at or under a folder path; startWorking() (app.js:2161-2180) inserts 'Checking in...' into those rows and the CSS hides who has them.
-- How it was verified then: Playwright probes with the demo holding the answer (press param): manyMine + My files Check in all: foot 'Checking in 5,018 files...' while 1,401 are mine; bigProject + folder Check in all: 'Checking in 5,000 files...' with one file mine and 38 drawn rows labeled; checkedOutByOther: Check out all dialog 'Check out 6 files in Drivetrain...' then foot 'Checking out 8 files...'; folder Check in all labels Maria's Plate-Left 'Checking in...' with her 'Checked out by Maria Lopez' chip hidden.
+- How it was verified then: Playwright probes with the demo holding the answer (press param): manyMine + My files Check in all: foot 'Checking in 5,018 files...' while 1,401 are mine; bigProject + folder Check in all: 'Checking in 5,000 files...' with one file mine and 38 drawn rows labeled; checkedOutByOther: Check out all dialog 'Check out 6 files in Drivetrain...' then foot 'Checking out 8 files...'; folder Check in all labels Maria's Plate-Left 'Checking in...' with the 'Checked out by Maria Lopez' chip hidden.
 - Cause: The page expands folder paths to all files instead of filtering by state per action type (check in/undo: state mine; check out: available; take back: other/myOtherComputer).
 - Missing at 0.3.2: Counts and labels limited to the files the action will actually touch.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Folder-wide actions count and mark only the files they can change (app.js affectedOf).
+- Verified in 0.3.3 by: check-ui stand-in host checks: only touched rows show as working; the working line and the question agree on the count.
 
 ### X-readonly-manifest-per-file
 
@@ -955,7 +1064,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Read code; field gaps of about 2.5 s between 500-file lock_files calls and 6.1 s before a 1,424-file release batch.
 - Cause: Single-file helper reused inside bulk loops.
 - Missing at 0.3.2: Batching in the check out and check in paths.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Read-only bits go in one ApplyLockAttributesNow call per chunk of locks or releases, still before each release.
+- Verified in 0.3.3 by: ResponsivenessTests.A_folder_check_out_reads_no_unchanged_file_and_sets_bits_in_batches; Windows platform tests.
 
 ### X-recovery
 
@@ -965,7 +1075,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Flight transfers and passEnd counts; 184c9e24 snapshot notices; website route read; Reconciler ordering (SaveSideVersion before Download) and the repro ('edits on server=True').
 - Cause: N4 mechanism; preservation worked, the working copy was reverted 3 times for SmallFlywheel V3 (22:40:05, 23:00:27, 23:05:36) and once for Toparmredesignnoscrewpocket (about 23:11:35, about 1.5 hours of work). Toparmredesign and Hook V3 show no kept copy, so nothing of theirs changed.
 - Missing at 0.3.2: No in-app way to bring a kept copy back; intermediate saves made while SolidWorks held the file were never captured separately (only the bytes at close), which is the student's own later save anyway.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Abraham's edits are on the server as kept copies (side versions). Armory can put one of your kept copies back on this computer, checked out to you (SyncEngine.PutBackKeptCopyAsync, bridge putBackKeptCopy, key on File detail); it keeps any unsaved bytes first and refuses an open file or someone else's copy.
+- Verified in 0.3.3 by: End-to-end tests.
 
 ### X-responsiveness-test-gap
 
@@ -975,7 +1086,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Read every test that uses Stopwatch in tests/Armory.EndToEnd.Tests and tests/Armory.Agent.Tests.
 - Cause: Tests model the open check as free (PortableVaultFileSystem.OpenAmong) and use small vaults.
 - Missing at 0.3.2: Not measured at all: undoCheckOut, takeBack, takeBackAll, createFolder, renameFolder, deleteFolder, renameFile, addFiles, dropFiles, takeOverFolder, reportProblem, sendFeedback, dismissNotice, pause/resume, launchFile of an on-disk file, openFile during a plan; none of the 29 bridge types is measured on a 1,000+ file synced vault, with LatencyProfile.School, or with a costly open-file question.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. LargeVaultResponsivenessTests (22 tests, a 1,500-file vault, school latency, modeled open-files cost) and ResponsivenessTests; the table is docs/agent/responsiveness-0.3.3.md.
+- Verified in 0.3.3 by: Run in the whole suite (EndToEnd 213 of 213 passed after the merge).
 
 ### X-signed-out-as-refusal
 
@@ -985,7 +1097,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Reproduced (throwaway E2E A_sign_out_mid_upload_is_recorded_as_a_refusal): report Refused=1, card 'Roller.SLDPRT can't be uploaded / This save couldn't be read back from this computer's safe copy.' Field: IDEA-06 log 15:03Z 'signed out' x2, 16:01:47Z 'sync: ...: This computer is not connected to Armory.', then 0.3.0's first snapshots show cantSend 574, 558, 344 shrinking as slices re-planned files, and none after 18:42Z.
 - Cause: Sign-out is treated as a server refusal instead of a stop like offline.
 - Missing at 0.3.2: 
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. A sign-out during a pass is a stop like offline: the in-flight write is kept and goes again once connected. A related bug found while testing is fixed too: a resent commit named the new device instead of the lock holder's.
+- Verified in 0.3.3 by: Guarded end-to-end A_sign_out_mid_upload_is_not_a_refusal.
 
 ### X-stale-markers
 
@@ -995,7 +1108,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Snapshot 184c9e24 'SolidWorks may have closed unexpectedly with 224 files open'; IDEA-06 0.3.1 scan median 5.2 s versus 0.1 s elsewhere; 2ab514eb notices 43 ms apart (two RM sessions per marker in 0.3.0).
 - Cause: Stale markers are re-checked every pass and never cleaned up.
 - Missing at 0.3.2: At HEAD 448 paths per pass through the same RM path (about 6.6 s at 14.7 ms per file, capped at 10 s).
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. A stale ~$ marker is remembered by its stamp and not asked about again until it changes, reaches the flight recorder once, and is never deleted.
+- Verified in 0.3.3 by: ResponsivenessTests.Stale_markers_are_not_asked_about_again_until_they_change.
 
 ### X-stale-unread-entry
 
@@ -1005,7 +1119,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Code read; the 13 readOnlyBroken incidents name only files that were 'being used by another process' at that time (Hook V3 17:52, Toparmredesign 21:03-21:29, Toparmredesignnoscrewpocket 21:33-23:10, SmallFlywheel V3 22:30-23:04) and stop as soon as the file is readable again; repro test An_unreadable_file_reports_readOnlyBroken_every_pass_though_its_bit_is_set fails at HEAD with 3 events in 3 passes while the bit is set.
 - Cause: The 'never a deletion' safety rule was implemented by reusing the whole cached entry, so 'present but unreadable' is indistinguishable from 'read and unchanged'.
 - Missing at 0.3.2: A per-entry 'not read this scan' flag, honored by the engine, and a forced re-hash once readable.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. LocalFileState/LocalFile carry Unread; the next readable scan hashes again even with the same size and time; ApplyReadOnly skips unread entries.
+- Verified in 0.3.3 by: Windows platform test A_file_held_open_for_writing_is_marked_unread_and_hashed_again_once_readable (CI) and end-to-end tests.
 
 ### X-sticky-focus
 
@@ -1015,7 +1130,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Playwright probe uibulk-probe5.mjs on bigProject: after 40 ArrowDown then ArrowUp, rows 28 to 34 (1280x800) and 28 to 35 (420x720) are focused with their top above the head's bottom (head bottom 346 and 254 px), i.e. hidden under the keys.
 - Cause: The sticky head was added in 0.3.2 without updating the list's scroll margin logic.
 - Missing at 0.3.2: Scrolling that respects the pinned head.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. scroll-padding-top from the pinned keys' height keeps keyboard focus visible.
+- Verified in 0.3.3 by: check-ui focus-clear-of-pinned-keys flow.
 
 ### X-telemetry-refusals
 
@@ -1025,7 +1141,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Flight per pass on IDEA-06: exactly 200 'Armory is treating X as closed' notices every pass from 224-243 ~$ markers (Full Assembly 56, MISC/Prototypes/Francis 125, ...), zero other notices; no event names any of the 148.
 - Cause: Telemetry records notices, not refusal transitions, and repeats unchanged notices each pass.
 - Missing at 0.3.2: 
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. A refusal flight event (path, kind, namesake) when a refusal starts, changes or ends; stale ~$ markers recorded once; the snapshot lists the first 20 items per card and refusals by kind; tools/read-incident prints them.
+- Verified in 0.3.3 by: RefusalEventTests.
 
 ### X-test-doubles-blind
 
@@ -1035,7 +1152,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Code read; the repro needed a new hold model in the double before it could fail.
 - Cause: The doubles model Windows' read-only bit but not its sharing violations.
 - Missing at 0.3.2: A model of a file held open for writing (scan keeps the old entry, reads fail) and invariants that catch a release over unread bytes.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. PortableVaultFileSystem.Hold/Unhold/HoldUnreadable; the Core checkout simulation models write-held and unreadable files.
+- Verified in 0.3.3 by: The new tests fail on 0.3.2 and pass now.
 
 ### X-two-computers-named-IDEA-06
 
@@ -1045,7 +1163,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Seraj's 0.3.1 runtime started on C:\IDEA\Armory at 20:52:03 while Abraham's agent kept syncing C:\IDEA\Armory (log lines 20:53-20:59); a second runtime on one folder is impossible because owner.lock is held FileShare.None (SafeFileReplace.cs:35). Snapshots at the same hour: Seraj 1,463-1,465 files, Abraham 1,605-1,632. Abraham's agent recorded heartbeats 22:32-22:54 while Seraj's process recorded nothing 22:00-22:52.
 - Cause: Lab computers imaged with the same hostname (inference).
 - Missing at 0.3.2: A stable machine id in incidents and heartbeats.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. As X-two-idea-06.
+- Verified in 0.3.3 by: As X-two-idea-06.
 
 ### X-two-idea-06
 
@@ -1055,17 +1174,19 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Incident logs and snapshots: Seraj's Armory 0.3.1 started a vault runtime at C:\IDEA\Armory at 20:52:03Z, signed in, 'pass: moving 267 of 1,463 files' at 20:52:47Z (snapshot files 1463, signedIn, device a0307df4); at the same time Abraham's Armory 0.3.1 ran C:\IDEA\Armory with 1,605 files ('pass: moving 142 of 1,605 files' 20:42:01Z, slowAction 20:50:38Z, sync errors on C:\IDEA\Armory paths 20:53:36Z, slowAction 21:02:23Z; device 8c26f8ac). owner.lock is opened FileShare.None (SafeFileReplace.cs:35), so two runtimes on one folder of one computer cannot both start; the file counts differ too. So these are two computers, both named IDEA-06 (both Windows 10.0.26200).
 - Cause: Lab computers share a name (likely imaging).
 - Missing at 0.3.2: A way to tell same-named computers apart; other auditors must not treat IDEA-06 incidents as one disk, and N10 should not be read as evidence of two Windows users sharing one folder there.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Incidents carry a machineId (a hash of Windows' MachineGuid), and two computers with one name read 'IDEA-06 (a030)' in check-out lines and refusals. Team status lives on the website: showing the id there is a website request. Renaming one of the computers is a school IT task (Mr. Pina's call).
+- Verified in 0.3.3 by: MachineIdTests; the Windows registry read itself runs only on Windows (CI).
 
 ### X-two-idea06-engines
 
 **Two engines report device IDEA-06 at the same time with separate vaults** (other; refs 87fa2b3d, 2d479aea, 5da43de6).
 
-- Found at 0.3.2: **Not reproducible**. Seraj's engine (records 1,463, vault C:\IDEA\Armory) and Abraham's (records 1,625-1,634, vault C:\IDEA\Armory) ran concurrently. Seraj's SolidWorks held Toparmredesignnoscrewpocket 21:22-21:28 and his engine created it at 21:29:04 (480,955 B); Abraham's engine never saw it held then and downloaded those bytes at 21:29:54. state.json and the exclusive read-only.lock live in each vault's .armory (AgentHost.cs:623-629, ReadOnlyPolicy.cs:33), so the two cannot share one folder.
+- Found at 0.3.2: **Not reproducible**. Seraj's engine (records 1,463, vault C:\IDEA\Armory) and Abraham's (records 1,625-1,634, vault C:\IDEA\Armory) ran concurrently. Seraj's SolidWorks held Toparmredesignnoscrewpocket 21:22-21:28 and Seraj's engine created it at 21:29:04 (480,955 B); Abraham's engine never saw it held then and downloaded those bytes at 21:29:54. state.json and the exclusive read-only.lock live in each vault's .armory (AgentHost.cs:623-629, ReadOnlyPolicy.cs:33), so the two cannot share one folder.
 - How it was verified then: Per-person flight merge and logs.
 - Cause: Either two PCs named IDEA-06 or a reused device name; not determinable from the data.
 - Missing at 0.3.2: Nothing for N4: the mechanism is entirely within Abraham's engine. Device names alone do not identify a computer in incidents.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Not reproducible**. No Armory defect: two different computers share the name IDEA-06. 0.3.3 tells same-named computers apart in the window and in incidents (X-two-idea-06).
+- Verified in 0.3.3 by: See X-two-idea-06.
 
 ### X-ui-checks-coverage
 
@@ -1075,7 +1196,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Read tools/agent-ui/*.mjs and the workflows; ran check-ui.mjs.
 - Cause: Tests were written for the 0.3.0 design and extended by example only.
 - Missing at 0.3.2: No assertions for: pinned folder keys after scrolling; keys visible at open (clicks auto-scroll); #act-log content and visibility; check-out running lines (no demo state has log-only activity); working-line counts; focus vs the pinned head; re-render count and latency on theme switch with a big view; selection of thousands.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. check-ui covers the N7 to N12 behaviors (86 flows) and runs on CI in the new Agent window checks workflow (ui.yml) whenever the page or the tools change.
+- Verified in 0.3.3 by: check-ui PASS; ui.yml on main.
 
 ### X-uploading-vs-saved
 
@@ -1085,7 +1207,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Snapshots of N11, N12 and incident aa236105: filesByStatus {synced: 1433, uploading: 38}, sync 'Everything is saved to Armory.', pendingCount 0, with an archived project 'test' in the list. Code read. Not reproduced: which 38 files these were is not in the snapshot.
 - Cause: Likely the archived project's new local files (archived rows are not drawn, app.js:1339-1354) or files without a record; needs the engine owner to confirm.
 - Missing at 0.3.2: A status for 'not going to upload' (archived project, or no record) consistent with the sync line.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Rows no longer say Uploading while the status line says everything is saved (archived, name-blocked and versionless files have their own statuses).
+- Verified in 0.3.3 by: End-to-end tests.
 
 ### X-version-40
 
@@ -1095,7 +1218,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Read code; grep of tests: only V3ClientTests.cs:250 checks a heartbeat carries '0.3.0' and AgentTelemetryTests.cs:160 compares with AgentPaths.Version; no test bounds the length or format.
 - Cause: The two server limits differ (40 vs 64) and the client only guards the 64 one.
 - Missing at 0.3.2: A test holding AgentPaths.Version to 1 to 40 characters and a clamp in TeamHeartbeat.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. TeamHeartbeat.MaximumVersionCharacters = 40, the heartbeat cuts its version to 40 and stops sending a version the server refused; the app version is 0.3.3.
+- Verified in 0.3.3 by: Guarded test HostPiecesTests.The_app_version_fits_the_heartbeats_40_characters and V3 client tests.
 
 ### X-view-open-per-file
 
@@ -1105,7 +1229,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Reproduced in the throwaway EndToEnd test SpcAuditTests: with 20 files added while open, a quiet pass made 80 single IsOpen calls (plus 3 batches) and 20 view builds made 400 IsOpen calls (20 per view). IDEA-06 had 55 such files (610eed69 snapshot checkInWhenClosed 55).
 - Cause: Views and phase D ask the platform directly instead of the pass's batch.
 - Missing at 0.3.2: A per-pass open answer reused by views and phase D.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Views, My files and the read-only rule read the last pass's answers (KnownOpen) instead of asking per file.
+- Verified in 0.3.3 by: ResponsivenessTests.Views_and_a_quiet_pass_never_ask_whether_a_file_is_open_one_by_one.
 
 ### X-wrong-words
 
@@ -1115,7 +1240,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Code read; repro test captured the answer 'Checked in Plate.SLDPRT.' while the server kept v1.
 - Cause: The answer is derived from the release, not from what was shared; the card assumes a kept copy means the student skipped check out.
 - Missing at 0.3.2: Truthful answers; a pointer to how to get the kept copy back.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. 'Checked in' only after a fresh read matched; 'Plate.SLDPRT is open in SolidWorks. Save it there and close it; Armory checks it in as soon as it's closed.'; the kept-copy card no longer blames the student.
+- Verified in 0.3.3 by: End-to-end tests assert the sentences.
 
 ### X-year-check-docs
 
@@ -1125,7 +1251,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: grep over docs/, README.md, wwwroot and engine strings; each quote checked at HEAD 0ef1ae0.
 - Cause: Docs describe Core's gate and the fake-reader proof as product behavior.
 - Missing at 0.3.2: 
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. Corrected docs/core/solidworks-version-gate.md, docs/spike/saved-release.md (superseded line), ENGINE.md, BRIDGE.md, PROOF.md, docs/platform/audit.md, validation.md, docs/core/integration.md and the demo card; the 0.3.3 release notes say plainly that earlier versions never checked the year.
+- Verified in 0.3.3 by: Read back; check-ui passes.
 
 ### X-year-check-off
 
@@ -1135,7 +1262,8 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Read code and migrations; reproduced (throwaway E2E Without_a_release_reader_warn_marks_every_SolidWorks_version_and_enforce_refuses_every_one, with the app's real wiring, ReleaseReader null): warn: a part whose bytes the fake reader would read as 2026 uploads; server row 'null/false'; row and detail releaseNotChecked true, history all true; no notice. Enforce (set by RPC): check in refused 'Plate.SLDPRT can't be checked in. The SolidWorks year it was saved in is unknown, and Robot 2027 only takes files whose year Armory can check. It stays on this computer. It stays checked out by you.'; a new Gear.SLDPRT never reaches the server; card 'They were saved in a SolidWorks year the project can't take. Each one says what to do, then it uploads by itself.'
 - Cause: The phase 0 spike found no validated standalone reader (docs/spike/saved-release.md:22); the gate was shipped with warn as the default instead.
 - Missing at 0.3.2: Any reader. ARMORY.md rule 4 ('A 2026-format file can never slip in') is not true today: a SolidWorks 2026 save from a student laptop is uploaded and becomes the team's version that 2025 lab PCs cannot edit. The 'year not checked' tag appears on every SolidWorks file and version, so it carries no information.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. AgentHost passes SolidWorksSavedReleaseReader (src/Armory.Core/SolidWorksFileRelease.cs), which reads the year from the file itself with no key and answers unknown unless two independent fields agree. A file newer than the pin is refused in Warn and Enforce and stays a private draft.
+- Verified in 0.3.3 by: Core tests on synthetic containers for every code 8000 to 20000 and every malformed case; 158 public files from 2017 to 2025 all read correctly (outside the repo); 6,320 corrupted copies gave 0 wrong years; end-to-end ReleaseTests (a 2026 draft never reaches the server). No real 2026 file was available: lab checklist.
 
 ### X-year-find-2026
 
@@ -1145,5 +1273,6 @@ Totals at 0.3.3: 105 In progress.
 - How it was verified then: Read migrations 0231-0235 and the client parse (ArmoryApi.cs:15, 219, 227).
 - Cause: No reader, and the release table was designed write-once at commit time.
 - Missing at 0.3.2: Any saved release per version; any way to record one later without a migration.
-- 0.3.3: **In progress**. 
+- 0.3.3: **Done**. After each loop pass Armory reads identical local copies of versions the server holds as 'release not checked' and flags those saved in 2026: rows and File detail carry savedRelease/newerThanPin, and a notice says how many and what a person on a 2026 computer must do. The server's rows are immutable, so the flag is per computer; a website table to share it is listed as a request.
+- Verified in 0.3.3 by: End-to-end ReleaseTests; at most 2 s per pass, never during a click.
 
