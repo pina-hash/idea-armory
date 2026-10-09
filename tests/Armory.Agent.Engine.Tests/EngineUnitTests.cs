@@ -221,8 +221,12 @@ public sealed class EngineUnitTests
         using var json = JsonDocument.Parse(BridgeMessages.ViewMessage(view));
         Assert.Equal("view", json.RootElement.GetProperty("type").GetString());
         var v = json.RootElement.GetProperty("view");
-        Assert.Equal(["connection", "connect", "account", "sync", "activity", "vaultRoot", "notices", "prompt", "myFiles", "projects", "settings", "effectiveTheme"],
+        Assert.Equal(["connection", "connect", "account", "sync", "activity", "vaultRoot", "notices", "prompt", "myFiles", "projects", "settings", "effectiveTheme", "solidWorks"],
             v.EnumerateObject().Select(p => p.Name).ToArray());
+        // The SolidWorks link's line in Settings (null while no link was made).
+        Assert.Equal(JsonValueKind.Null, v.GetProperty("solidWorks").ValueKind);
+        using (var linked = JsonDocument.Parse(BridgeMessages.ViewMessage(view with { SolidWorks = new SolidWorksView(SolidWorksStates.Attached, "Linked to SolidWorks 2026 SP4.1. It saves team files in 2025.", null) })))
+            Assert.Equal(["state", "line", "detail"], linked.RootElement.GetProperty("view").GetProperty("solidWorks").EnumerateObject().Select(p => p.Name).ToArray());
         var project = v.GetProperty("projects")[0];
         foreach (var name in new[] { "id", "name", "archived", "role", "canTakeBack", "folders", "pinnedRelease", "newerThanPinCount" })
             Assert.True(project.TryGetProperty(name, out _), name);

@@ -339,7 +339,8 @@
 			myFiles: [],
 			projects: projects(parts.changes, parts.opts),
 			settings: { vaultRoot: SETTINGS.vaultRoot, startAtSignIn: SETTINGS.startAtSignIn, theme: SETTINGS.theme },
-			effectiveTheme: 'idea'
+			effectiveTheme: 'idea',
+			solidWorks: null
 		};
 		view.myFiles = myFilesOf(view, parts.notes);
 		return view;
@@ -358,7 +359,8 @@
 			myFiles: [],
 			projects: [],
 			settings: { vaultRoot: SETTINGS.vaultRoot, startAtSignIn: SETTINGS.startAtSignIn, theme: SETTINGS.theme },
-			effectiveTheme: 'idea'
+			effectiveTheme: 'idea',
+			solidWorks: null
 		};
 	}
 

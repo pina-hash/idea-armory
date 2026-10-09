@@ -45,10 +45,11 @@
 	 * @typedef {'upload' | 'download' | 'move'} Direction
 	 * @typedef {'info' | 'look' | 'bad'} NoticeTone
 	 * @typedef {'import' | 'nameShared' | 'newerWaiting' | 'keptCopy' | 'takenBack' | 'folderPutBack'
-	 *   | 'projectPutBack' | 'projectRenaming' | 'projectDeleted' | 'cantSend' | 'cantRead' | 'checkInPartial' | 'newerRelease'} NoticeKind
+	 *   | 'projectPutBack' | 'projectRenaming' | 'projectDeleted' | 'cantSend' | 'cantRead' | 'checkInPartial' | 'newerRelease' | 'solidWorks'} NoticeKind
 	 * @typedef {'version' | 'keptCopy' | 'removed'} HistoryKind
 	 * @typedef {'system' | 'idea' | 'spaceWhite'} ThemeSetting
 	 * @typedef {'idea' | 'spaceWhite'} EffectiveTheme
+	 * @typedef {'none' | 'attached' | 'cantSaveDown' | 'administrator'} SolidWorksState
 	 */
 
 	/**
@@ -220,6 +221,14 @@
 	 */
 
 	/**
+	 * The SolidWorks link, for Settings (docs/agent/SOLIDWORKS.md).
+	 * @typedef {object} SolidWorksView
+	 * @property {SolidWorksState} state
+	 * @property {string} line           "SolidWorks isn't running.", "Linked to SolidWorks 2026 SP4.1. It saves team files in 2025."
+	 * @property {string | null} detail  why it can't save down and what to do (cantSaveDown, administrator)
+	 */
+
+	/**
 	 * @typedef {object} AgentView
 	 * @property {Connection} connection
 	 * @property {ConnectView} connect
@@ -233,6 +242,7 @@
 	 * @property {ProjectView[]} projects
 	 * @property {SettingsView} settings
 	 * @property {EffectiveTheme} effectiveTheme
+	 * @property {SolidWorksView | null} solidWorks  null on a computer with no SolidWorks link
 	 */
 
 	/**
@@ -292,11 +302,14 @@
 	 *   sendFeedback: { kind, body }          (kind: bug, idea or other; a note on its own, no
 	 *                                          incident: armory_submit_app_feedback, one sentence back)
 	 *   openIncidents: none                   (opens the incidents folder in File Explorer)
+	 *   keepLocal: { paths }                  (a solidWorks notice's "Keep this file on this computer only")
+	 *   saveDown: { paths }                   (a solidWorks notice's "Save it in 2025 now": saved again in the project's year)
 	 * @typedef {'ready' | 'connect' | 'cancelConnect' | 'signOut' | 'pause' | 'resume'
 	 *   | 'openVault' | 'openFile' | 'launchFile' | 'showInFolder' | 'checkOut' | 'checkIn'
 	 *   | 'undoCheckOut' | 'takeBack' | 'createFolder' | 'renameFolder' | 'deleteFolder' | 'renameFile'
 	 *   | 'addFiles' | 'dropFiles' | 'dismissNotice' | 'saveSettings' | 'chooseVaultRoot'
-	 *   | 'reportProblem' | 'openIncidents' | 'sendFeedback' | 'takeBackAll' | 'takeOverFolder' | 'switchAccount'} PageMessageType
+	 *   | 'reportProblem' | 'openIncidents' | 'sendFeedback' | 'takeBackAll' | 'takeOverFolder' | 'switchAccount'
+	 *   | 'keepLocal' | 'saveDown'} PageMessageType
 	 */
 
 	/**
@@ -318,7 +331,7 @@
 	/* ------------------------------------------------------- Message lists */
 
 	/** Page to host message types (BRIDGE.md, "Page to host"). */
-	var PAGE_TO_HOST = ['ready', 'connect', 'cancelConnect', 'signOut', 'pause', 'resume', 'openVault', 'openFile', 'launchFile', 'showInFolder', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'dismissNotice', 'saveSettings', 'chooseVaultRoot', 'reportProblem', 'openIncidents', 'sendFeedback', 'takeBackAll', 'takeOverFolder', 'switchAccount'];
+	var PAGE_TO_HOST = ['ready', 'connect', 'cancelConnect', 'signOut', 'pause', 'resume', 'openVault', 'openFile', 'launchFile', 'showInFolder', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'dismissNotice', 'saveSettings', 'chooseVaultRoot', 'reportProblem', 'openIncidents', 'sendFeedback', 'takeBackAll', 'takeOverFolder', 'switchAccount', 'keepLocal', 'saveDown'];
 
 	/** Host to page message types (BRIDGE.md, "Host to page"). */
 	var HOST_TO_PAGE = ['view', 'fileDetail', 'activity', 'actionResult'];
@@ -342,11 +355,13 @@
 		dismissNotice: ['key'],
 		saveSettings: ['vaultRoot', 'startAtSignIn', 'theme'],
 		reportProblem: ['kind', 'body'],
-		sendFeedback: ['kind', 'body']
+		sendFeedback: ['kind', 'body'],
+		keepLocal: ['paths'],
+		saveDown: ['paths']
 	};
 
 	/** Actions: each carries a requestId, and the host answers it with one actionResult. */
-	var ACTIONS = ['launchFile', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'reportProblem', 'sendFeedback', 'takeBackAll', 'takeOverFolder'];
+	var ACTIONS = ['launchFile', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'reportProblem', 'sendFeedback', 'takeBackAll', 'takeOverFolder', 'keepLocal', 'saveDown'];
 
 	/* ----------------------------------------------------------- Plumbing */
 

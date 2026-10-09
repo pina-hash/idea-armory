@@ -18,7 +18,8 @@ public sealed record AgentView(
     IReadOnlyList<MyFileView> MyFiles,
     IReadOnlyList<ProjectView> Projects,
     SettingsView Settings,
-    string EffectiveTheme);
+    string EffectiveTheme,
+    SolidWorksView? SolidWorks = null);
 
 public sealed record ConnectView(string Phase, string? Message);
 public sealed record AccountView(string Email, string DeviceName);
@@ -38,6 +39,11 @@ public sealed record FolderView(string Path, string Name, int FileCount, IReadOn
 public sealed record FileRowView(string? FileId, string Name, string Path, string Status, CheckoutView Checkout, bool Changed, bool ReleaseNotChecked,
     string? UpdatedAt, string? UpdatedBy, int? SavedRelease, bool NewerThanPin);
 public sealed record SettingsView(string VaultRoot, bool StartAtSignIn, string Theme);
+// The SolidWorks link, for Settings (docs/agent/SOLIDWORKS.md): none ("SolidWorks isn't
+// running."), attached ("Linked to SolidWorks 2026 SP4.1. It saves team files in 2025."),
+// cantSaveDown (Line says which year, Detail why and what to do) or administrator (SolidWorks
+// was started as administrator, so Armory can't link to it). Null on a computer with no link.
+public sealed record SolidWorksView(string State, string Line, string? Detail);
 public sealed record FileDetailView(string FileId, string Name, string Path, string Project, string Folder, string Status, CheckoutView Checkout,
     bool ReleaseNotChecked, bool CanTakeBack, IReadOnlyList<HistoryEntryView> History, int? SavedRelease, bool NewerThanPin);
 // Routine: a kept copy that is the ordinary record of work (saved while checked out, an earlier
@@ -86,6 +92,10 @@ public static class CheckoutStates
 {
     public const string Available = "available", Mine = "mine", Other = "other", MyOtherComputer = "myOtherComputer";
 }
+public static class SolidWorksStates
+{
+    public const string None = "none", Attached = "attached", CantSaveDown = "cantSaveDown", Administrator = "administrator";
+}
 public static class Directions
 {
     public const string Upload = "upload", Download = "download", Move = "move";
@@ -98,7 +108,7 @@ public static class NoticeKinds
 {
     public const string Import = "import", NameShared = "nameShared", NewerWaiting = "newerWaiting", KeptCopy = "keptCopy", TakenBack = "takenBack",
         FolderPutBack = "folderPutBack", ProjectPutBack = "projectPutBack", ProjectRenaming = "projectRenaming", CantSend = "cantSend",
-        CantRead = "cantRead", CheckInPartial = "checkInPartial", ProjectDeleted = "projectDeleted", NewerRelease = "newerRelease";
+        CantRead = "cantRead", CheckInPartial = "checkInPartial", ProjectDeleted = "projectDeleted", NewerRelease = "newerRelease", SolidWorks = "solidWorks";
 }
 public static class HistoryKinds
 {
@@ -116,10 +126,10 @@ public static class BridgeMessages
         UndoCheckOut = "undoCheckOut", TakeBack = "takeBack", CreateFolder = "createFolder", RenameFolder = "renameFolder", DeleteFolder = "deleteFolder",
         RenameFile = "renameFile", AddFiles = "addFiles", DropFiles = "dropFiles", DismissNotice = "dismissNotice", SaveSettings = "saveSettings",
         ChooseVaultRoot = "chooseVaultRoot", ReportProblem = "reportProblem", OpenIncidents = "openIncidents", SendFeedback = "sendFeedback", TakeBackAll = "takeBackAll",
-        TakeOverFolder = "takeOverFolder", SwitchAccount = "switchAccount";
+        TakeOverFolder = "takeOverFolder", SwitchAccount = "switchAccount", KeepLocal = "keepLocal", SaveDown = "saveDown";
     public static readonly IReadOnlyList<string> PageToHost = [Ready, Connect, CancelConnect, SignOut, Pause, Resume, OpenVault, OpenFile, LaunchFile, ShowInFolder,
         CheckOut, CheckIn, UndoCheckOut, TakeBack, CreateFolder, RenameFolder, DeleteFolder, RenameFile, AddFiles, DropFiles, DismissNotice, SaveSettings, ChooseVaultRoot,
-        ReportProblem, OpenIncidents, SendFeedback, TakeBackAll, TakeOverFolder, SwitchAccount];
+        ReportProblem, OpenIncidents, SendFeedback, TakeBackAll, TakeOverFolder, SwitchAccount, KeepLocal, SaveDown];
 
     public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
     {

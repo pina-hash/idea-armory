@@ -418,12 +418,16 @@ internal sealed partial class AgentHost : IAsyncDisposable
             try
             {
                 // Opening the journal, snapshots and read-only intents touches the disk: off the UI thread.
-                created = await Task.Run(() => VaultRuntime.Create(target.VaultRoot, Sessions, Api, Blobs, log, Telemetry.Recorder, new RealtimeFeed(Sessions, log: log.Info)));
+                created = await Task.Run(() => VaultRuntime.Create(target.VaultRoot, Sessions, Api, Blobs, log, Telemetry.Recorder, new RealtimeFeed(Sessions, log: log.Info),
+                    paths.SolidWorksFile));
                 created.Engine.ViewChanged += OnEngineView;
                 created.Engine.ActivityChanged += OnEngineActivity;
+                created.Engine.OpenPromptsChanged += OnOpenPrompts;
                 ApplySettingsTo(created.Engine);
                 lock (gate) { if (connectPhase != "idle") created.Engine.SetConnectState(connectPhase, connectMessage); }
                 created.Engine.Start();
+                // The SolidWorks link looks for SolidWorks once the engine takes its records.
+                created.SolidWorks?.Start();
                 Volatile.Write(ref runtime, created);
                 log.Info("vault runtime started at " + target.VaultRoot);
             }
@@ -448,6 +452,7 @@ internal sealed partial class AgentHost : IAsyncDisposable
     {
         old.Engine.ViewChanged -= OnEngineView;
         old.Engine.ActivityChanged -= OnEngineActivity;
+        old.Engine.OpenPromptsChanged -= OnOpenPrompts;
         try
         {
             var stop = old.Engine.StopAsync();
@@ -605,14 +610,16 @@ internal sealed partial class AgentHost : IAsyncDisposable
     }
 }
 
-// One vault root's disk adapters and its engine. Disposed in reverse order of creation.
+// One vault root's disk adapters, its SolidWorks link and its engine. Disposed in reverse order
+// of creation.
 internal sealed class VaultRuntime
 {
-    private VaultRuntime(WindowsVaultFileSystem files, DurableJournalStore journal, WindowsSnapshotStore snapshots, SyncEngine engine)
+    private VaultRuntime(WindowsVaultFileSystem files, DurableJournalStore journal, WindowsSnapshotStore snapshots, Armory.SolidWorks.SolidWorksLink? solidWorks, SyncEngine engine)
     {
         Files = files;
         Journal = journal;
         Snapshots = snapshots;
+        SolidWorks = solidWorks;
         Engine = engine;
     }
 
@@ -620,11 +627,16 @@ internal sealed class VaultRuntime
     internal DurableJournalStore Journal { get; }
     internal WindowsSnapshotStore Snapshots { get; }
     internal SyncEngine Engine { get; }
+    // The SolidWorks link (docs/agent/SOLIDWORKS.md); null when the runtime was made without one.
+    internal Armory.SolidWorks.SolidWorksLink? SolidWorks { get; }
 
+    // solidWorksFile: where the SolidWorks link keeps the student's own Save to Version setting;
+    // null makes the runtime without a link.
     internal static VaultRuntime Create(string vaultRoot, SessionManager sessions, ArmoryApi api, BlobClient blobs, AgentLog? log = null,
-        Armory.Telemetry.FlightRecorder? recorder = null, RealtimeFeed? live = null)
+        Armory.Telemetry.FlightRecorder? recorder = null, RealtimeFeed? live = null, string? solidWorksFile = null)
     {
         var disposables = new Stack<IDisposable>();
+        Armory.SolidWorks.SolidWorksLink? solidWorks = null;
         try
         {
             var files = new WindowsVaultFileSystem(vaultRoot) { LaunchLog = log is null ? null : log.Info, OpenLog = log is null ? null : log.Info };
@@ -634,6 +646,7 @@ internal sealed class VaultRuntime
             var snapshots = new WindowsSnapshotStore(new DurableSnapshotStore(new WindowsPaths(files.Root)));
             disposables.Push(snapshots);
             var state = new FileStateStore(Path.Combine(files.Root, ".armory", "state.json"));
+            if (solidWorksFile is not null) solidWorks = AgentHost.CreateSolidWorksLink(files.Root, solidWorksFile, log);
             var engine = new SyncEngine(new EngineOptions { VaultRoot = files.Root }, new EngineDependencies
             {
                 Files = files,
@@ -651,11 +664,15 @@ internal sealed class VaultRuntime
                 Recorder = recorder,
                 // Live updates (v0.3): each synced project's change feed, filtered by project.
                 Live = live,
+                // What SolidWorks does with vault files: opens (C5), saves, save down (B2).
+                SolidWorks = solidWorks,
             });
-            return new VaultRuntime(files, journal, snapshots, engine);
+            return new VaultRuntime(files, journal, snapshots, solidWorks, engine);
         }
         catch
         {
+            // Nothing attached yet (the link starts after the engine): it only stops its thread.
+            solidWorks?.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(10));
             while (disposables.TryPop(out var item)) item.Dispose();
             throw;
         }
@@ -670,6 +687,17 @@ internal sealed class VaultRuntime
             else await dispose;
         }
         catch (Exception error) when (error is not OutOfMemoryException) { if (error is not NotImplementedException) log.Error("engine dispose failed", error); }
+        // SolidWorks keeps running: every reference let go, the student's own setting put back.
+        if (SolidWorks is not null)
+        {
+            try
+            {
+                var release = SolidWorks.DisposeAsync().AsTask();
+                if (await Task.WhenAny(release, Task.Delay(timeout + timeout)) != release) log.Error("the SolidWorks link did not finish letting go of SolidWorks");
+                else await release;
+            }
+            catch (Exception error) when (error is not OutOfMemoryException) { log.Error("SolidWorks link dispose failed", error); }
+        }
         Snapshots.Dispose();
         Journal.Dispose();
         Files.Dispose();

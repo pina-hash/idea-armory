@@ -17,6 +17,11 @@ public readonly record struct SolidWorksRevision(int Major, int Minor, int Hotfi
     public int Year => Major + 1992;
     public SolidWorksRelease Release => new(Year);
 
+    // How SolidWorks names itself in Help > About: "SolidWorks 2026 SP4.1" for 34.4.1,
+    // "SolidWorks 2026 SP0" for the first release, "SolidWorks 2015 beta" for a pre-release.
+    public string DisplayName => Minor < 0 ? $"SolidWorks {Year} beta"
+        : Hotfix == 0 ? $"SolidWorks {Year} SP{Minor}" : $"SolidWorks {Year} SP{Minor}.{Hotfix}";
+
     public static SolidWorksRevision? Parse(string? text)
     {
         if (string.IsNullOrWhiteSpace(text)) return null;
@@ -28,6 +33,24 @@ public readonly record struct SolidWorksRevision(int Major, int Minor, int Hotfi
         // 1995 (major 3) is the oldest year the gate takes; a major that big would be no year.
         if (values[0] is < 3 or > 1000) return null;
         return new SolidWorksRevision(values[0], values[1], values[2]);
+    }
+}
+
+// ISldWorks.VersionHistory(path), which SolidWorks reads from the file on disk: one entry per
+// release the file was saved in, "<major code>[<build date>,...]" ("13000[2020/296]",
+// "19000[2026/225]"), the last one the release that wrote it. The bracket is a build date, never
+// the release (research section 1.1).
+public static class VersionHistory
+{
+    // The year of the last entry's major code (SolidWorksFileRelease.YearOf), or null.
+    public static int? LastYear(IReadOnlyList<string>? entries)
+    {
+        if (entries is not { Count: > 0 }) return null;
+        var last = entries[^1]?.Trim() ?? "";
+        var digits = 0;
+        while (digits < last.Length && char.IsAsciiDigit(last[digits])) digits++;
+        if (digits == 0 || digits > 9 || (digits < last.Length && last[digits] != '[')) return null;
+        return SolidWorksFileRelease.YearOf(int.Parse(last.AsSpan(0, digits), NumberStyles.None, CultureInfo.InvariantCulture));
     }
 }
 
@@ -58,6 +81,13 @@ public static class SavedReleaseRule
 
     public static bool Disagree(ReleaseStamp? stamp, SolidWorksRelease? parsed)
         => Known(stamp?.Year) is { } a && Known(parsed?.Year) is { } b && a != b;
+
+    // The link meant to save these bytes down (Save to Version was on for that save) and
+    // SolidWorks' own reading of them did not confirm the year it was set to: they may well be
+    // the newer release. They are kept on this computer in both gate modes, so a save that
+    // couldn't be written in the pinned year is never uploaded as the newer one, not even
+    // "release not checked" in Warn.
+    public static bool UnverifiedSaveDown(ReleaseStamp? stamp) => stamp is { SaveToVersionYear: not null } && Known(stamp.Year) is null;
 
     // The year a stamp records (research section 2, step 4): what SolidWorks read in the bytes
     // on disk (the last major code of VersionHistory), when it is the year the link meant to
@@ -127,6 +157,58 @@ public static class SaveDown
         SaveDownPlan.Antepenultimate => 2,
         _ => null,
     };
+
+    // Whether the running SolidWorks can save down in place, as the link found it at attach
+    // (research section 3.5). enumsKnown: the numbers of the swEnableSaveToVersion and
+    // swSaveToVersion preferences are known on this computer (they are not printed in the API
+    // help; lab step L1). readBack: setting each preference to its own value read it back
+    // unchanged. saveDownFailed: a save made with the option on still wrote this release (no
+    // license for it, B4). Anything but Available means no save down at all.
+    public static SaveToVersionSupport Support(SolidWorksRevision running, bool enumsKnown, bool readBack, bool saveDownFailed)
+    {
+        if (running.Year < 2026) return SaveToVersionSupport.Unsupported;
+        if (!HasSaveToVersion(running)) return SaveToVersionSupport.OldServicePack;
+        if (!enumsKnown) return SaveToVersionSupport.NotConfigured;
+        if (!readBack || saveDownFailed) return SaveToVersionSupport.NotLicensed;
+        return SaveToVersionSupport.Available;
+    }
+
+    // What Save to Version should be while a document is SolidWorks' active one (research 3.4
+    // step 1). Armory touches the option only where it can use it (optionUsable: Support is
+    // Available) and only for a document in the vault: there, a project pinned one or two
+    // releases back saves down, unless the document can't go back (blocked: SolidWorks' own
+    // compatibility check lists something the pinned release doesn't have) or the student chose
+    // to keep it on this computer only; then the option is off, so the save writes this release
+    // and the file stays a private draft. Everything else keeps the student's own setting.
+    public static SaveToVersionChoice Choose(SaveDownPlan plan, bool optionUsable, bool vaultDocument, bool blocked, bool keepLocal)
+    {
+        if (!optionUsable || !vaultDocument || !plan.CanSave()) return SaveToVersionChoice.StudentOwn;
+        return blocked || keepLocal ? SaveToVersionChoice.Off : SaveToVersionChoice.SaveDown;
+    }
+}
+
+public enum SaveToVersionSupport
+{
+    Available,
+    // SolidWorks 2026 before Service Pack 3: no Save to Version option.
+    OldServicePack,
+    // The option's preference numbers are unknown on this computer: Armory never guesses one.
+    NotConfigured,
+    // The option did not take (it didn't read back, or a save with it on still wrote this
+    // release): no license for it, as far as Armory can tell.
+    NotLicensed,
+    // A release before 2026: there is no in-place save down.
+    Unsupported,
+}
+
+public enum SaveToVersionChoice
+{
+    // The student's own Save to Version setting, as it was before Armory attached.
+    StudentOwn,
+    // On, one or two releases back (SaveDownPlan.SaveToVersionValue).
+    SaveDown,
+    // Off: this save writes the running release, and the file stays on this computer.
+    Off,
 }
 public sealed record InstallationGap(string Installation, int ReleasesBehind, bool WarnNextSeason, bool ExceedsBackSaveRange);
 // Per-project gate. Enforce refuses a SolidWorks file whose saved release cannot be read;

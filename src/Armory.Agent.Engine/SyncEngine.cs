@@ -58,6 +58,10 @@ public sealed class EngineDependencies
     // project, each filtered by project_id. An event only wakes the loop to read the server
     // again; the poll stays the floor. Null: the poll alone.
     public RealtimeFeed? Live { get; init; }
+    // The SolidWorks link (docs/agent/SOLIDWORKS.md, SyncEngine.Open.cs): which documents
+    // SolidWorks has open, its saves and their stamps, and the commands back (make writable after
+    // a check out, save down). Null: SolidWorks is seen only through its "~$" markers.
+    public ISolidWorksLink? SolidWorks { get; init; }
 }
 
 public sealed record SyncReport(bool SignedIn, bool Online, int Uploaded, int Downloaded, int SideVersions, int Refused, IReadOnlyList<string> Problems);
@@ -149,6 +153,8 @@ public sealed partial class SyncEngine : IAsyncDisposable
             view = BuildView();
             lastViewBuilt = dependencies.Clock.GetTimestamp();
         }, null);
+        // The SolidWorks link's records are handled from the start, loop or no loop.
+        StartLinkPump();
     }
 
     public AgentView View => Volatile.Read(ref view);
@@ -181,6 +187,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
         if (loop is not null) { try { await loop; } catch (OperationCanceledException) { } }
         if (deps.Live is { } live) live.Changed -= OnLiveChange;
         if (liveRun is not null) { try { await liveRun; } catch (OperationCanceledException) { } }
+        if (linkPump is not null) { try { await linkPump; } catch (OperationCanceledException) { } }
         return true;
     });
 
@@ -481,6 +488,8 @@ public sealed partial class SyncEngine : IAsyncDisposable
         online = await RefreshAsync(ct);
         // What was deleted forever leaves this computer (v0.3), before anything is planned.
         DropPurged();
+        // The SolidWorks link learns which folders save down, and to what year.
+        if (online == true) SendPins();
         if (online == true)
         {
             lastOnline = deps.Clock.GetUtcNow();
@@ -548,6 +557,8 @@ public sealed partial class SyncEngine : IAsyncDisposable
         ApplyReadOnly();
         // Files opened before they were here open now that they are.
         OpenArrived();
+        // Files checked out while open, closed since: open again, ready to save (C5).
+        ReopenClosed();
         // Every notice of this pass is known now, so dismissed items that are gone are forgotten.
         if (online == true) PruneDismissed();
         Phase("finish");
@@ -875,6 +886,8 @@ public sealed partial class SyncEngine : IAsyncDisposable
         foreach (var file in local.Values.OrderBy(f => f.Path))
         {
             var key = file.Path.Value;
+            // SolidWorks is writing it: kept once it says it saved (with the stamp of its bytes).
+            if (SavingHeld(key)) continue;
             if (HeldForCapture(key))
             {
                 // A folder on its way back where it was (a project folder renamed in Explorer, a
@@ -1020,6 +1033,8 @@ public sealed partial class SyncEngine : IAsyncDisposable
         // A folder being renamed or removed here, a project folder gone or waiting to be put
         // back, a known folder gone from the scan: nothing under it is planned file by file.
         if (Held(key)) return null;
+        // SolidWorks is saving it: decided once it says it saved, with the stamp of its bytes.
+        if (SavingHeld(key)) return null;
         local.TryGetValue(key, out var localFile);
         state.Files.TryGetValue(key, out var st);
         // Deleted forever (v0.3): nothing of it is planned; DropPurged moves its copy aside.
@@ -1074,7 +1089,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
         if (Reconciler.IsSolidWorks(path) && localHash is not null && (localHash != st.BaseHash || st.BreakNotice))
             saved = await ReadReleaseAsync(st, path, localHash, ct);
         var input = new SyncInput(path, st.Base, localHash, remoteRevision, ownership, open, isOnline, st.BreakNotice,
-            saved, new SolidWorksRelease(project.PinnedRelease), st.Preserved, project.Enforce ? ReleaseGateMode.Enforce : ReleaseGateMode.Warn,
+            saved, new SolidWorksRelease(project.PinnedRelease), st.Preserved, GateModeFor(project, localHash),
             CheckoutMode.Explicit, RequestOf(st, open));
         var plan = Reconciler.Plan(input);
         if (!isOnline)
@@ -1230,10 +1245,11 @@ public sealed partial class SyncEngine : IAsyncDisposable
         => st.Request != CheckoutRequest.None ? st.Request : st.AutoCheckIn && !open ? CheckoutRequest.CheckIn : CheckoutRequest.None;
 
     // The engine's "never overwrite an open file" check: the platform's open-file answer,
-    // or SolidWorks' ~$ lock file beside the document. Used for Core's input and again
-    // immediately before any write to the file.
+    // SolidWorks' ~$ lock file beside the document, or a linked SolidWorks that has it open.
+    // Used for Core's input and again immediately before any write to the file.
     private bool IsOpenNow(VaultPath path)
-        => (openKnown is { } known && known.Asked.Contains(path.Value) ? known.Open.Contains(path.Value) : fs.IsOpen(path)) || markerDocuments.Contains(path.Value);
+        => (openKnown is { } known && known.Asked.Contains(path.Value) ? known.Open.Contains(path.Value) : fs.IsOpen(path)) || markerDocuments.Contains(path.Value)
+           || (linkOpen.Count > 0 && linkOpen.ContainsKey(path.Value));
 
     // Open answers asked once for many files (IVaultFileSystem.OpenAmong), which IsOpenNow gives
     // for those files while the scope lasts: a pass's plan, a batch of check outs. Asking file by
@@ -1290,7 +1306,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
         foreach (var gone in markerSince.Keys.Where(k => !seen.Contains(k)).ToArray()) markerSince.Remove(gone);
         foreach (var gone in markerFirstSeen.Keys.Where(k => !seen.Contains(k)).ToArray()) markerFirstSeen.Remove(gone);
         // A question dismissed for one open is forgotten once that open is over.
-        dismissedPrompts.RemoveWhere(key => !markerFirstSeen.Any(m => key == PromptKey(m.Key, m.Value)));
+        dismissedPrompts.RemoveWhere(key => !PromptStillOpen(key));
     }
 
     internal const string StaleMarkerTitle = "SolidWorks may have closed unexpectedly";

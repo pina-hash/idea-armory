@@ -26,6 +26,7 @@
     <ProjectReference Include="../Armory.Client/Armory.Client.csproj" />
     <ProjectReference Include="../Armory.Agent.Engine/Armory.Agent.Engine.csproj" />
     <ProjectReference Include="../Armory.Platform.Windows/Armory.Platform.Windows.csproj" />
+    <ProjectReference Include="../Armory.SolidWorks/Armory.SolidWorks.csproj" />
     <InternalsVisibleTo Include="Armory.Agent.Tests" />
   </ItemGroup>
   <ItemGroup>

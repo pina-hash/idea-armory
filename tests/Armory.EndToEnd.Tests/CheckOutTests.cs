@@ -290,10 +290,11 @@ public sealed class CheckOutTests
         await t.A.SyncAsync();
         Assert.Equal(Plate, t.A.Engine.View.Prompt!.Path);
 
-        // Check out and reopen while SolidWorks still has it open: checked out, not opened.
+        // Check out and reopen while SolidWorks still has it open (no SolidWorks link): checked
+        // out, not opened; Armory opens it again once the student closes it (C5).
         var answer = await t.A.CheckOutAndOpenAsync(Plate);
         Assert.True(answer.Ok);
-        Assert.Equal("Checked out Plate.SLDPRT. Close Plate.SLDPRT in SolidWorks first, then open it again.", answer.Message);
+        Assert.Equal("Checked out Plate.SLDPRT. Close it in SolidWorks and Armory opens it again, ready to save.", answer.Message);
         Assert.DoesNotContain(Plate, t.A.Disk.Launched);
         Assert.Null(t.A.Engine.View.Prompt); // the dismissed one stays dismissed; Plate is checked out
         t.A.Close(Bracket);

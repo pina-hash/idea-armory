@@ -15,13 +15,14 @@ public sealed partial class SyncEngine
     private static readonly TimeSpan KeptCopiesShownFor = TimeSpan.FromDays(1);
     private static readonly string[] NoticeOrder =
     [
-        NoticeKinds.CantSend, NoticeKinds.CantRead, NoticeKinds.NewerRelease, NoticeKinds.NameShared, NoticeKinds.TakenBack, NoticeKinds.FolderPutBack, NoticeKinds.ProjectPutBack,
+        NoticeKinds.CantSend, NoticeKinds.CantRead, NoticeKinds.SolidWorks, NoticeKinds.NewerRelease, NoticeKinds.NameShared, NoticeKinds.TakenBack, NoticeKinds.FolderPutBack, NoticeKinds.ProjectPutBack,
         NoticeKinds.ProjectRenaming, NoticeKinds.ProjectDeleted, NoticeKinds.CheckInPartial, NoticeKinds.KeptCopy, NoticeKinds.NewerWaiting, NoticeKinds.Import,
     ];
     private IReadOnlyCollection<string> openWithoutCheckOut = [];
 
-    // The open files (SolidWorks' ~$ marker) this computer has not checked out, for the tray's
-    // one quiet balloon per opened file (decision D13).
+    // The open files this computer has not checked out, for the tray's one quiet balloon per
+    // opened file (decision D13): SolidWorks' ~$ markers, or, while a SolidWorks is linked, only
+    // the documents the student opened (never an assembly's parts).
     public IReadOnlyCollection<string> OpenWithoutCheckOut => Volatile.Read(ref openWithoutCheckOut);
 
     private AgentView BuildView()
@@ -45,7 +46,7 @@ public sealed partial class SyncEngine
             : pending > 0 ? new SyncView(SyncStates.Syncing, "Uploading your saves.", null, pending)
             : new SyncView(SyncStates.Synced, "Everything is saved to Armory.", LastChecked(), 0);
         return new AgentView(connection, new ConnectView(connectPhase, connectMessage), account, sync, moving, options.VaultRoot,
-            notices, Prompt(), MyFiles(files), Projects(), settings, effectiveTheme);
+            notices, Prompt(), MyFiles(files), Projects(), settings, effectiveTheme, SolidWorksStatus());
     }
 
     private string? LastChecked() => lastOnline is { } at ? "Last checked " + Relative(at) + "." : null;
@@ -104,8 +105,9 @@ public sealed partial class SyncEngine
     // ItemDetail is the item's own sentence in a card of several (who has its files checked out,
     // why it went back); ReasonKind and Who let such a card name everyone in its title.
     // Release is a newerRelease item's project and years.
+    // Action is a solidWorks item's own button (a card of one shows it).
     private sealed record RawItem(string Id, Guid? FileId, string Path, string? Detail, string? Title = null, string? Flavor = null, (int Added, int Total)? Tally = null,
-        string? ItemDetail = null, string? ReasonKind = null, string? Who = null, (string Project, int Saved, int Pin)? Release = null);
+        string? ItemDetail = null, string? ReasonKind = null, string? Who = null, (string Project, int Saved, int Pin)? Release = null, NoticeActionView? Action = null);
     private sealed record RawGroup(string Key, string Kind, List<RawItem> Items);
 
     // The items each card showed when the view was last built: a dismissal hides exactly those.
@@ -202,10 +204,15 @@ public sealed partial class SyncEngine
         {
             state.Files.TryGetValue(path.Value, out var st);
             if (TeamRelease(remote, path, st) is not { } saved || saved <= project.PinnedRelease) continue;
-            var (detail, needsYou) = NewerThanPinNotice(saved, project.PinnedRelease, solidWorks?.Revision, solidWorks?.SaveDownWorks ?? false);
+            var (detail, needsYou) = NewerThanPinNotice(saved, project.PinnedRelease, solidWorks?.Revision, solidWorksSupport ?? SupportOf(solidWorks?.SaveDownWorks ?? false));
             Add(NoticeKinds.NewerRelease, new RawItem($"newerRelease:{path.Value}:{current.Id}", remote.Id, path.Value, detail, Flavor: needsYou ? "needsYou" : "news",
                 ItemDetail: $"Saved in SolidWorks {saved}. {project.Name} uses SolidWorks {project.PinnedRelease}.", Release: (project.Name, saved, project.PinnedRelease)));
         }
+        // The SolidWorks link (SyncEngine.Open.cs): what a save in the pinned year does to each
+        // open document, or why it can't, before the student saves.
+        foreach (var (id, path, title, detail, action, flavor) in LinkNotices())
+            Add(NoticeKinds.SolidWorks, new RawItem(id, path.Length > 0 && state.Files.TryGetValue(path, out var linked) ? linked.FileId : null, path, detail, title, flavor,
+                ItemDetail: $"{title}. {detail}", Action: action));
         foreach (var group in groups.Values)
             if (!keepDismissed && state.Dismissed.TryGetValue(group.Key, out var hidden)) group.Items.RemoveAll(i => hidden.Contains(i.Id));
         return groups.Values.Where(g => g.Items.Count > 0).ToList();
@@ -234,6 +241,11 @@ public sealed partial class SyncEngine
         var expand = new NoticeActionView("Show them", "expand", []);
         var (tone, title, detail, action) = g.Kind switch
         {
+            // One item: its own words and button. A save SolidWorks canceled is not saved yet.
+            NoticeKinds.SolidWorks => (items.Any(i => i.Flavor == "canceled") ? NoticeTones.Bad : NoticeTones.Look,
+                n == 1 ? first.Title ?? name : "SolidWorks needs you",
+                n == 1 ? first.Detail ?? "" : "Each one says what to do.",
+                n == 1 ? first.Action : expand),
             NoticeKinds.NewerRelease => (items.Any(i => i.Flavor == "needsYou") ? NoticeTones.Look : NoticeTones.Info,
                 NewerReleaseTitle(items),
                 items.Select(i => i.Detail).Distinct(StringComparer.Ordinal).Count() == 1 ? first.Detail ?? ""
@@ -326,33 +338,8 @@ public sealed partial class SyncEngine
 
     // SolidWorks opened a file the server has and this computer has not checked out: the most
     // recently opened one asks, once per open (decision D13). Someone else's file says who.
-    private PromptView? Prompt()
-    {
-        PromptView? prompt = null;
-        List<string> open = [];
-        foreach (var (document, firstSeen) in markerFirstSeen.OrderByDescending(m => m.Value).ThenBy(m => m.Key, StringComparer.OrdinalIgnoreCase))
-        {
-            if (!markerDocuments.Contains(document) || !state.Files.TryGetValue(HomeOf(document) ?? document, out var st) || st.FileId is not { } id) continue;
-            LockOwnership ownership;
-            CheckoutView checkout;
-            if (remoteById.TryGetValue(id, out var remote))
-            {
-                if (remote.File.Deleted || remote.File.Current is null) continue;
-                ownership = OwnershipOf(remote.File.Lock);
-                checkout = CheckoutOf(remote.File.Lock);
-            }
-            else if (st.BaseHash is not null) (ownership, checkout) = (KnownOwnership(st), KnownCheckout(st)); // offline: as last known
-            else continue;
-            if (ownership == LockOwnership.ThisDevice) continue;
-            open.Add(document);
-            var key = PromptKey(document, firstSeen);
-            if (prompt is not null || dismissedPrompts.Contains(key)) continue;
-            // The file's own path (where it goes back to, when its folder is away), so Check out finds it.
-            prompt = new PromptView(key, id.ToString(), st.Path, NameOf(st.Path), checkout, ownership == LockOwnership.Free);
-        }
-        Volatile.Write(ref openWithoutCheckOut, open.ToArray());
-        return prompt;
-    }
+    // Prompt() is in SyncEngine.Open.cs: from the SolidWorks link's documents while a SolidWorks
+    // is linked (only those the student opened), from SolidWorks' markers otherwise.
 
     // ---- My files and the team's files ------------------------------------------------------
 

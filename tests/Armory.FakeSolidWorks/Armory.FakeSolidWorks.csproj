@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- A stand-in SolidWorks for the link's Windows platform tests (tests/Armory.SolidWorks.Tests):
+       an out-of-process COM server with hand-written IDispatch and connection points. Test only,
+       never shipped (tools/package-agent.ps1 publishes src/Armory.Agent alone). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+</Project>

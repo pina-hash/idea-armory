@@ -76,8 +76,11 @@ public sealed partial class SyncEngine
     private string GateWords(SyncInput input, ProjectState project, string? reason)
     {
         var pin = input.PinnedRelease?.Year ?? project.PinnedRelease;
+        // What the SolidWorks link knows better: a save down SolidWorks didn't do, a file that
+        // can't go back to the pinned year, or one the student keeps on this computer.
+        if (LinkGateWords(input.Path, input.LocalHash, pin) is { } linked) return linked;
         if (input.SavedRelease is { } saved && saved.Year >= 1995 && saved.Year > pin)
-            return NewerThanPinWords(saved.Year, pin, project.Name, solidWorks?.Revision, solidWorks?.SaveDownWorks ?? false);
+            return NewerThanPinWords(saved.Year, pin, project.Name, solidWorks?.Revision, solidWorksSupport ?? SupportOf(solidWorks?.SaveDownWorks ?? false));
         if (input.SavedRelease is not { Year: >= 1995 } && pin >= 1995)
             return $"The SolidWorks year it was saved in is unknown, and {project.Name} only takes files whose year Armory can check. It stays on this computer.";
         return reason ?? "Armory can't take this file. It stays on this computer.";
@@ -659,7 +662,7 @@ public sealed partial class SyncEngine
                 {
                     try { saved = await ReleaseOfAsync(null, entry.Hash, () => deps.Snapshots.OpenRead(entry.SnapshotId!), ct); }
                     catch (Exception error) when (error is IOException or InvalidDataException) { EarlierSaveProblem(st.Path, error); continue; }
-                    var gate = SolidWorksVersionGate.Decide(saved, new SolidWorksRelease(project.PinnedRelease), project.Enforce ? ReleaseGateMode.Enforce : ReleaseGateMode.Warn);
+                    var gate = SolidWorksVersionGate.Decide(saved, new SolidWorksRelease(project.PinnedRelease), GateModeFor(project, entry.Hash));
                     if (!gate.Allowed)
                     {
                         // Kept as a private draft on this computer; offered again if the gate changes.

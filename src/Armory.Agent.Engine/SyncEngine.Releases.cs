@@ -22,8 +22,10 @@ public sealed partial class SyncEngine
     // Content hashes whose stamp and reading disagreed, recorded once each.
     private readonly HashSet<string> releaseDisagreements = new(StringComparer.Ordinal);
     // The SolidWorks running on this computer as the link last said, and whether saving down
-    // worked there; null while no link is attached.
+    // worked there; null while no link is attached. solidWorksSupport: why not, when the link
+    // said (LinkAttached); null when only SolidWorksAttached was called.
     private (SolidWorksRevision Revision, bool SaveDownWorks)? solidWorks;
+    private SaveToVersionSupport? solidWorksSupport;
 
     // ---- What the SolidWorks link tells the engine -------------------------------------------------
 
@@ -54,14 +56,18 @@ public sealed partial class SyncEngine
     public void SolidWorksAttached(string revisionNumber, bool saveDownWorks = true) => engineThread.Enqueue(() =>
     {
         solidWorks = SolidWorksRevision.Parse(revisionNumber) is { } revision ? (revision, saveDownWorks) : null;
+        solidWorksSupport = null;
         RequestPublish();
     });
 
     public void SolidWorksDetached() => engineThread.Enqueue(() =>
     {
         solidWorks = null;
+        solidWorksSupport = null;
         RequestPublish();
     });
+
+    private static SaveToVersionSupport SupportOf(bool saveDownWorks) => saveDownWorks ? SaveToVersionSupport.Available : SaveToVersionSupport.NotLicensed;
 
     // ---- Reading ------------------------------------------------------------------------------
 
@@ -191,13 +197,19 @@ public sealed partial class SyncEngine
     // The refusal of a file saved in a SolidWorks newer than the project's pin (research section
     // 6): what this computer can do about it. A private draft never uploads; it waits here.
     internal static string NewerThanPinWords(int saved, int pin, string project, SolidWorksRevision? running, bool saveDownWorks)
+        => NewerThanPinWords(saved, pin, project, running, SupportOf(saveDownWorks));
+
+    // support: what the link found (SaveDown.Support). The option's numbers unknown here
+    // (NotConfigured) is said as the update it needs, like a SolidWorks before Service Pack 3.
+    internal static string NewerThanPinWords(int saved, int pin, string project, SolidWorksRevision? running, SaveToVersionSupport support)
     {
         var first = $"Saved in SolidWorks {saved}, and {project} uses SolidWorks {pin}.";
         var waits = $"{first} It stays on this computer only until it is saved in SolidWorks {pin}.";
         if (running is not { } sw || saved > sw.Year) return waits;
         var plan = SaveDown.Plan(sw, pin);
-        if (plan.CanSave() && saveDownWorks)
+        if (plan.CanSave() && support == SaveToVersionSupport.Available)
             return $"{first} Open it in SolidWorks {sw.Year} and click Save: Armory saves it as {pin}, then it uploads by itself.";
+        if (plan.CanSave() && support is SaveToVersionSupport.NotConfigured or SaveToVersionSupport.OldServicePack) plan = SaveDownPlan.OldServicePack;
         return plan switch
         {
             SaveDownPlan.Penultimate or SaveDownPlan.Antepenultimate => $"{waits} SolidWorks on this computer couldn't save it in {pin}. Ask a CAD lead or a mentor what to do.",
@@ -212,8 +224,11 @@ public sealed partial class SyncEngine
     // computer that can fix them, and while no SolidWorks link says what this computer is; news
     // on a computer the link says cannot.
     internal static (string Detail, bool NeedsYou) NewerThanPinNotice(int saved, int pin, SolidWorksRevision? running, bool saveDownWorks)
+        => NewerThanPinNotice(saved, pin, running, SupportOf(saveDownWorks));
+
+    internal static (string Detail, bool NeedsYou) NewerThanPinNotice(int saved, int pin, SolidWorksRevision? running, SaveToVersionSupport support)
     {
-        if (running is { } here && saved <= here.Year && SaveDown.Plan(here, pin).CanSave() && saveDownWorks)
+        if (running is { } here && saved <= here.Year && SaveDown.Plan(here, pin).CanSave() && support == SaveToVersionSupport.Available)
             return ($"People on SolidWorks {pin} computers can't change these files. You can fix them here: 1. Check one out in Armory. " +
                 $"2. Open it in SolidWorks {here.Year}. 3. Click Save. Armory saves it as SolidWorks {pin} for you. 4. Check it in.", true);
         if (running is { } pinned && pinned.Year == pin)
