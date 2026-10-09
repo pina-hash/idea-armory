@@ -31,8 +31,14 @@ jobs:
         id: package
         uses: ./.github/actions/package-agent
 
-      - name: Platform tests (real NTFS, Restart Manager, DPAPI, child processes)
+      - name: Native parts (badge handlers, the right-click forwarder) with Visual Studio's compilers
+        run: ./tools/build-native.ps1
+
+      - name: Platform tests (real NTFS, Restart Manager, DPAPI, child processes, the native parts)
         run: dotnet test tests/Armory.Platform.Windows.Tests --no-build --logger "console;verbosity=normal" --logger "trx;LogFileName=platform-tests.trx"
+
+      - name: Every other test on Windows (the agent's Explorer and pipe tests find the native build)
+        run: dotnet test --no-build --logger "console;verbosity=normal" --logger "trx;LogFileName=windows-all.trx"
 
       - name: Install, launch and uninstall from the flash-drive zip
         run: ./tools/test-agent-install.ps1 -Kind Usb
