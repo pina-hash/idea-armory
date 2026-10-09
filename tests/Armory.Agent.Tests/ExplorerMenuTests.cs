@@ -18,12 +18,13 @@ public sealed class ExplorerMenuTests
     public void The_menu_shows_inside_the_vault_only_and_check_out_reaches_armory()
     {
         using var folder = new TempFolder();
-        var vault = folder.File("Vault Root");
+        // Explorer matches AppliesTo against the long path; a runner's TEMP may be an 8.3 name.
+        var vault = Path.Combine(LongPath(folder.Root), "Vault Root");
         Directory.CreateDirectory(Path.Combine(vault, "Robot 2027"));
         Directory.CreateDirectory(Path.Combine(vault, "Class 2026"));
         var robotFile = Path.Combine(vault, "Robot 2027", "Plate notes.txt");
         var classFile = Path.Combine(vault, "Class 2026", "Lesson.txt");
-        var outside = folder.File("Outside.txt");
+        var outside = Path.Combine(LongPath(folder.Root), "Outside.txt");
         File.WriteAllText(robotFile, "synthetic");
         File.WriteAllText(classFile, "synthetic");
         File.WriteAllText(outside, "synthetic");
@@ -55,7 +56,7 @@ public sealed class ExplorerMenuTests
             while (batches.IsEmpty && watch.Elapsed < TimeSpan.FromSeconds(30)) Thread.Sleep(50);
             var batch = Assert.Single(batches);
             Assert.Equal(ShellVerb.CheckOut, batch.Verb);
-            Assert.Equal([robotFile], batch.Paths);
+            Assert.Equal(robotFile, Assert.Single(batch.Paths), StringComparer.OrdinalIgnoreCase);
         }
         finally
         {
@@ -69,6 +70,16 @@ public sealed class ExplorerMenuTests
     }
 
     private static void ShellNotify() => Armory.Platform.Windows.ShellNotify.AssociationsChanged();
+
+    private static string LongPath(string path)
+    {
+        var buffer = new char[32768];
+        var length = GetLongPathNameW(path, buffer, buffer.Length);
+        return length > 0 && length < buffer.Length ? new string(buffer, 0, length) : path;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern int GetLongPathNameW(string shortPath, [Out] char[] longPath, int length);
 
     private static void OnSta(Action body)
     {

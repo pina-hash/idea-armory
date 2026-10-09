@@ -51,7 +51,7 @@ static BOOL TestDataFolder(wchar_t* full, DWORD cch) {
 static BOOL InstanceSuffix(wchar_t* out, size_t cch) {
     wchar_t full[1024], upper[1024];
     char utf8[4096];
-    UCHAR digest[32];
+    UCHAR digest[32] = {0};
     BCRYPT_ALG_HANDLE alg = NULL;
     BCRYPT_HASH_HANDLE hash = NULL;
     out[0] = 0;

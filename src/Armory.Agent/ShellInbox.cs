@@ -219,10 +219,19 @@ internal sealed class ShellInbox : IDisposable
         timer = time.CreateTimer(_ => OnTimer(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         // The first instance claims the name, so nothing else can serve it to our forwarders.
         var first = CreateServer(first: true);
-        for (var i = 0; i < Listeners; i++)
+        try
         {
-            var server = i == 0 ? first : CreateServer(first: false);
-            loops.Add(Task.Run(() => Listen(server)));
+            for (var i = 0; i < Listeners; i++)
+            {
+                var server = i == 0 ? first : CreateServer(first: false);
+                loops.Add(Task.Run(() => Listen(server)));
+            }
+        }
+        catch
+        {
+            if (loops.Count == 0) first.Dispose();
+            Dispose();
+            throw;
         }
     }
 

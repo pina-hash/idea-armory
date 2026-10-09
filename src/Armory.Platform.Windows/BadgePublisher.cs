@@ -118,7 +118,7 @@ public sealed class BadgePublisher : IDisposable
                     generation++;
                 }
             }
-            using (var view = table.CreateViewAccessor(0, bytes.Length, MemoryMappedFileAccess.Write))
+            using (var view = table.CreateViewAccessor(0, bytes.Length, MemoryMappedFileAccess.ReadWrite))
                 view.WriteArray(0, bytes, 0, bytes.Length);
             headerView.Write(BadgeTable.HeaderPidOffset, (uint)Environment.ProcessId);
             headerView.Write(BadgeTable.HeaderUpdatedAtOffset, time.GetUtcNow().ToFileTime());
