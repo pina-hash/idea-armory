@@ -1268,9 +1268,9 @@ const CONTRACT = {
 	takeOverFolder: [...ACT],
 	switchAccount: [],
 	createFolder: ['projectId', 'parent', 'name', ...ACT],
-	renameFolder: ['projectId', 'folder', 'newName', ...ACT],
-	deleteFolder: ['projectId', 'folder', ...ACT],
-	renameFile: ['path', 'newName', ...ACT],
+	renameFolder: ['projectId', 'folder', 'newName', 'force', ...ACT],
+	deleteFolder: ['projectId', 'folder', 'force', ...ACT],
+	renameFile: ['path', 'newName', 'force', ...ACT],
 	addFiles: ['projectId', 'folder', ...ACT],
 	dropFiles: ['projectId', 'folder', ...ACT],
 	dismissNotice: ['key'],
@@ -1397,11 +1397,26 @@ tally.bridgeTypes = 0;
 		expect(m.type === 'createFolder' && m.projectId === 'proj-robot-2027' && m.parent === 'Drivetrain' && m.name === 'Brackets', 'New folder sent ' + JSON.stringify(m));
 		await click('[data-key="fk-rename"]');
 		await page.fill('#ask-name', 'Chassis');
+		expect(!(await page.$('[data-key="ask-force"]')), 'a student was offered Force check in and rename');
 		m = await click('[data-key="ask-ok"]');
-		expect(m.type === 'renameFolder' && m.folder === 'Drivetrain' && m.newName === 'Chassis', 'Rename folder sent ' + JSON.stringify(m));
+		expect(m.type === 'renameFolder' && m.folder === 'Drivetrain' && m.newName === 'Chassis' && m.force === false, 'Rename folder sent ' + JSON.stringify(m));
+		const renamed = m;
 		await click('[data-key="fk-delete"]');
 		m = await click('[data-key="ask-ok"]');
-		expect(m.type === 'deleteFolder' && m.folder === 'Drivetrain', 'Delete folder sent ' + JSON.stringify(m));
+		expect(m.type === 'deleteFolder' && m.folder === 'Drivetrain' && m.force === false, 'Delete folder sent ' + JSON.stringify(m));
+		// A mentor or CAD lead, with Maria's file in the folder: the dialog's second key force
+		// checks it in and renames (or deletes) in one action (N5).
+		for (const asked of [renamed, m]) await host({ type: 'actionResult', requestId: asked.requestId, ok: false, message: 'Maria Lopez has 1 of its files checked out.' });
+		await host({ type: 'view', view: view('takeBack') });
+		await click('[data-key="fk-rename"]');
+		await page.fill('#ask-name', 'Chassis');
+		expect(/^Force check in 1 file and rename$/.test((await page.textContent('[data-key="ask-force"]')).replace(/\u00a0/g, ' ')), 'the second key for a lead reads ' + (await page.textContent('[data-key="ask-force"]')));
+		m = await click('[data-key="ask-force"]');
+		expect(m.type === 'renameFolder' && m.folder === 'Drivetrain' && m.newName === 'Chassis' && m.force === true, 'Force check in and rename sent ' + JSON.stringify(m));
+		await click('[data-key="fk-delete"]');
+		m = await click('[data-key="ask-force"]');
+		expect(m.type === 'deleteFolder' && m.folder === 'Drivetrain' && m.force === true, 'Force check in and delete sent ' + JSON.stringify(m));
+		await host({ type: 'view', view: view('synced') });
 		m = await click('[data-key="fk-add"]');
 		expect(m.type === 'addFiles' && m.folder === 'Drivetrain', 'Add files sent ' + JSON.stringify(m));
 

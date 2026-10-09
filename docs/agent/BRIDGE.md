@@ -55,7 +55,10 @@ uses a demo transport that answers from `wwwroot/demo/states.js`. See "The demo"
   nobody else can save them until they are checked in; it starts on Cancel), Rename
   file (a notice's file that shares its name with another file in the project) and
   Force check in (one file, the picked files, or all of a folder's: who has them, and that
-  anything they hadn't checked in is kept as their own copy). It is filled once when it opens and never redrawn by a host message, so
+  anything they hadn't checked in is kept as their own copy). For a mentor or CAD lead, Rename
+  folder, Delete folder and Rename file have a second key while someone else has files there
+  checked out (0.3.3, N5): "Force check in 3 files and rename" ("... and delete", "Force check
+  in and rename"), which sends the same action with `force: true`. It is filled once when it opens and never redrawn by a host message, so
   typed words stay.
 
 Every file row shows who has it checked out, always: "Checked out by you" or "Checked
@@ -67,7 +70,8 @@ that always draws its box), Open, and one state key before it: Check out when no
 has it, Check in when it is checked out here, nothing when someone else has it (the row
 says who). A file that isn't in Armory yet shows "Not in Armory" (`notInArmory`) or
 "New, not uploaded yet" (`waiting`) instead of a check out and has no select or state
-key (nothing can be checked out or in until it is added). Long lists (a folder, My
+key (nothing can be checked out or in until it is added). A file whose first version never
+arrived shows "No first version" (`noVersion`, 0.3.3), never "Uploading". Long lists (a folder, My
 files, a notice's files) draw only the rows near the view at one fixed row height, so a
 folder of 5,000 files keeps well under 150 rows in the page.
 
@@ -194,6 +198,8 @@ FileRowView {
 }
 FileStatus = "synced" | "changed" | "uploading" | "downloading" | "waiting" | "newerWaiting"
            | "keptCopy" | "notInArmory" | "notOnThisComputer"
+           | "noVersion"                    // 0.3.3: a record whose first version never arrived ("No first version";
+                                            // File detail: "Added without its first version"), never "uploading"
 SettingsView { vaultRoot: string, startAtSignIn: boolean, theme: "system" | "idea" | "spaceWhite" }
 
 FileDetailView {
@@ -291,9 +297,9 @@ replaces all of it. The spinner holds still under `prefers-reduced-motion`.
 | `takeBack` | `fileId`, `requestId` | Force check in of one file (a file row, File detail, the selection bar), after the small dialog asks (mentors and CAD leads) | ends the check out for its holder (the type keeps its old name); anything they hadn't checked in is kept as their own copy |
 | `takeBackAll` | `fileIds`, `requestId` | Force check in of more than one file (Force check in all, the selection bar), after the small dialog asks; at most 20,000 ids | one action: each lock broken as for one file (16 at a time), then one pass for all of them, and one sentence back (since 0.3.1; before, the page sent one `takeBack` per file and each ran a whole pass) |
 | `createFolder` | `projectId`, `parent`, `name`, `requestId` | New folder, after the small dialog | makes the folder |
-| `renameFolder` | `projectId`, `folder`, `newName`, `requestId` | Rename folder, after the small dialog | renames it for everyone (refused, and put back, when someone else has a file in it checked out) |
-| `deleteFolder` | `projectId`, `folder`, `requestId` | Delete folder, after the small dialog | removes it and its files for everyone; their history is kept |
-| `renameFile` | `path`, `newName`, `requestId` | Rename on a notice's file that shares a name (after the small dialog refuses a name the project has, a lost extension or a character Windows forbids) | renames that one file in its folder: a file Armory doesn't have is renamed on disk (and then added); a file in Armory is renamed for everyone (`armory_move_file`), refused while someone else has it checked out |
+| `renameFolder` | `projectId`, `folder`, `newName`, `force`, `requestId` | Rename folder, after the small dialog (`force: false`); its second key, Force check in 3 files and rename, for a mentor or CAD lead while someone else has files in it checked out (`force: true`) | renames it for everyone (refused, and put back, when someone else has a file in it checked out; the refusal says to ask a mentor or CAD lead to force check in). With `force` (0.3.3, N5): the check outs in the way are force checked in first, in the same action, then it is renamed: "Force checked in 3 files from Maria Lopez, then renamed Gearbox to Gearbox v2. Anything Maria hadn't checked in is kept as Maria's own copy." Anyone else asking with `force` is told only a mentor or CAD lead can |
+| `deleteFolder` | `projectId`, `folder`, `force`, `requestId` | Delete folder, after the small dialog (`force: false`); its second key, Force check in 3 files and delete, as for `renameFolder` | removes it and its files for everyone; their history is kept. `force`: as for `renameFolder` |
+| `renameFile` | `path`, `newName`, `force`, `requestId` | Rename on a notice's file that shares a name (after the small dialog refuses a name the project has, a lost extension or a character Windows forbids; `force: false`); its second key, Force check in and rename, for a mentor or CAD lead while someone else has the file checked out (`force: true`) | renames that one file in its folder: a file Armory doesn't have is renamed on disk (and then added); a file in Armory is renamed for everyone (`armory_move_file`), refused while someone else has it checked out. `force`: as for `renameFolder` |
 | `addFiles` | `projectId`, `folder`, `requestId` | Add files | host shows a file picker, then copies the files in (never over a file already there) and adds them: one import summary; closing the picker answers with an empty message, which the page doesn't show |
 | `dropFiles` | `projectId`, `folder`, `requestId` (+ the dropped files) | a drop on the open folder's list | host copies the dropped files in, a dropped folder whole, the same way |
 | `dismissNotice` | `key` | a notice's Done or OK (`dismissNotice` action); Not now or OK on the check-out question (its `PromptView.key`) | the host drops that notice card, or that one question and asks about the next file SolidWorks has open without a check out |

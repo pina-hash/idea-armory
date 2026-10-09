@@ -83,7 +83,8 @@
 		newerWaiting: { chip: 'Newer version waiting', tone: 'look' },
 		keptCopy: { chip: 'Your copy kept', tone: 'look' },
 		notInArmory: { chip: 'Not in Armory', tone: 'off' },
-		notOnThisComputer: { chip: 'Not here yet', tone: 'off' }
+		notOnThisComputer: { chip: 'Not here yet', tone: 'off' },
+		noVersion: { chip: 'No first version', tone: 'off' }
 	};
 
 	/** A notice card's glyph, by kind. */
@@ -1595,6 +1596,8 @@
 				return { readout: 'Not here yet', tone: 'off', line: 'Not on this computer yet', meta: 'Armory is getting it. It shows up in the folder soon.' };
 			case 'keptCopy':
 				return { readout: 'Your copy kept', tone: 'look', line: 'Your changes were kept as your own copy', meta: 'Your change is kept in its history. Nothing was lost.' };
+			case 'noVersion':
+				return { readout: 'No first version', tone: 'off', line: 'Added without its first version', meta: 'Its first version never reached Armory, so there is nothing to open yet. Put the file in this folder again to add it.' };
 			default:
 				return { readout: 'Available', tone: 'ok', line: 'Available', meta: 'Anyone can open it to look. Check it out to make changes.' };
 		}
@@ -1822,6 +1825,8 @@
 		// on Cancel, so Enter never does it by accident.
 		var cancelFirst = false;
 		var extra = '';
+		// A mentor or CAD lead can force check in what is in the way, in the same action (N5).
+		var force = '';
 		if (kind === 'report') {
 			title = 'Report a problem';
 			body = 'Tell us what went wrong, or what would make Armory better. Your words go with a short record of what Armory was doing: file names, never what is in your files.';
@@ -1855,6 +1860,7 @@
 			body = 'Rename ' + c.name + ' in ' + c.where + '. A project keeps one file per name, so pick a name no other file in ' + c.project + ' has.';
 			field = fieldHtml('New name', c.name);
 			ok = 'Rename';
+			if (c.held && c.canTakeBack) force = 'Force check in and rename';
 		} else if (kind === 'newFolder') {
 			title = 'New folder';
 			body = 'Make a folder in ' + c.where + '. Everyone on the team sees it.';
@@ -1865,6 +1871,7 @@
 			body = 'Rename ' + c.name + ' in ' + c.parentWhere + '. Everyone on the team sees the new name, and its files keep their history.';
 			field = fieldHtml('New name', c.name);
 			ok = 'Rename';
+			if (c.held && c.canTakeBack) force = 'Force check in ' + plural(c.held, 'file', 'files') + ' and rename';
 		} else if (kind === 'deleteFolder') {
 			title = 'Delete folder';
 			body =
@@ -1872,6 +1879,7 @@
 				(c.files ? 'The history of every file is kept, so a file can be brought back later.' : 'It has no files in it.');
 			ok = 'Delete folder';
 			danger = true;
+			if (c.held && c.canTakeBack) force = 'Force check in ' + plural(c.held, 'file', 'files') + ' and delete';
 		} else {
 			title = c.count === 1 ? 'Force check in' : 'Force check in all';
 			body =
@@ -1889,6 +1897,7 @@
 			field +
 			'<div class="ask-keys">' +
 			'<button class="key' + (danger ? ' danger' : cancelFirst ? '' : ' primary') + '" type="button" data-action="askOk" data-key="ask-ok">' + esc(glue(ok)) + '</button>' +
+			(force ? '<button class="key danger" type="button" data-action="askForce" data-key="ask-force">' + esc(glue(force)) + '</button>' : '') +
 			'<button class="key" type="button" data-action="askCancel" data-key="ask-cancel"' + (field || !(danger || cancelFirst) ? '' : ' data-ask-first="true"') + '>Cancel</button>' +
 			'</div></div>'
 		);
@@ -1951,10 +1960,11 @@
 		return null;
 	}
 
-	function askOk() {
+	function askOk(force) {
 		var a = ui.ask;
 		if (!a) return;
 		var c = a.ctx;
+		force = force === true;
 		if (a.kind === 'report') {
 			var area = ask.querySelector('#ask-report');
 			var words = area.value.trim();
@@ -1985,7 +1995,7 @@
 				fileInput.focus();
 				return;
 			}
-			act('renameFile', { path: c.path, newName: newName }, { key: a.returnKey });
+			act('renameFile', { path: c.path, newName: newName, force: force }, { key: a.returnKey });
 		} else if (a.kind === 'newFolder' || a.kind === 'renameFolder') {
 			var input = ask.querySelector('#ask-name');
 			var name = input.value.trim();
@@ -1998,13 +2008,13 @@
 			}
 			if (a.kind === 'newFolder') act('createFolder', { projectId: c.projectId, parent: c.folder, name: name }, { key: a.returnKey });
 			else {
-				act('renameFolder', { projectId: c.projectId, folder: c.folder, newName: name }, { key: a.returnKey });
+				act('renameFolder', { projectId: c.projectId, folder: c.folder, newName: name, force: force }, { key: a.returnKey });
 				// When the host's next view has the new name, the browser goes with it.
 				ui.follow = { projectId: c.projectId, from: c.folder, to: c.folder.split('/').slice(0, -1).concat([name]).join('/') };
 			}
 		} else if (a.kind === 'checkOutAll') act('checkOut', { paths: [c.path], open: false }, { key: a.returnKey });
 		else if (a.kind === 'undoMine') act('undoCheckOut', { paths: mineFolders(ui.view) }, { key: a.returnKey, words: 'Undoing ' + plural(c.count, 'check out', 'check outs') + '...' });
-		else if (a.kind === 'deleteFolder') act('deleteFolder', { projectId: c.projectId, folder: c.folder }, { key: a.returnKey });
+		else if (a.kind === 'deleteFolder') act('deleteFolder', { projectId: c.projectId, folder: c.folder, force: force }, { key: a.returnKey });
 		// One file is takeBack; more go in ONE takeBackAll, so the host forces them in one action
 		// and one pass (one message per file ran a whole pass for each).
 		else if (c.count === 1) act('takeBack', { fileId: c.fileIds[0] }, { key: a.returnKey });
@@ -2042,6 +2052,7 @@
 				var st = checkoutOf(r).state;
 				return r.fileId && (st === 'other' || st === 'myOtherComputer');
 			}).length,
+			canTakeBack: !!p.canTakeBack,
 			siblingsHere: names(folder),
 			siblingsParent: names(parent)
 		};
@@ -2071,7 +2082,13 @@
 		});
 		var parts = String(path).split('/');
 		var name = parts.pop();
-		openAsk('renameFile', { path: path, name: name, where: parts.join(' \u203a '), project: project ? project.name : root, taken: taken }, from);
+		var hit = ui.index.byPath[path];
+		var st = hit && hit.row.fileId ? checkoutOf(hit.row).state : 'available';
+		openAsk(
+			'renameFile',
+			{ path: path, name: name, where: parts.join(' \u203a '), project: project ? project.name : root, taken: taken, held: st === 'other' || st === 'myOtherComputer' ? 1 : 0, canTakeBack: !!(project && project.canTakeBack) },
+			from
+		);
 	}
 
 	/** Force check in one file, or the picked files (or a folder's files) someone else has,
@@ -2853,6 +2870,9 @@
 				break;
 			case 'askOk':
 				askOk();
+				break;
+			case 'askForce':
+				askOk(true);
 				break;
 			case 'askCancel':
 				ask.close();
