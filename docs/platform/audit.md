@@ -34,7 +34,8 @@ C1 already frames journal intents with SHA-256. C2 adds a CRC-32C transport enve
 without replacing that format or modifying the core. Invalid complete records are
 quarantined and block replay; incomplete suffixes are removed and their size reported.
 
-The Windows projects target `net10.0-windows`; the core stays `net10.0`. Tests use
+The Windows projects target `net10.0-windows` (the agent and its tests,
+`net10.0-windows10.0.17763.0` since 0.3.3, for Windows' notifications); the core stays `net10.0`. Tests use
 `WindowsFact`/`WindowsTheory` so the existing Ubuntu workflow builds them and reports
 clean skips. The same workflow executes them on Windows. No SolidWorks assembly is
 referenced by the platform or core; optional probe automation uses late-bound COM.

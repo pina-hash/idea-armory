@@ -61,11 +61,19 @@ engine.RecordReleaseStamp(stamp);     // after a save it watched: Core ReleaseSt
 await engine.RecordReleaseStampAsync(stamp); // the same, true once kept (false: not a SHA-256)
 engine.SolidWorksAttached("34.4.1", saveDownWorks: true); // ISldWorks.RevisionNumber; false once SolidWorks would not save down
 engine.SolidWorksDetached();
+
+// File Explorer's badges (0.3.3, docs/agent/EXPLORER.md 2.4): on the engine thread, between two steps of a pass.
+await engine.BadgeFactsAsync();       // one Core BadgeFacts per file on this computer in a project of this account
 ```
 
 `View` is the window's `AgentView` (docs/agent/BRIDGE.md); `OpenWithoutCheckOut` lists the
-open files this computer has not checked out, for the tray's one quiet balloon per opened
-file (D13). Every method marshals onto the engine's own thread (see Threading), so the
+open files this computer has not checked out, for the check-out question outside the window
+(D13; a Windows notification since 0.3.3, docs/agent/EXPLORER.md). `BadgeFactsAsync` gives
+each file's disk path, the same status and check out names its row shows, whether it is in
+Armory, whether Armory refused to upload it (a refusal stays a fact after its notice is
+dismissed) and whether a problem said Armory could not read it (this pass, or remembered for
+30 minutes; "SolidWorks may have closed unexpectedly" is not one). A file outside every
+project of this account has no facts. Every method marshals onto the engine's own thread (see Threading), so the
 window's UI thread only awaits: it never scans, hashes, saves the state or waits on a pass.
 `View`, `IsPaused` and `OpenWithoutCheckOut` are published values, read without the engine.
 

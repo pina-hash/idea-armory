@@ -88,7 +88,8 @@ page's own crumbs are: "Added 4,987 of 5,000 files to Robot 2027 › CopyDesignT
 | `view` | `view: AgentView` | on `ready` and whenever anything changes (at most every 500 ms during a pass); the page redraws from it |
 | `fileDetail` | `detail: FileDetailView` | the answer to `openFile` |
 | `activity` | `activity: ActivityView` | while files move, at most 4 a second; the page patches only Right now and the status line, so focus, scroll and typing never move |
-| `actionResult` | `requestId`, `ok`, `message` | once for each action (see Page to host); the page shows `message` in a quiet line at the window's foot, never an alert and never a focus change |
+| `actionResult` | `requestId`, `ok`, `message` | once for each action (see Page to host); the page shows `message` in a quiet line at the window's foot, never an alert and never a focus change. 0.3.3: also with `requestId: "shell"` (`BridgeMessages.ShellRequest`) for something File Explorer's right-click or a notification's button asked for while the window shows (docs/agent/EXPLORER.md) |
+| `reveal` | `path` | 0.3.3: Show in Armory from File Explorer's right-click, after the host opened the window; `path` is vault-relative ("" is the Armory folder itself). The page shows the file's detail (a file in Armory), Team files at that folder (a folder, or the folder of a file Armory doesn't have yet), or Home; never while its small dialog is asking something. Sent once the page has said `ready`, right after its `view` |
 
 ```
 AgentView {
@@ -205,7 +206,12 @@ FileStatus = "synced" | "changed" | "uploading" | "downloading" | "waiting" | "n
            | "keptCopy" | "notInArmory" | "notOnThisComputer"
            | "checkingInWhenClosed"   // 0.3.3: checked out by you and asked to be checked in, but open in
                                       // SolidWorks (or unreadable) now; checked in as soon as it is closed
-SettingsView { vaultRoot: string, startAtSignIn: boolean, theme: "system" | "idea" | "spaceWhite" }
+SettingsView { vaultRoot: string, startAtSignIn: boolean, theme: "system" | "idea" | "spaceWhite",
+               badges: BadgesView | null }   // 0.3.3; null until the host has checked
+BadgesView {                        // 0.3.3: Armory's status on file icons (docs/agent/EXPLORER.md 2.6)
+  state: "off" | "on" | "afterSignIn" | "crowded" | "partial" | "broken"   // BadgeHealthReport.Key
+  line: string                      // Settings' sentence, e.g. "Armory's status shows on file icons."
+}                                   // Settings draws the row with Turn on (turnOnBadges) for off and broken
 
 FileDetailView {
   fileId: string, name: string, path: string, project: string, folder: string,
@@ -272,7 +278,7 @@ answers it with exactly one `actionResult` carrying the same id and a plain sent
 Plate.SLDPRT.", "Close Plate.SLDPRT in SolidWorks first."). The actions are
 `launchFile`, `checkOut`, `checkIn`, `undoCheckOut`, `takeBack`, `takeBackAll`, `createFolder`,
 `renameFolder`, `deleteFolder`, `renameFile`, `addFiles`, `dropFiles`, `reportProblem`,
-`sendFeedback`, `takeOverFolder` and `putBackKeptCopy`.
+`sendFeedback`, `takeOverFolder`, `putBackKeptCopy` and `turnOnBadges`.
 
 The page shows an action is under way from the moment it is sent until its
 `actionResult` arrives (v0.2.1): the pressed key gets `aria-busy="true"` and
@@ -313,6 +319,7 @@ replaces all of it. The spinner holds still under `prefers-reduced-motion`.
 | `reportProblem` | `kind`, `body`, `requestId` | Send in Report a problem (Settings), after the page refuses empty words | `kind` is `bug`, `idea` or `other`; the host saves the words with a fresh `userReport` incident and sends them (docs/agent/TELEMETRY.md); the answer is one sentence: "Sent. Thank you for telling us.", or "Saved. It will be sent ..." when it can't go yet |
 | `sendFeedback` | `kind`, `body`, `requestId` | Send in Send feedback (the header's key, or Settings), after the page refuses empty words | v0.3: `kind` is `bug`, `idea` or `other`; a note on its own (`armory_submit_app_feedback`), saved first and sent at once when it can be, with Armory's version and what it was doing as its context, and no incident after it; the answer is one sentence, "Sent. Thank you for the feedback." or "Saved. It will be sent ..." |
 | `openIncidents` | | Open incidents folder (Settings) | opens `%LOCALAPPDATA%\IDEA Armory\incidents` in File Explorer, so the files can be handed over by hand |
+| `turnOnBadges` | `requestId` | Turn on, in Settings' "Status on file icons" row (only for `off` and `broken`); Settings closes so the answer shows at the window's foot | 0.3.3: the host runs `<app>\badges\IDEA-Armory-Badges-Setup.exe /SILENT /SUPPRESSMSGBOXES /NORESTART` with the `runas` verb (Windows asks for an administrator's password), waits for it, checks the badges again (a new `view`) and answers with the new Settings line ("Armory's status shows on file icons after you sign out of Windows and back in."), or "Nothing changed. This one step needs an administrator's password." for a canceled prompt (error 1223), "The badges setup stopped before it finished, so nothing changed." for an exit code other than 0, and "The badges setup isn't in Armory's folder on this computer. Ask an administrator to run IDEA-Armory-Badges-Setup." when the file is missing |
 | `putBackKeptCopy` | `fileId`, `versionId`, `requestId` | Put back on this computer, on a File detail history entry of kind `keptCopy` (0.3.3, feedback N4) | `versionId` is the entry's `id`. The host's `PutBackKeptCopyAsync` (docs/agent/ENGINE.md, "Put back on this computer"): only the signed-in person's own kept copy; the file is checked out first when it is checked out to nobody; any save on disk the server doesn't have is kept first, and an open file is refused; the copy is put in place and stays checked out, shared only at check in. Answers "Put your copy of Plate.SLDPRT back on this computer. It's checked out to you: look at it in SolidWorks, then check it in to share it.", or why not ("That copy of Plate.SLDPRT is Maria Lopez's. Only your own kept copies can be put back here.", "Close Plate.SLDPRT in SolidWorks first, then put your copy back.") |
 
 ## Thumbnails (0.3.2)

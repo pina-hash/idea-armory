@@ -11,7 +11,9 @@ laptops run Windows 10 or 11 with SolidWorks 2026. Installing needs no internet.
 | What | Where |
 |---|---|
 | The app (self-contained .NET, x64) | `%LOCALAPPDATA%\Programs\IDEA Armory\` with `IdeaArmory.exe`, `wwwroot\` and `scripts\` (Setup.ps1, Uninstall.cmd, Check.cmd, payload.sha256) |
-| Start menu shortcut, this account only | `%APPDATA%\Microsoft\Windows\Start Menu\Programs\IDEA Armory.lnk` |
+| Start menu shortcut, this account only | `%APPDATA%\Microsoft\Windows\Start Menu\Programs\IDEA Armory.lnk`, with `System.AppUserModel.ID` = `IdeaBosco.Armory` (0.3.3) |
+| Notifications and links (0.3.3) | `HKCU\Software\Classes\AppUserModelId\IdeaBosco.Armory` and `HKCU\Software\Classes\idea-armory` (below) |
+| File Explorer's right-click items, written by the app | `HKCU\Software\Classes`: `AllFilesystemObjects\shell\IDEAArmory`, `IDEAArmory.Menu`, `Directory\Background\shell\IDEAArmory`, `IDEAArmory.BackgroundMenu` |
 | Start at sign-in | `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, value `IDEA Armory` = `"<exe>" --background` |
 | Apps entry (Settings > Apps) | `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\IDEA Armory` (flash drive) or `...\Uninstall\{28A1D010-82E3-4294-9676-83AC0AA1F5D3}_is1` (setup.exe), with DisplayName, Publisher, DisplayVersion, DisplayIcon, UninstallString, QuietUninstallString, NoModify, NoRepair and EstimatedSize |
 | Per-account data, written by the app | `%LOCALAPPDATA%\IDEA Armory\`: `settings.json`, `logs\agent.log`, `secrets\` (this computer's sign-in, protected with Windows DPAPI), `WebView2\` |
@@ -27,12 +29,16 @@ install ends on FAIL with the download page, and setup.exe names it on its Ready
 in a message after installing; the runtime installs from https://developer.microsoft.com/microsoft-edge/webview2/consumer/
 without an administrator password.
 
-`IdeaArmory.exe` takes three flags. `--background` starts in the tray without opening the
+`IdeaArmory.exe` takes three flags, and a link. `--background` starts in the tray without opening the
 window (the sign-in entry uses it). `--quit` asks the running copy to exit cleanly and
 waits up to 30 seconds. `--check` opens nothing, prints one JSON line
 `{"version","webView2Runtime","wwwroot","vaultRoot"}`, and exits 0 when the app files and
-the WebView2 Runtime are present, 1 otherwise. The app writes `started <version>` to
-`agent.log` when it starts and `stopped` when it exits cleanly.
+the WebView2 Runtime are present, 1 otherwise. `"idea-armory:act?t=<token>&a=<checkout|show>"`
+is what Windows passes when a notification's button is clicked (docs/agent/EXPLORER.md section
+7): with Armory running, it is handed over and the launch exits 0 (1 when the running copy can't
+be reached, after bringing its window up); with none running, Armory starts with its window
+open. The app writes `started <version>` to `agent.log` when it starts and `stopped` when it
+exits cleanly.
 
 Two environment variables exist for automated tests only. `ARMORY_DATA_DIR` (an absolute
 folder) replaces `%LOCALAPPDATA%\IDEA Armory`, gives the single-instance guard its own
@@ -152,6 +158,47 @@ an administrator once per computer, because Windows reads icon overlay handlers 
 
 docs/agent/EXPLORER.md has the details: the four badges, what Settings says about them, and
 `tools/check-overlays.ps1`, which shows on any computer which badges Windows really shows.
+Settings' Turn on runs `files\badges\IDEA-Armory-Badges-Setup.exe` from the app folder (the
+installed `<app>\badges\IDEA-Armory-Badges-Setup.exe`), so both installers must ship it there.
+
+## Notifications and links (0.3.3): what the installers write and remove
+
+Windows names Armory's notifications by its AppUserModelID, `IdeaBosco.Armory`, and opens their
+buttons by the `idea-armory:` scheme. Both installers write these per-user values (all REG_SZ;
+`<app>` is `%LOCALAPPDATA%\Programs\IDEA Armory`, `{app}` in Inno), and the installed
+`IdeaArmory.exe` writes them again at start when one differs, so a missing value repairs
+itself the next time Armory starts. (The installers' entries below come with the installers'
+0.3.3 work; until it lands, Armory's own repair at start is what writes them, and nothing
+removes them at uninstall.)
+
+| Key (under `HKCU\Software\Classes`) | Value | Data |
+|---|---|---|
+| `AppUserModelId\IdeaBosco.Armory` | `DisplayName` | `IDEA Armory` |
+| `AppUserModelId\IdeaBosco.Armory` | `IconUri` | `<app>\Assets\armory.ico` (shipped in the payload since 0.3.3) |
+| `idea-armory` | (Default) | `URL:IDEA Armory` |
+| `idea-armory` | `URL Protocol` | empty string |
+| `idea-armory\DefaultIcon` | (Default) | `"<app>\IdeaArmory.exe",0` |
+| `idea-armory\shell\open\command` | (Default) | `"<app>\IdeaArmory.exe" "%1"` |
+
+- **setup.exe** (`installer/IdeaArmory.iss`): `[Registry]` entries for exactly these values, each
+  key with `uninsdeletekey` (`Root: HKCU; Subkey: "Software\Classes\AppUserModelId\IdeaBosco.Armory"`,
+  `Root: HKCU; Subkey: "Software\Classes\idea-armory"` and its two subkeys); the `[Icons]` line
+  of the Start menu shortcut gains `AppUserModelID: "IdeaBosco.Armory"`.
+- **Flash drive** (`installer/scripts/Setup.ps1`): Install writes the same values (`New-Item
+  -Force`, `New-ItemProperty -PropertyType String`); `WScript.Shell` cannot set the shortcut's
+  AppUserModelID, and Armory sets it at start when the shortcut points to the installed
+  `IdeaArmory.exe` (Install already starts Armory). Check reports "Notifications: registered" or
+  "MISSING" and "Link scheme: registered" or "MISSING".
+- **Uninstall, both routes** (Setup.ps1 Uninstall and InnoUninstall, and the Inno uninstaller):
+  delete `HKCU\Software\Classes\AppUserModelId\IdeaBosco.Armory`, `HKCU\Software\Classes\idea-armory`,
+  the four right-click keys above, and `HKCU\Software\IDEA Armory` (the badges' heartbeat), then
+  send `SHCNE_ASSOCCHANGED` once. `--quit` removes none of them.
+- `tools/package-agent.ps1` checks that the AppUserModelID in `IdeaArmory.iss` equals the one in
+  `Setup.ps1`, as it does for the AppId, and that the payload holds `Assets\armory.ico`.
+- `tools/test-agent-install.ps1`, after each install route: every value above exact, the
+  shortcut's `System.AppUserModel.ID` is `IdeaBosco.Armory` (after Armory has started), a launch of
+  `IdeaArmory.exe "idea-armory:act?t=AAAAAAAAAAAAAAAAAAAAAA&a=show"` while Armory runs exits 0
+  and leaves one `IdeaArmory.exe`; after uninstall, every key gone.
 
 ## Artifact names
 
