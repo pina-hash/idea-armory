@@ -638,8 +638,18 @@ function Assert-NoBadges([string]$When) {
     }
     if (Test-MachineKey 'SOFTWARE\IDEA Armory') { $found += 'HKLM\SOFTWARE\IDEA Armory' }
     if (Test-MachineKey $BadgesAppsKey) { $found += 'the Apps entry' }
-    if (Test-Path -LiteralPath $BadgesFolder) { $found += $BadgesFolder }
+    $queued = @()
+    if (Test-Path -LiteralPath $BadgesFolder) {
+        # A DLL that a running Explorer loaded is queued for deletion at the next restart
+        # (uninsrestartdelete); anything else left is a failure.
+        $pending = @(Get-PendingBadgeRenames)
+        foreach ($file in @(Get-ChildItem -LiteralPath $BadgesFolder -Recurse -File -Force)) {
+            if (@($pending | Where-Object { $_.EndsWith($file.FullName, [StringComparison]::OrdinalIgnoreCase) }).Count -gt 0) { $queued += $file.FullName }
+            else { $found += $file.FullName }
+        }
+    }
     if ($found.Count -gt 0) { Fail ($When + ': ' + ($found -join '; ') + ' still present') }
+    if ($queued.Count -gt 0) { Note ($When + ': ' + ($queued -join ', ') + ' still loaded somewhere, queued for deletion when Windows next starts') }
     Note ($When + ': no badges key, value, file or Apps entry')
 }
 function Initialize-IconReader {
@@ -1097,8 +1107,6 @@ if ($Kind -eq 'Usb') {
     $done = Wait-Until { -not (Test-MachineKey $BadgesAppsKey) -and -not (Test-Path -LiteralPath $BadgesFolder) -and @(Get-Process -Name '_iu*' -ErrorAction SilentlyContinue).Count -eq 0 } 120
     if (-not $done) { Note 'the badges uninstaller was still finishing after 120 seconds' }
     Assert-NoBadges 'after uninstall'
-    $pending = @(Get-PendingBadgeRenames)
-    if ($pending.Count -gt 0) { Fail ('Files of the badges wait for a restart after uninstall: ' + ($pending -join ', ')) }
 } else {
     # SolidWorks: an upgrade with SolidWorks open, against the link's test fake.
     $fakeExe = Find-FakeSolidWorks
