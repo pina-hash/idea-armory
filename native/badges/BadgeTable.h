@@ -43,7 +43,8 @@ struct Header {
     uint32_t armoryPid;           // the process that publishes; its exit drops every badge
     uint32_t reserved;
     uint64_t updatedAt;           // FILETIME (UTC) of the last publish, for diagnostics only
-    // 32 bytes so far; the rest of the 4096 bytes is zero.
+    int64_t newest;               // the newest generation ever named here (publishers only)
+    // 40 bytes so far; the rest of the 4096 bytes is zero.
 };
 
 struct TableHeader {
@@ -69,7 +70,7 @@ struct Slot {
 };
 #pragma pack(pop)
 
-static_assert(sizeof(Header) == 32, "header layout");
+static_assert(sizeof(Header) == 40, "header layout");
 static_assert(sizeof(TableHeader) == TableHeaderSize, "table header layout");
 static_assert(sizeof(Slot) == SlotSize, "slot layout");
 

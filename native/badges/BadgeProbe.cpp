@@ -115,6 +115,7 @@ struct Publication {
         FILETIME now;
         GetSystemTimeAsFileTime(&now);
         header->updatedAt = (static_cast<uint64_t>(now.dwHighDateTime) << 32) | now.dwLowDateTime;
+        if (header->newest < generation) header->newest = generation;
         InterlockedExchange64(const_cast<int64_t*>(&header->generation), generation);
         return true;
     }

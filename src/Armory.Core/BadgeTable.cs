@@ -10,7 +10,8 @@ namespace Armory.Core;
 //
 // Header section "Local\IDEA-Armory-Badges-<user SID>", 4096 bytes:
 //   0 magic "ARBH", 4 version, 8 generation (int64; 0 means no table), 16 publisher process id,
-//   20 reserved, 24 updatedAt (FILETIME UTC), the rest zero.
+//   20 reserved, 24 updatedAt (FILETIME UTC), 32 newest (the newest generation this header ever
+//   named; publishers only), the rest zero.
 // Table section "<header name>-<generation as 16 uppercase hex digits>", immutable:
 //   0 magic "ARBT", 4 version, 8 generation, 16 entryCount, 20 slotCount, 24 rootOffset,
 //   28 rootUnits, 32 stringsOffset, 36 stringsUnits, 40 totalBytes, 44 reserved (20 bytes),
@@ -25,6 +26,7 @@ public static class BadgeTable
     public const int HeaderGenerationOffset = 8;
     public const int HeaderPidOffset = 16;
     public const int HeaderUpdatedAtOffset = 24;
+    public const int HeaderNewestOffset = 32;
     public const int TableHeaderBytes = 64;
     public const int SlotBytes = 16;
     public const int MinSlots = 16;
@@ -167,9 +169,9 @@ public static class BadgeTable
         return BadgeState.None;
     }
 
-    // The first 32 bytes of the header section, generation included. A publisher writes the
+    // The first 40 bytes of the header section, generation included. A publisher writes the
     // generation last, with one aligned 64-bit store.
-    public static void WriteHeader(Span<byte> header, long generation, uint publisherPid, long updatedAtFileTime)
+    public static void WriteHeader(Span<byte> header, long generation, uint publisherPid, long updatedAtFileTime, long newest = 0)
     {
         if (header.Length < HeaderBytes) throw new ArgumentException("The header is 4096 bytes.", nameof(header));
         BinaryPrimitives.WriteUInt32LittleEndian(header, HeaderMagic);
@@ -178,13 +180,20 @@ public static class BadgeTable
         BinaryPrimitives.WriteUInt32LittleEndian(header[HeaderPidOffset..], publisherPid);
         BinaryPrimitives.WriteUInt32LittleEndian(header[20..], 0);
         BinaryPrimitives.WriteInt64LittleEndian(header[HeaderUpdatedAtOffset..], updatedAtFileTime);
+        BinaryPrimitives.WriteInt64LittleEndian(header[HeaderNewestOffset..], Math.Max(newest, generation));
     }
 
     // The published generation, or 0 when header is not a format 1 header.
     public static long HeaderGeneration(ReadOnlySpan<byte> header) =>
+        IsHeader(header) ? BinaryPrimitives.ReadInt64LittleEndian(header[HeaderGenerationOffset..]) : 0;
+
+    // The newest generation a header ever named (a publisher taking it over starts above it), or 0.
+    public static long HeaderNewest(ReadOnlySpan<byte> header) =>
+        IsHeader(header) ? Math.Max(BinaryPrimitives.ReadInt64LittleEndian(header[HeaderGenerationOffset..]), BinaryPrimitives.ReadInt64LittleEndian(header[HeaderNewestOffset..])) : 0;
+
+    private static bool IsHeader(ReadOnlySpan<byte> header) =>
         header.Length >= HeaderBytes && BinaryPrimitives.ReadUInt32LittleEndian(header) == HeaderMagic &&
-        BinaryPrimitives.ReadUInt32LittleEndian(header[4..]) == FormatVersion
-            ? BinaryPrimitives.ReadInt64LittleEndian(header[HeaderGenerationOffset..]) : 0;
+        BinaryPrimitives.ReadUInt32LittleEndian(header[4..]) == FormatVersion;
 
     private readonly record struct View(uint SlotCount, int RootOffset, int RootUnits, int StringsOffset, int StringsUnits)
     {

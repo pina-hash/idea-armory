@@ -262,19 +262,28 @@ public sealed class BadgeTableTests
     }
 
     [Fact]
-    public void The_header_carries_magic_version_generation_publisher_and_time()
+    public void The_header_carries_magic_version_generation_publisher_time_and_newest()
     {
         var header = new byte[BadgeTable.HeaderBytes];
-        BadgeTable.WriteHeader(header, Generation, 4242, 133_000_000_000_000_000);
+        BadgeTable.WriteHeader(header, Generation, 4242, 133_000_000_000_000_000, newest: Generation + 5);
         Assert.Equal("ARBH", System.Text.Encoding.ASCII.GetString(header, 0, 4));
         Assert.Equal(1u, BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(4)));
         Assert.Equal(Generation, BinaryPrimitives.ReadInt64LittleEndian(header.AsSpan(8)));
         Assert.Equal(4242u, BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(16)));
         Assert.Equal(133_000_000_000_000_000, BinaryPrimitives.ReadInt64LittleEndian(header.AsSpan(24)));
-        Assert.All(header[32..], b => Assert.Equal(0, b));
+        Assert.Equal(Generation + 5, BinaryPrimitives.ReadInt64LittleEndian(header.AsSpan(32)));
+        Assert.All(header[40..], b => Assert.Equal(0, b));
         Assert.Equal(Generation, BadgeTable.HeaderGeneration(header));
+        Assert.Equal(Generation + 5, BadgeTable.HeaderNewest(header));
+        // Newest is never below the generation named now, and generation 0 keeps it.
+        BadgeTable.WriteHeader(header, 0, 1, 1, newest: 77);
+        Assert.Equal(0, BadgeTable.HeaderGeneration(header));
+        Assert.Equal(77, BadgeTable.HeaderNewest(header));
+        BadgeTable.WriteHeader(header, 90, 1, 1, newest: 77);
+        Assert.Equal(90, BadgeTable.HeaderNewest(header));
         header[0] = 0;
         Assert.Equal(0, BadgeTable.HeaderGeneration(header));
+        Assert.Equal(0, BadgeTable.HeaderNewest(header));
         Assert.Throws<ArgumentException>(() => BadgeTable.WriteHeader(new byte[32], 1, 1, 1));
     }
 
