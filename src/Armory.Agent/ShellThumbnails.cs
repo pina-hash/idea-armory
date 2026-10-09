@@ -170,8 +170,7 @@ internal sealed class ShellThumbnails : IDisposable
             // Not that file again for a while: the next thread would likely stick on it too.
             Remember(job.Key, null);
             count = ++stuckThreads;
-            if (count < MaxStuck) worker = StartWorker();
-            else
+            if (count >= MaxStuck)
             {
                 foreach (var left in waiting) left.Done.TrySetResult(null);
                 waiting.Clear();
@@ -180,12 +179,20 @@ internal sealed class ShellThumbnails : IDisposable
             Monitor.PulseAll(gate);
         }
         job.Done.TrySetResult(null);
+        // Written and counted before the next thread starts, so its first picture follows the line.
         var name = Path.GetFileName(job.File);
         var seconds = stuckAfter.TotalSeconds.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture);
         log?.Invoke(count < MaxStuck
             ? $"thumbnail {name}: Windows' thumbnail handler gave no answer in {seconds} s; a new thread makes the next pictures ({count} left behind)"
             : $"thumbnail {name}: Windows' thumbnail handler gave no answer in {seconds} s, {count} times now; no more pictures until Armory starts again");
         stuck?.Invoke(job.File);
+        if (count >= MaxStuck) return;
+        lock (gate)
+        {
+            if (disposed) return;
+            worker = StartWorker();
+            Monitor.PulseAll(gate);
+        }
     }
 
     // Under gate. A missing picture stands for NoPictureFor only; a picture until its file changes.

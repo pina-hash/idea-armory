@@ -115,12 +115,13 @@ public sealed class ShellThumbnailsTests
     {
         using var folder = new TempFolder();
         using var hold = new ManualResetEventSlim();
+        using var started = new ManualResetEventSlim();
         var made = 0;
-        using var thumbnails = new ShellThumbnails(make: (_, _) => { hold.Wait(TimeSpan.FromSeconds(10)); Interlocked.Increment(ref made); return Picture; },
+        using var thumbnails = new ShellThumbnails(make: (_, _) => { started.Set(); hold.Wait(TimeSpan.FromSeconds(10)); Interlocked.Increment(ref made); return Picture; },
             answerWithin: TimeSpan.FromSeconds(10), stuckAfter: TimeSpan.FromSeconds(30));
         // The first is being made; the next 70 wait, and only the newest 64 of them stay.
         var first = thumbnails.GetAsync(Part(folder, "Row-0000.SLDPRT"));
-        await Task.Delay(100);
+        Assert.True(started.Wait(TimeSpan.FromSeconds(5)));
         var rows = Enumerable.Range(1, 70).Select(i => thumbnails.GetAsync(Part(folder, $"Row-{i:0000}.SLDPRT"))).ToList();
         var dropped = await Task.WhenAll(rows.Take(6)).WaitAsync(TimeSpan.FromSeconds(2));
         Assert.All(dropped, Assert.Null);
