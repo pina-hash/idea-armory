@@ -71,6 +71,7 @@ internal sealed partial class AgentHost : IAsyncDisposable
         // that a new version still uses the sign-in an older one saved.
         log.Info(Sessions.Current is { } saved ? "session loaded for " + saved.Email : "no saved session");
         hintTimer = new System.Threading.Timer(_ => PollHints(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        thumbnails = new ShellThumbnails(log.Info, file => telemetry.Recorder.Note("thumbnailStuck", Path.GetFileName(file)));
         telemetry.Attach(() => Sessions.Current, DescribeAsync, DescribeNow, Api, () => Blobs.ActiveTransfers > 0, Feedback);
         AttachedTelemetry();
     }
@@ -146,10 +147,11 @@ internal sealed partial class AgentHost : IAsyncDisposable
     internal Task<ActionResult> TakeBackAsync(Guid fileId) => OnEngineAsync("take back", e => e.TakeBackAsync(fileId));
     // File detail's Put back on this computer: one of your kept copies, checked out to you (feedback N4).
     internal Task<ActionResult> PutBackKeptCopyAsync(Guid fileId, Guid versionId) => OnEngineAsync("put back a kept copy", e => e.PutBackKeptCopyAsync(fileId, versionId));
-    // The picture File Explorer shows for a file in the vault (ShellThumbnails), or null.
+    // The picture File Explorer shows for a file in the vault (ShellThumbnails), or null. A
+    // handler's failure goes to agent.log, and one stuck on a file to the flight recorder too.
     internal Task<byte[]?> ThumbnailAsync(string vaultPath)
         => Volatile.Read(ref runtime)?.Windows?.ExistingFile(vaultPath) is { } file ? thumbnails.GetAsync(file) : Task.FromResult<byte[]?>(null);
-    private readonly ShellThumbnails thumbnails = new();
+    private readonly ShellThumbnails thumbnails;
     internal Task<ActionResult> TakeBackAsync(IReadOnlyList<Guid> fileIds) => OnEngineAsync("take back " + fileIds.Count + " files", e => e.TakeBackAsync(fileIds));
     // One file, in the same folder: a file Armory doesn't have yet is renamed on disk; a file in
     // Armory is renamed for everyone (refused while someone else has it checked out, unless force:

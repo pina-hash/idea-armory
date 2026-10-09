@@ -1,5 +1,4 @@
 using System.Buffers.Binary;
-using System.Collections.Concurrent;
 using System.IO.Compression;
 using System.Runtime.InteropServices;
 
@@ -8,68 +7,212 @@ namespace Armory.Agent;
 // A file's picture as File Explorer shows it, from Windows' own thumbnail handlers (SolidWorks
 // installs one for parts, assemblies and drawings), as PNG bytes, or null when Windows has no
 // picture for it. Only a real thumbnail, never the file type's icon (SIIGBF_THUMBNAILONLY):
-// the window keeps its own glyph for those. The handlers run on one STA thread of their own,
-// as some require, one file at a time, never on the window's thread; recent answers are kept
-// by path, size and time written, so a list scrolled back and forth asks Windows once.
+// the window keeps its own glyph for those. The handlers run on an STA thread of their own,
+// as some require, one file at a time, never on the window's thread.
+//
+// A handler is someone else's code, so nothing here waits on one for long (0.3.3, N15):
+//   - the window has its answer within AnswerWithin (5 s), null when the picture is late;
+//   - a handler stuck on one file for StuckAfter (20 s) is left behind on its thread, a new
+//     thread makes the next pictures, and the file is logged and counted (stuck: the flight
+//     recorder's thumbnailStuck); after MaxStuck such threads no more pictures are made until
+//     Armory starts again;
+//   - at most Waiting (64) pictures wait, the newest (the rows in view): an older one answers
+//     null at once, and two asks for one file share one picture;
+//   - answers are kept by path, size and time written, read before the picture is made (so a
+//     picture is never kept under bytes it wasn't made from), the last Kept of them; a file
+//     with no picture is asked again after NoPictureFor (60 s), since SolidWorks may have had
+//     it open, or Windows may still have been making it.
 internal sealed class ShellThumbnails : IDisposable
 {
     internal const int Size = 192;
-    private const int Kept = 600;
-    private readonly BlockingCollection<(string File, TaskCompletionSource<byte[]?> Done)> queue = new();
-    private readonly Thread thread;
-    private readonly object gate = new();
-    private readonly Dictionary<(string File, long Length, long Written), byte[]?> cache = [];
-    private readonly Queue<(string File, long Length, long Written)> order = new();
-    private readonly Action<string>? log;
+    internal const int Kept = 600;
+    internal const int Waiting = 64;
+    internal const int MaxStuck = 3;
+    internal static readonly TimeSpan AnswerWithin = TimeSpan.FromSeconds(5);
+    internal static readonly TimeSpan StuckAfter = TimeSpan.FromSeconds(20);
+    internal static readonly TimeSpan NoPictureFor = TimeSpan.FromSeconds(60);
 
-    internal ShellThumbnails(Action<string>? log = null)
+    private readonly object gate = new();
+    private readonly Dictionary<Key, Answer> cache = [];
+    private readonly Queue<Key> order = new();
+    private readonly LinkedList<Job> waiting = new();
+    // Every picture asked for and not answered yet (waiting, or being made): another ask for
+    // the same file joins it.
+    private readonly Dictionary<Key, Job> asked = [];
+    private readonly Func<string, int, byte[]?> make;
+    private readonly Action<string>? log;
+    private readonly Action<string>? stuck;
+    private readonly TimeProvider clock;
+    private readonly TimeSpan answerWithin;
+    private readonly TimeSpan stuckAfter;
+    private readonly ITimer watchdog;
+    private Worker worker;
+    private int stuckThreads;
+    private bool disposed;
+
+    // log: a line for agent.log; stuck: the file a handler got stuck on (the flight recorder).
+    // Tests pass their own make, clock and waits; the app uses Windows' handlers (Make).
+    internal ShellThumbnails(Action<string>? log = null, Action<string>? stuck = null, Func<string, int, byte[]?>? make = null,
+        TimeProvider? clock = null, TimeSpan? answerWithin = null, TimeSpan? stuckAfter = null)
     {
         this.log = log;
-        thread = new Thread(Run) { IsBackground = true, Name = "Armory thumbnails" };
-        // The shell's thumbnails are COM, Windows only (a test host elsewhere gets none).
-        if (OperatingSystem.IsWindows()) thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
+        this.stuck = stuck;
+        this.make = make ?? Make;
+        this.clock = clock ?? TimeProvider.System;
+        this.answerWithin = answerWithin ?? AnswerWithin;
+        this.stuckAfter = stuckAfter ?? StuckAfter;
+        worker = StartWorker();
+        var look = this.stuckAfter / 4;
+        watchdog = this.clock.CreateTimer(_ => Watch(), null, look, look);
     }
+
+    // How many handler threads were left behind, stuck.
+    internal int StuckThreads { get { lock (gate) return stuckThreads; } }
 
     internal Task<byte[]?> GetAsync(string file)
     {
+        // The key first: a picture is kept under the bytes it was asked for.
         var key = KeyOf(file);
         if (key is null) return Task.FromResult<byte[]?>(null);
-        lock (gate) if (cache.TryGetValue(key.Value, out var known)) return Task.FromResult(known);
-        var done = new TaskCompletionSource<byte[]?>(TaskCreationOptions.RunContinuationsAsynchronously);
-        try { queue.Add((file, done)); }
-        catch (InvalidOperationException) { done.TrySetResult(null); } // disposed
-        return done.Task;
+        Job? job;
+        Job? dropped = null;
+        lock (gate)
+        {
+            if (disposed || stuckThreads >= MaxStuck) return Task.FromResult<byte[]?>(null);
+            if (cache.TryGetValue(key.Value, out var known) && (known.Until is not { } until || clock.GetUtcNow() < until)) return Task.FromResult(known.Png);
+            if (!asked.TryGetValue(key.Value, out job))
+            {
+                job = new Job(file, key.Value);
+                asked[key.Value] = job;
+                waiting.AddLast(job);
+                // The newest wait (the rows in view); the oldest gives way.
+                if (waiting.Count > Waiting)
+                {
+                    dropped = waiting.First!.Value;
+                    waiting.RemoveFirst();
+                    asked.Remove(dropped.Key);
+                }
+                Monitor.PulseAll(gate);
+            }
+        }
+        dropped?.Done.TrySetResult(null);
+        return InTime(job.Done.Task);
     }
 
-    private static (string, long, long)? KeyOf(string file)
+    private async Task<byte[]?> InTime(Task<byte[]?> made)
+    {
+        try { return await made.WaitAsync(answerWithin, clock); }
+        catch (TimeoutException) { return null; }
+    }
+
+    private static Key? KeyOf(string file)
     {
         try
         {
             var info = new FileInfo(file);
-            return info.Exists ? (info.FullName.ToUpperInvariant(), info.Length, info.LastWriteTimeUtc.Ticks) : null;
+            return info.Exists ? new Key(info.FullName.ToUpperInvariant(), info.Length, info.LastWriteTimeUtc.Ticks) : null;
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { return null; }
     }
 
-    private void Run()
+    private Worker StartWorker()
     {
-        foreach (var (file, done) in queue.GetConsumingEnumerable())
+        var next = new Worker();
+        var thread = new Thread(() => Run(next)) { IsBackground = true, Name = "Armory thumbnails" };
+        // The shell's thumbnails are COM, Windows only (a test host elsewhere gets none).
+        if (OperatingSystem.IsWindows()) thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        return next;
+    }
+
+    private void Run(Worker me)
+    {
+        while (true)
         {
+            Job job;
+            lock (gate)
+            {
+                while (!disposed && !me.LeftBehind && waiting.Count == 0) Monitor.Wait(gate);
+                if (disposed || me.LeftBehind) return;
+                job = waiting.First!.Value;
+                waiting.RemoveFirst();
+                me.Current = job;
+                me.Since = clock.GetTimestamp();
+            }
             byte[]? png = null;
-            try { png = Make(file, Size); }
+            try { png = make(job.File, Size); }
             // Whatever a handler throws, this thread goes on to the next file (one that ended would
             // leave every later picture waiting).
             catch (Exception error) when (error is not OutOfMemoryException)
-            { log?.Invoke($"thumbnail {Path.GetFileName(file)}: {error.GetType().Name}: {error.Message}"); }
-            if (KeyOf(file) is { } key)
-                lock (gate)
-                {
-                    if (cache.TryAdd(key, png)) order.Enqueue(key);
-                    while (order.Count > Kept) cache.Remove(order.Dequeue());
-                }
-            done.TrySetResult(png);
+            { log?.Invoke($"thumbnail {Path.GetFileName(job.File)}: {error.GetType().Name}: {error.Message}"); }
+            lock (gate)
+            {
+                // A thread left behind that answers after all: its picture is still good.
+                if (!disposed) Remember(job.Key, png);
+                if (asked.TryGetValue(job.Key, out var same) && same == job) asked.Remove(job.Key);
+                me.Current = null;
+            }
+            job.Done.TrySetResult(png);
         }
+    }
+
+    // A handler stuck on one file is left behind with its thread; a new thread takes the rest.
+    private void Watch()
+    {
+        Job? job;
+        int count;
+        lock (gate)
+        {
+            job = worker.Current;
+            if (disposed || job is null || worker.LeftBehind || clock.GetElapsedTime(worker.Since) < stuckAfter) return;
+            worker.LeftBehind = true;
+            if (asked.TryGetValue(job.Key, out var same) && same == job) asked.Remove(job.Key);
+            // Not that file again for a while: the next thread would likely stick on it too.
+            Remember(job.Key, null);
+            count = ++stuckThreads;
+            if (count < MaxStuck) worker = StartWorker();
+            else
+            {
+                foreach (var left in waiting) left.Done.TrySetResult(null);
+                waiting.Clear();
+                asked.Clear();
+            }
+            Monitor.PulseAll(gate);
+        }
+        job.Done.TrySetResult(null);
+        var name = Path.GetFileName(job.File);
+        var seconds = stuckAfter.TotalSeconds.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture);
+        log?.Invoke(count < MaxStuck
+            ? $"thumbnail {name}: Windows' thumbnail handler gave no answer in {seconds} s; a new thread makes the next pictures ({count} left behind)"
+            : $"thumbnail {name}: Windows' thumbnail handler gave no answer in {seconds} s, {count} times now; no more pictures until Armory starts again");
+        stuck?.Invoke(job.File);
+    }
+
+    // Under gate. A missing picture stands for NoPictureFor only; a picture until its file changes.
+    private void Remember(Key key, byte[]? png)
+    {
+        if (!cache.ContainsKey(key)) order.Enqueue(key);
+        cache[key] = new Answer(png, png is null ? clock.GetUtcNow() + NoPictureFor : null);
+        while (cache.Count > Kept && order.TryDequeue(out var old)) cache.Remove(old);
+    }
+
+    private readonly record struct Key(string File, long Length, long Written);
+
+    private sealed record Answer(byte[]? Png, DateTimeOffset? Until);
+
+    private sealed class Job(string file, Key key)
+    {
+        internal string File { get; } = file;
+        internal Key Key { get; } = key;
+        internal TaskCompletionSource<byte[]?> Done { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    // One handler thread: the picture it is making, since when, and whether it was left behind.
+    private sealed class Worker
+    {
+        internal Job? Current;
+        internal long Since;
+        internal bool LeftBehind;
     }
 
     // One file's thumbnail at most size pixels on its longer side, as PNG; null when there is none.
@@ -179,8 +322,18 @@ internal sealed class ShellThumbnails : IDisposable
 
     public void Dispose()
     {
-        queue.CompleteAdding();
-        while (queue.TryTake(out var left)) left.Done.TrySetResult(null);
+        List<Job> left;
+        lock (gate)
+        {
+            if (disposed) return;
+            disposed = true;
+            left = [.. waiting];
+            waiting.Clear();
+            asked.Clear();
+            Monitor.PulseAll(gate);
+        }
+        watchdog.Dispose();
+        foreach (var job in left) job.Done.TrySetResult(null);
     }
 
     private const int ThumbnailOnly = 0x08, BiggerSizeOk = 0x01;
