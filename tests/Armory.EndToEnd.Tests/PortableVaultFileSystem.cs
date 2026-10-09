@@ -163,6 +163,19 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
     // on, so their scans cost what a Windows scan does.
     public bool ReuseHashes { get; set; }
     private Dictionary<string, (long Size, DateTime Written, DateTimeOffset HashedAt, string Hash)> hashed = new(StringComparer.OrdinalIgnoreCase);
+    // Files the scans read and hashed (with ReuseHashes, only the ones that changed).
+    public int ScanHashes { get; private set; }
+
+    // As the Windows adapter (LocalChangeDetector.Seed): bytes Armory wrote itself through
+    // private staging are known by their hash while the file's size and last-write time stay
+    // what they are now, so the next scan does not read them again.
+    public void Wrote(VaultPath path, string hash)
+    {
+        if (!ReuseHashes) return;
+        var info = new FileInfo(Full(path.Value));
+        if (!info.Exists) return;
+        lock (gate) hashed[path.Value] = (info.Length, info.LastWriteTimeUtc, new DateTimeOffset(info.LastWriteTimeUtc) + RacyWindow, hash);
+    }
 
     public VaultScan Scan() => Scan(CancellationToken.None);
 
@@ -203,18 +216,27 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
             {
                 var info = new FileInfo(full);
                 var written = info.LastWriteTimeUtc;
-                bool bit;
-                lock (gate) bit = readOnlyBits.Contains(path.Value);
-                if (ReuseHashes && hashed.TryGetValue(path.Value, out var known) && known.Size == info.Length && known.Written == written &&
-                    (known.HashedAt.UtcDateTime - written).Duration() >= RacyWindow)
+                bool bit, reuse;
+                (long Size, DateTime Written, DateTimeOffset HashedAt, string Hash) known = default;
+                lock (gate)
                 {
-                    files.Add(new LocalFile(path, known.Hash, known.Size, bit, Stamp: new FileStamp(path.Value, written, known.HashedAt)));
+                    bit = readOnlyBits.Contains(path.Value);
+                    reuse = ReuseHashes && hashed.TryGetValue(path.Value, out known) && known.Size == info.Length && known.Written == written &&
+                        (known.HashedAt.UtcDateTime - written).Duration() >= RacyWindow;
+                }
+                if (reuse)
+                {
+                    files.Add(new LocalFile(path, known.Hash!, known.Size, bit, Stamp: new FileStamp(path.Value, written, known.HashedAt)));
                     continue;
                 }
                 var bytes = File.ReadAllBytes(full);
                 var hash = Convert.ToHexStringLower(SHA256.HashData(bytes));
                 var now = DateTimeOffset.UtcNow;
-                if (ReuseHashes) hashed[path.Value] = (bytes.Length, written, now, hash);
+                lock (gate)
+                {
+                    ScanHashes++;
+                    if (ReuseHashes) hashed[path.Value] = (bytes.Length, written, now, hash);
+                }
                 files.Add(new LocalFile(path, hash, bytes.Length, bit, Stamp: new FileStamp(path.Value, written, now)));
             }
             catch (IOException error) { problems.Add($"{relative}: {error.Message}"); }

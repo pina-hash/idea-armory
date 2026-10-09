@@ -67,6 +67,9 @@ internal sealed class LatencyHandler(LatencyProfile profile, int sitePort, int r
     public Func<string, TimeSpan>? RpcDelay { get; set; }
     // A test's slow file storage on this computer only: extra time for one storage request.
     public Func<HttpRequestMessage, TimeSpan>? StorageDelay { get; set; }
+    // A test watching file storage: told when each storage request starts (true) and when it
+    // ends, answered or not (false), so it can see when no transfer was running at all.
+    public Action<HttpRequestMessage, bool>? StorageWatch { get; set; }
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
@@ -76,13 +79,19 @@ internal sealed class LatencyHandler(LatencyProfile profile, int sitePort, int r
             if (StorageFault?.Invoke(request) is { } refused) return refused;
             Interlocked.Increment(ref storageRequests);
             if (request.Method == HttpMethod.Get) Interlocked.Increment(ref storageGets);
-            var sent = request.Content?.Headers.ContentLength ?? 0;
-            await Task.Delay(Profile.StorageRoundTrip + Body(sent) + (StorageDelay?.Invoke(request) ?? TimeSpan.Zero), cancellationToken);
-            var response = await base.SendAsync(request, cancellationToken);
-            var received = request.Method == HttpMethod.Get && response.IsSuccessStatusCode ? response.Content.Headers.ContentLength ?? 0 : 0;
-            if (received > 0) await Task.Delay(Body(received), cancellationToken);
-            Interlocked.Add(ref storageBytes, sent + received);
-            return response;
+            var watch = StorageWatch;
+            watch?.Invoke(request, true);
+            try
+            {
+                var sent = request.Content?.Headers.ContentLength ?? 0;
+                await Task.Delay(Profile.StorageRoundTrip + Body(sent) + (StorageDelay?.Invoke(request) ?? TimeSpan.Zero), cancellationToken);
+                var response = await base.SendAsync(request, cancellationToken);
+                var received = request.Method == HttpMethod.Get && response.IsSuccessStatusCode ? response.Content.Headers.ContentLength ?? 0 : 0;
+                if (received > 0) await Task.Delay(Body(received), cancellationToken);
+                Interlocked.Add(ref storageBytes, sent + received);
+                return response;
+            }
+            finally { watch?.Invoke(request, false); }
         }
         if (uri.Port == sitePort)
         {

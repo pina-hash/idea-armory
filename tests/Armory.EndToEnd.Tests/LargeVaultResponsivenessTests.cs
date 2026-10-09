@@ -246,7 +246,7 @@ public sealed class LargeVaultResponsivenessTests(LargeVault vault, ITestOutputH
     [PostgresFact]
     public async Task A_folder_delete_answers_at_once()
     {
-        var answer = await Click("deleteFolder (100 files)", () => B.Engine.DeleteFolderAsync(vault.Project, "Vault/S03"), "Deleting the folder S03");
+        var answer = await Click("deleteFolder (100 files)", () => B.Engine.DeleteFolderAsync(vault.Project, "Vault/S03"), "Deleting S03 (100 files)");
         Assert.True(answer.Ok, answer.Message);
     }
 

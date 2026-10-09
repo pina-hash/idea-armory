@@ -184,6 +184,9 @@ internal sealed class Computer : IAsyncDisposable
     public int EngineStackBytes { get; set; }
     // A loop pass's slice (EngineOptions.PassSlice); null is the default.
     public TimeSpan? PassSlice { get; set; }
+    // How long a transfer may move no bytes before it counts as stalled (BlobClient.StallAfter);
+    // null is the default.
+    public TimeSpan? StallAfter { get; set; }
     // The loop's poll, active and idle alike (null: the engine's defaults). A long one shows that
     // only live updates could have brought a change sooner.
     public TimeSpan? Poll { get; set; }
@@ -232,7 +235,8 @@ internal sealed class Computer : IAsyncDisposable
         }, new EngineDependencies
         {
             Files = Disk, Journal = Journal, Snapshots = Snapshots, State = State, Sessions = Sessions, Api = api,
-            Blobs = new BlobClient(http, http, world.Site.BaseUri, Sessions, Flight), ReleaseReader = ReleaseReader, Clock = Clock,
+            Blobs = new BlobClient(http, http, world.Site.BaseUri, Sessions, Flight) { StallAfter = StallAfter ?? BlobClient.DefaultStallAfter },
+            ReleaseReader = ReleaseReader, Clock = Clock,
             Log = line => { lock (Logged) Logged.Add(line); }, Recorder = Flight, Live = Feed,
         })
         { CrashPoint = CrashPoint };
