@@ -35,12 +35,15 @@ public sealed partial class AgentViewContractTests
         var code = Code(BridgeJs());
         var required = RequiredFields(code);
         var actions = StringArray(code, "ACTIONS");
-        foreach (var type in required.Keys.Concat(actions))
+        // Asks (0.3.3) carry a requestId too, answered by their own message (windowShot, myFeedback).
+        var asks = StringArray(code, "ASKS");
+        Assert.Empty(actions.Intersect(asks));
+        foreach (var type in required.Keys.Concat(actions).Concat(asks))
             Assert.True(BridgeMessages.PageToHost.Contains(type), $"bridge.js names fields for '{type}', which is not a page-to-host message.");
         foreach (var type in BridgeMessages.PageToHost)
         {
             var sent = (required.TryGetValue(type, out var fields) ? fields : []).ToList();
-            if (actions.Contains(type)) sent.Add("requestId");
+            if (actions.Contains(type) || asks.Contains(type)) sent.Add("requestId");
             var record = Bridge.MessageRecords[type];
             var read = record is null ? [] : JsonNames(record);
             Assert.True(Sorted(sent).SequenceEqual(Sorted(read)),
@@ -82,10 +85,15 @@ public sealed partial class AgentViewContractTests
             new WaitingView(1, "1 file is waiting to upload. It uploads when this computer is back online."),
             [new ActiveTransferView("Robot/Plate.SLDPRT", "Plate.SLDPRT", Directions.Download, 10240, 20480)],
             [new ActivityLineView("2026-10-08T18:24:58.0000000Z", "Downloaded Plate.SLDPRT (20 KB)")]);
+        var note = new FeedbackNoteView("0f000000-0000-0000-0000-000000000001", "2026-10-09T15:02:11Z", "bug", "Spins.", null, "Home", true, "0.3.3",
+            "LAB-PC-07", "seen", "Read by the IDEA team", "2026-10-09T18:40:00Z");
         foreach (var (type, json) in new[]
         {
             (BridgeMessages.Activity, BridgeMessages.ActivityMessage(activity)),
             (BridgeMessages.ActionResult, BridgeMessages.ActionResultMessage("r7", false, "Close Plate.SLDPRT in SolidWorks first.")),
+            (BridgeMessages.ActionResult, BridgeMessages.ActionResultMessage("r8", false, "Your note wasn't sent.", ActionResult.WithoutPicture)),
+            (BridgeMessages.WindowShot, BridgeMessages.WindowShotMessage("r9", new WindowShotView(true, new string('a', 32), "https://armory.local/shot/x.png", 1120, 760, 219113, false, null))),
+            (BridgeMessages.MyFeedback, BridgeMessages.MyFeedbackMessage("r10", new FeedbackListView(FeedbackListView.Shown, true, null, [note]))),
         })
         {
             using var document = JsonDocument.Parse(json);

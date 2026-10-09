@@ -29,8 +29,15 @@ internal sealed record DismissNoticeMessage(string? Key);
 internal sealed record SaveSettingsMessage(string? VaultRoot, bool? StartAtSignIn, string? Theme);
 // Report a problem: kind is bug, idea or other; body is what the person wrote.
 internal sealed record ReportProblemMessage(string? Kind, string? Body, string? RequestId);
-// Send feedback (v0.3): kind is bug, idea or other; body is what the person wrote. A note on its own.
-internal sealed record SendFeedbackMessage(string? Kind, string? Body, string? RequestId);
+// Send feedback (0.3.3, the same as the website's): kind is bug, idea, praise or other; body is
+// what the person wrote, tried what they tried (or null), area the window or view it is about,
+// shot the id of the picture of the window captureWindow answered with (or null). A note on its own.
+internal sealed record SendFeedbackMessage(string? Kind, string? Body, string? Tried, string? Area, string? Shot, string? RequestId);
+// Send feedback's "Add a picture of this window": the page's size in CSS pixels. Answered with
+// windowShot, never actionResult.
+internal sealed record CaptureWindowMessage(int? Width, int? Height, string? RequestId);
+// "Your feedback": answered with myFeedback, never actionResult.
+internal sealed record ReadMyFeedbackMessage(string? RequestId);
 
 // What the bridge needs from the window it lives in. Every member runs on the UI thread.
 internal interface IBridgeWindow
@@ -40,7 +47,14 @@ internal interface IBridgeWindow
     // Add files: the Windows file picker, several files at once. Null when the student cancels.
     IReadOnlyList<string>? ChooseFiles(string title);
     void ShowProblem(string message);
+    // Send feedback's picture: what the window's own page draws (never the screen, never another
+    // window), as PNG, taken again smaller while it is over FeedbackScreenshots.MaximumBytes (at
+    // most three times). cssWidth and cssHeight are the page's size. Null when it can't be taken.
+    Task<WindowCapture?> CaptureWindowAsync(int cssWidth, int cssHeight);
 }
+
+// One picture of the window as taken: the PNG bytes, and whether it was taken again smaller.
+internal sealed record WindowCapture(byte[] Png, bool Scaled);
 
 // Dispatches exactly BridgeMessages.PageToHost, one case each (AgentViewContractTests checks
 // that no type is left to the default). Unknown or malformed messages are ignored; an
@@ -83,6 +97,8 @@ internal sealed class Bridge(AgentHost host, IBridgeWindow window, AgentLog log)
         [BridgeMessages.TakeBackAll] = typeof(TakeBackAllMessage),
         [BridgeMessages.TakeOverFolder] = typeof(TakeOverFolderMessage),
         [BridgeMessages.SwitchAccount] = null,
+        [BridgeMessages.CaptureWindow] = typeof(CaptureWindowMessage),
+        [BridgeMessages.ReadMyFeedback] = typeof(ReadMyFeedbackMessage),
     };
 
     // The answer to an action the window sent with something unusable in it.
@@ -275,7 +291,16 @@ internal sealed class Bridge(AgentHost host, IBridgeWindow window, AgentLog log)
                     break;
                 case BridgeMessages.SendFeedback:
                     var note = Read<SendFeedbackMessage>(message);
-                    await AnswerAsync(type, 0, asked, note?.RequestId, host.SendFeedbackAsync(note?.Kind, note?.Body));
+                    await AnswerAsync(type, 0, asked, note?.RequestId, note?.Shot is { } shot && !WindowShots.IsId(shot)
+                        ? Refuse(new ActionResult(false, WindowShots.Gone, ActionResult.WithoutPicture))
+                        : host.SendFeedbackAsync(note?.Kind, note?.Body, note?.Tried, note?.Area, note?.Shot));
+                    break;
+                case BridgeMessages.CaptureWindow:
+                    await CaptureWindowAsync(Read<CaptureWindowMessage>(message));
+                    break;
+                case BridgeMessages.ReadMyFeedback:
+                    var mine = Read<ReadMyFeedbackMessage>(message);
+                    window.Post(BridgeMessages.MyFeedbackMessage(mine?.RequestId, await host.ReadMyFeedbackAsync()));
                     break;
                 case BridgeMessages.OpenIncidents:
                     // The incidents folder, so a person can hand the files over by hand today.
@@ -314,9 +339,33 @@ internal sealed class Bridge(AgentHost host, IBridgeWindow window, AgentLog log)
             host.Telemetry.Recorder.Exception("window action " + type, error);
             result = new ActionResult(false, "Armory couldn't do that. Try again in a moment.");
         }
-        window.Post(BridgeMessages.ActionResultMessage(requestId, result.Ok, result.Message));
+        window.Post(BridgeMessages.ActionResultMessage(requestId, result.Ok, result.Message, result.Offer));
         var recorder = host.Telemetry.Recorder;
         recorder.WindowAction(type, targets, recorder.MillisecondsSince(asked), result.Ok);
+    }
+
+    // Send feedback's picture of the window: taken by the window (its page only), kept by the host
+    // in memory, and answered with windowShot, refusals included. The page hid the dialog and the
+    // things a picture must not show before it asked.
+    private async Task CaptureWindowAsync(CaptureWindowMessage? request)
+    {
+        WindowShotView answer;
+        if (request is not { Width: >= 1 and <= WindowShots.MaximumSide, Height: >= 1 and <= WindowShots.MaximumSide })
+            answer = WindowShots.Refused(WindowShots.NotTaken);
+        else
+        {
+            WindowCapture? capture;
+            try { capture = await window.CaptureWindowAsync(request.Width!.Value, request.Height!.Value); }
+            catch (Exception error) when (error is not OutOfMemoryException)
+            {
+                log.Error("send feedback: the picture of the window could not be taken", error);
+                capture = null;
+            }
+            answer = host.Shots.Answer(capture);
+            log.Info(answer.Ok ? $"send feedback: a picture of the window, {answer.Width}x{answer.Height}, {answer.Bytes} bytes{(answer.Scaled ? ", made smaller" : "")}"
+                : "send feedback: no picture of the window: " + answer.Message);
+        }
+        window.Post(BridgeMessages.WindowShotMessage(request?.RequestId, answer));
     }
 
     private static Task<ActionResult> Refuse(ActionResult why) => Task.FromResult(why);

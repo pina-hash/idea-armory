@@ -172,21 +172,7 @@ internal sealed partial class AgentHost : IAsyncDisposable
         }
     }
 
-    // "Send feedback" (v0.3): the words as a note on its own, saved here and sent when the site
-    // can take them. One sentence back, never an error for a site that isn't ready.
-    internal async Task<ActionResult> SendFeedbackAsync(string? kind, string? body)
-    {
-        try
-        {
-            var (ok, message) = await Telemetry.SendFeedbackAsync(kind, body).ConfigureAwait(false);
-            return new ActionResult(ok, message);
-        }
-        catch (Exception error) when (error is not OutOfMemoryException)
-        {
-            log.Error("send feedback failed", error);
-            return new ActionResult(false, "Armory couldn't save your feedback. Try again in a moment.");
-        }
-    }
+    // "Send feedback" and "Your feedback": AgentHost.Feedback.cs.
 
     // The engine's compact snapshot for an incident, with what the host knows (at once when the
     // engine is not running).

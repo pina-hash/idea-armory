@@ -3930,6 +3930,151 @@ dialog.housing.ask {
 	gap: var(--space-2);
 }
 
+/* ---- Send feedback and Your feedback (0.3.3) ---- */
+
+/* Four kinds in a row; two by two in a narrow window. */
+.segmented.feedback-kinds {
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+@media (max-width: 560px) {
+	.segmented.feedback-kinds {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+}
+/* What was tried: the same well, three lines tall, with its count under it near the limit. */
+.field-tried {
+	min-height: 5rem;
+	resize: vertical;
+}
+.field-count {
+	min-height: 1.2em;
+	margin-top: -0.5rem;
+	font-size: 0.8rem;
+	line-height: 1.2;
+	text-align: right;
+	color: var(--plate-ink-2);
+}
+/* The window or view the note is about, filled in by the page and read only. */
+.ask-about {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 0.5rem;
+	font-size: 0.9rem;
+	line-height: 1.4;
+	color: var(--plate-ink);
+}
+.ask-about .label {
+	color: var(--plate-caption);
+}
+.ask-about-where {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+/* The picture of the window, at the dialog's width, exactly as it would be sent. */
+.ask-shot {
+	display: grid;
+	justify-items: start;
+	gap: var(--space-2);
+}
+.ask-shot .setting-help {
+	margin-top: -0.25rem;
+}
+.shot-figure {
+	display: grid;
+	gap: var(--space-2);
+	width: 100%;
+	margin: 0;
+}
+.shot-img {
+	display: block;
+	box-sizing: border-box;
+	width: 100%;
+	height: auto;
+	border: 1px solid var(--plate-hair);
+	border-radius: var(--plate-r-small);
+	background-color: var(--plate-list-face);
+}
+.shot-caption {
+	font-size: 0.85rem;
+	line-height: 1.45;
+	color: var(--plate-ink-2);
+	text-wrap: pretty;
+}
+/* "Your feedback" sits at the left end of the keys, apart from Send. */
+.ask-mine,
+.set-mine {
+	display: contents;
+}
+.ask-keys .textlink {
+	margin-right: auto;
+}
+/* While the host takes the picture, the dialog and its scrim are out of it, and so are the
+   pictures of file contents (the glyph under each shows instead). */
+dialog.housing.away {
+	visibility: hidden;
+}
+dialog.housing.away::backdrop {
+	background: transparent;
+	backdrop-filter: none;
+}
+html.shooting img.thumb {
+	visibility: hidden;
+}
+html.shooting .thumb-slot[data-thumb='on'] .thumb-glyph {
+	visibility: visible;
+}
+/* Your feedback: each note on a quiet card, its kind and where it is, the first lines of its
+   words, what was tried, and when and from where. */
+.mine-notes {
+	display: grid;
+	gap: var(--space-2);
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+.mine-note {
+	display: grid;
+	gap: 0.4rem;
+	padding: var(--space-3);
+	border: 1px solid var(--plate-hair);
+	border-radius: var(--plate-r-small);
+	background-color: var(--plate-list-face);
+}
+.mine-top {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.5rem;
+}
+.mine-kind {
+	font-family: var(--font-mono);
+	font-size: 0.75rem;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: var(--plate-ink);
+}
+.mine-body {
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 3;
+	overflow: hidden;
+	font-size: 0.95rem;
+	line-height: 1.45;
+	overflow-wrap: anywhere;
+	color: var(--plate-ink);
+}
+.mine-tried,
+.mine-meta {
+	font-size: 0.85rem;
+	line-height: 1.45;
+	overflow-wrap: anywhere;
+	color: var(--plate-ink-2);
+}
+.mine-tried .label {
+	color: var(--plate-caption);
+}
+
 /* ---- What the host said about the last action ---- */
 
 /* A small raised tag at the window's foot, never a key and never in the way of a click;

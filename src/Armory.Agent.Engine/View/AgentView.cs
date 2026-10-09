@@ -58,8 +58,34 @@ public sealed record NoticeActionView(string Label, string Command, IReadOnlyLis
 public sealed record NoticeItemView(string? FileId, string Path, string Name, string? Detail);
 
 // What an action from the window came to, in one plain sentence (v2-design.md 4.2):
-// "Checked in Plate.SLDPRT.", "Close Plate.SLDPRT in SolidWorks first."
-public sealed record ActionResult(bool Ok, string Message);
+// "Checked in Plate.SLDPRT.", "Close Plate.SLDPRT in SolidWorks first." Offer is what the window
+// may offer next, or null: WithoutPicture after Send feedback with a picture that couldn't go
+// (the same note again without it).
+public sealed record ActionResult(bool Ok, string Message, string? Offer = null)
+{
+    public const string WithoutPicture = "withoutPicture";
+}
+
+// Send feedback's picture of the Armory window (the answer to captureWindow), held by the host in
+// memory only and shown to the person exactly as it would be sent: Url serves those very bytes
+// (https://armory.local/shot/<id>.png, never cached). Width and Height are the PNG's pixels,
+// Bytes its size, Scaled true when it was taken again smaller to fit 2 MB. Not Ok: Message says
+// why in one sentence, and the note can go without a picture.
+public sealed record WindowShotView(bool Ok, string? Id, string? Url, int Width, int Height, long Bytes, bool Scaled, string? Message);
+
+// One note of "Your feedback" (armory_my_app_feedback), newest first. CreatedAt and ReviewedAt:
+// ISO-8601 UTC. Status: new, seen, resolved or closed (spam reads closed); StatusWords in plain
+// words: "Not read yet", "Read by the IDEA team", "Done", "Closed". There are no replies.
+public sealed record FeedbackNoteView(string Id, string CreatedAt, string Kind, string Body, string? Tried, string? Area, bool HasScreenshot,
+    string AppVersion, string? DeviceName, string Status, string StatusWords, string? ReviewedAt);
+
+// "Your feedback" (the answer to readMyFeedback). State: shown (Notes), missing (the website
+// doesn't have it yet: the window hides it), offline, signedOut or failed (Message says so).
+// Pictures: Send feedback may offer a picture of the window (the website takes them).
+public sealed record FeedbackListView(string State, bool Pictures, string? Message, IReadOnlyList<FeedbackNoteView> Notes)
+{
+    public const string Shown = "shown", Missing = "missing", Offline = "offline", SignedOut = "signedOut", Failed = "failed";
+}
 
 public static class Connections
 {
@@ -104,16 +130,22 @@ public static class HistoryKinds
 public static class BridgeMessages
 {
     public const string View = "view", FileDetail = "fileDetail", Activity = "activity", ActionResult = "actionResult";
-    public static readonly IReadOnlyList<string> HostToPage = [View, FileDetail, Activity, ActionResult];
+    // Send feedback's picture of the window and "Your feedback" (0.3.3): answers to captureWindow
+    // and readMyFeedback, each with the requestId it answers.
+    public const string WindowShot = "windowShot", MyFeedback = "myFeedback";
+    public static readonly IReadOnlyList<string> HostToPage = [View, FileDetail, Activity, ActionResult, WindowShot, MyFeedback];
     public const string Ready = "ready", Connect = "connect", CancelConnect = "cancelConnect", SignOut = "signOut", Pause = "pause", Resume = "resume",
         OpenVault = "openVault", OpenFile = "openFile", LaunchFile = "launchFile", ShowInFolder = "showInFolder", CheckOut = "checkOut", CheckIn = "checkIn",
         UndoCheckOut = "undoCheckOut", TakeBack = "takeBack", CreateFolder = "createFolder", RenameFolder = "renameFolder", DeleteFolder = "deleteFolder",
         RenameFile = "renameFile", AddFiles = "addFiles", DropFiles = "dropFiles", DismissNotice = "dismissNotice", SaveSettings = "saveSettings",
         ChooseVaultRoot = "chooseVaultRoot", ReportProblem = "reportProblem", OpenIncidents = "openIncidents", SendFeedback = "sendFeedback", TakeBackAll = "takeBackAll",
         TakeOverFolder = "takeOverFolder", SwitchAccount = "switchAccount";
+    // Asks (0.3.3): each carries a requestId and is answered by its own message, not actionResult.
+    public const string CaptureWindow = "captureWindow", ReadMyFeedback = "readMyFeedback";
     public static readonly IReadOnlyList<string> PageToHost = [Ready, Connect, CancelConnect, SignOut, Pause, Resume, OpenVault, OpenFile, LaunchFile, ShowInFolder,
         CheckOut, CheckIn, UndoCheckOut, TakeBack, CreateFolder, RenameFolder, DeleteFolder, RenameFile, AddFiles, DropFiles, DismissNotice, SaveSettings, ChooseVaultRoot,
-        ReportProblem, OpenIncidents, SendFeedback, TakeBackAll, TakeOverFolder, SwitchAccount];
+        ReportProblem, OpenIncidents, SendFeedback, TakeBackAll, TakeOverFolder, SwitchAccount,
+        CaptureWindow, ReadMyFeedback];
 
     public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
     {
@@ -122,7 +154,20 @@ public static class BridgeMessages
     public static string ViewMessage(AgentView view) => JsonSerializer.Serialize(new { type = View, view }, Json);
     public static string DetailMessage(FileDetailView detail) => JsonSerializer.Serialize(new { type = FileDetail, detail }, Json);
     public static string ActivityMessage(ActivityView activity) => JsonSerializer.Serialize(new { type = Activity, activity }, Json);
-    // The one answer to an action: the action's requestId comes back with it.
-    public static string ActionResultMessage(string? requestId, bool ok, string message)
-        => JsonSerializer.Serialize(new { type = ActionResult, requestId, ok, message }, Json);
+    // The one answer to an action: the action's requestId comes back with it. offer is null but
+    // after Send feedback with a picture that couldn't go (ActionResult.WithoutPicture).
+    public static string ActionResultMessage(string? requestId, bool ok, string message, string? offer = null)
+        => JsonSerializer.Serialize(new { type = ActionResult, requestId, ok, message, offer }, Json);
+
+    // The answer to captureWindow: the picture's fields beside the type and requestId.
+    public static string WindowShotMessage(string? requestId, WindowShotView shot)
+        => JsonSerializer.Serialize(new
+        {
+            type = WindowShot, requestId, ok = shot.Ok, id = shot.Id, url = shot.Url, width = shot.Width, height = shot.Height, bytes = shot.Bytes,
+            scaled = shot.Scaled, message = shot.Message,
+        }, Json);
+
+    // The answer to readMyFeedback: the list's fields beside the type and requestId.
+    public static string MyFeedbackMessage(string? requestId, FeedbackListView list)
+        => JsonSerializer.Serialize(new { type = MyFeedback, requestId, state = list.State, pictures = list.Pictures, message = list.Message, notes = list.Notes }, Json);
 }

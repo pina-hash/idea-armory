@@ -19,9 +19,14 @@
  * state can be drawn without a click:
  *   project=<projectId>  folder=<folder path in the project; empty for its top>
  *   select=<name>,<name> (files in that folder)  expand=<notice key>
- *   dialog=newFolder|renameFolder|deleteFolder|checkOutAll|takeBack|forceAll|renameFile|report
+ *   dialog=newFolder|renameFolder|deleteFolder|checkOutAll|takeBack|forceAll|renameFile|report|feedback|myFeedback
  *     (renameFile asks about the first file in the open notice list; forceAll is Force check
- *     in all for the open folder; report is Report a problem)
+ *     in all for the open folder; report is Report a problem; feedback is Send feedback;
+ *     myFeedback is the "Your feedback" list)
+ *   words=<text> (Send feedback opens with these words typed)
+ *   shot=1 (Send feedback takes a picture of the window once it is open; shot=offer then sends
+ *     it, and the demo answers that the picture can't go, offering the note without it)
+ *   feedback=shown|missing|offline (how the demo answers readMyFeedback; shown by default)
  *   press=<control key> (the page presses that key once it is drawn, and the demo holds every
  *     answer, so what a press shows while it waits stays in view)
  *   drag=1 (files held over the list)
@@ -259,8 +264,55 @@
 	 */
 
 	/**
+	 * Send feedback's picture of the Armory window (the answer to captureWindow; its fields come
+	 * flat in the windowShot message). The host keeps it in memory only and serves exactly the
+	 * bytes that would be sent at url (armory.local/shot/<id>.png, never cached).
+	 * @typedef {object} WindowShotView
+	 * @property {boolean} ok
+	 * @property {string | null} id         32 hex digits; sendFeedback's shot
+	 * @property {string | null} url
+	 * @property {number} width             the PNG's pixels
+	 * @property {number} height
+	 * @property {number} bytes             at most 2,097,152
+	 * @property {boolean} scaled           taken again smaller to fit 2 MB
+	 * @property {string | null} message    why there is no picture, when not ok
+	 */
+
+	/**
+	 * @typedef {'new' | 'seen' | 'resolved' | 'closed'} FeedbackStatus
+	 * @typedef {'shown' | 'missing' | 'offline' | 'signedOut' | 'failed'} FeedbackListState
+	 */
+
+	/**
+	 * One note of "Your feedback", newest first. There are no replies: the status is all there is.
+	 * @typedef {object} FeedbackNoteView
+	 * @property {string} id
+	 * @property {string} createdAt          ISO-8601 UTC
+	 * @property {string} kind               bug, idea, praise or other
+	 * @property {string} body
+	 * @property {string | null} tried
+	 * @property {string | null} area
+	 * @property {boolean} hasScreenshot
+	 * @property {string} appVersion
+	 * @property {string | null} deviceName  the computer it was sent from
+	 * @property {FeedbackStatus} status
+	 * @property {string} statusWords        "Not read yet", "Read by the IDEA team", "Done", "Closed"
+	 * @property {string | null} reviewedAt  ISO-8601 UTC
+	 */
+
+	/**
+	 * "Your feedback" (the answer to readMyFeedback; its fields come flat in the myFeedback message).
+	 * missing: the website doesn't have it yet, and the window hides it.
+	 * @typedef {object} FeedbackListView
+	 * @property {FeedbackListState} state
+	 * @property {boolean} pictures          Send feedback may offer a picture of the window
+	 * @property {string | null} message     offline or failed, in one sentence
+	 * @property {FeedbackNoteView[]} notes
+	 */
+
+	/**
 	 * Host to page.
-	 * @typedef {{ type: 'view', view: AgentView } | { type: 'fileDetail', detail: FileDetailView } | { type: 'activity', activity: ActivityView } | { type: 'actionResult', requestId: string, ok: boolean, message: string }} HostMessage
+	 * @typedef {{ type: 'view', view: AgentView } | { type: 'fileDetail', detail: FileDetailView } | { type: 'activity', activity: ActivityView } | { type: 'actionResult', requestId: string, ok: boolean, message: string, offer: string | null } | { type: 'windowShot', requestId: string, ok: boolean, id: string | null, url: string | null, width: number, height: number, bytes: number, scaled: boolean, message: string | null } | { type: 'myFeedback', requestId: string, state: FeedbackListState, pictures: boolean, message: string | null, notes: FeedbackNoteView[] }} HostMessage
 	 */
 
 	/**
@@ -283,14 +335,20 @@
 	 *   saveSettings: { vaultRoot, startAtSignIn, theme }
 	 *   reportProblem: { kind, body }         (kind: bug, idea or other; the host saves it with a
 	 *                                          fresh incident and answers in one sentence)
-	 *   sendFeedback: { kind, body }          (kind: bug, idea or other; a note on its own, no
-	 *                                          incident: armory_submit_app_feedback, one sentence back)
+	 *   sendFeedback: { kind, body, tried, area, shot }
+	 *                                         (kind: bug, idea, praise or other; tried and shot may be
+	 *                                          null; a note on its own, no incident; one sentence back,
+	 *                                          and offer: 'withoutPicture' when its picture couldn't go)
+	 *   captureWindow: { width, height }      (an ask: the host answers windowShot, a picture of this
+	 *                                          window only, after the page hid its dialog and masks)
+	 *   readMyFeedback: none                  (an ask: the host answers myFeedback)
 	 *   openIncidents: none                   (opens the incidents folder in File Explorer)
 	 * @typedef {'ready' | 'connect' | 'cancelConnect' | 'signOut' | 'pause' | 'resume'
 	 *   | 'openVault' | 'openFile' | 'launchFile' | 'showInFolder' | 'checkOut' | 'checkIn'
 	 *   | 'undoCheckOut' | 'takeBack' | 'createFolder' | 'renameFolder' | 'deleteFolder' | 'renameFile'
 	 *   | 'addFiles' | 'dropFiles' | 'dismissNotice' | 'saveSettings' | 'chooseVaultRoot'
-	 *   | 'reportProblem' | 'openIncidents' | 'sendFeedback' | 'takeBackAll' | 'takeOverFolder' | 'switchAccount'} PageMessageType
+	 *   | 'reportProblem' | 'openIncidents' | 'sendFeedback' | 'takeBackAll' | 'takeOverFolder' | 'switchAccount'
+	 *   | 'captureWindow' | 'readMyFeedback'} PageMessageType
 	 */
 
 	/**
@@ -303,19 +361,21 @@
 	 * @property {string | null} folder    a folder path in that project
 	 * @property {string[]} select         file names in that folder
 	 * @property {string | null} expand    a notice key
-	 * @property {string | null} dialog    newFolder, renameFolder, deleteFolder, checkOutAll, takeBack, forceAll, renameFile, report or feedback
+	 * @property {string | null} dialog    newFolder, renameFolder, deleteFolder, checkOutAll, takeBack, forceAll, renameFile, report, feedback or myFeedback
 	 * @property {boolean} drag
 	 * @property {string | null} at        a part of Home to scroll into view: browser
 	 * @property {string | null} press     a control key the page presses once it is drawn
+	 * @property {string | null} words     Send feedback opens with these words typed
+	 * @property {string | null} shot      1: Send feedback takes a picture; offer: and sends it, and the picture can't go
 	 */
 
 	/* ------------------------------------------------------- Message lists */
 
 	/** Page to host message types (BRIDGE.md, "Page to host"). */
-	var PAGE_TO_HOST = ['ready', 'connect', 'cancelConnect', 'signOut', 'pause', 'resume', 'openVault', 'openFile', 'launchFile', 'showInFolder', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'dismissNotice', 'saveSettings', 'chooseVaultRoot', 'reportProblem', 'openIncidents', 'sendFeedback', 'takeBackAll', 'takeOverFolder', 'switchAccount'];
+	var PAGE_TO_HOST = ['ready', 'connect', 'cancelConnect', 'signOut', 'pause', 'resume', 'openVault', 'openFile', 'launchFile', 'showInFolder', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'dismissNotice', 'saveSettings', 'chooseVaultRoot', 'reportProblem', 'openIncidents', 'sendFeedback', 'takeBackAll', 'takeOverFolder', 'switchAccount', 'captureWindow', 'readMyFeedback'];
 
 	/** Host to page message types (BRIDGE.md, "Host to page"). */
-	var HOST_TO_PAGE = ['view', 'fileDetail', 'activity', 'actionResult'];
+	var HOST_TO_PAGE = ['view', 'fileDetail', 'activity', 'actionResult', 'windowShot', 'myFeedback'];
 
 	/** Required fields per page-to-host type, as the host's message records name them. */
 	var REQUIRED = {
@@ -336,11 +396,16 @@
 		dismissNotice: ['key'],
 		saveSettings: ['vaultRoot', 'startAtSignIn', 'theme'],
 		reportProblem: ['kind', 'body'],
-		sendFeedback: ['kind', 'body']
+		sendFeedback: ['kind', 'body', 'tried', 'area', 'shot'],
+		captureWindow: ['width', 'height']
 	};
 
 	/** Actions: each carries a requestId, and the host answers it with one actionResult. */
 	var ACTIONS = ['launchFile', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'reportProblem', 'sendFeedback', 'takeBackAll', 'takeOverFolder'];
+
+	/** Asks: each carries a requestId too, and the host answers it with a message of its own
+	 *  (windowShot, myFeedback), never actionResult. */
+	var ASKS = ['captureWindow', 'readMyFeedback'];
 
 	/* ----------------------------------------------------------- Plumbing */
 
@@ -366,7 +431,7 @@
 			if (!fields || !(needed[i] in fields)) throw new Error('Armory bridge: ' + type + ' needs ' + needed[i]);
 			message[needed[i]] = fields[needed[i]];
 		}
-		if (ACTIONS.indexOf(type) >= 0) message.requestId = fields && fields.requestId ? String(fields.requestId) : 'r' + nextRequest++;
+		if (ACTIONS.indexOf(type) >= 0 || ASKS.indexOf(type) >= 0) message.requestId = fields && fields.requestId ? String(fields.requestId) : 'r' + nextRequest++;
 		return message;
 	}
 
@@ -431,7 +496,9 @@
 			dialog: params.get('dialog'),
 			drag: params.get('drag') === '1',
 			at: params.get('at'),
-			press: params.get('press')
+			press: params.get('press'),
+			words: params.get('words'),
+			shot: params.get('shot')
 		};
 
 		function firstFileId(v) {
@@ -453,10 +520,23 @@
 			view.effectiveTheme = view.settings.theme === 'system' ? systemTheme() : view.settings.theme;
 			deliver({ type: 'view', view: view });
 		}
-		function result(message, ok, words) {
+		function result(message, ok, words, offer) {
 			// A state drawn with a key just pressed keeps waiting for its answer.
 			if (route.press) return;
-			deliver({ type: 'actionResult', requestId: message.requestId, ok: ok, message: words });
+			deliver({ type: 'actionResult', requestId: message.requestId, ok: ok, message: words, offer: offer || null });
+		}
+		/** "Your feedback" as the demo has it: two notes, or the website without it, or offline. */
+		function myFeedback(message) {
+			var how = params.get('feedback') || 'shown';
+			var shown = how === 'shown';
+			deliver({
+				type: 'myFeedback',
+				requestId: message.requestId,
+				state: how,
+				pictures: shown,
+				message: how === 'offline' ? 'You\'re offline. Your feedback shows here once this computer is back online.' : null,
+				notes: shown ? demo.myFeedback : []
+			});
 		}
 		function useState(name) {
 			var s = demo.states[name];
@@ -536,7 +616,7 @@
 				case 'ready':
 					postView();
 					// A state drawn with an action's answer at the window's foot.
-					if (params.get('result')) deliver({ type: 'actionResult', requestId: 'r0', ok: params.get('resultOk') !== '0', message: params.get('result') });
+					if (params.get('result')) deliver({ type: 'actionResult', requestId: 'r0', ok: params.get('resultOk') !== '0', message: params.get('result'), offer: null });
 					break;
 				case 'connect':
 					clearTimers();
@@ -777,7 +857,30 @@
 					result(message, true, 'Sent. Thank you for telling us.');
 					break;
 				case 'sendFeedback':
-					result(message, true, 'Sent. Thank you for the feedback.');
+					// shot=offer: the picture can't go (it is on another note), and the note can
+					// go without it.
+					if (message.shot && route.shot === 'offer')
+						result(message, false, 'Your note wasn\'t sent: that screenshot is already on another note. You can send it without the picture.', 'withoutPicture');
+					else result(message, true, 'Sent. Thank you for the feedback.');
+					break;
+				case 'captureWindow':
+					// In the app this is a picture of the window itself; the demo has a small
+					// drawing of one, and says what the app's picture of this size would weigh.
+					deliver({
+						type: 'windowShot',
+						requestId: message.requestId,
+						ok: true,
+						id: demo.windowShot.id,
+						url: demo.windowShot.url,
+						width: message.width,
+						height: message.height,
+						bytes: demo.windowShot.bytes,
+						scaled: false,
+						message: null
+					});
+					break;
+				case 'readMyFeedback':
+					myFeedback(message);
 					break;
 				case 'openVault':
 				case 'showInFolder':
@@ -835,6 +938,7 @@
 		PAGE_TO_HOST: Object.freeze(PAGE_TO_HOST.slice()),
 		HOST_TO_PAGE: Object.freeze(HOST_TO_PAGE.slice()),
 		ACTIONS: Object.freeze(ACTIONS.slice()),
+		ASKS: Object.freeze(ASKS.slice()),
 
 		/** True when a demo transport answers instead of the engine. */
 		isDemo: !webview,
@@ -843,7 +947,7 @@
 		 * Sends one message to the host.
 		 * @param {PageMessageType} type
 		 * @param {Record<string, unknown>} [fields]
-		 * @returns {string | null} the requestId an action's actionResult will answer
+		 * @returns {string | null} the requestId an action's actionResult (or an ask's own answer) will carry
 		 */
 		send: function (type, fields) {
 			var message = buildMessage(type, fields);
@@ -866,7 +970,8 @@
 		},
 
 		/**
-		 * Calls `handler` with every host message (view, fileDetail, activity, actionResult).
+		 * Calls `handler` with every host message (view, fileDetail, activity, actionResult,
+		 * windowShot, myFeedback).
 		 * @param {(message: HostMessage) => void} handler
 		 * @returns {() => void} stops listening
 		 */
