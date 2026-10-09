@@ -46,7 +46,10 @@ and the rename replaces the read-only file directly (`FileRenameInfoEx` with
 the fallback on file systems without it). The scan reports each file's bit
 (`LocalFile.ReadOnly`, read from the same handle as its id, size and time), and a cleared bit
 wakes the engine (the watcher includes attribute changes), so the engine can put it back or
-keep the changed bytes as a kept copy.
+keep the changed bytes as a kept copy. A file the scan could not open (`LocalFile.Unread`:
+SolidWorks or another program holds it for writing) carries the bit the scan read last, not
+the disk's, so the engine neither reports nor applies anything for it until a scan can read it
+(0.3.3: the `readOnlyBroken` incidents of IDEA-06 were all such stale bits).
 
 Tests (Windows only) exercise every ownership state on a real file in both orders; a
 200-file batch persisted once, applied again with no manifest write and no attribute write

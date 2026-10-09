@@ -88,7 +88,8 @@ public sealed class WindowsVaultFileSystem : IVaultFileSystem, IDisposable
             RetryReadOnly(problems);
             var scan = changes.Scan();
             problems.AddRange(scan.Problems);
-            var files = scan.Files.Select(f => new LocalFile(f.Path, f.Hash, f.Size, f.ReadOnly)).ToArray();
+            // Unread: carried over from the last scan that could read it (LocalFileState.Unread).
+            var files = scan.Files.Select(f => new LocalFile(f.Path, f.Hash, f.Size, f.ReadOnly, f.Unread)).ToArray();
             return new VaultScan(files, scan.Markers, problems,
                 scan.Renames?.Select(r => new LocalMove(r.Before, r.After)).ToArray(),
                 scan.Folders.Select(f => f.Path).ToArray(),

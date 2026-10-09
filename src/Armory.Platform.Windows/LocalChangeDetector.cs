@@ -6,9 +6,13 @@ using Armory.Core;
 namespace Armory.Platform.Windows;
 
 // ReadOnly is FILE_ATTRIBUTE_READONLY as found by this scan (read from the same handle that
-// gives the id, size and time, so it costs nothing).
+// gives the id, size and time, so it costs nothing). Unread: this scan could not read the file
+// (another program holds it for writing, as SolidWorks holds a part it has open, or a problem
+// hid it) and carried its previous entry over as it was: the hash, size, time and read-only
+// bit are the last ones read, not the disk's now. The next scan that can read it hashes it
+// again, whatever its size and time say (feedback N4).
 public sealed record LocalFileState(VaultPath Path, string FileId, long Size, DateTime LastWriteUtc, string Hash, DateTimeOffset HashedAt,
-    bool ReadOnly = false);
+    bool ReadOnly = false, bool Unread = false);
 public sealed record LocalRename(VaultPath Before, VaultPath After, string FileId);
 // A vault-relative folder ("Robot 2027/Gearbox", validated and NFC like VaultPath) and its
 // NTFS directory id, or null when the directory could not be opened during this scan.
@@ -162,7 +166,9 @@ public sealed class LocalChangeDetector : IDisposable
                 // folder rename above it), whose hash can be reused when nothing else changed.
                 var atPath = cache.TryGetValue(path, out var cached) && cached.FileId == id ? cached : null;
                 var basis = atPath ?? (oldById.TryGetValue(id, out var moved) ? moved : null);
-                var mustHash = basis is null || basis.Size != size || basis.LastWriteUtc != write || IsRacy(basis) ||
+                // An entry carried over unread says nothing about the bytes now: a writer can
+                // change them and put the size and time back (feedback N4).
+                var mustHash = basis is null || basis.Unread || basis.Size != size || basis.LastWriteUtc != write || IsRacy(basis) ||
                     (full && maximumCacheAge is { } age && now - basis.HashedAt >= age);
                 var hash = mustHash ? Convert.ToHexStringLower(SHA256.HashData(handle)) : basis!.Hash;
                 if (mustHash) hashes++;
@@ -173,8 +179,9 @@ public sealed class LocalChangeDetector : IDisposable
             {
                 walk.Problems.Add($"{relative}: {error.Message}");
                 walk.Unread(file, id ?? NativeMethods.EntryId(file));
-                // Something is at this path: never a deletion of what was here.
-                if (cache.TryGetValue(path, out var previous)) next[path] = previous;
+                // Something is at this path: never a deletion of what was here. What was read
+                // last time is kept, marked unread, so nothing trusts it as the disk's bytes now.
+                if (cache.TryGetValue(path, out var previous)) next[path] = previous with { Unread = true };
             }
         }
 
@@ -185,7 +192,7 @@ public sealed class LocalChangeDetector : IDisposable
         {
             if (next.ContainsKey(path) || foundFiles.Contains(old.FileId)) continue;
             if (!walk.Hides(path.Value, old.FileId, folder: false)) continue;
-            next[path] = old;
+            next[path] = old with { Unread = true };
             keptFiles.Add(path.Value);
         }
         var foundFolders = folders.Values.Where(f => f.FolderId is not null).Select(f => f.FolderId!).ToHashSet(StringComparer.Ordinal);

@@ -4,7 +4,11 @@ namespace Armory.Agent.Engine;
 
 // ReadOnly is the file's read-only bit as the scan found it on disk (FILE_ATTRIBUTE_READONLY on
 // Windows), so the engine can put back a bit someone cleared (docs/platform/read-only.md).
-public sealed record LocalFile(VaultPath Path, string Hash, long Size, bool ReadOnly = false);
+// Unread: the scan could not read the file this time (another program holds it for writing, as
+// SolidWorks holds a part it has open; or a problem hid it) and kept what it last read: Hash,
+// Size and ReadOnly are then not the disk's now. Nothing lets a lock go over it or reports its
+// read-only bit from it (feedback N4); the next scan that can read it hashes it again.
+public sealed record LocalFile(VaultPath Path, string Hash, long Size, bool ReadOnly = false, bool Unread = false);
 // Files excludes the platform's ignore list (Armory.Platform.Windows.VaultIgnore). Markers
 // are the vault-relative paths of "~$<name>" files, which SolidWorks creates beside a
 // document it has open (docs/spike/solidworks-lock-file.md). Problems never imply deletion.
@@ -28,8 +32,8 @@ public sealed record LocalFile(VaultPath Path, string Hash, long Size, bool Read
 // (the first scan after a start, with no earlier map; a folder id it could not read; no
 // directory identity at all), so the engine falls back to its own evidence; an empty list
 // means checked, none. Files and Folders keep, as they were, only the entries a problem could
-// hide (an unreadable folder or file, a path the vault refuses, a reparse point): anything
-// else missing is missing.
+// hide (an unreadable folder or file, a path the vault refuses, a reparse point), each such
+// file marked Unread: anything else missing is missing.
 public sealed record VaultScan(IReadOnlyList<LocalFile> Files, IReadOnlyList<string> Markers, IReadOnlyList<string> Problems,
     IReadOnlyList<LocalMove>? Renames = null, IReadOnlyList<string>? Folders = null, IReadOnlyList<FolderMove>? FolderMoves = null);
 public sealed record LocalMove(VaultPath From, VaultPath To);
