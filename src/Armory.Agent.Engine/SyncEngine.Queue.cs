@@ -140,14 +140,14 @@ public sealed partial class SyncEngine
                 throw new OperationCanceledException("The pass failed elsewhere.");
             }
             ct.ThrowIfCancellationRequested();
-            if (mine.Count == 0 && (next >= run.Count || online != true || Cut())) break;
-            if (online == true && Cut())
+            var cut = online == true && Cut();
+            if (cut || (mine.Count == 0 && (next >= run.Count || online != true)))
             {
                 foreach (var entry in mine) Carry(entry);
                 carried = mine.Count;
                 // The slice is over: the downloads it planned and did not start go on starting as
                 // lanes free while the next pass scans and reads the server (Feed).
-                if (actionsWaiting == 0 && !paused)
+                if (cut && actionsWaiting == 0 && !paused)
                 {
                     for (var i = next; i < run.Count; i++)
                         if (run[i].All(p => p.Plan.Actions.All(a => a.Kind is SyncActionKind.None or SyncActionKind.Download)) &&
