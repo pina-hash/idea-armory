@@ -132,7 +132,7 @@ Type: dirifempty; Name: "{app}\{#AppVersion}"
 Type: dirifempty; Name: "{app}"
 
 [Code]
-procedure GetSystemTimeAsFileTime(var Time: TFileTime);
+procedure GetSystemTimeAsFileTime(var Value: TFileTime);
   external 'GetSystemTimeAsFileTime@kernel32.dll stdcall';
 
 // The current time as a FILETIME (UTC), in decimal, for the qword InstalledAt.

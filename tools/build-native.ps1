@@ -49,6 +49,13 @@ function Invoke-Tool([string]$tool, [string[]]$arguments) {
     if ($LASTEXITCODE -ne 0) { throw ($tool + ' failed with exit code ' + $LASTEXITCODE + ': ' + ($arguments -join ' ')) }
 }
 
+# rc, run from the .rc file's own folder so the icons and the manifest it names are found there.
+function Invoke-Rc([string]$rcFile, [string]$res, [string]$include) {
+    Push-Location -LiteralPath (Split-Path -Parent $rcFile)
+    try { Invoke-Tool 'rc' @('/nologo', '/I', $include, '/fo', $res, $rcFile) }
+    finally { Pop-Location }
+}
+
 # The DLLs a binary imports, from dumpbin /dependents, in upper case.
 function Get-Imports([string]$file) {
     $lines = & dumpbin /nologo /dependents $file
@@ -87,7 +94,7 @@ foreach ($arch in $Architectures) {
     # This architecture's developer environment, on a clean copy of the original one.
     $vs = Find-VisualStudio $arch
     $devcmd = Join-Path $vs 'Common7\Tools\VsDevCmd.bat'
-    Get-ChildItem Env: | Where-Object { -not $saved.ContainsKey($_.Name) } | ForEach-Object { Remove-Item -LiteralPath ('Env:' + $_.Name) }
+    @(Get-ChildItem Env: | Where-Object { -not $saved.ContainsKey($_.Name) }) | ForEach-Object { Remove-Item -LiteralPath ('Env:' + $_.Name) }
     foreach ($name in $saved.Keys) { Set-Item -LiteralPath ('Env:' + $name) -Value $saved[$name] }
     $environment = & cmd.exe /d /c "`"$devcmd`" -no_logo -arch=$arch -host_arch=amd64 && set"
     if ($LASTEXITCODE -ne 0) { throw ('VsDevCmd.bat failed for ' + $arch + '.') }
@@ -99,7 +106,7 @@ foreach ($arch in $Architectures) {
     $hardened = @('/guard:cf', '/DYNAMICBASE', '/NXCOMPAT') + $cet
 
     # The badge handlers: loaded into Explorer and every file dialog.
-    Invoke-Tool 'rc' @('/nologo', '/I', $obj, '/I', (Join-Path $native 'badges'), '/fo', (Join-Path $obj 'ArmoryBadges.res'), (Join-Path $native 'badges\ArmoryBadges.rc'))
+    Invoke-Rc (Join-Path $native 'badges\ArmoryBadges.rc') (Join-Path $obj 'ArmoryBadges.res') $obj
     Invoke-Tool 'cl' @('/nologo', '/c', '/O2', '/W4', '/WX', '/permissive-', '/sdl', '/GS', '/guard:cf', '/MT', '/EHsc', '/std:c++17',
         '/DUNICODE', '/D_UNICODE', ('/Fo' + (Join-Path $obj 'ArmoryBadges.obj')), (Join-Path $native 'badges\ArmoryBadges.cpp'))
     Invoke-Tool 'link' (@('/nologo', '/WX', '/DLL', ('/DEF:' + (Join-Path $native 'badges\ArmoryBadges.def')), ('/OUT:' + (Join-Path $bin 'ArmoryBadges.dll')),
@@ -110,7 +117,7 @@ foreach ($arch in $Architectures) {
     if ($arch -ne 'x64') { continue }
 
     # The right-click forwarder: a plain Windows program with no window.
-    Invoke-Tool 'rc' @('/nologo', '/I', $obj, '/I', (Join-Path $native 'shell'), '/fo', (Join-Path $obj 'ArmoryShell.res'), (Join-Path $native 'shell\ArmoryShell.rc'))
+    Invoke-Rc (Join-Path $native 'shell\ArmoryShell.rc') (Join-Path $obj 'ArmoryShell.res') $obj
     Invoke-Tool 'cl' @('/nologo', '/c', '/O2', '/W4', '/WX', '/sdl', '/GS', '/guard:cf', '/MT', '/DUNICODE', '/D_UNICODE',
         ('/Fo' + (Join-Path $obj 'ArmoryShell.obj')), (Join-Path $native 'shell\ArmoryShell.c'))
     Invoke-Tool 'link' (@('/nologo', '/WX', ('/OUT:' + (Join-Path $bin 'ArmoryShell.exe')), (Join-Path $obj 'ArmoryShell.obj'), (Join-Path $obj 'ArmoryShell.res'),
@@ -127,7 +134,7 @@ foreach ($arch in $Architectures) {
         ('/Fo' + (Join-Path $obj 'ShellPipeTest.obj')), (Join-Path $native 'shell\ShellPipeTest.c'))
     Invoke-Tool 'link' @('/nologo', ('/OUT:' + (Join-Path $bin 'ShellPipeTest.exe')), (Join-Path $obj 'ShellPipeTest.obj'), '/SUBSYSTEM:CONSOLE', 'kernel32.lib')
 }
-Get-ChildItem Env: | Where-Object { -not $saved.ContainsKey($_.Name) } | ForEach-Object { Remove-Item -LiteralPath ('Env:' + $_.Name) }
+@(Get-ChildItem Env: | Where-Object { -not $saved.ContainsKey($_.Name) }) | ForEach-Object { Remove-Item -LiteralPath ('Env:' + $_.Name) }
 foreach ($name in $saved.Keys) { Set-Item -LiteralPath ('Env:' + $name) -Value $saved[$name] }
 
 Write-Host ('IDEA Armory native parts ' + $Version + ' in ' + $out + ':')
