@@ -329,6 +329,14 @@
 	   from File Explorer are held over it. */
 	--tint-pick: rgba(120, 184, 112, 0.1);
 	--tint-drop: rgba(120, 184, 112, 0.14);
+	/* Armory 0.3.3: the tooltip card (N1), a small raised card a step lighter than the panels
+	   it floats over, its edge the 3:1 hairline. */
+	--tip-top: #282d2a;
+	--tip-bot: #202421;
+	--tip-ink: var(--text-1);
+	--tip-edge: var(--plate-hair-top);
+	--tip-hi: rgba(255, 255, 255, 0.1);
+	--tip-drop: rgba(0, 0, 0, 0.6);
 
 	/* The IDEA lockup, as ideabosco.com draws it (idea-app src/lib/brand/AnimatedLogo.svelte):
 	   two layers, the gear behind the plate. In IDEA they are the site's own dark rasters,
@@ -477,6 +485,13 @@
 	--tint-bad: rgba(196, 58, 58, 0.1);
 	--tint-pick: rgba(59, 108, 54, 0.1);
 	--tint-drop: rgba(59, 108, 54, 0.12);
+	/* The tooltip card on Space White: near white over the slate plate, a darker edge. */
+	--tip-top: #fbfcfc;
+	--tip-bot: #eef1f4;
+	--tip-ink: var(--text-1);
+	--tip-edge: #757c86;
+	--tip-hi: #ffffff;
+	--tip-drop: rgba(60, 68, 84, 0.28);
 
 	/* The light lockup the site ships on Space White: idea-app tools/idea_logo_vector.py
 	   --emblem light (palette LIGHT = SLATE: a slate gear with a green rim, a flat green
@@ -1150,6 +1165,19 @@ dialog .plate-title::after {
 }
 .switch:hover {
 	border-color: var(--hover-ink);
+}
+/* Armory: a switch the student can't change is UNLIT like a key: quieter edge and words, the
+   not-allowed cursor. Its tooltip says who can change it. */
+.switch:is(:disabled, [aria-disabled='true']),
+.switch:is(:disabled, [aria-disabled='true']):hover {
+	cursor: not-allowed;
+	color: var(--plate-disabled);
+	border-color: var(--plate-disabled-edge);
+	background: linear-gradient(var(--plate-disabled-face), var(--plate-disabled-face)) padding-box;
+	background-color: var(--plate-disabled-face);
+	box-shadow:
+		inset 0 1px 0 0 var(--plate-plate-hi),
+		inset 0 -2px 2px -1px var(--plate-tube-lo);
 }
 
 /* PADS: a tab in a strip (plate.css 1416-1523). A thick composite bezel (the hairline as
@@ -2033,7 +2061,8 @@ body[data-screen='connect'] .screen-root {
 	grid-template-areas:
 		'label'
 		'display'
-		'key';
+		'key'
+		'last';
 }
 .status-group > .section-label {
 	grid-area: label;
@@ -3023,7 +3052,8 @@ dialog.housing > .title-bar {
 		grid-template-areas:
 			'screen key'
 			'line line'
-			'detail detail';
+			'detail detail'
+			'last last';
 		align-items: center;
 		column-gap: var(--space-2);
 		row-gap: 0.4rem;
@@ -3032,7 +3062,8 @@ dialog.housing > .title-bar {
 		grid-template-areas:
 			'screen screen'
 			'line line'
-			'detail detail';
+			'detail detail'
+			'last last';
 	}
 	/* The strip says it, so the label is for screen readers only: clipped to nothing,
 	   but at its own width, so its word never spills out of its box. */
@@ -3872,6 +3903,11 @@ dialog.housing > .title-bar {
 	justify-content: center;
 	gap: var(--space-2);
 }
+/* The file's kind, place and SolidWorks tags wrap under one another in a narrow window. */
+.detail .title-sub {
+	flex-wrap: wrap;
+	row-gap: 0.25rem;
+}
 .title-sub > .year-tag {
 	flex: none;
 }
@@ -4613,4 +4649,252 @@ body[data-screen='picker'] .screen-root {
 		grid-column: 2;
 		justify-self: start;
 	}
+}
+
+/* ===================================================================== ARMORY 0.3.3 */
+
+/* THE TOOLTIP CARD (N1): what the control under the mouse, or reached with Tab, does, in one
+   sentence. One card for the whole window, placed by app.js inside the window (under its
+   control, or over it near the foot), never in the way of a click. It shows by opacity only,
+   and at once when the student asks for less motion. Its words are the reading face, sentence
+   case, never caps. */
+.tip {
+	position: fixed;
+	left: 0;
+	top: 0;
+	z-index: 20;
+	box-sizing: border-box;
+	max-width: min(280px, calc(100vw - 16px));
+	margin: 0;
+	padding: 0.45rem 0.7rem 0.5rem;
+	border: 1px solid var(--tip-edge);
+	border-radius: var(--plate-r-small);
+	font-family: var(--font-display);
+	font-size: 0.85rem;
+	font-weight: 400;
+	line-height: 1.4;
+	letter-spacing: 0;
+	text-transform: none;
+	text-align: left;
+	text-wrap: pretty;
+	overflow-wrap: anywhere;
+	white-space: normal;
+	color: var(--tip-ink);
+	background-color: var(--tip-bot);
+	background-image: linear-gradient(to bottom, var(--tip-top), var(--tip-bot));
+	box-shadow:
+		inset 0 1px 0 0 var(--tip-hi),
+		0 2px 4px 0 var(--tip-drop),
+		0 10px 18px -8px var(--tip-drop);
+	pointer-events: none;
+	opacity: 0;
+}
+.tip[data-on='true'] {
+	opacity: 1;
+}
+@media (prefers-reduced-motion: no-preference) {
+	.tip {
+		transition: opacity 120ms ease-out;
+	}
+}
+
+/* Switching themes paints every surface in one frame: nothing eases from one theme's colors to
+   the other's, so no frame shows the two mixed (N7). app.js sets data-theming for the frame. */
+:root[data-theming] *,
+:root[data-theming] *::before,
+:root[data-theming] *::after {
+	transition: none !important;
+}
+
+/* SELECT ALL IN THIS FOLDER: the list's own head, its box over the rows' boxes (the same 44px
+   column and the rows' padding), the words beside it and how many files at the right. */
+.list-head {
+	display: grid;
+	grid-template-columns: 44px minmax(0, 1fr) auto;
+	align-items: center;
+	column-gap: 0.75rem;
+	min-height: 44px;
+	padding: var(--space-1) 0.4rem;
+	box-shadow:
+		inset 0 -1px 0 0 var(--plate-groove-dk),
+		inset 0 -2px 0 0 var(--plate-groove-lt);
+}
+.list-head > .key.sel-key {
+	grid-area: auto;
+}
+.list-head-word {
+	font-size: 0.9rem;
+	line-height: 1.3;
+	color: var(--plate-ink);
+}
+.list-head-count {
+	font-family: var(--font-mono);
+	font-size: var(--plate-label-size);
+	letter-spacing: var(--plate-label-track);
+	text-transform: uppercase;
+	white-space: nowrap;
+	color: var(--plate-caption);
+}
+.key.sel-key[aria-checked='mixed'] .sel-box {
+	border-color: var(--plate-accent);
+	background-color: var(--plate-primary-face);
+	color: var(--plate-primary-ink);
+}
+.key.sel-key[aria-checked='mixed'] .sel-box svg {
+	opacity: 1;
+}
+
+/* THE NEWEST RUNNING LINE, ALWAYS IN SIGHT (N8). In a wide window it is the display's last
+   line, under the status (the side column never scrolls): a note glyph, the line, and its time
+   at the right, on one line that ends in an ellipsis (the whole line is its tooltip). In a narrow
+   window the column scrolls, so it is a slim strip under the header instead, which never does. */
+.sync-latest {
+	display: flex;
+	align-items: flex-start;
+	gap: 0.45rem;
+	min-width: 0;
+	margin-top: var(--space-1);
+	padding-top: var(--space-2);
+	box-shadow: inset 0 1px 0 0 var(--plate-groove-dk), inset 0 2px 0 0 var(--plate-groove-lt);
+	font-size: 0.85rem;
+	line-height: 1.4;
+	color: var(--plate-ink);
+}
+.sync-latest svg,
+.latest-strip svg {
+	flex: none;
+	width: 14px;
+	height: 14px;
+	color: var(--ink-ok);
+}
+.sync-latest svg {
+	align-self: flex-start;
+	margin-top: 3px;
+}
+/* Two lines at most in the side column (the whole line is the tooltip), the time after the
+   words; one line ending in an ellipsis in the narrow window's strip. */
+.latest-words {
+	flex: 1 1 auto;
+	min-width: 0;
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 2;
+	overflow: hidden;
+	overflow-wrap: anywhere;
+}
+.latest-strip .latest-words {
+	display: flex;
+	align-items: baseline;
+	gap: 0.5rem;
+}
+.latest-strip .latest-line {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+}
+.latest-strip .latest-at {
+	flex: none;
+}
+.latest-at {
+	flex: none;
+	font-family: var(--font-mono);
+	font-size: 0.72rem;
+	font-variant-numeric: tabular-nums;
+	color: var(--plate-ink-2);
+}
+.latest-strip {
+	display: none;
+}
+@media (max-width: 760px) {
+	.status-group .sync-latest {
+		display: none;
+	}
+	.latest-strip:not([hidden]) {
+		flex: none;
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		min-width: 0;
+		margin: var(--space-2) 0 0;
+		padding: 0.4rem 0.75rem;
+		border: 1px solid var(--plate-hair);
+		border-radius: var(--plate-r-small);
+		font-size: 0.85rem;
+		line-height: 1.4;
+		color: var(--plate-ink);
+		background-color: var(--plate-list-face);
+		box-shadow: inset 0 1px 0 0 var(--plate-groove-dk);
+	}
+}
+
+/* The running lines' box: its directions, files and waiting count are one part (drawn in place)
+   with no box of their own, so the panel's spacing is as it was. */
+.act-body {
+	display: contents;
+}
+
+/* THE LAST ACTION (N9): the answer to an action on many files stays readable until OK, under
+   the status key (the line at the window's foot fades after a few seconds). A quiet card with
+   the severity edge, the label voice for its head, the answer in the reading face. */
+.status-group > .last-action {
+	grid-area: last;
+}
+.last-action.panel {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	grid-template-areas:
+		'head ok'
+		'words ok';
+	align-items: center;
+	column-gap: var(--space-2);
+	margin-top: var(--space-2);
+	padding: 0.6rem 0.5rem 0.6rem 1rem;
+	box-shadow:
+		inset 4px 0 0 0 var(--tone-edge),
+		inset 0 1px 0 0 var(--plate-panel-hi),
+		0 1px 2px 0 var(--plate-drop),
+		0 8px 14px -6px var(--plate-drop);
+}
+.last-head {
+	grid-area: head;
+	display: flex;
+	align-items: baseline;
+	gap: 0.5rem;
+	color: var(--plate-caption);
+}
+.last-at {
+	font-family: var(--font-mono);
+	font-size: 0.72rem;
+	font-variant-numeric: tabular-nums;
+	color: var(--plate-ink-2);
+}
+.last-words {
+	grid-area: words;
+	font-size: 0.875rem;
+	line-height: 1.45;
+	color: var(--plate-ink);
+	overflow-wrap: anywhere;
+	text-wrap: pretty;
+}
+.last-action .last-ok {
+	grid-area: ok;
+}
+
+/* Focus and scrollIntoView keep clear of the pinned folder keys and the selection bar
+   (X-sticky-focus): app.js sets --pinned to how far down they reach. */
+.recess-scroll,
+.scroller {
+	scroll-padding-top: var(--pinned, 0px);
+}
+
+/* A kept copy's Put back on this computer, under its words (0.3.3, N4). */
+.hist-act {
+	display: flex;
+	margin-top: var(--space-2);
+}
+.hist-act .key svg {
+	width: 14px;
+	height: 14px;
 }

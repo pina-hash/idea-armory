@@ -871,6 +871,28 @@
 							: 'None of those files is checked out by someone else now.'
 					);
 					break;
+				case 'putBackKeptCopy':
+					// The engine's PutBackKeptCopyAsync: the student's own copy goes back on this
+					// computer, checked out to them (another person's is refused in one sentence).
+					var putBack = null;
+					eachRow(function (r) {
+						if (r.fileId === message.fileId) putBack = r;
+					});
+					if (!putBack) {
+						result(message, false, 'That file isn\'t in Armory on this computer.');
+						break;
+					}
+					if (putBack.checkout.state !== 'available' && putBack.checkout.state !== 'mine') {
+						result(message, false, 'Close ' + putBack.name + ' first: ' + putBack.checkout.label.toLowerCase() + '.');
+						break;
+					}
+					putBack.checkout = demo.checkoutMine();
+					putBack.changed = true;
+					putBack.status = 'changed';
+					refreshMine();
+					postView();
+					result(message, true, 'Put your copy of ' + putBack.name + ' back on this computer. It\'s checked out to you: look at it in SolidWorks, then check it in to share it.');
+					break;
 				case 'createFolder':
 					p = projectById(message.projectId);
 					p.folders.push({ path: (message.parent ? message.parent + '/' : '') + message.name, name: message.name, fileCount: 0, files: [] });

@@ -132,8 +132,22 @@
 	].map(function (name, i) {
 		return ['f-sh-' + pad4(i + 1), 'proj-robot-2027', 'Shooter', name, i % 2 ? SAM : ALEX, 2 * DAY + i * 30, 90000 + i * 41000];
 	});
+	// A practice folder of 40 parts that 19 students have checked out (Force check in of many).
+	var CLASS = ['Alex Kim', 'Maria Lopez', 'Sam Patel', 'Priya Shah', 'Diego Ramos', 'Hannah Cho', 'Ethan Brooks', 'Aisha Bello', 'Lucas Moreau', 'Mia Russo',
+		'Noah Fischer', 'Zoe Nguyen', 'Omar Haddad', 'Lily Chen', 'Mateo Silva', 'Grace Kim', 'Ivan Petrov', 'Sofia Rossi', 'Kai Tanaka'].map(function (name, i) {
+		return { name: name, email: name.toLowerCase().replace(' ', '.') + '@boscotech.edu', device: 'LAB-PC-' + ('0' + (i + 1)).slice(-2) };
+	});
+	var PRACTICE = [];
+	for (var pi = 1; pi <= 40; pi++) PRACTICE.push(['f-pr-' + pad4(pi), 'proj-robot-2027', 'Practice', 'Practice-Part-' + pad4(pi) + '.SLDPRT', ALEX, 3 * DAY, 60000 + pi * 1500]);
+	function heldByMany() {
+		var changes = {};
+		PRACTICE.forEach(function (e, i) {
+			changes[e[0]] = { checkout: other(CLASS[i % CLASS.length], 2 * HOUR + i) };
+		});
+		return changes;
+	}
 	var EXTRA = {};
-	BIG.concat(IMPORTED, ARM, SHOOTER).forEach(function (e) {
+	BIG.concat(IMPORTED, ARM, SHOOTER, PRACTICE).forEach(function (e) {
 		EXTRA[e[0]] = e;
 	});
 
@@ -939,6 +953,111 @@
 			screens: ['home'],
 			params: {},
 			view: signedIn({ sync: SYNCED, changes: shared(allMine(1400)), opts: { files: BIG, folders: { 'proj-robot-2027': ['CopyDesignTemp'] } } })
+		},
+
+		// 0.3.3, N8: what a long action shows while it runs, in its running lines.
+		checkingOut: {
+			label: 'Checking out a folder of 1,400 files: the newest running line in sight under the status, the rest in Right now',
+			screens: ['home'],
+			params: { folder: 'CopyDesignTemp', at: 'browser' },
+			view: signedIn({
+				sync: { state: 'syncing', line: 'Checking for changes.', detail: 'You can keep working.', pendingCount: 0 },
+				activity: {
+					line: null,
+					upload: null,
+					download: null,
+					move: null,
+					waiting: null,
+					active: [],
+					log: [
+						{ at: ago(1.4), line: 'Checking out 1,400 files' },
+						{ at: ago(1.3), line: 'Getting 1,400 files ready to check out' },
+						{ at: ago(0.9), line: 'Asking the server to check out 1,400 files' },
+						{ at: ago(0.4), line: 'Checked out 500 of 1,400 files' }
+					]
+				},
+				changes: shared(allMine(500)),
+				opts: { files: BIG.slice(0, 1400), folders: { 'proj-robot-2027': ['CopyDesignTemp'] } }
+			})
+		},
+
+		forcingIn: {
+			label: 'As a mentor, force checking in 40 files that 19 students have: the running lines as each group of 16 is done',
+			screens: ['home'],
+			params: { folder: 'Practice', at: 'browser' },
+			view: signedIn({
+				sync: { state: 'syncing', line: 'Checking for changes.', detail: 'You can keep working.', pendingCount: 0 },
+				activity: {
+					line: null,
+					upload: null,
+					download: null,
+					move: null,
+					waiting: null,
+					active: [],
+					log: [
+						{ at: ago(0.8), line: 'Force checking in 40 files' },
+						{ at: ago(0.5), line: 'Force checked in 16 of 40 files' },
+						{ at: ago(0.2), line: 'Force checked in 32 of 40 files' }
+					]
+				},
+				changes: shared(heldByMany()),
+				opts: { lead: true, files: PRACTICE, folders: { 'proj-robot-2027': ['Practice'] } }
+			})
+		},
+
+		forceManyConfirm: {
+			label: 'As a mentor, Force check in this folder when 19 students have its files: two names, then how many others',
+			screens: ['home'],
+			params: { folder: 'Practice', at: 'browser', dialog: 'forceAll' },
+			view: signedIn({ sync: SYNCED, changes: shared(heldByMany()), opts: { lead: true, files: PRACTICE, folders: { 'proj-robot-2027': ['Practice'] } } })
+		},
+
+		// 0.3.3, merged branches: a file that checks in when it is closed, a record with no first
+		// version, and files saved in a newer SolidWorks year (their card, their rows, their page).
+		checkInWaits: {
+			label: 'Check in waits for SolidWorks: My files says the file checks in when it is closed; a file with no first version',
+			screens: ['home'],
+			params: { folder: 'COTS' },
+			view: signedIn({
+				sync: SYNCED,
+				changes: shared({
+					'f-gearbox': { checkout: mine(35 * MIN), changed: true, status: 'checkingInWhenClosed' },
+					'f-plate-right': { checkout: mine(2 * HOUR) },
+					'f-collar': { status: 'noVersion' }
+				}),
+				notes: { 'f-gearbox': 'Checks in as soon as you close it in SolidWorks.' }
+			})
+		},
+
+		newerRelease: {
+			label: 'Three files saved in SolidWorks 2026 in a 2025 project: one card, a tag on each row, the year on the file\'s page',
+			screens: ['home', 'detail'],
+			detailFileId: 'f-wheel-hub',
+			params: { folder: 'Drivetrain' },
+			view: signedIn({
+				sync: { state: 'attention', line: 'Everything else is saved. A few files need you.', detail: 'Last checked just now.', pendingCount: 0 },
+				notices: [
+					notice(
+						'newerRelease',
+						'newerRelease',
+						'look',
+						'3 files in Robot 2027 were saved in SolidWorks 2026',
+						'You can fix them here: 1. Check one out in Armory. 2. Open it in SolidWorks 2026. 3. Click Save. Armory saves it as SolidWorks 2025 for you. 4. Check it in.',
+						3,
+						{ label: 'Show them', command: 'expand', paths: [] },
+						[
+							item('f-wheel-hub', 'Robot 2027/Drivetrain/Wheel-Hub.SLDPRT', 'Saved in SolidWorks 2026. Robot 2027 uses SolidWorks 2025.'),
+							item('f-plate-right', 'Robot 2027/Drivetrain/Plate-Right.SLDPRT', 'Saved in SolidWorks 2026. Robot 2027 uses SolidWorks 2025.'),
+							item('f-roller-shaft', 'Robot 2027/Intake/Roller-Shaft.SLDPRT', 'Saved in SolidWorks 2026. Robot 2027 uses SolidWorks 2025.')
+						]
+					)
+				],
+				changes: shared({
+					'f-wheel-hub': { savedRelease: 2026, newerThanPin: true },
+					'f-plate-right': { savedRelease: 2026, newerThanPin: true },
+					'f-roller-shaft': { savedRelease: 2026, newerThanPin: true }
+				})
+			})
 		},
 
 		bigProject: {
