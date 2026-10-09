@@ -142,6 +142,32 @@ Its free part shows only sync states (custom states need a paid signature), and 
 the Armory folder into on-demand placeholders managed by a filter driver, changing how files
 sit on disk for SolidWorks.
 
+### C6. How Explorer's items and the notifications reach the running Armory
+- **One per-user pipe, one line format,** for the right-click forwarder and for a second
+  `IdeaArmory.exe` started by a notification's button (an `idea-armory:` link). The research
+  proposed a separate JSON channel; one channel is less to secure and test. Pipes are not per
+  Windows session, so the same person signed in twice gets the pipe in the first session only.
+- **Each sender checks the pipe's server is `IdeaArmory.exe` from its own folder** before sending
+  a path, so a path never goes to another program.
+- **Only the installed copy registers** the right-click items, the app identity for notifications
+  (`IdeaBosco.Armory`), the `idea-armory:` link scheme and the Start menu shortcut's identity, all
+  per user. A test copy leaves the registry alone.
+- **Notification buttons carry a token, never a path**: single use, 30 minutes, kept in memory.
+  A link Armory doesn't recognize only opens the window.
+- **Notifications turned off in Windows means none from Armory**, not even a tray balloon; the
+  window's card carries the question. The balloon is used only if the notification API fails.
+- **"Check out and reopen" (C5).** When a vault file not checked out is opened, one notification
+  asks "Check out <name> to edit it?" with Check out and reopen / Not now (several files opened
+  together become one notification with Open Armory). It asks once per open, never while the
+  Armory window is showing, and is withdrawn when the file closes. Nothing is checked out just
+  because it was opened. With the SolidWorks link, only documents the student opened themselves
+  ask (never the parts inside an assembly), and the document becomes editable in place without
+  being closed; it is never closed with unsaved changes.
+- **The app now targets the Windows 10 1809 SDK** for notifications: the install grows by about
+  24 MB (6 MB zipped). Every supported Windows 10 and 11 has it.
+- **On the Armory folder itself** the right-click Check in checks in every file checked out here;
+  the other items ask the student to pick files or folders inside a project.
+
 ## D. The live server calls
 
 ### D1. Force check in many files: `armory_break_locks`, 500 at a time
