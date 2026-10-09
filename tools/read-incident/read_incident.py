@@ -132,6 +132,11 @@ def describe(event):
         return f"previous run ended unexpectedly; last log line: {event.get('lastLogLine')}"
     if kind == "note":
         return f"note {event.get('name')}: {event.get('detail', '')}"
+    if kind == "openFiles":
+        late = ", gave up at its budget" if event.get("timedOut") else ""
+        return f"open-files question about {event.get('files')} files: {ms(event.get('ms'))}{late}"
+    if kind == "power":
+        return f"the computer {'went to sleep' if event.get('mode') == 'suspend' else 'woke up' if event.get('mode') == 'resume' else event.get('mode')}"
     return json.dumps(event, ensure_ascii=False)
 
 
@@ -172,7 +177,7 @@ def print_incident(name, incident, row, args, out):
         mark = ">>" if trigger_seq is not None and event.get("seq") == trigger_seq else "  "
         out.write(f"{mark}{relative(event, anchor)}  {describe(event)}\n")
 
-    timed = [e for e in events if e.get("kind") in ("rpc", "transfer", "windowAction", "passEnd") and e.get("ms") is not None]
+    timed = [e for e in events if e.get("kind") in ("rpc", "transfer", "windowAction", "passEnd", "openFiles") and e.get("ms") is not None]
     if timed:
         out.write(f"\nSlowest ({min(args.slowest, len(timed))} of {len(timed)} calls, transfers, window actions and passes)\n")
         for event in sorted(timed, key=lambda e: e.get("ms", 0), reverse=True)[: args.slowest]:

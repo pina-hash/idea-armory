@@ -24,6 +24,8 @@ public static class FlightJson
         FlightKind.ReadOnlyBroken => "readOnlyBroken",
         FlightKind.RepairedCheckout => "repairedCheckout",
         FlightKind.Note => "note",
+        FlightKind.OpenFiles => "openFiles",
+        FlightKind.Power => "power",
         _ => "unknown",
     };
 
@@ -114,6 +116,14 @@ public static class FlightJson
             case FlightKind.Note:
                 o["name"] = e.Name;
                 if (e.Detail is not null) o["detail"] = e.Detail;
+                break;
+            case FlightKind.OpenFiles:
+                o["ms"] = e.Ms;
+                o["files"] = e.Count;
+                o["timedOut"] = !e.Ok;
+                break;
+            case FlightKind.Power:
+                o["mode"] = e.Name;
                 break;
         }
         return o;

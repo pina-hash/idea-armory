@@ -53,6 +53,41 @@ public sealed class GlitchRuleTests
         Assert.Null(GlitchRules.SlowPass(Last(r => r.WindowAction("checkIn", 1, 70_000, true))));
     }
 
+    // The computer slept in the middle of a pass (0.3.3: a 52 minute "pass" on IDEA-06 was the
+    // computer asleep): no slowPass. A slow pass that starts after it woke is still one.
+    [Fact]
+    public void A_pass_the_computer_slept_through_is_not_a_slow_pass()
+    {
+        var detector = new GlitchDetector();
+        var recorder = new FlightRecorder(clock: new ManualClock());
+        FlightEvent Next(Action<FlightRecorder> record) { record(recorder); return recorder.Snapshot(1)[0]; }
+        Assert.Null(GlitchRules.SlowPass(Next(r => r.PassEnd("loop", true, 3_134_550, 0, 0, 0, 0)), slept: true));
+        Assert.Null(detector.Inspect(Next(r => r.PassStart("loop"))));
+        Assert.Null(detector.Inspect(Next(r => r.Power("suspend"))));
+        Assert.Null(detector.Inspect(Next(r => r.Power("resume"))));
+        Assert.Null(detector.Inspect(Next(r => r.PassEnd("loop", true, 3_134_550, 0, 0, 0, 0))));
+        Assert.Null(detector.Inspect(Next(r => r.PassStart("loop"))));
+        Assert.Equal(GlitchKinds.SlowPass, detector.Inspect(Next(r => r.PassEnd("loop", true, 74_000, 0, 0, 0, 0)))?.Kind);
+        var power = FlightJson.Event(Next(r => r.Power("resume")), DateTimeOffset.UnixEpoch);
+        Assert.Equal("power", (string?)power["kind"]);
+        Assert.Equal("resume", (string?)power["mode"]);
+    }
+
+    // One open-files question (0.3.3, feedback N6) in the flight: its time, its files and whether
+    // the platform gave up at its budget.
+    [Fact]
+    public void An_open_files_question_is_one_flight_event()
+    {
+        var recorder = new FlightRecorder(clock: new ManualClock());
+        recorder.OpenFiles(2_004, 1_467, timedOut: true);
+        var written = FlightJson.Event(recorder.Snapshot(1)[0], DateTimeOffset.UnixEpoch);
+        Assert.Equal("openFiles", (string?)written["kind"]);
+        Assert.Equal(2_004, (long?)written["ms"]);
+        Assert.Equal(1_467, (int?)written["files"]);
+        Assert.Equal(true, (bool?)written["timedOut"]);
+        Assert.Null(new GlitchDetector().Inspect(recorder.Snapshot(1)[0]));
+    }
+
     [Fact]
     public void The_same_file_failing_three_times_in_a_row_is_a_repeated_failure()
     {

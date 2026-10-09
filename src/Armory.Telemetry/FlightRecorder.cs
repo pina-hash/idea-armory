@@ -18,6 +18,9 @@ public enum FlightKind : byte
     ReadOnlyBroken,
     RepairedCheckout,
     Note,
+    // 0.3.3: one open-files question (feedback N6), and the computer going to sleep or waking.
+    OpenFiles,
+    Power,
 }
 
 // One event, stored in place in the recorder's ring (no allocation per event). Strings are
@@ -133,6 +136,13 @@ public sealed class FlightRecorder
     public void RepairedCheckout(string path) => Write(FlightKind.RepairedCheckout, null, path, null, false);
 
     public void Note(string name, string? detail) => Write(FlightKind.Note, name, null, detail, true);
+
+    // One open-files question the engine asked the platform (0.3.3): how long it took, how many
+    // files it named, and whether the platform gave up on part of it at its budget.
+    public void OpenFiles(long ms, int files, bool timedOut) => Write(FlightKind.OpenFiles, null, null, null, !timedOut, ms: ms, count: files);
+
+    // The computer went to sleep ("suspend") or woke ("resume"): a pass that spans it is not slow.
+    public void Power(string mode) => Write(FlightKind.Power, mode, null, null, true);
 
     private void Write(FlightKind kind, string? name, string? target, string? detail, bool ok, int status = 0, long ms = 0, long bytes = 0,
         int count = 0, int count2 = 0, int count3 = 0, int count4 = 0, string? stack = null, bool fatal = false)

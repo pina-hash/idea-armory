@@ -35,9 +35,10 @@ public static class GlitchRules
             ? new(GlitchKinds.SlowAction, Clip($"The window waited {Seconds(e.Ms)} for {e.Name} ({Plural(e.Count, "target", "targets")}) to answer{(e.Ok ? "" : ", and it was refused")}."), e)
             : null;
 
-    // A pass that took more than 60 seconds from start to end.
-    public static Glitch? SlowPass(in FlightEvent e)
-        => e.Kind == FlightKind.PassEnd && e.Ms > SlowPassMs
+    // A pass that took more than 60 seconds from start to end, unless the computer slept during
+    // it (0.3.3: a 52 minute "pass" on IDEA-06 was the computer asleep, the clock counting on).
+    public static Glitch? SlowPass(in FlightEvent e, bool slept = false)
+        => e.Kind == FlightKind.PassEnd && e.Ms > SlowPassMs && !slept
             ? new(GlitchKinds.SlowPass, Clip($"A {e.Name} pass took {Seconds(e.Ms)}{(e.Ok ? "" : " and failed")}: {e.Count:N0} downloaded, {e.Count2:N0} uploaded, " +
                 $"{e.Count3:N0} kept copies, {e.Count4:N0} refused."), e)
             : null;
@@ -105,6 +106,8 @@ public sealed class GlitchDetector
 {
     private readonly object gate = new();
     private readonly RepeatedFailureRule repeated = new();
+    // The computer slept or woke since the pass that is running started (a power event).
+    private bool sleptDuringPass;
 
     public Glitch? Inspect(in FlightEvent e)
     {
@@ -112,7 +115,16 @@ public sealed class GlitchDetector
         {
             case FlightKind.Exception: return GlitchRules.Crash(e);
             case FlightKind.WindowAction: return GlitchRules.SlowAction(e);
-            case FlightKind.PassEnd: return GlitchRules.SlowPass(e);
+            case FlightKind.PassStart:
+                lock (gate) sleptDuringPass = false;
+                return null;
+            case FlightKind.Power:
+                lock (gate) sleptDuringPass = true;
+                return null;
+            case FlightKind.PassEnd:
+                bool slept;
+                lock (gate) slept = sleptDuringPass;
+                return GlitchRules.SlowPass(e, slept);
             case FlightKind.RepairedCheckout: return GlitchRules.RepairedCheckout(e);
             case FlightKind.ReadOnlyBroken: return GlitchRules.ReadOnlyBroken(e);
             case FlightKind.FileFailed when e.Target is { } failed:
