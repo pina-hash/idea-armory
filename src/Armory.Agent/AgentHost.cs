@@ -64,9 +64,13 @@ internal sealed class AgentHost : IAsyncDisposable
         Blobs = new BlobClient(siteHttp, storageHttp, site, Sessions, telemetry.Recorder);
         Connector = new ConnectFlow(siteHttp, site, new DefaultBrowserLauncher(), Sessions);
         Heartbeat = new TeamHeartbeat(Api, Sessions, AgentPaths.Version, log: log.Info);
+        // Send feedback, the same as the website's (v0.3.2): the window's one entry point, and the
+        // path the saved notes go through too, sharing the uploader's waits.
+        Feedback = new FeedbackSender(Api, new FeedbackScreenshots(restHttp, Sessions, telemetry.Recorder), Sessions, AgentPaths.Version,
+            telemetry.Limiter, log: log.Info);
         Sessions.SignedOut += () => { log.Info("signed out"); Wake(); };
         hintTimer = new System.Threading.Timer(_ => PollHints(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
-        telemetry.Attach(() => Sessions.Current, DescribeAsync, DescribeNow, Api, () => Blobs.ActiveTransfers > 0);
+        telemetry.Attach(() => Sessions.Current, DescribeAsync, DescribeNow, Api, () => Blobs.ActiveTransfers > 0, Feedback);
     }
 
     internal AgentTelemetry Telemetry { get; }
@@ -75,6 +79,9 @@ internal sealed class AgentHost : IAsyncDisposable
     internal BlobClient Blobs { get; }
     internal ConnectFlow Connector { get; }
     internal TeamHeartbeat Heartbeat { get; }
+    // The window's Send feedback (FeedbackSender.SendAsync) and "Your feedback"
+    // (Api.MyAppFeedbackAsync): docs/agent/CLIENT.md section 7.
+    internal FeedbackSender Feedback { get; }
     internal AgentSettings Settings { get { lock (gate) return settings; } }
     internal string EffectiveTheme { get { lock (gate) return effectiveTheme; } }
     internal bool IsPaused

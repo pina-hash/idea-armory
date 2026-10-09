@@ -57,24 +57,37 @@ public sealed class IncidentUploader
     private readonly Action<string>? log;
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly SemaphoreSlim wake = new(0, int.MaxValue);
-    private readonly Dictionary<string, DateTimeOffset> waits;
+    // When each RPC may be asked again, shared with the window's FeedbackSender (one PT429 makes
+    // both wait) and kept in the incidents folder across restarts.
+    private readonly SubmitLimiter limiter;
+    // The window's sender: a note's words go through it (the eight-argument form while the site
+    // has it, the five-argument one otherwise), or straight through ArmoryApi without one.
+    private readonly FeedbackSender? feedback;
     // The files whose person's words went in this run (under the gate).
     private readonly HashSet<string> feedbackSent = new(StringComparer.OrdinalIgnoreCase);
     private DateTimeOffset nextAttempt = DateTimeOffset.MinValue;
 
-    public IncidentUploader(ArmoryApi api, IncidentStore store, Func<bool> transferring, TimeProvider? clock = null, Action<string>? log = null)
+    // feedback: the window's FeedbackSender, which a note's words go through; its limiter is then
+    // this uploader's too (give it one over the same store). limiter: the waits to share without
+    // a sender. Without either, this uploader keeps its own waits over the store.
+    public IncidentUploader(ArmoryApi api, IncidentStore store, Func<bool> transferring, TimeProvider? clock = null, Action<string>? log = null,
+        FeedbackSender? feedback = null, SubmitLimiter? limiter = null)
     {
         this.api = api;
         this.store = store;
         this.transferring = transferring;
         this.clock = clock ?? TimeProvider.System;
         this.log = log;
-        waits = store.ReadWaits();
+        this.feedback = feedback;
+        this.limiter = feedback?.Limiter ?? limiter ?? new SubmitLimiter(store, this.clock);
     }
+
+    // The waits this uploader keeps (give the same one to a FeedbackSender).
+    public SubmitLimiter Limiter => limiter;
 
     // True while this RPC is not asked: the site lacks it (for 6 hours after a 404 PGRST202), or
     // this account reached its limit (until the PT429's retry_after_seconds have passed).
-    public bool IsWaiting(string rpc) => (waits.TryGetValue(rpc, out var until) && clock.GetUtcNow() < until) || IsRateLimitWait(rpc);
+    public bool IsWaiting(string rpc) => limiter.IsWaiting(rpc);
 
     // One round: sends at most one incident (with its feedback first, when it has some).
     public async Task<UploadOutcome> StepAsync(CancellationToken ct = default)
@@ -139,11 +152,15 @@ public sealed class IncidentUploader
     // A new incident was saved: the next round comes now (still at most one a minute).
     public void Wake() => wake.Release();
 
+    // A note's words: through the window's FeedbackSender when there is one (no new fields).
+    private async Task<Guid> SubmitNoteAsync(string kind, string body, string version, string? device, JsonObject context, CancellationToken ct)
+        => feedback is null ? await api.SubmitAppFeedbackAsync(kind, body, version, device, context, ct)
+            : (await feedback.SubmitOnceAsync(kind, body, FeedbackSender.FitVersion(version), device, context, null, null, null, ct)).Id;
+
     private static bool NeedsFeedback(JsonObject incident) => incident["feedback"] is JsonObject && incident["feedbackId"] is null;
     private static bool NoteOnly(JsonObject incident) => incident[IncidentDocument.NoteOnlyField] is JsonValue v && v.TryGetValue<bool>(out var only) && only;
     // A wait a PT429 set (remembered under its own key), not a site without the RPC.
-    private const string RateLimitedKey = "#rate-limited";
-    private bool IsRateLimitWait(string rpc) => waits.TryGetValue(rpc + RateLimitedKey, out var until) && clock.GetUtcNow() < until;
+    private bool IsRateLimitWait(string rpc) => limiter.IsRateLimited(rpc);
 
     private bool TryRead(string file, out JsonObject incident)
     {
@@ -171,9 +188,9 @@ public sealed class IncidentUploader
             var device = Text(incident, "deviceName");
             if (NeedsFeedback(incident))
             {
-                var feedback = (JsonObject)incident["feedback"]!;
-                var id = await SendShortenedOnceAsync(file, incident, rpc, shortened => api.SubmitAppFeedbackAsync(Text(feedback, "kind") ?? "other",
-                    Body(Text(feedback, "body") ?? "", shortened), Version(incident, shortened), device, FeedbackContext(incident, shortened ? ShortenedContextBytes : MaximumContextBytes), ct));
+                var note = (JsonObject)incident["feedback"]!;
+                var id = await SendShortenedOnceAsync(file, incident, rpc, shortened => SubmitNoteAsync(Text(note, "kind") ?? "other",
+                    Body(Text(note, "body") ?? "", shortened), Version(incident, shortened), device, FeedbackContext(incident, shortened ? ShortenedContextBytes : MaximumContextBytes), ct));
                 incident["feedbackId"] = id.ToString();
                 feedbackSent.Add(file);
                 store.Rewrite(file, incident);
@@ -197,7 +214,7 @@ public sealed class IncidentUploader
         }
         catch (ArmoryRpcException error) when (error.IsFunctionMissing)
         {
-            Wait(rpc, NotLiveRetry);
+            limiter.NotLive(rpc, NotLiveRetry);
             log?.Invoke($"incident upload: the site has no {rpc} yet; {name} waits here, tried again in {NotLiveRetry.TotalHours:0} hours");
             return UploadOutcome.NotLive;
         }
@@ -205,7 +222,7 @@ public sealed class IncidentUploader
         {
             // PT429: the account's hourly limit. The DETAIL says when to send again.
             var wait = error.RetryAfter ?? RateLimitedRetry;
-            Wait(rpc + RateLimitedKey, wait);
+            limiter.RateLimited(rpc, wait);
             log?.Invoke($"incident upload: the site's limit for {rpc} was reached; {name} waits here, sent again in {Math.Ceiling(wait.TotalSeconds):0} s");
             return UploadOutcome.RateLimited;
         }
@@ -249,13 +266,6 @@ public sealed class IncidentUploader
             store.Rewrite(file, incident);
             return await send(true);
         }
-    }
-
-    private void Wait(string rpc, TimeSpan wait)
-    {
-        waits[rpc] = clock.GetUtcNow() + wait;
-        try { store.WriteWaits(waits); }
-        catch (Exception write) when (write is IOException or UnauthorizedAccessException) { }
     }
 
     private void Hold(string file)

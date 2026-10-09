@@ -3,6 +3,28 @@ namespace Armory.Agent.Tests;
 // Host rules that need no window, so they run on every host.
 public sealed class HostPiecesTests
 {
+    // armory_heartbeat refuses an app_version longer than 40 characters (22023), while feedback
+    // and incidents take 64 (idea-app ARMORY.md, "The two version limits do not match"). The
+    // version every call carries (AgentPaths.Version: the informational version before any "+",
+    // which Armory.Agent.csproj's <Version> sets) stays within 40, so no heartbeat is ever refused
+    // for it and nothing has to be cut.
+    [Fact]
+    public void The_app_version_fits_the_heartbeats_40_characters()
+    {
+        Assert.InRange(AgentPaths.Version.Length, 1, Armory.Client.TeamHeartbeat.MaximumVersionCharacters);
+        Assert.Equal(AgentPaths.Version, Armory.Client.TeamHeartbeat.VersionFor(AgentPaths.Version));
+        Assert.Equal(AgentPaths.Version, Armory.Client.FeedbackSender.FitVersion(AgentPaths.Version));
+        Assert.Equal(40, Armory.Client.TeamHeartbeat.MaximumVersionCharacters);
+        var root = Repo.FindRoot();
+        Assert.NotNull(root);
+        var project = System.Xml.Linq.XDocument.Load(Path.Combine(root, "src", "Armory.Agent", "Armory.Agent.csproj"));
+        var versions = project.Descendants().Where(e => e.Name.LocalName is "Version" or "VersionPrefix" or "VersionSuffix" or "InformationalVersion")
+            .Select(e => e.Value.Trim()).ToList();
+        Assert.NotEmpty(versions);
+        Assert.All(versions, v => Assert.InRange(v.Length, 1, Armory.Client.TeamHeartbeat.MaximumVersionCharacters));
+        Assert.StartsWith(project.Descendants().First(e => e.Name.LocalName == "Version").Value.Trim(), AgentPaths.Version);
+    }
+
     [Fact]
     public void Every_script_and_style_the_page_loads_carries_the_version()
     {

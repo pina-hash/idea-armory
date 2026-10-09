@@ -15,9 +15,16 @@ public sealed class TeamHeartbeat
     public static readonly TimeSpan CallTimeout = TimeSpan.FromSeconds(15);
     // A site without armory_heartbeat (404 PGRST202) is asked again after this long.
     public static readonly TimeSpan NotLiveRetry = TimeSpan.FromHours(6);
+    // armory_heartbeat refuses an app_version longer than this (22023), while feedback and
+    // incidents take 64 (ARMORY.md item 5, "The two version limits do not match"). A longer
+    // version is cut to it here, so a heartbeat is never refused for it.
+    public const int MaximumVersionCharacters = 40;
     private readonly ArmoryApi api;
     private readonly SessionManager sessions;
     private readonly string appVersion;
+    // False once the server refused the version anyway (22023, field app_version): from then on
+    // every beat sends none (null keeps what the server has), so one refusal never repeats.
+    private volatile bool sendVersion = true;
     private readonly TimeProvider clock;
     private readonly Action<string>? log;
     private readonly SemaphoreSlim changed = new(0, int.MaxValue);
@@ -30,12 +37,21 @@ public sealed class TeamHeartbeat
     {
         this.api = api;
         this.sessions = sessions;
-        this.appVersion = appVersion;
+        this.appVersion = VersionFor(appVersion);
         this.clock = clock ?? TimeProvider.System;
         this.log = log;
     }
 
     public string State => Volatile.Read(ref state);
+    // The version each beat sends: the app's, trimmed and cut to MaximumVersionCharacters.
+    public string AppVersion => appVersion;
+
+    // The version a heartbeat can carry: trimmed, at most MaximumVersionCharacters.
+    public static string VersionFor(string? version)
+    {
+        var v = (version ?? "").Trim();
+        return v.Length <= MaximumVersionCharacters ? v : v[..MaximumVersionCharacters].TrimEnd();
+    }
     public int Sent { get; private set; }
 
     // "syncing" while files move, "idle" otherwise.
@@ -80,7 +96,15 @@ public sealed class TeamHeartbeat
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeout.CancelAfter(CallTimeout);
-            await api.HeartbeatAsync(session.DeviceId, appVersion, beat, timeout.Token);
+            try { await api.HeartbeatAsync(session.DeviceId, sendVersion ? appVersion : null, beat, timeout.Token); }
+            catch (ArmoryRpcException error) when (sendVersion && error.SqlState == ArmoryRpcException.InvalidValueState && error.Detail?.Field == "app_version")
+            {
+                // Never expected (the version is cut to the limit above). This beat goes again at
+                // once without a version, and so does every later one: never the same refusal twice.
+                sendVersion = false;
+                Problem($"refused the version ({error.Reason}): {error.Message}; beats go on without it");
+                await api.HeartbeatAsync(session.DeviceId, null, beat, timeout.Token);
+            }
             Sent++;
             lastProblem = null;
             return true;

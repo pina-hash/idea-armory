@@ -169,4 +169,38 @@ public sealed class AgentTelemetryTests
         Assert.True(IncidentDocument.Read(File.ReadAllBytes(file))[IncidentDocument.NoteOnlyField]!.GetValue<bool>());
         Assert.DoesNotContain(network.Calls, c => c.Path.EndsWith("armory_submit_app_incident", StringComparison.Ordinal));
     }
+
+    // The host as AgentHost wires it (0.3.3): today's Send feedback goes through the window's
+    // FeedbackSender with no new fields (the eight-argument form while the site has it), and the
+    // sender and the uploader share one limiter over the incidents folder.
+    [Fact]
+    public async Task Send_feedback_goes_through_the_feedback_sender_with_no_new_fields()
+    {
+        using var temp = new TempFolder();
+        var paths = new AgentPaths(temp.Root, true);
+        Directory.CreateDirectory(paths.LogFolder);
+        var log = new AgentLog(paths.LogFile, paths.CrashFile);
+        var network = new Live();
+        var http = new HttpClient(network);
+        var sessions = new SessionManager(http, new InMemorySecretStore());
+        sessions.SignIn(new ArmorySession("https://project.supabase.test", Anon, Access, Refresh, DateTimeOffset.UtcNow.AddHours(1), "alex.kim@students.test", Guid.NewGuid(), "LAB-PC-07"));
+        await using var telemetry = new AgentTelemetry(paths, log);
+        var api = new ArmoryApi(new PostgrestClient(http, sessions, telemetry.Recorder));
+        var feedback = new FeedbackSender(api, new FeedbackScreenshots(http, sessions), sessions, AgentPaths.Version, telemetry.Limiter);
+        telemetry.Attach(() => sessions.Current, _ => Task.FromResult<JsonNode?>(new JsonObject { ["online"] = true }),
+            () => new JsonObject { ["quick"] = true }, api, () => false, feedback);
+        Assert.Equal((true, "Sent. Thank you for the feedback."), await telemetry.SendFeedbackAsync("bug", "Check in spun."));
+        var (path, note) = Assert.Single(network.Calls);
+        Assert.Equal("/rest/v1/rpc/armory_submit_app_feedback", path);
+        Assert.Equal(8, note.Count);
+        Assert.Equal(("bug", "Check in spun.", AgentPaths.Version), (note["p_kind"]!.GetValue<string>(), note["p_body"]!.GetValue<string>(), note["p_app_version"]!.GetValue<string>()));
+        Assert.Null(note["p_tried"]);
+        Assert.Null(note["p_area"]);
+        Assert.Null(note["p_screenshot"]);
+        // One limiter: a wait the sender records is the uploader's too.
+        telemetry.Limiter.RateLimited(ArmoryApi.SubmitFeedbackRpc, TimeSpan.FromMinutes(10));
+        Assert.Equal((true, "Saved. You've sent a lot today, so it will be sent in a little while."), await telemetry.SendFeedbackAsync("idea", "Dark mode."));
+        Assert.IsType<FeedbackResult.RateLimited>(await feedback.SendAsync(new FeedbackNote("idea", "Dark mode.")));
+        Assert.Single(network.Calls);
+    }
 }

@@ -42,7 +42,11 @@ internal sealed class AgentTelemetry : IAsyncDisposable
             Log = log.Info,
         }, clock, LastFlight);
         Reporter.Saved += _ => uploader?.Wake();
+        // One wait per RPC for the uploader and the window's Send feedback (a PT429 makes both wait).
+        Limiter = new SubmitLimiter(Reporter.Store, clock);
     }
+
+    internal SubmitLimiter Limiter { get; }
 
     internal FlightRecorder Recorder { get; }
     internal Scrubber Scrubber { get; }
@@ -69,13 +73,14 @@ internal sealed class AgentTelemetry : IAsyncDisposable
     }
 
     // The host is up: who is signed in, the engine's snapshot, and the uploader on its network.
+    // feedback: the window's FeedbackSender (made over Limiter); a note's words go through it.
     internal void Attach(Func<ArmorySession?> currentSession, Func<CancellationToken, Task<JsonNode?>> describe, Func<JsonNode?> quick,
-        ArmoryApi api, Func<bool> transferring)
+        ArmoryApi api, Func<bool> transferring, FeedbackSender? feedback = null)
     {
         session = currentSession;
         snapshot = describe;
         quickSnapshot = quick;
-        uploader = new IncidentUploader(api, Reporter.Store, transferring, log: log.Info);
+        uploader = new IncidentUploader(api, Reporter.Store, transferring, log: log.Info, feedback: feedback, limiter: Limiter);
         uploading = Task.Run(() => uploader.RunAsync(stopping.Token));
     }
 

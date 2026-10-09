@@ -32,6 +32,14 @@ public sealed record BatchFileResult(Guid FileId, bool Ok, bool Done, string? Co
 // {total, succeeded, refused, results}. Some files can land while others are refused: a batch is
 // never all or nothing, so callers report each file.
 public sealed record BatchResult(int Total, int Succeeded, int Refused, IReadOnlyList<BatchFileResult> Results);
+// One of the caller's own feedback notes (v0.3.2, idea-app 0235, armory_my_app_feedback), newest
+// first. Status is new, seen, resolved or closed: a note the site marked spam reads closed, so the
+// app never calls a person's note spam. There are no replies from the team: the site has none.
+public sealed record AppFeedbackNote(Guid Id, DateTimeOffset CreatedAt, string Kind, string Body, string? Tried, string? Area, bool HasScreenshot,
+    string AppVersion, string? DeviceName, string Status, DateTimeOffset? ReviewedAt)
+{
+    public const string New = "new", Seen = "seen", Resolved = "resolved", Closed = "closed";
+}
 // The payload of a folder_purged change (v0.3, armory_purge_folder): those files and their
 // history are gone from the server.
 public sealed record FolderPurge(string Folder, int Files, IReadOnlyList<Guid> FileIds, string? By)
@@ -125,6 +133,32 @@ public sealed class ArmoryApi(PostgrestClient rest)
     public async Task<Guid> SubmitAppFeedbackAsync(string kind, string body, string appVersion, string? deviceName, JsonObject context, CancellationToken ct = default)
         => GuidOf(await rest.CallAsync(SubmitFeedbackRpc, Args(("p_kind", kind), ("p_body", body), ("p_app_version", appVersion), ("p_device_name", deviceName),
             ("p_context", context)), ct));
+    // v0.3.2 (idea-app 0235): the eight-argument form, with what was tried, the area of the app and
+    // a screenshot's key in armory-feedback-shots (uploaded first, FeedbackScreenshots). It has no
+    // defaults, so all eight named arguments always go, a blank one as null (no call can match both
+    // forms). kind: bug, idea, praise or other. A site before 0235 answers 404 PGRST202
+    // (FeedbackSender falls back to the five arguments). Refusals are 22023 with DETAIL {reason,
+    // field}: too_long for tried (1000) and area (120), bad_path, not_found and in_use for the
+    // screenshot; PT429 is shared with the five-argument form (20 an hour).
+    public async Task<Guid> SubmitAppFeedbackAsync(string kind, string body, string appVersion, string? deviceName, JsonObject context,
+        string? tried, string? area, string? screenshot, CancellationToken ct = default)
+        => GuidOf(await rest.CallAsync(SubmitFeedbackRpc, Args(("p_kind", kind), ("p_body", body), ("p_app_version", appVersion), ("p_device_name", deviceName),
+            ("p_context", context), ("p_tried", Blank(tried)), ("p_area", Blank(area)), ("p_screenshot", Blank(screenshot))), ct));
+
+    // v0.3.2 (idea-app 0235): the caller's own notes, newest first, at most limit (the site clamps
+    // it to 1 to 200). Null when the site does not have it yet (404 PGRST202): the window hides
+    // "Your feedback". No session: ArmoryRpcException 42501.
+    public const string MyFeedbackRpc = "armory_my_app_feedback";
+    public async Task<IReadOnlyList<AppFeedbackNote>?> MyAppFeedbackAsync(int limit = 50, CancellationToken ct = default)
+    {
+        JsonNode? node;
+        try { node = await rest.CallAsync(MyFeedbackRpc, Args(("p_limit", limit)), ct); }
+        catch (ArmoryRpcException error) when (error.IsFunctionMissing) { return null; }
+        return Array(node).Select(n => new AppFeedbackNote(Guid.Parse(n["id"]!.GetValue<string>()), Time(n["created_at"])!.Value,
+            n["kind"]!.GetValue<string>(), n["body"]!.GetValue<string>(), TextOf(n["tried"]), TextOf(n["area"]),
+            n["has_screenshot"] is JsonValue shot && shot.GetValue<bool>(), TextOf(n["app_version"]) ?? "", TextOf(n["device_name"]),
+            FeedbackStatus(TextOf(n["status"])), Time(n["reviewed_at"]))).ToArray();
+    }
     // kind: crash, slowAction, slowPass, repeatedFailure, repairedCheckout, readOnlyBroken or userReport.
     public async Task<Guid> SubmitAppIncidentAsync(string kind, string summary, string appVersion, string? deviceName, Guid? project, JsonObject report,
         Guid? feedback, CancellationToken ct = default)
@@ -148,7 +182,8 @@ public sealed class ArmoryApi(PostgrestClient rest)
     public async Task HeartbeatAsync(Guid device, string? appVersion, string? state, CancellationToken ct = default)
         => await rest.CallAsync("armory_heartbeat", Args(("p_device", device), ("p_app_version", appVersion), ("p_state", state)), ct);
 
-    // v0.3 (0233): at most this many distinct files per armory_lock_files or armory_release_locks.
+    // v0.3 (0233, 0234): at most this many distinct files per armory_lock_files, armory_release_locks
+    // or armory_break_locks.
     public const int MaximumBatchFiles = 500;
 
     // v0.3 (0233). armory_acquire_lock per file, in id order, in one call. 1 to 500 distinct
@@ -159,6 +194,15 @@ public sealed class ArmoryApi(PostgrestClient rest)
     // v0.3 (0233). The same over armory_release_lock.
     public async Task<BatchResult> ReleaseLocksAsync(IReadOnlyCollection<Guid> files, Guid device, Guid operation, CancellationToken ct = default)
         => BatchOf(await rest.CallAsync("armory_release_locks", Args(("p_files", BatchFiles(files)), ("p_device", device), ("p_operation", operation)), ct), "released");
+
+    // v0.3.1 (idea-app 0234). Force check in: armory_break_lock per file, in id order, in one call,
+    // each file under an operation id the server derives from this one and the file. 1 to 500
+    // distinct files (Chunk anything larger). Done is broken: false means nobody had it checked
+    // out any more. A replayed operation answers the first time and writes nothing. A site before
+    // 0234 answers 404 PGRST202: the caller sends one BreakLockAsync per file instead.
+    public const string BreakLocksRpc = "armory_break_locks";
+    public async Task<BatchResult> BreakLocksAsync(IReadOnlyCollection<Guid> files, Guid device, Guid operation, CancellationToken ct = default)
+        => BatchOf(await rest.CallAsync(BreakLocksRpc, Args(("p_files", BatchFiles(files)), ("p_device", device), ("p_operation", operation)), ct), "broken");
 
     // Files in batches the server takes: distinct, in id order, at most MaximumBatchFiles each.
     public static IReadOnlyList<Guid[]> Chunk(IEnumerable<Guid> files)
@@ -193,6 +237,16 @@ public sealed class ArmoryApi(PostgrestClient rest)
         _ => throw new InvalidDataException($"Unknown member role {role}."),
     };
     private static Dictionary<string, object?> Args(params (string Name, object? Value)[] values) => values.ToDictionary(v => v.Name, v => v.Value);
+    // A blank optional text goes as null (the site stores a blank one as nothing too).
+    private static string? Blank(string? text) => string.IsNullOrWhiteSpace(text) ? null : text;
+    private static string? TextOf(JsonNode? node) => node is JsonValue v && v.TryGetValue<string>(out var text) ? text : null;
+    // new, seen, resolved or closed; spam is never shown as such (the site already says closed).
+    private static string FeedbackStatus(string? status) => status switch
+    {
+        AppFeedbackNote.Seen or AppFeedbackNote.Resolved or AppFeedbackNote.Closed => status,
+        "spam" => AppFeedbackNote.Closed,
+        _ => AppFeedbackNote.New,
+    };
     private static Guid[] BatchFiles(IReadOnlyCollection<Guid> files)
     {
         var distinct = files.Distinct().Order().ToArray();
