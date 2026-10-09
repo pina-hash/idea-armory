@@ -64,6 +64,26 @@ older `invalid_grant` form) means this
 computer is signed out; the client raises `SignedOut` and never retries with the old token.
 Refresh is single-flight and starts 60 seconds before `expires_at`.
 
+**Ending a sign-in on the server (0.3.3).** `SessionManager.SignOutSessionAsync()` ends this
+session on the server, then forgets it here:
+
+```
+POST {supabase_url}/auth/v1/logout?scope=local
+apikey: {anon_key}
+Authorization: Bearer {access_token}
+```
+
+`scope=local` ends only this session (the student's other computers stay signed in). It renews an
+access token about to expire first, waits at most 5 seconds, and answers whether the server
+agreed (a 2xx answer); offline or refused, the session is forgotten here all the same (`SignOut()`), so it is best
+effort. A computer several students share (docs/agent/PROFILES.md) calls it when a student is
+removed, when a sign-in that is not kept is dropped, and when shared mode is turned off for the
+students who are forgotten. On such a computer each student has their own `SessionManager`,
+`ArmoryApi`, `BlobClient`, `ConnectFlow`, `TeamHeartbeat` and `FeedbackSender` (the host's
+`ProfileClients`) over their own secret store, sharing only the host's three `HttpClient`s, so a
+refresh token always has exactly one owner and a call that started as one student can never
+finish as another.
+
 ## 3. ideabosco.com (contract sections 2 and 3)
 
 `POST {site}/api/armory/blob-url` with the access token, exactly as the contract says. The

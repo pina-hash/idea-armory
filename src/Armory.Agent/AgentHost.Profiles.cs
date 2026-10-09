@@ -462,15 +462,34 @@ internal sealed partial class AgentHost
         var id = ProfileStore.NewId();
         var made = ProfileClients.Create(id, profiles.SecretsOf(id), HostClients, site, parts.Browser, Telemetry, log);
         var cancel = new CancellationTokenSource();
+        CancellationTokenSource? previous = null;
+        PendingAdd? dropped = null;
+        var busy = false;
         lock (profileGate)
         {
-            if (signingIn is not null || picker.Kind == PickerSteps.Switching) { cancel.Dispose(); return Task.FromResult(new ActionResult(true, "")); }
-            signingIn = cancel;
-            pendingAdd = new PendingAdd(id, made, null);
-            picker = new Picker(true, PickerSteps.Adding, ConnectPhase: "waitingForBrowser");
+            // "Open the browser again" while a student is being added: that sign-in stops and a
+            // new one starts. Any other sign-in under way, or a switch, is left to finish.
+            if (picker.Kind == PickerSteps.Switching || (signingIn is not null && picker.Kind != PickerSteps.Adding)) busy = true;
+            else
+            {
+                previous = signingIn;
+                dropped = previous is null ? null : pendingAdd;
+                signingIn = cancel;
+                pendingAdd = new PendingAdd(id, made, null);
+                picker = new Picker(true, PickerSteps.Adding, ConnectPhase: "waitingForBrowser");
+            }
         }
+        if (busy)
+        {
+            cancel.Dispose();
+            profiles.Forget(id);
+            return Task.FromResult(new ActionResult(true, ""));
+        }
+        try { previous?.Cancel(); }
+        catch (ObjectDisposedException) { }
+        if (dropped is not null) _ = ForgetAddedAsync(dropped);
         RaiseView();
-        log.Info("picker: adding a student, waiting for the browser");
+        log.Info(previous is null ? "picker: adding a student, waiting for the browser" : "picker: adding a student, the browser opened again");
         _ = Task.Run(() => AddInBrowserAsync(id, made, cancel));
         return Task.FromResult(new ActionResult(true, ""));
     }
@@ -480,6 +499,16 @@ internal sealed partial class AgentHost
         try
         {
             var session = await made.Connector.ConnectAsync(parts.MachineName, cancel.Token);
+            // Stopped (Cancel, or Open the browser again) just as it finished: not kept.
+            bool ours;
+            lock (profileGate) ours = ReferenceEquals(signingIn, cancel) && pendingAdd?.Id == id;
+            if (!ours)
+            {
+                await made.Sessions.SignOutSessionAsync();
+                profiles!.Forget(id);
+                log.Info("picker: a sign-in that was stopped finished anyway; not kept");
+                return;
+            }
             log.Info("picker: signed in as " + session.Email + " to add a student");
             ProfileRecord? existing;
             bool pins;
@@ -563,13 +592,20 @@ internal sealed partial class AgentHost
         var temp = ProfileClients.Create(null, new InMemorySecretStore(), HostClients, site, parts.Browser, Telemetry, log);
         var cancel = new CancellationTokenSource();
         SignInPurpose purpose;
+        CancellationTokenSource? previous;
         lock (profileGate)
         {
-            if (signingIn is not null || picker.Kind == PickerSteps.Switching) { cancel.Dispose(); return Task.FromResult(new ActionResult(true, "")); }
-            purpose = picker.Kind == PickerSteps.SignInAgain && picker.ProfileId == profileId ? picker.Purpose : SignInPurpose.Forgot;
+            // "Open the browser again" for the same student: that sign-in stops and a new one
+            // starts. Any other sign-in under way, or a switch, is left to finish.
+            var again = picker.Kind == PickerSteps.SignInAgain && picker.ProfileId == profileId;
+            if (picker.Kind == PickerSteps.Switching || (signingIn is not null && !again)) { cancel.Dispose(); return Task.FromResult(new ActionResult(true, "")); }
+            purpose = again ? picker.Purpose : SignInPurpose.Forgot;
+            previous = signingIn;
             signingIn = cancel;
             picker = new Picker(true, PickerSteps.SignInAgain, profileId, ConnectPhase: "waitingForBrowser", Purpose: purpose);
         }
+        try { previous?.Cancel(); }
+        catch (ObjectDisposedException) { }
         RaiseView();
         log.Info($"picker: {record.Email} signs in again ({purpose})");
         _ = Task.Run(() => SignInAgainAsync(record, temp, purpose, cancel));
@@ -581,7 +617,18 @@ internal sealed partial class AgentHost
         try
         {
             var session = await temp.Connector.ConnectAsync(parts.MachineName, cancel.Token);
-            lock (profileGate) signingIn = null;
+            bool ours;
+            lock (profileGate)
+            {
+                ours = ReferenceEquals(signingIn, cancel);
+                if (ours) signingIn = null;
+            }
+            if (!ours)
+            {
+                // Stopped (Cancel, or Open the browser again) just as it finished: not used.
+                _ = temp.Sessions.SignOutSessionAsync();
+                return;
+            }
             if (!Rules.SameEmail(session.Email, record.Email))
             {
                 // Someone else's account: not kept, and it changes nothing of this student's.

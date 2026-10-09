@@ -4,7 +4,8 @@
  * Renders everything from the AgentView the host sends (docs/agent/BRIDGE.md) and talks
  * back only through window.ArmoryBridge. Three screens: Connect, Home (the status, what
  * is moving right now, notices, My files and the team's files to browse) and File
- * detail, plus the Settings sheet and one small dialog for folder questions. The words
+ * detail, plus the Settings sheet and one small dialog for folder questions. On a computer
+ * several students share, a fourth screen, the picker, asks who is using Armory. The words
  * are for students who have never used a shared CAD folder: plain sentences, no jargon.
  *
  * Long lists (a folder of 5,000 files) are drawn a screenful at a time: rows have one
@@ -512,7 +513,9 @@
 		// A theme just picked holds until a view carries it, so an older view never flips it back.
 		if (ui.themeWanted && v.settings && v.settings.theme === ui.themeWanted) ui.themeWanted = null;
 		document.documentElement.setAttribute('data-theme', ui.themeWanted ? effectiveOf(ui.themeWanted, v.effectiveTheme) : v.effectiveTheme === 'spaceWhite' ? 'spaceWhite' : 'idea');
-		var screen = v.connection === 'signedIn' ? ui.screen : 'connect';
+		var screen = picking(v) ? 'picker' : v.connection === 'signedIn' ? ui.screen : 'connect';
+		// The picker forgets the page's place: the next student starts on their own Home.
+		if (screen === 'picker') leaveForPicker();
 		var focus = activeKey();
 		// In a wide window Home's lists scroll inside the recessed column, and a new view
 		// must not throw the student back to the top of them.
@@ -521,8 +524,9 @@
 		lists = {};
 		lastActivity = null;
 		document.body.setAttribute('data-screen', screen);
-		headerKeys.innerHTML = screen === 'connect' ? '' : headerHtml(v);
-		if (screen === 'connect') main.innerHTML = connectHtml(v);
+		headerKeys.innerHTML = screen === 'connect' || screen === 'picker' ? '' : headerHtml(v);
+		if (screen === 'picker') main.innerHTML = pickerHtml(v);
+		else if (screen === 'connect') main.innerHTML = connectHtml(v);
 		else if (screen === 'detail') main.innerHTML = detailHtml(v);
 		else main.innerHTML = homeHtml(v);
 		// Long lists first draw where they were, so the page is its full height before
@@ -532,13 +536,14 @@
 		applyBars(main);
 		logToEnd(main);
 		if (sheet.open) {
-			if (screen === 'connect') sheet.close();
+			if (screen === 'connect' || screen === 'picker') sheet.close();
 			else sheet.innerHTML = settingsHtml(v);
 		}
-		if (ask.open && screen === 'connect') ask.close();
+		if (ask.open && (screen === 'connect' || screen === 'picker')) ask.close();
 		document.title = screen === 'detail' && ui.detail ? ui.detail.name + ' · Armory' : 'Armory';
 		mountLists(false);
 		restoreFocus(focus);
+		if (screen === 'picker') focusPicker();
 		paintDrag();
 		updateCues();
 	}
@@ -637,8 +642,12 @@
 	function folderTakenHtml(v) {
 		var msg = v.connect.message || '';
 		var m = msg.match(/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/);
-		var owner = m ? m[0] : null;
-		var ownerName = owner ? nameFromEmail(owner) : null;
+		// Whose the folder is, as the engine read it from the folder itself (FolderOwnerView);
+		// an address in the message only when a host sends no owner.
+		var fo = v.folderOwner;
+		var owner = fo ? fo.email : m ? m[0] : null;
+		var ownerName = fo ? fo.name : owner ? nameFromEmail(owner) : null;
+		var theirs = fo && fo.waiting && fo.waiting.length ? fo.waiting : null;
 		var me = v.account ? v.account.email : null;
 		var mine = v.vaultRoot.replace(/[\\/]+$/, '') + '-' + (me ? nameFromEmail(me).split(' ')[0].toLowerCase() : 'mine');
 
@@ -649,6 +658,9 @@
 			'<p class="lead"><span class="mono-inline">' + esc(v.vaultRoot) + '</span> is ' + (ownerName ? esc(ownerName) + '\'s' : 'someone else\'s') + ' Armory folder. ' +
 			'If ' + (ownerName ? esc(ownerName.split(' ')[0]) : 'they') + ' saved everything to Armory, you can use it now: Armory checks first, and nothing of theirs changes. ' +
 			'If something of theirs is still waiting, use a folder of your own.</p>';
+		if (theirs)
+			html +=
+				'<p class="connect-where">' + esc(glue(firstName(ownerName) + ' still has ' + (theirs.length > 1 ? theirs.slice(0, -1).join(', ') + ' and ' + theirs[theirs.length - 1] : theirs[0]) + ' here.')) + '</p>';
 		if (!owner && msg) html += '<p class="connect-where">' + esc(msg) + '</p>';
 		html += '<dl class="accounts">';
 		if (owner) html += '<div><dt class="label">This folder belongs to</dt><dd class="mono-plate">' + esc(owner) + '</dd></div>';
@@ -662,6 +674,539 @@
 		html += '<p class="connect-foot">Not sure? Ask your teacher. Not you? <button class="textlink" type="button" data-action="signOut" data-key="cn-signout">Sign out</button></p>';
 		html += '</div></div>';
 		return html;
+	}
+
+	/* ---- A shared computer: who is using Armory ---- */
+
+	/*
+	 * Several students take turns on one computer with one Windows sign-in (PROFILES.md).
+	 * While view.profiles.showing is true the window shows the picker and nothing else: a
+	 * tile per student (their initials in a disc of their own color, their name, one line
+	 * about them) and Add a student. One click continues as that student, after their
+	 * 4-digit PIN when PINs are on. Meanwhile the view carries none of the student in use's
+	 * files, so nothing of theirs shows to whoever is at the computer.
+	 */
+	var HUES = 8;
+	var PIN_DIGITS = 4;
+	/** The picker's own page state: the step it last focused, digits typed so far (kept
+	 *  through a redraw), when a wait ends, and a new PIN typed twice that didn't match. */
+	var pickerUi = { focused: null, typed: {}, viewSeen: null, waitUntil: 0, waitTimer: 0, mismatch: false, lastProfile: null };
+
+	function picking(v) {
+		return !!(v && v.profiles && v.profiles.showing);
+	}
+
+	function profileOf(v, id) {
+		var list = v && v.profiles ? v.profiles.profiles : [];
+		for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i];
+		return null;
+	}
+
+	/** A student's picture: their initials in a disc of their own color, the same every time. */
+	function faceHtml(p, cls) {
+		var hue = Math.abs(Math.floor(Number(p.hue) || 0)) % HUES;
+		return '<span class="avatar face' + (cls ? ' ' + cls : '') + '" data-hue="' + hue + '" aria-hidden="true">' + esc(p.initials || initials(p.name)) + '</span>';
+	}
+
+	/** What a tile says under the name. */
+	function tileLine(p) {
+		if (p.current) return 'Using Armory now';
+		if (p.needsSignIn) return 'Sign in again to continue';
+		if (p.waiting) return firstName(p.name) + ' has ' + p.waiting + (p.ownFolder ? ' in ' + p.folder : ' here');
+		if (p.lastUsedAt) return 'Last here ' + ago(p.lastUsedAt);
+		return 'New on this computer';
+	}
+
+	/** A step is new when its kind, its student or its sign-in phase changes. */
+	function stepKey(s) {
+		return [s.kind, s.profileId || '', s.connectPhase || ''].join(':');
+	}
+
+	var PICKER_TITLES = {
+		pin: 'Type your PIN',
+		newPin: 'Choose your PIN',
+		adding: 'Add a student',
+		signInAgain: 'Sign in again',
+		folderBusy: 'Choose your folder',
+		switching: 'Switching students'
+	};
+
+	function pickerHtml(v) {
+		var s = v.profiles.step;
+		// A new view: a wait the host counted starts from now, and a new step forgets digits.
+		if (pickerUi.viewSeen !== v) {
+			pickerUi.viewSeen = v;
+			clearTimeout(pickerUi.waitTimer);
+			pickerUi.waitUntil = s.kind === 'pin' && s.waitSeconds ? Date.now() + s.waitSeconds * 1000 : 0;
+			if (pickerUi.waitUntil) pickerUi.waitTimer = setTimeout(render, s.waitSeconds * 1000 + 50);
+		}
+		if (pickerUi.focused !== stepKey(s)) {
+			pickerUi.typed = {};
+			pickerUi.mismatch = false;
+		}
+		if (s.profileId) pickerUi.lastProfile = s.profileId;
+		var html = titleBar('h1', PICKER_TITLES[s.kind] || 'Who is using Armory?');
+		html += '<div class="connect plate-recess picker"><div class="connect-inner brackets picker-inner" data-step="' + esc(s.kind) + '">';
+		if (s.kind === 'pin') html += pinStepHtml(v, s);
+		else if (s.kind === 'newPin') html += newPinStepHtml(v, s);
+		else if (s.kind === 'adding') html += addingStepHtml(v, s);
+		else if (s.kind === 'signInAgain') html += signInStepHtml(v, s);
+		else if (s.kind === 'folderBusy') html += folderBusyStepHtml(v, s);
+		else if (s.kind === 'switching') html += switchingStepHtml(v, s);
+		else if (s.kind === 'tooNew') html += lcdPlate('bad', 'Update Armory', s.message, false);
+		else html += chooseStepHtml(v, s);
+		return html + '</div></div>';
+	}
+
+	/** The student a step is for: their picture, name and address. */
+	function studentHtml(p) {
+		if (!p) return '';
+		return (
+			'<div class="picker-who">' + faceHtml(p, 'picker-face') +
+			'<span class="picker-who-words"><span class="picker-who-name">' + esc(p.name) + '</span><span class="picker-who-email">' + esc(p.email) + '</span></span></div>'
+		);
+	}
+
+	function pickerKey(o) {
+		return (
+			'<button class="key' + (o.primary ? ' primary' : '') + '" type="button" data-action="' + o.action + '" data-key="' + esc(o.key) + '"' +
+			(o.profileId ? ' data-profile-id="' + esc(o.profileId) + '"' : '') + (o.choice ? ' data-choice="' + esc(o.choice) + '"' : '') + busyAttrs(o.key) + '>' +
+			(o.glyph ? icon(o.glyph) : '') + '<span>' + o.html + '</span></button>'
+		);
+	}
+
+	function chooseStepHtml(v, s) {
+		var pr = v.profiles;
+		var current = profileOf(v, pr.currentId);
+		var html = '';
+		if (s.message) html += lcdPlate('look', 'Try again', s.message, false);
+		html +=
+			'<p class="lead">' +
+			(pr.profiles.length
+				? pr.pinsRequired ? 'Pick your name, then type your PIN.' : 'Pick your name to continue.'
+				: 'Nobody uses Armory on this computer yet. Add yourself to start: you sign in with your school Google account once, then pick your name here each time.') +
+			'</p>';
+		html += '<ul class="picker-tiles" aria-label="Students on this computer">';
+		pr.profiles.forEach(function (p) {
+			var k = 'pf-' + p.id;
+			html +=
+				'<li><button class="pad profile-tile" type="button" data-action="pickProfile" data-profile-id="' + esc(p.id) + '" data-key="' + esc(k) + '"' +
+				(p.current ? ' aria-current="true"' : '') + busyAttrs(k) + '>' +
+				faceHtml(p, 'tile-face') + '<span class="tile-name">' + esc(p.name) + '</span><span class="tile-line">' + esc(glue(tileLine(p))) + '</span></button></li>';
+		});
+		html +=
+			'<li><button class="pad profile-tile add-tile" type="button" data-action="addProfile" data-key="pf-add"' + busyAttrs('pf-add') + '>' +
+			'<span class="avatar face tile-face add-face" aria-hidden="true">' + icon('person-add') + '</span>' +
+			'<span class="tile-name">Add a student</span><span class="tile-line">Sign in once with Google</span></button></li>';
+		html += '</ul>';
+		var foot = [];
+		if (current) foot.push('Armory keeps working for ' + firstName(current.name) + ' until someone else picks their name.');
+		if (!pr.pinsRequired && pr.profiles.length) foot.push('PINs are off on this computer.' + (pr.pinsNote ? ' ' + pr.pinsNote : ''));
+		if (foot.length) html += '<p class="connect-foot">' + esc(glue(foot.join(' '))) + '</p>';
+		return html;
+	}
+
+	/** A 4-digit field: digits only, kept through a redraw, never shown. */
+	function pinField(id, disabled, describedBy) {
+		return (
+			'<input class="field pin-field" id="' + id + '" data-key="' + id + '" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="' + PIN_DIGITS + '"' +
+			' autocomplete="off" spellcheck="false" aria-describedby="' + describedBy + '" value="' + esc(pickerUi.typed[id] || '') + '"' + (disabled ? ' disabled' : '') + ' />'
+		);
+	}
+
+	function pinStepHtml(v, s) {
+		var p = profileOf(v, s.profileId);
+		var waiting = pickerUi.waitUntil > Date.now();
+		var message = s.message || '';
+		if (s.waitSeconds && !waiting) message = 'You can try again now.';
+		var html = studentHtml(p);
+		html += '<p class="lead" id="pin-help">Type your 4\u2011digit PIN.</p>';
+		html +=
+			'<div class="pin-box"><label class="field-label label" for="pin-input">PIN</label>' + pinField('pin-input', waiting, 'pin-help pin-error') +
+			'<p class="field-error" id="pin-error" aria-live="polite">' + esc(glue(message)) + '</p></div>';
+		html += '<div class="connect-actions">';
+		html += pickerKey({ action: 'forgotPin', key: 'pin-forgot', profileId: s.profileId, primary: waiting, html: 'Forgot your PIN?' });
+		html += pickerKey({ action: 'cancelPicker', key: 'pin-back', glyph: 'chev-left', html: 'Back' });
+		html += '</div>';
+		return html;
+	}
+
+	function newPinStepHtml(v, s) {
+		var p = profileOf(v, s.profileId);
+		var html = studentHtml(p);
+		html +=
+			'<p class="lead" id="newpin-help">Choose a 4\u2011digit PIN. You type it each time you pick your name on this computer, so pick one your classmates can\'t guess.</p>';
+		html += '<div class="pin-pair">';
+		html += '<div class="pin-box"><label class="field-label label" for="pin-new-1">New PIN</label>' + pinField('pin-new-1', false, 'newpin-help pin-error') + '</div>';
+		html += '<div class="pin-box"><label class="field-label label" for="pin-new-2">Type it again</label>' + pinField('pin-new-2', false, 'newpin-help pin-error') + '</div>';
+		html += '</div>';
+		html +=
+			'<p class="field-error pin-error" id="pin-error" aria-live="polite">' +
+			esc(pickerUi.mismatch ? 'Those PINs don\'t match. Type your new PIN again.' : s.message || '') + '</p>';
+		html += '<div class="connect-actions">' + pickerKey({ action: 'cancelPicker', key: 'newpin-back', glyph: 'chev-left', html: 'Back' }) + '</div>';
+		return html;
+	}
+
+	/** The sign-in in the browser goes the way Connect's does. The browser may still be
+	 *  signed in as the last student, so the step says which link to click. */
+	var NOT_YOU = 'If the page shows someone else, click <strong>Not you? Use another account</strong> first.';
+
+	function addingStepHtml(v, s) {
+		var failed = s.connectPhase === 'failed';
+		var current = failed ? 1 : 2;
+		var html = '<ol class="steps">';
+		html += step(1, current, failed ? 'Click <strong>Try again</strong> below.' : 'Click <strong>Add a student</strong>.');
+		html += step(2, current, 'Sign in with your school Google account in the browser that opens. ' + NOT_YOU);
+		html += step(3, current, v.profiles.pinsRequired ? 'Come back here and choose your 4\u2011digit PIN.' : 'Come back here. Your files show up by themselves.');
+		html += '</ol>';
+		if (failed) html += lcdPlate('bad', 'Sign-in didn\'t finish', s.message || 'Check that you\'re online, then try again.', false);
+		else html += lcdPlate('look', 'Waiting for Google', 'Finish signing in in your browser. This window updates by itself.', true);
+		html += '<div class="connect-actions">';
+		if (failed) {
+			html += pickerKey({ action: 'addProfile', key: 'add-retry', primary: true, html: 'Try again' });
+			html += pickerKey({ action: 'cancelPicker', key: 'add-back', glyph: 'chev-left', html: 'Back' });
+		} else {
+			html += pickerKey({ action: 'addProfile', key: 'add-reopen', html: 'Open the browser again' });
+			html += pickerKey({ action: 'cancelPicker', key: 'add-cancel', html: 'Cancel' });
+		}
+		return html + '</div>';
+	}
+
+	function signInStepHtml(v, s) {
+		var p = profileOf(v, s.profileId);
+		var waiting = s.connectPhase === 'waitingForBrowser';
+		var failed = s.connectPhase === 'failed';
+		var html = studentHtml(p);
+		if (waiting) html += lcdPlate('look', 'Waiting for Google', (s.message ? s.message + ' ' : '') + 'This window updates by itself.', true);
+		else if (failed) html += lcdPlate('bad', 'Sign-in didn\'t finish', s.message || 'Check that you\'re online, then try again.', false);
+		else html += '<p class="lead">' + esc(glue(s.message || 'Sign in with your school Google account once more.')) + '</p>';
+		html += '<p class="connect-where">' + NOT_YOU + '</p>';
+		html += '<div class="connect-actions">';
+		if (waiting) {
+			html += pickerKey({ action: 'forgotPin', key: 'si-reopen', profileId: s.profileId, html: 'Open the browser again' });
+			html += pickerKey({ action: 'cancelPicker', key: 'si-cancel', html: 'Cancel' });
+		} else {
+			html += pickerKey({ action: 'forgotPin', key: 'si-go', profileId: s.profileId, primary: true, html: failed ? 'Try again' : 'Sign in with Google' });
+			html += pickerKey({ action: 'cancelPicker', key: 'si-back', glyph: 'chev-left', html: 'Back' });
+		}
+		return html + '</div>';
+	}
+
+	/** The shared folder holds the last student's work: they keep it, and the next student
+	 *  waits or works in a folder of their own for now. */
+	function folderBusyStepHtml(v, s) {
+		var owner = s.ownerName || 'Another student';
+		var first = firstName(owner);
+		var shared = v.profiles.sharedFolder;
+		var html = studentHtml(profileOf(v, s.profileId));
+		html += lcdPlate('look', first + '\'s work is in this folder', null, false);
+		html +=
+			'<p class="lead">' + esc(owner) + ' has ' + esc(s.ownerWaiting || 'work waiting') + ' in <span class="mono-inline">' + esc(shared) + '</span>. ' +
+			'It stays ' + esc(first) + '\'s until ' + esc(first) + ' finishes it here. Wait for ' + esc(first) + ', or work in a folder of your own for now.</p>';
+		html += '<div class="connect-actions">';
+		if (s.ownFolder)
+			html += pickerKey({ action: 'chooseFolder', key: 'fb-own', profileId: s.profileId, choice: 'own', primary: true, html: 'Use <span class="key-path">' + esc(s.ownFolder) + '</span>' });
+		html += pickerKey({ action: 'chooseFolder', key: 'fb-wait', profileId: s.profileId, choice: 'wait', html: 'Wait for ' + esc(first) });
+		html += '</div>';
+		if (s.ownFolder)
+			html +=
+				'<p class="connect-foot">' +
+				esc(
+					glue(
+						'In your own folder your files have a different path than in ' + shared + ', so an assembly can look for its parts in the other folder: open your work from ' +
+							s.ownFolder + '. Once nothing of yours waits there, Armory moves you back to ' + shared + '.'
+					)
+				) +
+				'</p>';
+		return html;
+	}
+
+	function switchingStepHtml(v, s) {
+		var p = profileOf(v, s.profileId);
+		var words = s.message || (s.fromName ? 'Armory finishes what it was doing for ' + firstName(s.fromName) + ' first. This takes a moment.' : 'This takes a moment.');
+		return studentHtml(p) + lcdPlate('ok', 'Switching to ' + (p ? firstName(p.name) : 'the next student'), words, true);
+	}
+
+	/** The picker forgets the page's place, so nothing of the last student's stays open for
+	 *  the next one: File detail, picked files, open lists, where Home was scrolled. */
+	function leaveForPicker() {
+		ui.screen = 'home';
+		ui.detail = null;
+		ui.selected = {};
+		ui.anchor = null;
+		ui.expanded = {};
+		ui.projectId = null;
+		ui.folders = {};
+		ui.homeScroll = 0;
+		ui.homeRecess = 0;
+	}
+
+	/** After a redraw: a new step puts focus on its first control. Back on the tiles, the
+	 *  tile of the student the last step was for. */
+	function focusPicker() {
+		var s = ui.view.profiles.step;
+		var k = stepKey(s);
+		if (pickerUi.focused === k) return;
+		pickerUi.focused = k;
+		var target =
+			s.kind === 'pin' || s.kind === 'newPin'
+				? document.querySelector('#pin-input:not([disabled]), #pin-new-1') || document.querySelector('.picker-inner .key')
+				: s.kind === 'choose'
+					? document.querySelector('.profile-tile[data-profile-id="' + sel(pickerUi.lastProfile || '') + '"]') ||
+						document.querySelector('.profile-tile[aria-current="true"]') ||
+						document.querySelector('.profile-tile')
+					: document.querySelector('.picker-inner .key.primary') || document.querySelector('.picker-inner .key');
+		if (target) target.focus({ preventScroll: true });
+	}
+
+	/** Digits only; the fourth one sends. */
+	function pickerInput(el) {
+		if (!el.classList || !el.classList.contains('pin-field')) return;
+		var digits = el.value.replace(/[^0-9]/g, '').slice(0, PIN_DIGITS);
+		if (digits !== el.value) el.value = digits;
+		pickerUi.typed[el.id] = digits;
+		if (digits.length < PIN_DIGITS || !picking(ui.view)) return;
+		var s = ui.view.profiles.step;
+		if (el.id === 'pin-input') {
+			pickerUi.typed['pin-input'] = '';
+			el.value = '';
+			el.readOnly = true;
+			act('enterPin', { profileId: s.profileId, pin: digits });
+		} else if (el.id === 'pin-new-1') {
+			pickerUi.mismatch = false;
+			document.getElementById('pin-error').textContent = '';
+			document.getElementById('pin-new-2').focus();
+		} else if (el.id === 'pin-new-2') {
+			var firstPin = pickerUi.typed['pin-new-1'] || '';
+			pickerUi.typed = {};
+			if (firstPin !== digits) {
+				pickerUi.mismatch = true;
+				render();
+				var again = document.getElementById('pin-new-1');
+				if (again) again.focus();
+				return;
+			}
+			el.readOnly = true;
+			// A refusal (a PIN too easy to guess) starts again on the first field.
+			pickerUi.focused = null;
+			act('setPin', { profileId: s.profileId, pin: digits });
+		}
+	}
+
+	/** Arrows move between tiles; Escape goes back to the tiles from any other step. */
+	function pickerKeydown(e) {
+		if (!picking(ui.view) || sheet.open || ask.open) return false;
+		var el = e.target;
+		var s = ui.view.profiles.step;
+		if (e.key === 'Escape') {
+			if (s.kind === 'choose' || s.kind === 'switching' || s.kind === 'tooNew') return false;
+			e.preventDefault();
+			bridge.send('cancelPicker');
+			return true;
+		}
+		if (el && el.classList && el.classList.contains('profile-tile') && /^Arrow(Left|Right|Up|Down)$/.test(e.key)) {
+			var tiles = Array.prototype.slice.call(document.querySelectorAll('.profile-tile'));
+			var at = tiles.indexOf(el);
+			var top = tiles[0].getBoundingClientRect().top;
+			var cols = Math.max(
+				1,
+				tiles.filter(function (t) {
+					return Math.abs(t.getBoundingClientRect().top - top) < 2;
+				}).length
+			);
+			var to = e.key === 'ArrowRight' ? at + 1 : e.key === 'ArrowLeft' ? at - 1 : e.key === 'ArrowDown' ? at + cols : at - cols;
+			if (to >= 0 && to < tiles.length) tiles[to].focus();
+			e.preventDefault();
+			return true;
+		}
+		return false;
+	}
+
+	/** The picker's keys. True when the click was one of them. */
+	function pickerClick(action, el, from) {
+		var id = el.getAttribute('data-profile-id');
+		switch (action) {
+			case 'pickProfile':
+				pickerUi.lastProfile = id;
+				act('pickProfile', { profileId: id }, { key: from });
+				return true;
+			case 'addProfile':
+				act('addProfile', {}, { key: from });
+				return true;
+			case 'forgotPin':
+				act('forgotPin', { profileId: id }, { key: from });
+				return true;
+			case 'chooseFolder':
+				act('chooseFolder', { profileId: id, choice: el.getAttribute('data-choice') }, { key: from });
+				return true;
+			case 'cancelPicker':
+			case 'showPicker':
+				if (sheet.open) sheet.close();
+				bridge.send(action);
+				return true;
+			case 'sharedComputer':
+				var v = ui.view;
+				var now = v.profiles ? profileOf(v, v.profiles.currentId) : null;
+				if (v.settings.sharedComputer) openAsk('sharedOff', { name: now ? now.name : null, others: v.profiles ? v.profiles.profiles.length - (now ? 1 : 0) : 0 }, from);
+				else openAsk('sharedOn', { signedIn: !!v.account }, from);
+				return true;
+			case 'pinsRequired':
+				act('setPinsRequired', { on: !ui.view.profiles.pinsRequired }, { key: from });
+				return true;
+			case 'askRemoveProfile':
+				var p = profileOf(ui.view, id);
+				if (p) openAsk('removeProfile', { id: p.id, name: p.name, current: p.current, waiting: p.waiting }, from);
+				return true;
+		}
+		return false;
+	}
+
+	/** Settings > Shared computer. Off by default: a computer one student uses is exactly as
+	 *  before. On: who is using Armory now, the PIN switch (a mentor's), and every student. */
+	function sharedSettingsHtml(v) {
+		var on = !!v.settings.sharedComputer;
+		var pr = on ? v.profiles : null;
+		var html = '<section class="setting" aria-labelledby="set-shared-label">';
+		html += '<h3 class="section-label" id="set-shared-label">Shared computer</h3>';
+		html += '<div class="setting-line"><p class="setting-name" id="set-shared-name">This computer is shared by several students</p>';
+		html +=
+			'<button class="switch" type="button" data-action="sharedComputer" data-key="set-shared" aria-pressed="' + on + '" aria-labelledby="set-shared-name set-shared-word"' +
+			(on && pr && !pr.canTurnOff ? ' disabled' : '') + busyAttrs('set-shared') + '>' +
+			'<span class="ts-glyph" aria-hidden="true"></span><span class="ts-word" id="set-shared-word">' + (on ? 'On' : 'Off') + '</span></button></div>';
+		if (!on) {
+			html +=
+				'<p class="setting-help">Turn this on when several students take turns on this computer with one Windows sign-in. Each student gets their own sign-in to Armory and a 4\u2011digit PIN, and picks their name when they sit down.</p>';
+			return html + '</section>';
+		}
+		if (!pr) return html + '</section>';
+		var now = profileOf(v, pr.currentId);
+		if (!pr.canTurnOff) html += '<p class="setting-help">Only a mentor can turn this off while other students use this computer.</p>';
+		html += '<dl class="acct shared-now"><div><dt class="label">Using Armory now</dt><dd class="acct-email">' + esc(now ? now.name + ' (' + now.email + ')' : 'Nobody yet') + '</dd></div></dl>';
+
+		html += '<div class="setting-line"><p class="setting-name" id="set-pins-name">Ask for a PIN when switching students</p>';
+		html +=
+			'<button class="switch" type="button" data-action="pinsRequired" data-key="set-pins" aria-pressed="' + !!pr.pinsRequired + '" aria-labelledby="set-pins-name set-pins-word"' +
+			(pr.canChangePins ? '' : ' disabled') + busyAttrs('set-pins') + '>' +
+			'<span class="ts-glyph" aria-hidden="true"></span><span class="ts-word" id="set-pins-word">' + (pr.pinsRequired ? 'On' : 'Off') + '</span></button></div>';
+		html +=
+			'<p class="setting-help">' +
+			esc(
+				(pr.pinsRequired
+					? 'Each student types their PIN to switch to themselves, so nobody uses another student\'s sign-in by accident. '
+					: 'Picking a name switches at once. ') +
+					(pr.canChangePins ? 'Only mentors can change this, for this computer.' : 'A mentor can change this for this computer.') +
+					(pr.pinsNote ? ' ' + pr.pinsNote : '')
+			) +
+			'</p>';
+
+		html += '<h4 class="label student-label" id="set-students-label">Students on this computer</h4>';
+		html += '<ul class="list-well student-list" aria-labelledby="set-students-label">';
+		pr.profiles.forEach(function (p) {
+			var line = p.current ? 'Using Armory now' : p.waiting ? 'Has ' + p.waiting + (p.ownFolder ? ' in ' + p.folder : ' in ' + pr.sharedFolder) : p.lastUsedAt ? 'Last here ' + ago(p.lastUsedAt) : 'Not here yet';
+			html +=
+				'<li class="student-row">' + faceHtml(p, 'big') +
+				'<span class="student-words"><span class="student-name">' + esc(p.name) + '</span><span class="student-line">' + esc(glue(p.email + ' · ' + line)) + '</span></span>' +
+				(p.canRemove
+					? '<button class="key" type="button" data-action="askRemoveProfile" data-profile-id="' + esc(p.id) + '" data-key="set-remove-' + esc(p.id) + '" aria-haspopup="dialog" aria-label="Remove ' + esc(p.name) + '"' +
+						busyAttrs('set-remove-' + p.id) + '>Remove</button>'
+					: '') +
+				'</li>';
+		});
+		html += '</ul>';
+		html += '<p class="setting-help">Removing a student forgets their sign-in and PIN on this computer. No files are deleted.</p>';
+		return html + '</section>';
+	}
+
+	/** The account card on a shared computer: who is using Armory, and Switch student in
+	 *  place of Sign out (the next student picks their name; nobody signs out). */
+	function sharedAccountHtml(v) {
+		var pr = v.profiles;
+		var now = profileOf(v, pr.currentId);
+		var a = v.account;
+		return (
+			'<section class="group top account-group" aria-labelledby="acct-label">' +
+			'<h2 class="section-label" id="acct-label">This computer</h2>' +
+			'<div class="panel acct-panel">' +
+			ringHtml(v, a ? a.deviceName : 'this computer') +
+			'<dl class="acct"><div><dt class="label">Using Armory</dt><dd class="acct-email">' + esc(now ? now.name : a ? a.email : '') + '</dd></div></dl>' +
+			(pr.note ? '<p class="acct-note">' + esc(glue(pr.note)) + '</p>' : '') +
+			'<button class="textlink acct-signout" type="button" data-action="showPicker" data-key="switch-student">' + icon('person') + '<span>Switch student</span></button>' +
+			'</div></section>'
+		);
+	}
+
+	/** The questions Settings > Shared computer asks in the small dialog, or null for another. */
+	function sharedAskHtml(kind, c) {
+		var title;
+		var body;
+		var field = '';
+		var ok;
+		var danger = false;
+		if (kind === 'sharedOn') {
+			title = 'Share this computer';
+			body =
+				'Several students can then take turns here with one Windows sign-in. Each adds themselves once with Add a student and picks their name when they sit down. ' +
+				(c.signedIn ? 'You stay signed in: choose your 4\u2011digit PIN first.' : '');
+			if (c.signedIn)
+				field =
+					'<div class="pin-pair">' +
+					'<div class="pin-box"><label class="field-label label" for="ask-pin-1">Your PIN</label>' + pinField('ask-pin-1', false, 'ask-words ask-error') + '</div>' +
+					'<div class="pin-box"><label class="field-label label" for="ask-pin-2">Type it again</label>' + pinField('ask-pin-2', false, 'ask-words ask-error') + '</div>' +
+					'</div><p class="field-error" id="ask-error" aria-live="polite"></p>';
+			ok = 'Share this computer';
+		} else if (kind === 'sharedOff') {
+			title = 'Stop sharing this computer';
+			body =
+				(c.name ? c.name + ' stays signed in here, in the same folder. ' : '') +
+				(c.others > 0 ? 'Everyone else\'s sign-in and PIN are forgotten on this computer. ' : '') +
+				'No files are deleted or changed.';
+			ok = 'Stop sharing';
+			danger = true;
+		} else if (kind === 'removeProfile') {
+			title = 'Remove ' + c.name;
+			body =
+				'Remove ' + c.name + ' from this computer? Their sign-in and PIN are forgotten here. No files are deleted' +
+				(c.waiting ? ', and their ' + c.waiting + ' stay theirs until they add themselves again.' : '.') +
+				(c.current ? ' The next student picks their name.' : '');
+			ok = 'Remove';
+			danger = true;
+		} else return null;
+		return (
+			titleBar('h2', title, ' id="ask-title"') +
+			'<div class="ask-body">' +
+			'<p class="ask-words" id="ask-words">' + esc(glue(body)) + '</p>' +
+			field +
+			'<div class="ask-keys">' +
+			'<button class="key' + (danger ? ' danger' : ' primary') + '" type="button" data-action="askOk" data-key="ask-ok">' + esc(ok) + '</button>' +
+			'<button class="key" type="button" data-action="askCancel" data-key="ask-cancel"' + (danger ? ' data-ask-first="true"' : '') + '>Cancel</button>' +
+			'</div></div>'
+		);
+	}
+
+	/** Answers one of those questions. True when it was one of them. */
+	function sharedAskOk(a) {
+		if (a.kind === 'sharedOn') {
+			var pin = '';
+			if (a.ctx.signedIn) {
+				var one = ask.querySelector('#ask-pin-1');
+				var two = ask.querySelector('#ask-pin-2');
+				var wrong = one.value.length !== PIN_DIGITS ? 'Type 4 digits.' : two.value !== one.value ? 'Those PINs don\'t match. Type them again.' : null;
+				if (wrong) {
+					ask.querySelector('#ask-error').textContent = wrong;
+					one.setAttribute('aria-invalid', 'true');
+					one.value = '';
+					two.value = '';
+					one.focus();
+					return true;
+				}
+				pin = one.value;
+			}
+			act('setSharedComputer', { on: true, pin: pin }, { key: a.returnKey });
+		} else if (a.kind === 'sharedOff') act('setSharedComputer', { on: false, pin: '' }, { key: a.returnKey });
+		else if (a.kind === 'removeProfile') act('removeProfile', { profileId: a.ctx.id }, { key: a.returnKey, words: 'Removing ' + a.ctx.name + ' from this computer...' });
+		else return false;
+		ask.close();
+		return true;
 	}
 
 	/* ---- Home ---- */
@@ -801,6 +1346,7 @@
 	 *  ring), who is signed in, and Sign out as a quiet link, never a big key on the main
 	 *  screen. */
 	function accountHtml(v) {
+		if (v.profiles) return sharedAccountHtml(v);
 		var a = v.account;
 		return (
 			'<section class="group top account-group" aria-labelledby="acct-label">' +
@@ -1730,8 +2276,11 @@
 		html += '<section class="setting" aria-labelledby="set-root-label">';
 		html += '<h3 class="section-label" id="set-root-label">Where your files are kept</h3>';
 		html += '<div class="setting-row"><p class="path-plate" id="set-root-value">' + icon('folder') + '<span>' + esc(s.vaultRoot) + '</span></p>';
-		html += '<button class="key" type="button" data-action="chooseVaultRoot" data-key="set-root" aria-describedby="set-root-label set-root-value">Change</button></div>';
-		html += '<p class="setting-help">Armory keeps a copy of your team\'s files in this folder. Most people never change it.</p>';
+		if (!s.sharedComputer) html += '<button class="key" type="button" data-action="chooseVaultRoot" data-key="set-root" aria-describedby="set-root-label set-root-value">Change</button>';
+		html += '</div>';
+		html += s.sharedComputer
+			? '<p class="setting-help">The students on this computer take turns in this folder. Armory hands it to the next student once nothing of the last one\'s waits in it.</p>'
+			: '<p class="setting-help">Armory keeps a copy of your team\'s files in this folder. Most people never change it.</p>';
 		html += '</section>';
 
 		html += '<section class="setting" aria-labelledby="set-start-label">';
@@ -1752,6 +2301,8 @@
 				'<span class="seg-words"><span class="seg-name">' + esc(t[1]) + '</span><span class="seg-sub">' + esc(t[2]) + '</span></span></button>';
 		});
 		html += '</div></section>';
+
+		html += sharedSettingsHtml(v);
 
 		// Something wrong: a person's own report, and the folder of saved reports to hand over by hand.
 		html += '<section class="setting" aria-labelledby="set-report-label">';
@@ -1813,6 +2364,8 @@
 	}
 
 	function askHtml(kind, c) {
+		var shared = sharedAskHtml(kind, c);
+		if (shared) return shared;
 		var title;
 		var body;
 		var field = '';
@@ -1954,6 +2507,7 @@
 	function askOk() {
 		var a = ui.ask;
 		if (!a) return;
+		if (sharedAskOk(a)) return;
 		var c = a.ctx;
 		if (a.kind === 'report') {
 			var area = ask.querySelector('#ask-report');
@@ -2247,6 +2801,12 @@
 				return { line: 'Sending your report...', row: null };
 			case 'sendFeedback':
 				return { line: 'Sending your feedback...', row: null };
+			case 'enterPin':
+				return { line: 'Checking your PIN...', row: null };
+			case 'setSharedComputer':
+				return { line: f.on ? 'Setting this computer up for several students...' : 'Setting this computer up for one student...', row: null };
+			case 'setPinsRequired':
+				return { line: f.on ? 'Turning PINs on...' : 'Turning PINs off...', row: null };
 		}
 		return { line: null, row: null };
 	}
@@ -2744,6 +3304,7 @@
 		var action = el.getAttribute('data-action');
 		var path = el.getAttribute('data-path');
 		var from = el.getAttribute('data-key');
+		if (pickerClick(action, el, from)) return;
 		switch (action) {
 			case 'openFile':
 				openFile(el.getAttribute('data-file-id'), from);
@@ -2935,6 +3496,12 @@
 
 	document.addEventListener('keydown', function (e) {
 		var el = e.target;
+		if (e.key === 'Enter' && el && /^ask-pin-/.test(el.id || '')) {
+			e.preventDefault();
+			askOk();
+			return;
+		}
+		if (pickerKeydown(e)) return;
 		// Left and right arrows move between project tabs, as a tab strip should.
 		if (el && el.getAttribute && el.getAttribute('role') === 'tab' && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
 			var tabs = Array.prototype.slice.call(el.parentNode.querySelectorAll('[role="tab"]'));
@@ -2978,6 +3545,10 @@
 			clearPicked();
 			render();
 		}
+	});
+
+	document.addEventListener('input', function (e) {
+		if (e.target) pickerInput(e.target);
 	});
 
 	// Tab into a long list lands on the row it left from.

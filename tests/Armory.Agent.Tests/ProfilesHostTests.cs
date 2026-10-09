@@ -403,10 +403,17 @@ public sealed class ProfilesHostTests
         await Until(() => !Directory.Exists(lab.Paths.ProfilesFolder) || Directory.GetDirectories(lab.Paths.ProfilesFolder).Length == 0, "no profile folder left");
         Assert.Empty(lab.Profiles.Profiles);
 
-        // Signed in, then Cancel at the PIN: not kept either, and its sign-in is forgotten.
+        // "Open the browser again" stops the sign-in under way and starts a new one; signed in
+        // in the second, then Cancel at the PIN: not kept either, and its sign-in is forgotten.
+        lab.Browser.Next = null;
+        var opened = lab.Browser.Opened;
+        Assert.True((await lab.Host.AddProfileAsync()).Ok);
+        await Until(() => Volatile.Read(ref lab.Browser.Opened) == opened + 1, "the browser opened");
         lab.Browser.Next = Alex;
         Assert.True((await lab.Host.AddProfileAsync()).Ok);
         await Until(() => lab.Step.Kind == PickerSteps.NewPin, "the PIN step");
+        Assert.Equal(opened + 2, Volatile.Read(ref lab.Browser.Opened));
+        await Until(() => Directory.GetDirectories(lab.Paths.ProfilesFolder).Length == 1, "only the second sign-in's profile left");
         lab.Host.CancelPicker();
         await Until(() => Directory.GetDirectories(lab.Paths.ProfilesFolder).Length == 0, "the signed-in profile forgotten");
         Assert.Empty(lab.Profiles.Profiles);

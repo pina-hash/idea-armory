@@ -53,7 +53,7 @@ export function demoStates() {
 /** Every (screen, state, size) the tools render, in a stable order. */
 export function combos() {
 	const demo = demoStates();
-	const order = ['connect', 'home', 'detail', 'settings'];
+	const order = ['connect', 'picker', 'home', 'detail', 'settings'];
 	const list = [];
 	for (const screen of order)
 		for (const [state, s] of Object.entries(demo.states))

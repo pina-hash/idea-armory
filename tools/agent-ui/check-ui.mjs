@@ -42,13 +42,19 @@
 //               extension refused); the check-out question says to reopen the file and its
 //               key checks out and reopens; the Settings sheet, Pause (Resume is the green
 //               primary, and nothing to pause while offline), Connect and the one-click
-//               folder of your own do what they say.
+//               folder of your own do what they say. On a shared computer: the picker
+//               starts on the student in use, arrows move between tiles and Enter picks
+//               one, the fourth digit of a PIN sends it (a wrong one says so and the right
+//               one opens that student's Home), Escape goes back to the tiles, Switch
+//               student brings the picker back, a busy folder offers Wait or a folder of
+//               one's own, and Settings > Shared computer offers Remove only where it may
+//               be used.
 //   logo        the IDEA gear turns (idea-gear-spin, 24s, linear, infinite) when motion is
 //               allowed, holds still when the student asks for reduced motion, and is
 //               fully painted in both.
 //   bridge      inside a stand-in WebView2 host (no demo transport): the page says ready
 //               first, renders Home, detail and Connect from host messages alone, wears
-//               effectiveTheme, ignores a stray or unknown message, and every one of the 25
+//               effectiveTheme, ignores a stray or unknown message, and every one of the 40
 //               page-to-host types is sent by the control that should send it, carrying
 //               exactly the fields BRIDGE.md gives it (an action's requestId included; a
 //               drop goes with its files through postMessageWithAdditionalObjects). An
@@ -1113,7 +1119,7 @@ for (const size of SIZES) {
 		expect(await page.evaluate(() => document.getElementById('settings').open), 'Settings did not open');
 		// A theme pad says its name and, under it, what it is ("Dark", "Light"); the name is the setting.
 		const keys = await page.$$eval('#settings button', (b) => b.map((x) => (x.querySelector('.seg-name') || x).textContent.trim()));
-		expect(keys.join('|') === 'Done|Change|On|Match Windows|IDEA|Space White|Report a problem|Send feedback|Open incidents folder', `sheet holds ${keys.join(', ')}`);
+		expect(keys.join('|') === 'Done|Change|On|Match Windows|IDEA|Space White|Off|Report a problem|Send feedback|Open incidents folder', `sheet holds ${keys.join(', ')}`);
 		await page.click('[data-key="set-theme-spaceWhite"]');
 		await settle(page);
 		expect((await page.getAttribute('html', 'data-theme')) === 'spaceWhite', 'Space White did not apply');
@@ -1173,6 +1179,85 @@ for (const size of SIZES) {
 		const s = await where(page);
 		expect(s.screen === 'home', `using my own folder went to ${s.screen}, not Home`);
 	});
+	// A shared computer (PROFILES.md): the picker, by keyboard and by click.
+	const MARIA_ID = '1a2b3c4d5e6f708192a3b4c5d6e7f801';
+	const JORDAN_ID = '6f1c0e2a9b7d4c3e8a5f1b2c3d4e5f60';
+	await flow('picker by keyboard', size, 'pickerChoose', async (page, expect) => {
+		const focus = () => page.evaluate(() => document.activeElement && (document.activeElement.id || document.activeElement.getAttribute('data-key')));
+		expect((await page.getAttribute('body', 'data-screen')) === 'picker', 'the picker did not show');
+		expect(!(await page.$('[data-key="hdr-settings"]')), 'the picker shows Settings');
+		expect((await focus()) === 'pf-' + JORDAN_ID, `the picker starts on ${await focus()}, not the student in use`);
+		await page.keyboard.press('ArrowRight');
+		expect((await focus()) === 'pf-' + MARIA_ID, `ArrowRight went to ${await focus()}`);
+		await page.keyboard.press('Enter');
+		await settle(page);
+		expect((await focus()) === 'pin-input', `picking Maria put focus on ${await focus()}, not the PIN`);
+		await page.keyboard.type('1111');
+		await settle(page);
+		expect(/isn't right\. 4 more tries/.test(await text(page, '#pin-error')), `a wrong PIN says "${await text(page, '#pin-error')}"`);
+		expect((await page.inputValue('#pin-input')) === '', 'a wrong PIN stayed in the field');
+		await page.keyboard.press('Escape');
+		await settle(page);
+		expect(!!(await page.$('[data-key="pf-add"]')) && (await focus()) === 'pf-' + MARIA_ID, `Escape went to ${await focus()}, not back to Maria's tile`);
+		await page.keyboard.press('Escape');
+		await settle(page);
+		expect((await page.getAttribute('body', 'data-screen')) === 'picker', 'Escape on the tiles let the picker go');
+		await page.keyboard.press('Enter');
+		await settle(page);
+		await page.keyboard.type('2580');
+		await settle(page);
+		const s = await where(page);
+		expect(s.screen === 'home', `the right PIN went to ${s.screen}, not Home`);
+		expect(/Maria Lopez/.test(await text(page, '.acct-panel')), 'Home does not say Maria is using Armory');
+		await page.click('[data-key="switch-student"]');
+		await settle(page);
+		expect((await page.getAttribute('body', 'data-screen')) === 'picker', 'Switch student did not bring the picker back');
+	}, 'picker');
+	await flow('picker add a student', size, 'pickerFirst', async (page, expect) => {
+		const tiles = await page.$$eval('.profile-tile', (b) => b.map((x) => x.getAttribute('data-key')));
+		expect(tiles.join() === 'pf-add', `a computer with nobody yet shows ${tiles.join(', ')}`);
+		await page.click('[data-key="pf-add"]');
+		await settle(page);
+		expect(/Not you\? Use another account/.test(await text(page, '.steps')), 'adding a student does not say to click Not you? Use another account');
+		expect(!!(await page.$('[data-key="add-cancel"]')), 'no Cancel while the browser sign-in waits');
+		await page.click('[data-key="add-cancel"]');
+		await settle(page);
+		expect(!!(await page.$('[data-key="pf-add"]')), 'Cancel did not go back to the tiles');
+	}, 'picker');
+	await flow('picker new PIN', size, 'pickerNewPin', async (page, expect) => {
+		await page.fill('#pin-new-1', '1357');
+		await page.fill('#pin-new-2', '1375');
+		await settle(page);
+		expect(/don't match/.test(await text(page, '#pin-error')), `two different PINs say "${await text(page, '#pin-error')}"`);
+		await page.fill('#pin-new-1', '1111');
+		await page.fill('#pin-new-2', '1111');
+		await settle(page);
+		expect(/harder to guess/.test(await text(page, '#pin-error')), `an easy PIN says "${await text(page, '#pin-error')}"`);
+		await page.fill('#pin-new-1', '1357');
+		await page.fill('#pin-new-2', '1357');
+		await settle(page);
+		expect((await where(page)).screen === 'home', 'a new PIN did not open Home');
+	}, 'picker');
+	await flow('picker busy folder', size, 'pickerFolderBusy', async (page, expect) => {
+		expect(/Alex Kim has 2 files checked out/.test(await text(page, '.picker-inner')), 'the busy folder does not say what of Alex\'s waits');
+		expect(/different path/.test(await text(page, '.picker-inner .connect-foot')), 'the busy folder does not say what a folder of one\'s own changes');
+		await page.click('[data-key="fb-own"]');
+		await settle(page);
+		expect((await where(page)).screen === 'home', 'a folder of my own did not open Home');
+		expect(/own folder, C:\\IDEA\\Armory-jordan/.test(await text(page, '.acct-panel')), `Home says "${await text(page, '.acct-panel')}"`);
+	}, 'picker');
+	await flow('shared settings', size, 'sharedSettings', async (page, expect) => {
+		expect(await page.evaluate(() => document.getElementById('settings').open), 'Settings did not open');
+		const keys = await page.$$eval('#settings button:not(:disabled)', (b) => b.map((x) => (x.querySelector('.seg-name') || x).textContent.trim()));
+		expect(keys.join('|') === 'Done|On|Match Windows|IDEA|Space White|Remove|Report a problem|Send feedback|Open incidents folder', `the sheet holds ${keys.join(', ')}`);
+		expect(await page.$eval('[data-key="set-pins"]', (b) => b.disabled), 'a student can change the PIN switch');
+		expect(await page.$eval('[data-key="set-shared"]', (b) => b.disabled), 'a student can turn shared mode off while others use the computer');
+		expect(/Jordan Reyes/.test(await text(page, '.shared-now')), 'Settings does not say who is using Armory now');
+		await page.click('[data-key="set-remove-' + JORDAN_ID + '"]');
+		await settle(page);
+		expect(/No files are deleted/.test(await text(page, '#ask-words')), 'Remove does not say no file is deleted');
+		expect((await page.evaluate(() => document.activeElement.getAttribute('data-key'))) === 'ask-cancel', 'Remove does not start on Cancel');
+	}, 'settings');
 	await flow('connect', size, 'signedOut', async (page, expect) => {
 		const buttons = await page.$$eval('main button', (b) => b.map((x) => x.textContent.trim()));
 		expect(buttons.join('|') === 'Connect this computer', `Connect shows ${buttons.join(', ')}`);
@@ -1278,8 +1363,104 @@ const CONTRACT = {
 	chooseVaultRoot: [],
 	reportProblem: ['kind', 'body', ...ACT],
 	openIncidents: [],
-	sendFeedback: ['kind', 'body', ...ACT]
+	sendFeedback: ['kind', 'body', ...ACT],
+	showPicker: [],
+	pickProfile: ['profileId', ...ACT],
+	enterPin: ['profileId', 'pin', ...ACT],
+	setPin: ['profileId', 'pin', ...ACT],
+	addProfile: [...ACT],
+	forgotPin: ['profileId', ...ACT],
+	cancelPicker: [],
+	chooseFolder: ['profileId', 'choice', ...ACT],
+	removeProfile: ['profileId', ...ACT],
+	setSharedComputer: ['on', 'pin', ...ACT],
+	setPinsRequired: ['on', ...ACT]
 };
+
+// A shared computer's messages, inside the stand-in host: each is sent by the control that
+// should send it. Home's Sign out gives way to Switch student; the picker is a screen of
+// its own that the view alone decides; a PIN goes at its fourth digit and never before.
+async function profilesBridge({ page, host, click, take, view, expect, all }) {
+	const MARIA = '1a2b3c4d5e6f708192a3b4c5d6e7f801';
+	const SAM = '3c4d5e6f708192a3b4c5d6e7f8091a23';
+	const JORDAN = '6f1c0e2a9b7d4c3e8a5f1b2c3d4e5f60';
+	const typed = async (sel, digits) => {
+		await page.fill(sel, '');
+		await page.focus(sel);
+		await page.keyboard.type(digits);
+		await page.waitForTimeout(40);
+		const m = await take();
+		all.push(...m);
+		return m;
+	};
+	await host({ type: 'view', view: view('sharedHome') });
+	expect(!(await page.$('[data-key="signout"]')) && !(await page.$('[data-key="switch-account"]')), 'a shared computer offers Sign out or Switch account on Home');
+	let m = await click('[data-key="switch-student"]');
+	expect(m.type === 'showPicker', 'Switch student sent ' + JSON.stringify(m));
+	await host({ type: 'view', view: view('pickerChoose') });
+	expect((await page.getAttribute('body', 'data-screen')) === 'picker', 'a view with profiles.showing did not show the picker');
+	expect(!(await page.$('[data-key="hdr-settings"]')), 'the picker shows the header keys');
+	m = await click(`[data-key="pf-${MARIA}"]`);
+	expect(m.type === 'pickProfile' && m.profileId === MARIA, 'a tile sent ' + JSON.stringify(m));
+	m = await click('[data-key="pf-add"]');
+	expect(m.type === 'addProfile', 'Add a student sent ' + JSON.stringify(m));
+	await host({ type: 'view', view: view('pickerPin') });
+	let sent = await typed('#pin-input', '258');
+	expect(sent.length === 0, 'three digits sent ' + JSON.stringify(sent));
+	await page.keyboard.type('0');
+	await page.waitForTimeout(40);
+	sent = await take();
+	all.push(...sent);
+	m = sent[0] || {};
+	expect(m.type === 'enterPin' && m.profileId === MARIA && m.pin === '2580', 'the fourth digit sent ' + JSON.stringify(m));
+	await host({ type: 'view', view: view('pickerPinWrong') });
+	m = await click('[data-key="pin-forgot"]');
+	expect(m.type === 'forgotPin' && m.profileId === MARIA, 'Forgot your PIN sent ' + JSON.stringify(m));
+	m = await click('[data-key="pin-back"]');
+	expect(m.type === 'cancelPicker', 'Back sent ' + JSON.stringify(m));
+	await host({ type: 'view', view: view('pickerPinWait') });
+	expect(await page.$eval('#pin-input', (el) => el.disabled), 'the PIN field takes digits during a wait');
+	await host({ type: 'view', view: view('pickerNewPin') });
+	await typed('#pin-new-1', '1357');
+	sent = await typed('#pin-new-2', '1375');
+	expect(sent.length === 0 && /don't match/.test(await page.textContent('#pin-error')), 'two different new PINs sent ' + JSON.stringify(sent));
+	await typed('#pin-new-1', '1357');
+	sent = await typed('#pin-new-2', '1357');
+	m = sent[0] || {};
+	expect(m.type === 'setPin' && m.profileId === SAM && m.pin === '1357', 'a new PIN sent ' + JSON.stringify(m));
+	await host({ type: 'view', view: view('pickerFolderBusy') });
+	m = await click('[data-key="fb-wait"]');
+	expect(m.type === 'chooseFolder' && m.profileId === JORDAN && m.choice === 'wait', 'Wait sent ' + JSON.stringify(m));
+	m = await click('[data-key="fb-own"]');
+	expect(m.type === 'chooseFolder' && m.profileId === JORDAN && m.choice === 'own', 'a folder of my own sent ' + JSON.stringify(m));
+	await host({ type: 'view', view: view('sharedSettingsMentor') });
+	await click('[data-key="hdr-settings"]');
+	m = await click('[data-key="set-pins"]');
+	expect(m.type === 'setPinsRequired' && m.on === false, 'the PIN switch sent ' + JSON.stringify(m));
+	m = await click(`[data-key="set-remove-${MARIA}"]`);
+	expect(!m.type && (await page.evaluate(() => document.getElementById('ask').open)), 'Remove did not ask first: ' + JSON.stringify(m));
+	m = await click('[data-key="ask-ok"]');
+	expect(m.type === 'removeProfile' && m.profileId === MARIA, 'Remove sent ' + JSON.stringify(m));
+	m = await click('[data-key="set-shared"]');
+	expect(!m.type && (await page.evaluate(() => document.getElementById('ask').open)), 'turning shared mode off did not ask first: ' + JSON.stringify(m));
+	m = await click('[data-key="ask-ok"]');
+	expect(m.type === 'setSharedComputer' && m.on === false && m.pin === '', 'turning shared mode off sent ' + JSON.stringify(m));
+	await host({ type: 'actionResult', requestId: m.requestId, ok: true, message: 'This computer is used by one student now: Mr. Pina. Nothing in any Armory folder changed.' });
+	await host({ type: 'view', view: view('synced') });
+	m = await click('[data-key="set-shared"]');
+	expect(!m.type && !!(await page.$('#ask-pin-1')), 'turning shared mode on did not ask for a PIN first: ' + JSON.stringify(m));
+	await page.fill('#ask-pin-1', '4826');
+	await page.fill('#ask-pin-2', '4826');
+	m = await click('[data-key="ask-ok"]');
+	expect(m.type === 'setSharedComputer' && m.on === true && m.pin === '4826', 'turning shared mode on sent ' + JSON.stringify(m));
+	await page.keyboard.press('Escape');
+	await page.waitForTimeout(40);
+	// The folder-taken screen names the folder's owner from FolderOwnerView, not the message.
+	await host({ type: 'view', view: view('vaultOwnedByOther') });
+	expect(/This folder belongs to Alex Kim/i.test(await page.textContent('.lcd-plate')) && /still has 1\sfile checked out here/.test(await page.textContent('main')),
+		'the folder-taken screen does not name Alex and what of his waits');
+	await host({ type: 'view', view: view('synced') });
+}
 tally.bridgeFailures = 0;
 tally.bridgeTypes = 0;
 {
@@ -1661,6 +1842,8 @@ tally.bridgeTypes = 0;
 		await host({ type: 'view', view: view('vaultOwnedByOther') });
 		await host({ type: 'bogus' });
 		expect((await page.getAttribute('body', 'data-screen')) === 'connect', 'an unknown host message changed the screen');
+
+		await profilesBridge({ page, host, click, take, view, expect, all });
 
 		for (const x of all) {
 			const want = CONTRACT[x.type];
