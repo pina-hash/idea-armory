@@ -173,3 +173,37 @@ replies from the team anywhere (the website has none either), so Armory shows no
 ### D4. The app version stays at 40 characters or fewer
 The heartbeat refuses longer versions. A test holds Armory's version to 40, and if a version
 were ever refused, the heartbeat stops sending one rather than being refused in a loop.
+
+## E. Fixes found by the audit
+
+### E1. A check in waits for SolidWorks to close the file (the data loss behind note N4)
+When SolidWorks held a checked-out part open, Armory's scan couldn't read it and silently reused
+the last reading, so a check in let the lock go with nothing uploaded; SolidWorks kept saving,
+and the next pass treated those saves as "changed without a check out", kept them on the server
+and put the old version back on disk. Now a check in (single, undo, Check in all, batches, an
+add's automatic check in) never lets the lock go while the file is open or over bytes it didn't
+just read: it sets the file read-only, reads it fresh, and only then releases. An open file stays
+checked out and writable, and the first pass after it closes checks it in ("check in when
+closed"). The window says so: "Plate.SLDPRT is open in SolidWorks. Save it there and close it;
+Armory checks it in as soon as it's closed." Nobody's work was destroyed: the reverted edits are
+on the server as kept copies, and File detail can now put one of your kept copies back on this
+computer (checked out to you; it keeps any unsaved bytes first).
+
+### E2. IDEA-06's 142 refused files were copies with names already taken
+Not the year check: the 142 were copies (mostly from an imported folder) whose names other files
+in the project already had; Armory names are unique per project, and the engine re-planned and
+re-refused them on every pass, which also kept the window saying "Uploading 0 of 142". A
+name-taken copy is now refused once and left alone, never counted as moving, and goes in by
+itself when the name frees up. The card tells a student what a SolidWorks copy needs.
+
+### E3. Small judgment calls
+- An empty server record (created, but its first version never arrived) is removed by the
+  computer that made it, after two scans without the file and once its saves are kept. Records
+  whose computer never comes back stay until a lead can remove them (website request).
+- Two computers with the same name are told apart across every project this computer knows
+  ("IDEA-06 (a030)"), not only within one project.
+- A force-checked-in holder reads "kept as Maria's own copy" (the server has only addresses, so
+  Armory never guesses anyone's pronouns).
+- Organizing files others have checked out: a mentor or CAD lead can force check them in and
+  rename, delete or move in one action. Moving without breaking the check out, and an
+  "instructor" role, need server changes (docs/agent/website-requests-v0.3.3.md).
