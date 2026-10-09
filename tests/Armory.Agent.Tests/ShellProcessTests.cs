@@ -146,7 +146,8 @@ public sealed class ShellProcessTests
         using var first = Start(folder, data, pipe, "--background");
         try
         {
-            WaitFor(log, "shell: listening on " + pipe, first);
+            // The log redacts the test pipe's hex name; the batch below proves which pipe it is.
+            WaitFor(log, "shell: listening on ", first);
             var vault = data.File("vault");
             var forwarders = new[] { "Plate.SLDPRT", "Gear.SLDPRT", "Hub.SLDPRT", "Arm.SLDPRT" }.Select(name =>
             {
