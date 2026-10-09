@@ -75,6 +75,16 @@ public sealed class BadgeRulesTests
         Assert.Equal(BadgeState.None, BadgeRules.For(File(BadgeFileStatus.NewerWaiting, BadgeCheckout.Available)));
     }
 
+    // Feedback N4: a check in asked for while the file is open waits for it to close. It is
+    // still checked out by you on this computer until then, changed or not.
+    [Fact]
+    public void A_check_in_waiting_for_its_file_to_close_stays_mine()
+    {
+        Assert.Equal(BadgeState.Mine, BadgeRules.For(File(BadgeFileStatus.CheckingInWhenClosed, BadgeCheckout.Mine)));
+        Assert.Equal(BadgeState.Attention, BadgeRules.For(File(BadgeFileStatus.CheckingInWhenClosed, BadgeCheckout.Mine, cantRead: true)));
+        Assert.Equal(BadgeState.Mine, BadgeRules.For(BadgeFacts.FromNames("Robot 2027/Arm/Plate.SLDPRT", "checkingInWhenClosed", "mine", true, false, false)));
+    }
+
     [Fact]
     public void A_file_that_is_not_on_this_computer_never_has_a_badge()
     {
@@ -158,7 +168,7 @@ public sealed class BadgeRulesTests
     [Fact]
     public void The_engine_names_map_one_to_one_and_unknown_names_throw()
     {
-        string[] statuses = ["synced", "changed", "uploading", "downloading", "waiting", "newerWaiting", "keptCopy", "notInArmory", "notOnThisComputer"];
+        string[] statuses = ["synced", "changed", "uploading", "downloading", "waiting", "newerWaiting", "keptCopy", "notInArmory", "notOnThisComputer", "checkingInWhenClosed"];
         Assert.Equal(Enum.GetValues<BadgeFileStatus>(), statuses.Select(BadgeFacts.StatusOf));
         string[] checkouts = ["available", "mine", "other", "myOtherComputer"];
         Assert.Equal(Enum.GetValues<BadgeCheckout>(), checkouts.Select(BadgeFacts.CheckoutOf));

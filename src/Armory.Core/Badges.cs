@@ -19,8 +19,10 @@ public enum BadgeState : byte
 }
 
 // A file's status and who has it checked out, in Core's words. They map one to one to the
-// engine's FileStatuses and CheckoutStates names (BadgeFacts.FromNames).
-public enum BadgeFileStatus { Synced, Changed, Uploading, Downloading, Waiting, NewerWaiting, KeptCopy, NotInArmory, NotOnThisComputer }
+// engine's FileStatuses and CheckoutStates names (BadgeFacts.FromNames). CheckingInWhenClosed:
+// checked out by you and asked to be checked in, but open in SolidWorks (or unreadable) now,
+// so it is checked in as soon as it is closed (feedback N4).
+public enum BadgeFileStatus { Synced, Changed, Uploading, Downloading, Waiting, NewerWaiting, KeptCopy, NotInArmory, NotOnThisComputer, CheckingInWhenClosed }
 public enum BadgeCheckout { Available, Mine, Other, MyOtherComputer }
 
 // What the engine knows of one file in the vault. Path is vault-relative, either separator
@@ -45,6 +47,7 @@ public sealed record BadgeFacts(string Path, BadgeFileStatus Status, BadgeChecko
         "keptCopy" => BadgeFileStatus.KeptCopy,
         "notInArmory" => BadgeFileStatus.NotInArmory,
         "notOnThisComputer" => BadgeFileStatus.NotOnThisComputer,
+        "checkingInWhenClosed" => BadgeFileStatus.CheckingInWhenClosed,
         _ => throw new ArgumentException($"Unknown file status \"{status}\".", nameof(status)),
     };
 
