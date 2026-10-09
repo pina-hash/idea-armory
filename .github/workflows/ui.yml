@@ -42,6 +42,7 @@ jobs:
       # tools/agent-ui/lib.mjs finds it through PLAYWRIGHT_MODULE.
       - name: Playwright 1.56.1 with Chromium
         run: |
+          mkdir -p "$RUNNER_TEMP/playwright"
           npm install --prefix "$RUNNER_TEMP/playwright" --no-save --no-audit --no-fund playwright@1.56.1
           "$RUNNER_TEMP/playwright/node_modules/.bin/playwright" install --with-deps chromium
           echo "PLAYWRIGHT_MODULE=$RUNNER_TEMP/playwright/node_modules/playwright" >> "$GITHUB_ENV"
