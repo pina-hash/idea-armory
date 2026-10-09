@@ -10,6 +10,13 @@
 # are ever shown (learn.microsoft.com/previous-versions/troubleshoot/windows/win32/icon-overlay-handlers-windows-shell).
 param([int]$Limit = 11)
 $ErrorActionPreference = 'Stop'
+# Started from PowerShell 7, Windows PowerShell 5.1 inherits PowerShell 7's module folders ahead
+# of its own: it keeps only its own, its own first (as installer\scripts\Setup.ps1 does).
+if ($PSVersionTable.PSEdition -ne 'Core') {
+    $ownModules = Join-Path $PSHOME 'Modules'
+    $keptModules = @($env:PSModulePath -split ';' | Where-Object { $_ -and ($_ -notmatch '\\PowerShell\\(7[^\\]*\\)?Modules\\?$') -and ($_ -ne $ownModules) })
+    $env:PSModulePath = (@($ownModules) + $keptModules) -join ';'
+}
 
 # The same four as installer\IdeaArmoryBadges.iss and BadgeHealth.Badges.
 $Armory = @(

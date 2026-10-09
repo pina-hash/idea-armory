@@ -598,7 +598,8 @@ function Get-Problems($settings) {
         $wrong = @(Get-IdentityProblems)
         if ($wrong.Count -gt 0) { $problems.Add('the notification and link registration is missing or points somewhere else (' + ($wrong -join ', ') + ')') }
     }
-    return $problems
+    # The comma keeps the list a list: PowerShell would unroll it into $null or one string.
+    return ,$problems
 }
 function Get-CheckProblem($check, $runtime) {
     if ($check.Problem) {
