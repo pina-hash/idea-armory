@@ -1351,7 +1351,7 @@ for (const size of SIZES) {
 	await flow('shared settings', size, 'sharedSettings', async (page, expect) => {
 		expect(await page.evaluate(() => document.getElementById('settings').open), 'Settings did not open');
 		const keys = await page.$$eval('#settings button:not(:disabled)', (b) => b.map((x) => (x.querySelector('.seg-name') || x).textContent.trim()));
-		expect(keys.join('|') === 'Done|On|Match Windows|IDEA|Space White|Remove|Report a problem|Send feedback|Open incidents folder', `the sheet holds ${keys.join(', ')}`);
+		expect(keys.join('|') === 'Done|On|Match Windows|IDEA|Space White|Turn on|Remove|Report a problem|Send feedback|Your feedback (3)|Open incidents folder', `the sheet holds ${keys.join(', ')}`);
 		expect(await page.$eval('[data-key="set-pins"]', (b) => b.disabled), 'a student can change the PIN switch');
 		expect(await page.$eval('[data-key="set-shared"]', (b) => b.disabled), 'a student can turn shared mode off while others use the computer');
 		expect(/Jordan Reyes/.test(await text(page, '.shared-now')), 'Settings does not say who is using Armory now');
@@ -1484,7 +1484,11 @@ const CONTRACT = {
 	chooseFolder: ['profileId', 'choice', ...ACT],
 	removeProfile: ['profileId', ...ACT],
 	setSharedComputer: ['on', 'pin', ...ACT],
-	setPinsRequired: ['on', ...ACT]
+	setPinsRequired: ['on', ...ACT],
+	// 0.3.3: the SolidWorks link's notice buttons (Keep this file on this computer only, Save it in
+	// 2025 now); the page's keys come with the window's final pass, so these report "never sent" until then.
+	keepLocal: ['paths', ...ACT],
+	saveDown: ['paths', ...ACT]
 };
 
 // A shared computer's messages, inside the stand-in host: each is sent by the control that
