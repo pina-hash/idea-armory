@@ -60,10 +60,13 @@ function Assert-VersionResource([string]$file, [string]$label) {
     if (-not $onWindows) { Write-Output ($label + ': version resource not read (only Windows reads it)'); return }
     $info = [Diagnostics.FileVersionInfo]::GetVersionInfo($file)
     $actual = '{0}.{1}.{2}' -f $info.FileMajorPart, $info.FileMinorPart, $info.FileBuildPart
-    if ($info.ProductName -ne $Product -or $info.CompanyName -ne $Company -or $actual -ne $Version) {
-        throw ($label + ' carries "' + $info.ProductName + '" by "' + $info.CompanyName + '" ' + $actual + ', expected "' + $Product + '" by "' + $Company + '" ' + $Version + '.')
+    # Inno Setup writes a setup's strings into fixed-size fields padded with spaces.
+    $productName = ([string]$info.ProductName).TrimEnd()
+    $companyName = ([string]$info.CompanyName).TrimEnd()
+    if ($productName -ne $Product -or $companyName -ne $Company -or $actual -ne $Version) {
+        throw ($label + ' carries "' + $productName + '" by "' + $companyName + '" ' + $actual + ', expected "' + $Product + '" by "' + $Company + '" ' + $Version + '.')
     }
-    Write-Output ($label + ': ' + $info.ProductName + ' ' + $actual + ' by ' + $info.CompanyName)
+    Write-Output ($label + ': ' + $productName + ' ' + $actual + ' by ' + $companyName)
 }
 
 # CAD files, SolidWorks DLLs (the SolidWorks link uses none: docs/agent/SOLIDWORKS.md), per-user
