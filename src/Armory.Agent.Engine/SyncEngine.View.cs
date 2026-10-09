@@ -8,14 +8,14 @@ namespace Armory.Agent.Engine;
 // Builds the window's AgentView (docs/agent/BRIDGE.md, v2-design.md 4.4 to 4.6) in plain
 // student words. Notices are grouped by kind into at most one card each; waiting to upload is
 // activity, never rows; "SolidWorks year not checked" is never a notice, only a tag on the
-// file's detail.
+// file's detail. A year known to be newer than the project's pin is one (newerRelease, B5).
 public sealed partial class SyncEngine
 {
     private const int NoticeItemsShown = 200;
     private static readonly TimeSpan KeptCopiesShownFor = TimeSpan.FromDays(1);
     private static readonly string[] NoticeOrder =
     [
-        NoticeKinds.CantSend, NoticeKinds.CantRead, NoticeKinds.NameShared, NoticeKinds.TakenBack, NoticeKinds.FolderPutBack, NoticeKinds.ProjectPutBack,
+        NoticeKinds.CantSend, NoticeKinds.CantRead, NoticeKinds.NewerRelease, NoticeKinds.NameShared, NoticeKinds.TakenBack, NoticeKinds.FolderPutBack, NoticeKinds.ProjectPutBack,
         NoticeKinds.ProjectRenaming, NoticeKinds.ProjectDeleted, NoticeKinds.CheckInPartial, NoticeKinds.KeptCopy, NoticeKinds.NewerWaiting, NoticeKinds.Import,
     ];
     private IReadOnlyCollection<string> openWithoutCheckOut = [];
@@ -103,8 +103,9 @@ public sealed partial class SyncEngine
 
     // ItemDetail is the item's own sentence in a card of several (who has its files checked out,
     // why it went back); ReasonKind and Who let such a card name everyone in its title.
+    // Release is a newerRelease item's project and years.
     private sealed record RawItem(string Id, Guid? FileId, string Path, string? Detail, string? Title = null, string? Flavor = null, (int Added, int Total)? Tally = null,
-        string? ItemDetail = null, string? ReasonKind = null, string? Who = null);
+        string? ItemDetail = null, string? ReasonKind = null, string? Who = null, (string Project, int Saved, int Pin)? Release = null);
     private sealed record RawGroup(string Key, string Kind, List<RawItem> Items);
 
     // The items each card showed when the view was last built: a dismissal hides exactly those.
@@ -195,6 +196,16 @@ public sealed partial class SyncEngine
                         "Saved without a check out, so the checked-in version was put back. Your change is in its history.", Flavor: "forced"));
             }
         }
+        // B5: the team's version of a file saved in a newer SolidWorks than its project uses. On a
+        // computer that can fix it, the student is needed; elsewhere it is news.
+        foreach (var (remote, project, path, current) in UncheckedTeamVersions().OrderBy(v => v.Path.Value, StringComparer.OrdinalIgnoreCase))
+        {
+            state.Files.TryGetValue(path.Value, out var st);
+            if (TeamRelease(remote, path, st) is not { } saved || saved <= project.PinnedRelease) continue;
+            var (detail, needsYou) = NewerThanPinNotice(saved, project.PinnedRelease, solidWorks?.Revision, solidWorks?.SaveDownWorks ?? false);
+            Add(NoticeKinds.NewerRelease, new RawItem($"newerRelease:{path.Value}:{current.Id}", remote.Id, path.Value, detail, Flavor: needsYou ? "needsYou" : "news",
+                ItemDetail: $"Saved in SolidWorks {saved}. {project.Name} uses SolidWorks {project.PinnedRelease}.", Release: (project.Name, saved, project.PinnedRelease)));
+        }
         foreach (var group in groups.Values)
             if (!keepDismissed && state.Dismissed.TryGetValue(group.Key, out var hidden)) group.Items.RemoveAll(i => hidden.Contains(i.Id));
         return groups.Values.Where(g => g.Items.Count > 0).ToList();
@@ -223,6 +234,11 @@ public sealed partial class SyncEngine
         var expand = new NoticeActionView("Show them", "expand", []);
         var (tone, title, detail, action) = g.Kind switch
         {
+            NoticeKinds.NewerRelease => (items.Any(i => i.Flavor == "needsYou") ? NoticeTones.Look : NoticeTones.Info,
+                NewerReleaseTitle(items),
+                items.Select(i => i.Detail).Distinct(StringComparer.Ordinal).Count() == 1 ? first.Detail ?? ""
+                    : "Each one says which SolidWorks it was saved in. Someone with that SolidWorks can fix it: check it out in Armory, open it, click Save so Armory saves it in the project's SolidWorks year, then check it in.",
+                n == 1 ? null : expand),
             NoticeKinds.NameShared => (NoticeTones.Look,
                 n == 1 ? "1 file shares a name with another file in this project" : $"{n:N0} files share a name with other files in this project",
                 "A project keeps one file per name, because SolidWorks finds parts by name. Rename these to add them.", expand),
@@ -279,6 +295,17 @@ public sealed partial class SyncEngine
         };
         return new NoticeGroupView(g.Key, g.Kind, tone, title, detail, n, action,
             items.Take(NoticeItemsShown).Select(i => new NoticeItemView(i.FileId?.ToString(), i.Path, NameOf(i.Path), i.ItemDetail ?? i.Detail)).ToArray());
+    }
+
+    // "3 files in Robot 2027 were saved in SolidWorks 2026"; files of several projects or years
+    // are counted together.
+    private static string NewerReleaseTitle(List<RawItem> items)
+    {
+        var first = items[0];
+        if (first.Release is not { } release || items.Any(i => i.Release != release))
+            return $"{items.Count:N0} files were saved in a newer SolidWorks than their project uses";
+        return items.Count == 1 ? $"{NameOf(first.Path)} in {release.Project} was saved in SolidWorks {release.Saved}"
+            : $"{items.Count:N0} files in {release.Project} were saved in SolidWorks {release.Saved}";
     }
 
     // Several folders (or files) put back at once: what they are, and who has files in them
@@ -384,8 +411,10 @@ public sealed partial class SyncEngine
                     TryLocal(st.Path, out var file);
                     if (file is null && st.BaseHash is null) continue; // never here, and nothing known of it
                     var ownership = KnownOwnership(st);
+                    // Offline: the year this computer last knew for the version it has.
+                    var year = Reconciler.IsSolidWorks(known) && st.BaseHash is { } baseHash ? KnownRelease(st, baseHash)?.Year : null;
                     Add(Split(known).Folder, new FileRowView(st.FileId.ToString(), known.Name, known.Value, KnownStatus(st, file, ownership), KnownCheckout(st),
-                        file is not null && file.Hash != st.BaseHash, st.ReleaseNotChecked, null, null));
+                        file is not null && file.Hash != st.BaseHash, st.ReleaseNotChecked, null, null, year, year > project.PinnedRelease));
                     shown.Add(known.Value);
                 }
             foreach (var listed in remoteProjects.GetValueOrDefault(project.Id) ?? [])
@@ -396,9 +425,11 @@ public sealed partial class SyncEngine
                 state.Files.TryGetValue(known.Path.Value, out var st);
                 TryLocal(known.Path.Value, out var file);
                 var ownership = OwnershipOf(remote.Lock);
+                var year = TeamRelease(remote, known.Path, st);
                 Add(remote.Folder, new FileRowView(remote.Id.ToString(), remote.Name, known.Path.Value, StatusOf(st, remote, file, ownership), CheckoutOf(remote.Lock),
                     file is not null && st is not null && file.Hash != st.BaseHash, remote.Current?.ReleaseChecked == false,
-                    remote.Current?.CreatedAt.ToString("O", CultureInfo.InvariantCulture), remote.Current is { } c ? DisplayName(c.Author) : null));
+                    remote.Current?.CreatedAt.ToString("O", CultureInfo.InvariantCulture), remote.Current is { } c ? DisplayName(c.Author) : null,
+                    year, year > project.PinnedRelease));
                 shown.Add(known.Path.Value);
             }
             // Files in the project's folder that Armory does not have (yet).
@@ -413,7 +444,7 @@ public sealed partial class SyncEngine
                     if (!elsewhere.File.Deleted) continue; // shown where the server has it
                     gone = elsewhere.File;
                 }
-                Add(Split(file.Path).Folder, new FileRowView(null, file.Path.Name, key, StatusOf(st, gone, file, LockOwnership.Free), Available, false, false, null, null));
+                Add(Split(file.Path).Folder, new FileRowView(null, file.Path.Name, key, StatusOf(st, gone, file, LockOwnership.Free), Available, false, false, null, null, null, false));
             }
             // Folders on this computer, empty ones too.
             var prefix = project.Folder + "/";
@@ -421,7 +452,8 @@ public sealed partial class SyncEngine
                 if (folder.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && !folders.ContainsKey(folder[prefix.Length..])) folders[folder[prefix.Length..]] = [];
             projects.Add(new ProjectView(project.Id.ToString(), project.Name, project.Archived, project.Role, project.CanTakeBack,
                 folders.OrderBy(f => f.Key, StringComparer.OrdinalIgnoreCase).Select(f => new FolderView(f.Key, f.Key.Length == 0 ? project.Name : f.Key[(f.Key.LastIndexOf('/') + 1)..],
-                    f.Value.Count, f.Value.OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase).ToArray())).ToArray()));
+                    f.Value.Count, f.Value.OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase).ToArray())).ToArray(),
+                project.PinnedRelease, folders.Values.Sum(rows => rows.Count(r => r.NewerThanPin))));
 
             void Add(string folder, FileRowView row)
             {
@@ -542,9 +574,10 @@ public sealed partial class SyncEngine
             h.ReleaseChecked == false, h.Id == currentId,
             // Saves kept while checked out (and earlier saves) are the ordinary record of work, not news.
             h.Kind == "side_version" && h.Reason is SavedWhileCheckedOutReason or EarlierSaveReason)).ToArray();
+        var year = TeamRelease(remote.File, remote.Path, st);
         return new FileDetailView(fileId.ToString(), remote.File.Name, remote.Path.Value, remote.Project.Name, remote.File.Folder,
             StatusOf(st, remote.File, file, OwnershipOf(remote.File.Lock)), CheckoutOf(remote.File.Lock), remote.File.Current?.ReleaseChecked == false,
-            remote.Project.CanTakeBack, entries);
+            remote.Project.CanTakeBack, entries, year, year > remote.Project.PinnedRelease);
     }
 
     // A kept copy's note, from the reason the server keeps with it.

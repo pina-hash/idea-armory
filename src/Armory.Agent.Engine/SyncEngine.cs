@@ -80,7 +80,6 @@ public sealed partial class SyncEngine : IAsyncDisposable
     private readonly SemaphoreSlim passGate = new(1, 1);
     private readonly SemaphoreSlim wake = new(0, int.MaxValue);
     private readonly CancellationTokenSource stopping = new();
-    private readonly Dictionary<string, SolidWorksRelease?> releases = new(StringComparer.Ordinal);
     private EngineState state = null!;
     private Task? loop;
     private volatile bool paused;
@@ -427,6 +426,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
         wrote = false;
         state.Remembered.RemoveAll(n => deps.Clock.GetUtcNow() - n.At > TimeSpan.FromMinutes(30));
         state.Imports.RemoveAll(i => deps.Clock.GetUtcNow() - i.At > ImportShownFor);
+        PruneStamps();
         var session = deps.Sessions.Current;
         if (session is null) { deps.Live?.SetProjects([]); return Report(false); }
         if (state.Email is not null && !string.Equals(state.Email, session.Email, StringComparison.OrdinalIgnoreCase)) { deps.Live?.SetProjects([]); return Report(true); }
@@ -539,6 +539,8 @@ public sealed partial class SyncEngine : IAsyncDisposable
                 await FinishRequestsAsync(ct);
             }
         }
+        // The team's versions the server never checked, read from the identical copies here (B5).
+        if (online == true) await AuditReleasesAsync(ct);
         // Known folders with nothing left in them go, on every computer (decision D17).
         if (online == true) TidyFolders();
         // The read-only rule holds offline too, from the last ownership this computer knew.
@@ -1308,22 +1310,6 @@ public sealed partial class SyncEngine : IAsyncDisposable
     private static Revision? RevisionOf(RemoteFile? file)
         => file is null ? null : file.Deleted ? new($"tombstone:{file.Id}", null, "")
             : file.Current is { } current ? new(current.Id.ToString(), current.Hash, current.Author) : null;
-
-    private async Task<SolidWorksRelease?> ReadReleaseAsync(FileState st, VaultPath path, string hash, CancellationToken ct)
-    {
-        if (deps.ReleaseReader is null) return null;
-        if (releases.TryGetValue(hash, out var known)) return known;
-        var snapshot = SnapshotFor(st, hash);
-        SolidWorksRelease? release = null;
-        try
-        {
-            await using var stream = snapshot is not null ? deps.Snapshots.OpenRead(snapshot.Id) : fs.OpenRead(path);
-            release = await deps.ReleaseReader.ReadAsync(stream, ct);
-        }
-        catch (IOException) { }
-        releases[hash] = release;
-        return release;
-    }
 
     // ---- Helpers -------------------------------------------------------------------
 

@@ -278,7 +278,8 @@ public sealed class ScenarioTests
     }
 
     // h. A 2026-release SolidWorks file is refused at upload, naming both releases. The
-    // saved-release reader is a test fake; no real reader exists yet.
+    // saved-release reader here is a stand-in (FakeReleaseReader); ReleaseTests runs the real
+    // reader on synthetic SolidWorks containers.
     [PostgresFact]
     public async Task A_2026_SolidWorks_file_is_refused_naming_both_releases()
     {

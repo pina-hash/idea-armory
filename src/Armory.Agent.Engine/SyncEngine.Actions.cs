@@ -71,12 +71,13 @@ public sealed partial class SyncEngine
         }
     }
 
-    // The release gate's refusal in a student's words, naming both releases when it knows them.
-    private static string GateWords(SyncInput input, ProjectState project, string? reason)
+    // The release gate's refusal in a student's words, naming both releases when it knows them,
+    // and what this computer can do about a newer one (SyncEngine.Releases.cs).
+    private string GateWords(SyncInput input, ProjectState project, string? reason)
     {
         var pin = input.PinnedRelease?.Year ?? project.PinnedRelease;
         if (input.SavedRelease is { } saved && saved.Year >= 1995 && saved.Year > pin)
-            return $"Saved in SolidWorks {saved.Year}, and {project.Name} uses SolidWorks {pin}. In SolidWorks, use Save As and pick {pin}, then it uploads by itself.";
+            return NewerThanPinWords(saved.Year, pin, project.Name, solidWorks?.Revision, solidWorks?.SaveDownWorks ?? false);
         if (input.SavedRelease is not { Year: >= 1995 } && pin >= 1995)
             return $"The SolidWorks year it was saved in is unknown, and {project.Name} only takes files whose year Armory can check. It stays on this computer.";
         return reason ?? "Armory can't take this file. It stays on this computer.";
@@ -437,7 +438,7 @@ public sealed partial class SyncEngine
         BlobRefusedException => "Armory wouldn't take this file. It stays on this computer.",
         ArmoryRpcException { IsNotMember: true } or ArmoryRpcException { IsForbidden: true } => "Armory wouldn't take this file: you may no longer be in this project. Ask your CAD lead.",
         ArmoryRpcException rpc when rpc.Message.Contains("SolidWorks", StringComparison.Ordinal) && project is not null =>
-            $"It was saved in a SolidWorks year {project.Name} can't take. In SolidWorks, use Save As and pick {project.PinnedRelease}, then it uploads by itself.",
+            $"It was saved in a SolidWorks year {project.Name} can't take. It stays on this computer only until it is saved in SolidWorks {project.PinnedRelease}.",
         ArmoryRpcException rpc when rpc.Message.Contains("SolidWorks", StringComparison.Ordinal) =>
             "It was saved in a SolidWorks year this project can't take. It stays on this computer.",
         ArmoryRpcException { IsInvalidInput: true } => "Armory can't take it under this name. Rename it, then it uploads by itself.",
@@ -522,6 +523,7 @@ public sealed partial class SyncEngine
                     st.Attempt++;
                 }
                 st.ReleaseNotChecked = f.ReleaseNotChecked;
+                StampCommitted(f.Hash);
                 Complete(st, f.Hash!);
                 lastActivity = deps.Clock.GetUtcNow();
                 return answer.Advanced;
@@ -556,6 +558,7 @@ public sealed partial class SyncEngine
                 st.Drafts.Remove(f.EntryId!);
                 AddSide(st, id, f.Hash!, f.Reason ?? ConflictReason);
                 st.ReleaseNotChecked = f.ReleaseNotChecked;
+                StampCommitted(f.Hash);
                 lastActivity = deps.Clock.GetUtcNow();
                 return true;
             }
@@ -654,7 +657,7 @@ public sealed partial class SyncEngine
                 var notChecked = false;
                 if (Reconciler.IsSolidWorks(path))
                 {
-                    try { saved = await ReadReleaseFromSnapshotAsync(entry.SnapshotId!, ct); }
+                    try { saved = await ReleaseOfAsync(null, entry.Hash, () => deps.Snapshots.OpenRead(entry.SnapshotId!), ct); }
                     catch (Exception error) when (error is IOException or InvalidDataException) { EarlierSaveProblem(st.Path, error); continue; }
                     var gate = SolidWorksVersionGate.Decide(saved, new SolidWorksRelease(project.PinnedRelease), project.Enforce ? ReleaseGateMode.Enforce : ReleaseGateMode.Warn);
                     if (!gate.Allowed)
@@ -683,13 +686,6 @@ public sealed partial class SyncEngine
 
     private void EarlierSaveProblem(string path, Exception error)
         => Problem(NoticeKinds.CantRead, path, "Armory couldn't read an earlier save of it from this computer's safe copy. It tries again by itself.", error.Message);
-
-    private async Task<SolidWorksRelease?> ReadReleaseFromSnapshotAsync(string snapshotId, CancellationToken ct)
-    {
-        if (deps.ReleaseReader is null) return null;
-        await using var stream = deps.Snapshots.OpenRead(snapshotId);
-        return await deps.ReleaseReader.ReadAsync(stream, ct);
-    }
 
     // ---- Moves -----------------------------------------------------------------------
 

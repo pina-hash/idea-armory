@@ -26,14 +26,20 @@ public sealed record SyncView(string State, string Line, string? Detail, int Pen
 // The files THIS computer has checked out, in any project (archived ones too, so they can
 // always be checked in).
 public sealed record MyFileView(string? FileId, string Path, string Name, string Project, string Status, string? Note, CheckoutView Checkout);
-public sealed record ProjectView(string Id, string Name, bool Archived, string Role, bool CanTakeBack, IReadOnlyList<FolderView> Folders);
+// PinnedRelease: the SolidWorks year the project uses. NewerThanPinCount: its files whose
+// version in Armory was saved in a newer SolidWorks (the newerRelease notice lists them).
+public sealed record ProjectView(string Id, string Name, bool Archived, string Role, bool CanTakeBack, IReadOnlyList<FolderView> Folders,
+    int PinnedRelease, int NewerThanPinCount);
 // Path is in the project ("" for its top folder); FileCount counts the files directly in it.
 public sealed record FolderView(string Path, string Name, int FileCount, IReadOnlyList<FileRowView> Files);
+// SavedRelease: the SolidWorks year its version in Armory was saved in, when known (the server
+// checked it, or this computer read its identical copy); null for other files and unknown years.
+// NewerThanPin: that year is newer than the project's pinned release.
 public sealed record FileRowView(string? FileId, string Name, string Path, string Status, CheckoutView Checkout, bool Changed, bool ReleaseNotChecked,
-    string? UpdatedAt, string? UpdatedBy);
+    string? UpdatedAt, string? UpdatedBy, int? SavedRelease, bool NewerThanPin);
 public sealed record SettingsView(string VaultRoot, bool StartAtSignIn, string Theme);
 public sealed record FileDetailView(string FileId, string Name, string Path, string Project, string Folder, string Status, CheckoutView Checkout,
-    bool ReleaseNotChecked, bool CanTakeBack, IReadOnlyList<HistoryEntryView> History);
+    bool ReleaseNotChecked, bool CanTakeBack, IReadOnlyList<HistoryEntryView> History, int? SavedRelease, bool NewerThanPin);
 // Routine: a kept copy that is the ordinary record of work (saved while checked out, an earlier
 // save), shown in the neutral tone, never as news.
 public sealed record HistoryEntryView(string Id, string Kind, string Author, string At, long Bytes, string Note, bool ReleaseNotChecked, bool IsCurrent, bool Routine);
@@ -92,7 +98,7 @@ public static class NoticeKinds
 {
     public const string Import = "import", NameShared = "nameShared", NewerWaiting = "newerWaiting", KeptCopy = "keptCopy", TakenBack = "takenBack",
         FolderPutBack = "folderPutBack", ProjectPutBack = "projectPutBack", ProjectRenaming = "projectRenaming", CantSend = "cantSend",
-        CantRead = "cantRead", CheckInPartial = "checkInPartial", ProjectDeleted = "projectDeleted";
+        CantRead = "cantRead", CheckInPartial = "checkInPartial", ProjectDeleted = "projectDeleted", NewerRelease = "newerRelease";
 }
 public static class HistoryKinds
 {

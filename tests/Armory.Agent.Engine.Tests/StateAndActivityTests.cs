@@ -31,6 +31,11 @@ public sealed class StateAndActivityTests
         state.KnownFolders.Add("Robot 2027/Gearbox");
         state.Imports.Add(new ImportRecord(Guid.NewGuid(), Project, "Robot 2027/Gearbox", state.Files.Keys.Take(50).ToList(), DateTimeOffset.UnixEpoch));
         state.Dismissed["import"] = ["import:1"];
+        foreach (var year in new[] { 2025, 2026 })
+        {
+            var hash = new string((char)('0' + year % 10), 64);
+            state.ReleaseStamps[hash] = new StampRecord(new ReleaseStamp(hash, year, "34.4.1", 2026, 2025, DateTimeOffset.UnixEpoch));
+        }
         return state;
     }
 
@@ -69,11 +74,25 @@ public sealed class StateAndActivityTests
         Assert.NotNull(state.SerializeParts(whole: false));
         SameDocument(state);
         Assert.Null(state.SerializeParts(whole: false));
+        // A release stamp added, replaced (committed) and removed: each one is a change.
+        var stamp = new string('7', 64);
+        state.ReleaseStamps[stamp] = new StampRecord(new ReleaseStamp(stamp, 2025, null, null, null, DateTimeOffset.UnixEpoch));
+        Assert.NotNull(state.SerializeParts(whole: false));
+        SameDocument(state);
+        state.ReleaseStamps[stamp] = state.ReleaseStamps[stamp] with { Committed = DateTimeOffset.UnixEpoch };
+        Assert.NotNull(state.SerializeParts(whole: false));
+        SameDocument(state);
+        state.ReleaseStamps.Remove(new string('5', 64));
+        Assert.NotNull(state.SerializeParts(whole: false));
+        SameDocument(state);
+        Assert.Null(state.SerializeParts(whole: false));
         // And it loads back as it was.
         var store = new Store();
         store.Save(state.Serialize());
         var loaded = EngineState.Load(store);
         Assert.Equal(state.Files.Count, loaded.Files.Count);
+        Assert.Equal(DateTimeOffset.UnixEpoch, loaded.ReleaseStamps[stamp].Committed);
+        Assert.Equal(2026, loaded.ReleaseStamps[new string('6', 64)].Stamp.Year);
         Assert.True(JsonNode.DeepEquals(JsonNode.Parse(loaded.SerializeWhole()), JsonNode.Parse(state.SerializeWhole())));
         // A record found by its FileId (after a load too), and not once it left.
         Assert.Same(loaded.Files[files[5].Path], loaded.FirstWithFileId(files[5].FileId!.Value));
@@ -130,6 +149,7 @@ public sealed class StateAndActivityTests
         if (type == typeof(Guid)) return Guid.NewGuid();
         if (type == typeof(Guid?)) return Guid.NewGuid();
         if (type == typeof(int)) return (int)current! + 1;
+        if (type == typeof(int?)) return ((int?)current ?? 2024) + 1;
         if (type == typeof(bool)) return !(bool)current!;
         if (type == typeof(LockOwnership?)) return current is LockOwnership.ThisDevice ? LockOwnership.Free : LockOwnership.ThisDevice;
         if (type == typeof(CheckoutRequest)) return (CheckoutRequest)current! == CheckoutRequest.CheckIn ? CheckoutRequest.Undo : CheckoutRequest.CheckIn;

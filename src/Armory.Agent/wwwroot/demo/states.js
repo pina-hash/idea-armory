@@ -163,7 +163,9 @@
 			changed: false,
 			releaseNotChecked: false,
 			updatedAt: ago(entry[5]),
-			updatedBy: entry[4].name
+			updatedBy: entry[4].name,
+			savedRelease: /\.sld(prt|asm|drw)$/i.test(entry[3]) ? 2025 : null,
+			newerThanPin: false
 		};
 		if (change) for (var k in change) row[k] = change[k];
 		return row;
@@ -187,12 +189,14 @@
 		return list.map(function (p) {
 			var lead = !!opts.lead && p.id === 'proj-robot-2027';
 			var folders = p.folders.concat((opts.folders || {})[p.id] || []);
-			return {
+			var project = {
 				id: p.id,
 				name: p.name,
 				archived: p === ARCHIVED,
 				role: lead ? 'mentor' : p.role,
 				canTakeBack: lead,
+				pinnedRelease: 2025,
+				newerThanPinCount: 0,
 				folders: folders.map(function (folder) {
 					var files = catalog
 						.filter(function (e) {
@@ -212,12 +216,20 @@
 								changed: false,
 								releaseNotChecked: false,
 								updatedAt: null,
-								updatedBy: null
+								updatedBy: null,
+								savedRelease: null,
+								newerThanPin: false
 							});
 					});
 					return { path: folder, name: folder ? folder.split('/').pop() : p.name, fileCount: files.length, files: files };
 				})
 			};
+			project.folders.forEach(function (f) {
+				f.files.forEach(function (r) {
+					if (r.newerThanPin) project.newerThanPinCount++;
+				});
+			});
+			return project;
 		});
 	}
 
@@ -914,7 +926,7 @@
 					'cantSend',
 					'bad',
 					"2 files can't be uploaded",
-					'They were saved in SolidWorks 2026, and the team uses 2025. In SolidWorks, use Save As and pick 2025, then they upload by themselves.',
+					'They were saved in SolidWorks 2026, and the team uses 2025. Each stays on this computer until it is saved in 2025, then it uploads by itself.',
 					2,
 					null,
 					[
@@ -1026,7 +1038,9 @@
 			checkout: row.checkout,
 			releaseNotChecked: row.releaseNotChecked,
 			canTakeBack: found ? found.project.canTakeBack : false,
-			history: history(entry, row)
+			history: history(entry, row),
+			savedRelease: row.savedRelease,
+			newerThanPin: row.newerThanPin
 		};
 		if (s && s.details && s.details[fileId]) d = s.details[fileId](d);
 		return d;
