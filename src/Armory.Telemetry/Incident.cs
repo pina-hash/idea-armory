@@ -7,8 +7,10 @@ namespace Armory.Telemetry;
 // Who and what wrote an incident.
 public sealed record IncidentHeader(string AppVersion, string OsVersion, string? DeviceName, string? Email);
 
-// The words a person typed in "Report a problem", kept with their incident until the site has them.
-public sealed record IncidentFeedback(string Kind, string Body);
+// The words a person typed in "Report a problem" or "Send feedback", kept with their incident
+// until the site has them. A note from Send feedback can carry what was tried (at most 1000
+// characters) and the area of the app it is about (at most 120); both are scrubbed like the words.
+public sealed record IncidentFeedback(string Kind, string Body, string? Tried = null, string? Area = null);
 
 // Takes every secret out of the text an incident keeps: the exact strings this computer knows
 // are secret (its tokens and keys), then the patterns (the agent's Redactor: JWTs, Bearer
@@ -90,7 +92,7 @@ public static class IncidentDocument
             ["deviceName"] = header.DeviceName,
             ["email"] = header.Email,
             ["projectId"] = projectId?.ToString(),
-            ["feedback"] = feedback is null ? null : new JsonObject { ["kind"] = feedback.Kind, ["body"] = feedback.Body },
+            ["feedback"] = Feedback(feedback),
             ["feedbackId"] = null,
             ["trigger"] = trigger,
             ["flight"] = new JsonObject
@@ -103,6 +105,16 @@ public static class IncidentDocument
             ["snapshot"] = snapshot,
             ["log"] = lines,
         };
+    }
+
+    // {kind, body}, with tried and area when the note has them.
+    private static JsonObject? Feedback(IncidentFeedback? feedback)
+    {
+        if (feedback is null) return null;
+        var words = new JsonObject { ["kind"] = feedback.Kind, ["body"] = feedback.Body };
+        if (feedback.Tried is { Length: > 0 } tried) words["tried"] = tried;
+        if (feedback.Area is { Length: > 0 } area) words["area"] = area;
+        return words;
     }
 
     // The scrubbed, compressed file: every string scrubbed first, then trimmed (oldest events,

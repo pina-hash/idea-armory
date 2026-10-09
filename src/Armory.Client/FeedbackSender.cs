@@ -31,14 +31,15 @@ public abstract record FeedbackResult
         public override string Message => "Sent. Thank you for the feedback.";
     }
 
-    // The site has only the five-argument form (before idea-app 0235): the note went without what
-    // was tried, the area and the picture (LeftOutDetails says whether any was given), and Kind is
-    // what it went as: praise goes as "other", because that form refuses praise.
-    public sealed record SentWithoutNewFields(Guid Id, string Kind, bool KindChanged, bool LeftOutDetails) : FeedbackResult
+    // The site has only the five-argument form (before idea-app 0235): what was tried, the area and
+    // the kind asked for went in the note's context (the site keeps it whole), so only a picture is
+    // lost (LeftOutPicture says whether one was given). Kind is what it went as: praise goes as
+    // "other", because that form refuses praise.
+    public sealed record SentWithoutNewFields(Guid Id, string Kind, bool KindChanged, bool LeftOutPicture) : FeedbackResult
     {
         public override bool Ok => true;
         public override string Message => "Sent. Thank you for the feedback." +
-            (LeftOutDetails ? " The website can't take the picture, what you tried or the area yet, so they were left out." : "") +
+            (LeftOutPicture ? " The website can't take pictures yet, so it went without the picture." : "") +
             (KindChanged ? " The website doesn't take praise yet, so it went as other feedback." : "");
     }
 
@@ -201,7 +202,7 @@ public sealed class FeedbackSender
             log?.Invoke($"send feedback: sent {sent.Id} as {sent.Kind}{(sent.NewFields ? "" : " without the new fields")}");
             return sent.NewFields
                 ? new FeedbackResult.Sent(sent.Id)
-                : new FeedbackResult.SentWithoutNewFields(sent.Id, sent.Kind, sent.Kind != kind, tried is not null || area is not null || png is not null);
+                : new FeedbackResult.SentWithoutNewFields(sent.Id, sent.Kind, sent.Kind != kind, png is not null);
         }
         catch (ArmoryRpcException error) when (error.IsRateLimited)
         {
@@ -230,9 +231,10 @@ public sealed class FeedbackSender
         }
     }
 
-    // One note, the eight-argument form while the site has it, else the five-argument form without
-    // tried, area and screenshot. Praise goes as "other" there: the five-argument form refuses praise
-    // ("The kind of note is bug, idea or other."), and the answer's Kind says what it went as. A
+    // One note, the eight-argument form while the site has it, else the five-argument form with
+    // tried, area and the kind asked for in its context (WithAsked) and no screenshot. Praise goes
+    // as "other" there: the five-argument form refuses praise ("The kind of note is bug, idea or
+    // other."), and the answer's Kind says what it went as. A
     // context the site measures too large is shortened and sent once more (never the same payload
     // twice). Throws as ArmoryApi does (a PGRST202 from the five-argument form too: the site has
     // neither); a PT429 is recorded in the shared limiter first.
@@ -264,9 +266,11 @@ public sealed class FeedbackSender
                     log?.Invoke($"send feedback: the site has no eight-argument {Rpc}; notes go without the new fields, and it is asked again in {WideMissingRetry.TotalMinutes:0} minutes");
                 }
             }
-            // The five-argument form refuses praise: such a note goes as "other".
-            var narrow = kind == "praise" ? "other" : kind;
-            return new(await api.SubmitAppFeedbackAsync(narrow, body, version, deviceName, context, ct), false, narrow);
+            // The five-argument form refuses praise: such a note goes as "other". What it has no
+            // argument for goes in the context, so only a picture is lost.
+            var narrow = NarrowKind(kind);
+            return new(await api.SubmitAppFeedbackAsync(narrow, body, version, deviceName, WithAsked(context, kind != narrow ? kind : null, tried, area), ct),
+                false, narrow);
         }
         catch (ArmoryRpcException error) when (error.IsRateLimited)
         {
@@ -293,6 +297,25 @@ public sealed class FeedbackSender
     {
         if (key is null) return;
         lock (gate) if (uploaded is { } done && done.Key == key) uploaded = null;
+    }
+
+    // The kind the five-argument form takes: bug, idea or other (praise goes as other).
+    public static string NarrowKind(string kind) => kind == "praise" ? "other" : kind;
+
+    // The context the five-argument form carries for what it has no argument for: askedKind
+    // (praise, when it went as other), tried and area, each only when there is one. They are kept
+    // whole: the rest of the context gives way first (FitContext), within MaximumContextBytes.
+    public static JsonObject WithAsked(JsonObject? context, string? askedKind, string? tried, string? area)
+    {
+        var asked = new JsonObject();
+        if (askedKind is not null) asked["askedKind"] = askedKind;
+        if (tried is not null) asked["tried"] = tried;
+        if (area is not null) asked["area"] = area;
+        if (asked.Count == 0) return context?.DeepClone() as JsonObject ?? new JsonObject();
+        var room = MaximumContextBytes - JsonSerializer.SerializeToUtf8Bytes(asked).Length - 16;
+        var carried = FitContext(context, Math.Max(256, room));
+        foreach (var (name, value) in asked) carried[name] = value?.DeepClone();
+        return carried;
     }
 
     // bug, idea, praise or other (any case); anything else is "other".

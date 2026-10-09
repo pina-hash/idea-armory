@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json;
@@ -108,22 +109,38 @@ public sealed class FeedbackScreenshots(HttpClient http, SessionManager sessions
                 }
                 var status = (int)response.StatusCode;
                 if (status is 429 or 502 or 503 or 504) throw new ArmoryOfflineException($"Armory's file storage is busy ({status}).");
-                // Storage puts its own code in the body; a version answers some refusals with 400.
+                // Storage answers HTTP 400 for every refusal but a 500 and names the real one in the
+                // body's statusCode, so the body is read first. 544 DatabaseTimeout, 503
+                // DatabaseReadOnly or LockTimeout, 423 ResourceLocked, 429 and 408 are a busy
+                // Storage, never a refusal of the picture: trying again works.
                 var effective = code is >= 400 and < 600 ? code.Value : status;
+                if (IsBusy(effective) || status >= 500) throw new ArmoryOfflineException($"Armory's file storage is busy ({effective}).");
                 throw effective switch
                 {
                     413 => new ScreenshotRefusedException("too_large", status, "Armory's file storage says the screenshot is too large."),
                     403 => new ScreenshotRefusedException("not_allowed", status, "Armory's file storage wouldn't take the screenshot from this account."),
                     409 => new ScreenshotRefusedException("exists", status, "Armory's file storage already has a screenshot with that name."),
                     404 => new ScreenshotRefusedException("not_available", status, "Armory's file storage isn't ready for screenshots yet."),
-                    _ when status >= 500 => new ArmoryOfflineException($"Armory's file storage answered {status}."),
-                    _ => new ScreenshotRefusedException("refused", status, $"Armory's file storage refused the screenshot ({status})."),
+                    _ => new ScreenshotRefusedException("refused", status, $"Armory's file storage refused the screenshot ({effective})."),
                 };
             }
         }
     }
 
-    // Storage's error body: {"statusCode": "413", "error": "Payload too large", "message": "..."}.
+    // A Storage code that means "busy, try again": a timeout, a lock, a read-only or slow database.
+    internal static bool IsBusy(int code) => code is 408 or 423 or 429 || code >= 500;
+
+    // The width and height in pixels a PNG's header (IHDR) gives, or null when it isn't a PNG.
+    public static (int Width, int Height)? Dimensions(ReadOnlySpan<byte> png)
+    {
+        // The signature (8), the IHDR chunk's length (4) and type (4), then width and height.
+        if (png.Length < 24 || !IsPng(png) || !png.Slice(12, 4).SequenceEqual("IHDR"u8)) return null;
+        var width = BinaryPrimitives.ReadInt32BigEndian(png.Slice(16, 4));
+        var height = BinaryPrimitives.ReadInt32BigEndian(png.Slice(20, 4));
+        return width > 0 && height > 0 ? (width, height) : null;
+    }
+
+    // Storage's error body: {"statusCode": "413", "code": "EntityTooLarge", "error": "Payload too large", "message": "..."}.
     private static async Task<(int? Code, string? Error)> StorageErrorAsync(HttpResponseMessage response, CancellationToken ct)
     {
         try
@@ -138,11 +155,34 @@ public sealed class FeedbackScreenshots(HttpClient http, SessionManager sessions
                 JsonValueKind.String when int.TryParse(value.GetString(), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var n) => n,
                 _ => null,
             } : null;
+            // InvalidJWT is in "error", and in "code" too on current Storage.
             var error = root.TryGetProperty("error", out var e) && e.ValueKind == JsonValueKind.String ? e.GetString() : null;
+            if (root.TryGetProperty("code", out var name) && name.ValueKind == JsonValueKind.String && name.GetString() == "InvalidJWT") error = "InvalidJWT";
             return (code, error);
         }
         catch (Exception error) when (error is JsonException or HttpRequestException or InvalidOperationException) { return (null, null); }
     }
 
     private static string Megabytes(long bytes) => (bytes / 1048576.0).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + " MB";
+}
+
+// How much smaller a picture of the window is taken again when it is over the limit. The host
+// measures the bytes of each try, so this never depends on the display's scaling. A picture's
+// area, and roughly its PNG's bytes, shrink with the square of the scale.
+public static class ScreenshotFit
+{
+    // Never smaller than a quarter of the window's own size: smaller would not be readable.
+    public const double Smallest = 0.25;
+    private const double Aim = 0.85, Step = 0.05, AtLeast = 0.1;
+
+    // The next scale for a picture of `bytes` taken at `scale`: aimed at 85% of the limit, in
+    // steps of 0.05, at least 0.1 smaller than `scale` and never below Smallest. Null when the
+    // picture already fits, or `scale` is already the smallest.
+    public static double? NextScale(long bytes, double scale, long limit = FeedbackScreenshots.MaximumBytes)
+    {
+        if (bytes <= limit || scale <= Smallest + 1e-9) return null;
+        var aimed = scale * Math.Sqrt(Aim * limit / bytes);
+        var stepped = Math.Floor(aimed / Step + 1e-9) * Step;
+        return Math.Round(Math.Max(Smallest, Math.Min(stepped, scale - AtLeast)), 2);
+    }
 }

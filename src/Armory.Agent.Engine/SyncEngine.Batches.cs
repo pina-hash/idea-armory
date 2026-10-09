@@ -310,6 +310,11 @@ public sealed partial class SyncEngine
         var device = state.DeviceId!.Value;
         var byId = targets.ToDictionary(t => t.Id);
         List<Guid> pending = [.. byId.Keys];
+        // Each busy file's last call (the operation that answered it 40P01 or 40001): a later
+        // round's id is chained from it, so it is new for every ask. Built from the round number
+        // alone, a second ask's rounds would rebuild the first ask's ids and the server would
+        // answer its old busy receipt instead of trying.
+        Dictionary<Guid, Guid> busyFrom = [];
         for (var round = 0; pending.Count > 0; round++)
         {
             List<Guid> again = [];
@@ -318,8 +323,9 @@ public sealed partial class SyncEngine
             {
                 var chunk = chunks[i];
                 // The first round's id is the same whenever the same check outs are asked again.
-                string[] parts = [round == 0 ? "take back batch" : "take back batch, again " + round.ToString(CultureInfo.InvariantCulture),
-                    .. chunk.Select(id => TakeBackOperation(id, byId[id].Held).ToString())];
+                string[] parts = round == 0
+                    ? ["take back batch", .. chunk.Select(id => TakeBackOperation(id, byId[id].Held).ToString())]
+                    : ["take back batch, again", .. chunk.Select(id => busyFrom[id].ToString() + ":" + TakeBackOperation(id, byId[id].Held).ToString())];
                 var record = new PendingForceCheckIn(OperationIds.Derive(parts), device,
                     [.. chunk.Select(id => new ForcedCheckOut(id, byId[id].Held.HolderDeviceId, byId[id].Held.AcquiredAt))]);
                 state.ForceCheckIns.RemoveAll(r => r.Operation == record.Operation);
@@ -371,7 +377,12 @@ public sealed partial class SyncEngine
                     if (result.Code is "40P01" or "40001")
                     {
                         // Its savepoint rolled back: nothing was written for it.
-                        if (round < PostgrestClient.MaximumResends) again.Add(t.Id); else tally.Busy++;
+                        if (round < PostgrestClient.MaximumResends)
+                        {
+                            again.Add(t.Id);
+                            busyFrom[t.Id] = record.Operation;
+                        }
+                        else tally.Busy++;
                     }
                     else if (result.Message == ArmoryRpcException.NotMemberMessage && result.Code is "P0001" or "42501")
                     {

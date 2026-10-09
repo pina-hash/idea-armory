@@ -266,6 +266,86 @@ public sealed class ServerCallsClientTests
         await Assert.ThrowsAsync<ArmoryOfflineException>(() => new FeedbackScreenshots(h, s).UploadAsync(Png(10)));
     }
 
+    // Storage answers HTTP 400 for every refusal but a 500, with the real code in the body. A busy
+    // Storage (a database timeout, read only, a lock, too many requests) must read as "try again",
+    // never as "the picture was refused" (0.3.2 offered to drop the picture for a 544).
+    [Fact]
+    public async Task Storage_busy_answers_in_a_400_body_are_offline_never_a_refusal()
+    {
+        foreach (var (code, error) in new[] { ("544", "DatabaseTimeout"), ("503", "DatabaseReadOnly"), ("503", "LockTimeout"), ("423", "ResourceLocked"),
+            ("429", "SlowDown"), ("408", "RequestTimeout"), ("500", "InternalError") })
+        {
+            var recorded = new Recorded().Storage(400, code, error, "busy");
+            var (_, sessions, http) = Client(recorded);
+            var thrown = await Record.ExceptionAsync(() => new FeedbackScreenshots(http, sessions).UploadAsync(Png(10)));
+            Assert.True(thrown is ArmoryOfflineException, code + " " + error + " read as " + thrown?.GetType().Name + " " + (thrown as ScreenshotRefusedException)?.Reason);
+            // The window offers nothing about the picture: it says offline, so trying again works.
+            var sent = await Sender(new Recorded().Storage(400, code, error, "busy").Answer(ArmoryApi.SubmitFeedbackRpc, 200, Id()))
+                .SendAsync(new FeedbackNote("bug", "Spins.", Screenshot: Png(10)));
+            Assert.IsType<FeedbackResult.Offline>(sent);
+            Assert.False(sent.CanSendWithoutPicture);
+        }
+        // HTTP 429, 502, 503 and 504 with no body at all: busy too.
+        foreach (var status in new[] { 429, 502, 503, 504 })
+        {
+            var (_, sessions, http) = Client(new Recorded().Answer("storage", status, "upstream busy"));
+            await Assert.ThrowsAsync<ArmoryOfflineException>(() => new FeedbackScreenshots(http, sessions).UploadAsync(Png(10)));
+        }
+        // The real refusals in a 400 body stay refusals, each with its reason.
+        foreach (var (code, reason) in new[] { ("413", "too_large"), ("403", "not_allowed"), ("409", "exists"), ("404", "not_available"), ("415", "refused"), ("400", "refused") })
+        {
+            var (_, sessions, http) = Client(new Recorded().Storage(400, code, "x", "y"));
+            var refused = await Assert.ThrowsAsync<ScreenshotRefusedException>(() => new FeedbackScreenshots(http, sessions).UploadAsync(Png(10)));
+            Assert.Equal((reason, 400), (refused.Reason, refused.Status));
+        }
+    }
+
+    [Fact]
+    public void The_next_capture_scale_shrinks_by_area_and_gives_up_at_a_quarter()
+    {
+        const long limit = FeedbackScreenshots.MaximumBytes;
+        // 4 MiB at full size: the area must roughly halve, so the side shrinks by about 0.65.
+        Assert.True(ScreenshotFit.NextScale(4 * 1048576, 1.0) is { } first && first <= 0.65 && first >= 0.6, ScreenshotFit.NextScale(4 * 1048576, 1.0)?.ToString());
+        // Just over: still at least 0.1 smaller (a try that changes little would fail again).
+        Assert.Equal(0.9, ScreenshotFit.NextScale(limit + 1, 1.0));
+        Assert.Equal(0.55, ScreenshotFit.NextScale(limit + 1, 0.65));
+        // In steps of 0.05, never below a quarter, and nothing after a quarter.
+        foreach (var (bytes, scale) in new[] { (3_000_000L, 1.0), (9_000_000L, 0.8), (50_000_000L, 1.0), (2_200_000L, 0.4) })
+        {
+            var next = ScreenshotFit.NextScale(bytes, scale)!.Value;
+            Assert.True(next <= scale - 0.1 + 1e-9 || next == ScreenshotFit.Smallest, $"{bytes} at {scale}: {next}");
+            Assert.True(next >= ScreenshotFit.Smallest, $"{bytes} at {scale}: {next}");
+            Assert.Equal(0, Math.Round(next * 100) % 5);
+        }
+        Assert.Equal(ScreenshotFit.Smallest, ScreenshotFit.NextScale(50_000_000, 1.0));
+        Assert.Null(ScreenshotFit.NextScale(50_000_000, ScreenshotFit.Smallest));
+        // Already under the limit: nothing to do.
+        Assert.Null(ScreenshotFit.NextScale(limit, 1.0));
+        Assert.Null(ScreenshotFit.NextScale(200_000, 0.5));
+        // Three rounds from 1.0 never go below a quarter, whatever the sizes say.
+        var at = 1.0;
+        for (var round = 0; round < 3; round++) at = ScreenshotFit.NextScale(40_000_000, at) ?? at;
+        Assert.Equal(ScreenshotFit.Smallest, at);
+    }
+
+    [Fact]
+    public void A_pngs_size_is_read_from_its_header_and_anything_else_has_none()
+    {
+        // The signature, then IHDR: length 13, "IHDR", width 1120, height 760 (big-endian).
+        byte[] png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13, (byte)'I', (byte)'H', (byte)'D', (byte)'R',
+            0, 0, 0x04, 0x60, 0, 0, 0x02, 0xF8, 8, 6, 0, 0, 0, 0, 0, 0, 0];
+        Assert.Equal((1120, 760), FeedbackScreenshots.Dimensions(png));
+        Assert.Null(FeedbackScreenshots.Dimensions(png.AsSpan(0, 20)));        // cut short
+        Assert.Null(FeedbackScreenshots.Dimensions(Png(64)));                  // a signature and nothing after it
+        var jpeg = (byte[])png.Clone();
+        jpeg[0] = 0xFF;
+        Assert.Null(FeedbackScreenshots.Dimensions(jpeg));                     // not a PNG
+        var zero = (byte[])png.Clone();
+        zero[18] = zero[19] = 0;
+        Assert.Null(FeedbackScreenshots.Dimensions(zero));                     // no width
+        Assert.Null(FeedbackScreenshots.Dimensions([]));
+    }
+
     // ---- The eight-argument feedback (0235) and Your feedback ------------------------------------
 
     [Fact]
@@ -381,9 +461,9 @@ public sealed class ServerCallsClientTests
         var sender = Sender(recorded, clock, log);
         var result = await sender.SendAsync(new FeedbackNote("praise", "Love the new check in.", "Nothing", "Files"));
         var narrow = Assert.IsType<FeedbackResult.SentWithoutNewFields>(result);
-        Assert.Equal(("other", true, true), (narrow.Kind, narrow.KindChanged, narrow.LeftOutDetails));
-        Assert.Equal("Sent. Thank you for the feedback. The website can't take the picture, what you tried or the area yet, so they were left out." +
-            " The website doesn't take praise yet, so it went as other feedback.", result.Message);
+        // What was tried and the area went in the context: only a picture would be left out.
+        Assert.Equal(("other", true, false), (narrow.Kind, narrow.KindChanged, narrow.LeftOutPicture));
+        Assert.Equal("Sent. Thank you for the feedback. The website doesn't take praise yet, so it went as other feedback.", result.Message);
         var bodies = recorded.BodiesOf(ArmoryApi.SubmitFeedbackRpc).ToList();
         Assert.Equal([8, 5], bodies.Select(b => b.Count));
         Assert.Equal("other", bodies[1]["p_kind"]!.GetValue<string>());
@@ -393,7 +473,8 @@ public sealed class ServerCallsClientTests
         // Within the hour the wide form is not asked again, and a picture is not uploaded at all
         // (no note could name it).
         var again = await sender.SendAsync(new FeedbackNote("bug", "Spins.", null, null, Png(100)));
-        Assert.Equal((false, true), (((FeedbackResult.SentWithoutNewFields)again).KindChanged, ((FeedbackResult.SentWithoutNewFields)again).LeftOutDetails));
+        Assert.Equal((false, true), (((FeedbackResult.SentWithoutNewFields)again).KindChanged, ((FeedbackResult.SentWithoutNewFields)again).LeftOutPicture));
+        Assert.Equal("Sent. Thank you for the feedback. The website can't take pictures yet, so it went without the picture.", again.Message);
         Assert.Equal(5, recorded.BodiesOf(ArmoryApi.SubmitFeedbackRpc).Last().Count);
         Assert.Empty(recorded.Uploads);
         // A plain note with nothing new says nothing was left out.
@@ -408,6 +489,83 @@ public sealed class ServerCallsClientTests
         var none = Sender(new Recorded());
         var failed = Assert.IsType<FeedbackResult.Failed>(await none.SendAsync(new FeedbackNote("bug", "words")));
         Assert.Equal("The website can't take feedback from the app yet. Try again later.", failed.Message);
+    }
+
+    // A site before 0235 loses only the picture: what was tried, the area and the kind the person
+    // picked go in the note's context, which the admin's list shows whole (ARMORY.md item 4).
+    [Fact]
+    public async Task A_five_argument_fallback_keeps_praise_tried_and_area_in_the_context()
+    {
+        var recorded = new Recorded().Missing(ArmoryApi.SubmitFeedbackRpc).Answer(ArmoryApi.SubmitFeedbackRpc, 200, Id());
+        var sender = Sender(recorded);
+        // A bug with nothing new carries nothing extra: its kind went as asked. (The site answered
+        // that it has no eight-argument form, so nothing asks for it again within the hour.)
+        await sender.SendAsync(new FeedbackNote("bug", "Spins.", Context: new JsonObject { ["view"] = "files" }));
+        Assert.Equal("""{"view":"files"}""", recorded.BodiesOf(ArmoryApi.SubmitFeedbackRpc).Last()["p_context"]!.ToJsonString());
+        Assert.True(sender.NewFieldsMissing);
+        var big = new JsonObject { ["log"] = new string('x', 150 * 1024), ["view"] = "files" };
+        var tried = new string('t', 999) + "!";
+        var result = await sender.SendAsync(new FeedbackNote("praise", "Love the new check in.", tried, "Home > Robot 2027 > Drivetrain", Png(500), big));
+        var narrow = Assert.IsType<FeedbackResult.SentWithoutNewFields>(result);
+        Assert.Equal(("other", true, true), (narrow.Kind, narrow.KindChanged, narrow.LeftOutPicture));
+        Assert.Equal("Sent. Thank you for the feedback. The website can't take pictures yet, so it went without the picture." +
+            " The website doesn't take praise yet, so it went as other feedback.", result.Message);
+        var five = recorded.BodiesOf(ArmoryApi.SubmitFeedbackRpc).Last();
+        Assert.Equal(5, five.Count);
+        Assert.Equal("other", five["p_kind"]!.GetValue<string>());
+        var context = five["p_context"]!.AsObject();
+        // Kept whole, even when the rest of the context had to give way.
+        Assert.Equal(("praise", tried, "Home > Robot 2027 > Drivetrain"),
+            (context["askedKind"]!.GetValue<string>(), context["tried"]!.GetValue<string>(), context["area"]!.GetValue<string>()));
+        Assert.Equal("files", context["view"]!.GetValue<string>());
+        Assert.True(Encoding.UTF8.GetByteCount(context.ToJsonString()) <= FeedbackSender.MaximumContextBytes);
+        Assert.Empty(recorded.Uploads); // the picture was never uploaded: no note could name it
+    }
+
+    // A note saved for later (no picture: Send feedback without one, or after "Send without the
+    // picture") keeps tried and the area in its file, and goes with them through the wide form; a
+    // praise note goes as praise there. Without a sender the uploader's five-argument call does
+    // what the sender's fallback does.
+    [Fact]
+    public async Task A_saved_note_carries_tried_area_and_praise_through_the_wide_form()
+    {
+        var folder = Directory.CreateTempSubdirectory("armory-feedback-");
+        try
+        {
+            var clock = new TestClock(new DateTimeOffset(2026, 10, 9, 9, 0, 0, TimeSpan.Zero));
+            var store = new IncidentStore(folder.FullName);
+            string Save(DateTimeOffset at)
+            {
+                var glitch = new Glitch(IncidentDocument.NoteKind, "A note from the window (praise): Fast now.", null);
+                var incident = IncidentDocument.Build(glitch, new("0.3.3", "Windows 11", "LAB-PC-07", "alex.kim@students.test"), at, null, [], 0, 4000,
+                    new JsonObject { ["online"] = true }, ["2026-10-09T09:00:00.000Z sync: idle"], new IncidentFeedback("praise", "Fast now.", "Checked in 200 files.", "Settings"));
+                incident[IncidentDocument.NoteOnlyField] = true;
+                return store.Save(at, IncidentDocument.NoteKind, IncidentDocument.Render(incident, Scrubber.None));
+            }
+            var file = Save(clock.GetUtcNow());
+            var recorded = new Recorded().Answer(ArmoryApi.SubmitFeedbackRpc, 200, Id());
+            var (api, sessions, http) = Client(recorded);
+            var sender = new FeedbackSender(api, new FeedbackScreenshots(http, sessions), sessions, "0.3.3", new SubmitLimiter(store, clock), clock);
+            Assert.Equal(UploadOutcome.Sent, await new IncidentUploader(api, store, () => false, clock, feedback: sender).SendFeedbackNowAsync(file));
+            var wide = recorded.BodiesOf(ArmoryApi.SubmitFeedbackRpc).Single();
+            Assert.Equal(("praise", "Fast now.", "Checked in 200 files.", "Settings"),
+                (wide["p_kind"]!.GetValue<string>(), wide["p_body"]!.GetValue<string>(), wide["p_tried"]!.GetValue<string>(), wide["p_area"]!.GetValue<string>()));
+            Assert.Null(wide["p_screenshot"]);
+
+            // No sender: the five arguments, praise as other, the rest in the context (never held
+            // for the five-argument form's "The kind of note is bug, idea or other.").
+            var second = Save(clock.GetUtcNow().AddMinutes(1));
+            var plain = new Recorded().Answer(ArmoryApi.SubmitFeedbackRpc, 200, Id());
+            var (api2, _, _) = Client(plain);
+            Assert.Equal(UploadOutcome.Sent, await new IncidentUploader(api2, store, () => false, clock, limiter: new SubmitLimiter(store, clock)).SendFeedbackNowAsync(second));
+            var five = plain.BodiesOf(ArmoryApi.SubmitFeedbackRpc).Single();
+            Assert.Equal(5, five.Count);
+            Assert.Equal("other", five["p_kind"]!.GetValue<string>());
+            Assert.Equal(("praise", "Checked in 200 files.", "Settings"),
+                (five["p_context"]!["askedKind"]!.GetValue<string>(), five["p_context"]!["tried"]!.GetValue<string>(), five["p_context"]!["area"]!.GetValue<string>()));
+            Assert.Empty(store.Pending());
+        }
+        finally { folder.Delete(recursive: true); }
     }
 
     [Fact]

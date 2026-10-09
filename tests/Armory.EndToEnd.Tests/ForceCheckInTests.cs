@@ -184,6 +184,48 @@ public sealed class ForceCheckInTests
         Assert.Equal(6, await BrokenChanges(t));
     }
 
+    // RefuseAsync's trigger on one file, taken away again.
+    private static async Task ForgetRefusalAsync(Team t, Guid file)
+    {
+        var name = "test_refuse_" + file.ToString("N");
+        await using var c = await t.World.Database.OpenAsync();
+        await new NpgsqlCommand($"drop trigger {name} on public.armory_locks; drop function public.{name}(); drop sequence public.{name}_n;", c).ExecuteNonQueryAsync();
+    }
+
+    // A file still busy after every round of one ask, asked for again: each round of the second
+    // ask is a new call the server really runs (its id is chained from the call that answered
+    // busy), never a replay of the first ask's busy receipt. Before 0.3.3 rounds 1 to 3 were built
+    // from the round number alone, so the second ask got one real try instead of four.
+    [PostgresFact]
+    public async Task A_second_ask_gives_a_busy_file_fresh_tries()
+    {
+        var (t, mentor) = await MentorTeamAsync(latency: LatencyProfile.School);
+        await using var _ = t;
+        var ids = (await CheckedOutAsync(t, 3)).Order().ToList();
+        await mentor.SyncAsync();
+        t.World.Supabase.RecordRpcArguments = true;
+        await RefuseAsync(t, ids[1], "deadlock detected", "40P01");
+        var first = await mentor.Engine.TakeBackAsync([ids[0], ids[1]]);
+        Assert.Equal("Force checked in 1 file. Anything that wasn't checked in is kept as its holder's own copy. 1 file was busy on the server: try it again in a moment.",
+            first.Message);
+        var firstAsk = Batches(t);
+        Assert.Equal([2, 1, 1, 1], firstAsk.Select(b => b.Files.Count)); // round 0, then three more for the busy file
+        Assert.Equal(4, firstAsk.Select(b => b.Operation).Distinct().Count());
+        Assert.Equal(2, await LiveLocks(t));
+
+        // Busy once more, then free: the second ask's own rounds try it again for real.
+        await ForgetRefusalAsync(t, ids[1]);
+        await RefuseAsync(t, ids[1], "deadlock detected", "40P01", once: true);
+        var second = await mentor.Engine.TakeBackAsync([ids[1], ids[2]]);
+        Assert.Equal((true, "Force checked in 2 files. Anything that wasn't checked in is kept as its holder's own copy."), (second.Ok, second.Message));
+        var secondAsk = Batches(t).Skip(firstAsk.Count).ToList();
+        Assert.Equal([$"{ids[1]},{ids[2]}", ids[1].ToString()], secondAsk.Select(b => string.Join(",", b.Files)));
+        Assert.Empty(secondAsk.Select(b => b.Operation).Intersect(firstAsk.Select(b => b.Operation)));
+        Assert.Equal(0, await LiveLocks(t));
+        Assert.Equal(3, await BrokenChanges(t));
+        Assert.Empty(PendingRecords(mentor));
+    }
+
     [PostgresFact]
     public async Task A_lost_answer_is_answered_again_from_the_receipt_with_the_same_operation_id()
     {

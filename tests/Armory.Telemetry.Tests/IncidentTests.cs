@@ -209,4 +209,36 @@ public sealed class IncidentTests
         Assert.Equal("it froze", incident["feedback"]!["body"]!.GetValue<string>());
         Assert.Equal("userReport", incident["kind"]!.GetValue<string>());
     }
+
+    // Send feedback (0.3.3): a note keeps what was tried and the area beside its words, scrubbed
+    // the same way (another person's address masked, a known secret removed). A note composed for
+    // sending at once (with a picture, never saved) is exactly the document a saved note holds.
+    [Fact]
+    public async Task A_note_keeps_what_was_tried_and_the_area_and_scrubs_them_like_its_words()
+    {
+        using var temp = new TempFolder();
+        const string token = "access-token-1234567890";
+        var scrubber = new Scrubber(null, () => [token], () => "alex.kim@students.test");
+        var (reporter, _, _, _) = Reporter(temp.Path, scrubber);
+        const string body = "Maria (maria.lopez@students.test) had Gearbox.SLDASM; my address is alex.kim@students.test.";
+        const string tried = "Asked sam.lee@students.test, then pasted " + token;
+        const string area = "File details: Gearbox.SLDASM";
+        var path = await reporter.SaveNoteAsync("praise", body, tried, area);
+        var saved = reporter.Store.Read(path!);
+        var words = saved["feedback"]!;
+        Assert.Equal("praise", words["kind"]!.GetValue<string>());
+        Assert.Equal("Maria ([address]) had Gearbox.SLDASM; my address is alex.kim@students.test.", words["body"]!.GetValue<string>());
+        Assert.Equal("Asked [address], then pasted [redacted]", words["tried"]!.GetValue<string>());
+        Assert.Equal(area, words["area"]!.GetValue<string>());
+        Assert.True(saved[IncidentDocument.NoteOnlyField]!.GetValue<bool>());
+
+        var composed = await reporter.ComposeNoteAsync("praise", body, tried, area);
+        Assert.Single(reporter.Store.All()); // composed, never written
+        foreach (var made in new[] { saved, composed }) { made.Remove("id"); made.Remove("createdAt"); }
+        Assert.Equal(saved.ToJsonString(), composed.ToJsonString());
+
+        // A note without them keeps only kind and body, as before.
+        var plain = reporter.Store.Read((await reporter.SaveNoteAsync("idea", "Dark mode."))!);
+        Assert.Equal(["kind", "body"], plain["feedback"]!.AsObject().Select(p => p.Key));
+    }
 }

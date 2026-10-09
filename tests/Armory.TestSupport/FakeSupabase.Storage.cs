@@ -17,9 +17,11 @@ namespace Armory.TestSupport;
 /// lowercase (Storage takes any name in the caller's folder, and the submit refuses the rest as
 /// bad_path), so a client proven here always uploads the key the submit takes.
 /// <para>
-/// Refusals carry Storage's body, <c>{"statusCode": "413", "error", "message"}</c>, with that code
-/// as the HTTP status, or with 400 for every refusal while <see cref="StorageLegacyStatus"/> is on
-/// (older Storage versions answer that way).
+/// Refusals carry Storage's body, <c>{"statusCode": "413", "code": "EntityTooLarge", "error",
+/// "message"}</c>, with HTTP 400, as Storage answers every refusal but a 500 (its error handler
+/// sends <c>userStatusCode</c>, which is 400 unless the code is 500). While
+/// <see cref="StorageRealStatus"/> is on, the body's code is the HTTP status instead. An expired or
+/// bad token is <c>{"statusCode": "400", "code": "InvalidJWT", "error": "InvalidJWT"}</c> either way.
 /// </para>
 /// </summary>
 public sealed partial class FakeSupabase
@@ -31,10 +33,24 @@ public sealed partial class FakeSupabase
     public sealed record StoredObject(string Bucket, string Name, byte[] Bytes, string ContentType, string? Email);
 
     private readonly ConcurrentDictionary<string, StoredObject> _objects = new(StringComparer.Ordinal);
+    private readonly ConcurrentQueue<(string StatusCode, string Code, string Error)> _storageFailures = new();
     private int _storageUploads;
 
-    /// <summary>When true, every Storage refusal is HTTP 400 with its own code only in the body.</summary>
-    public bool StorageLegacyStatus { get; set; }
+    /// <summary>
+    /// False (the default): every Storage refusal is HTTP 400 with its own code only in the body, as
+    /// Storage answers. True: the body's code is the HTTP status too.
+    /// </summary>
+    public bool StorageRealStatus { get; set; }
+
+    /// <summary>
+    /// The next <paramref name="times"/> uploads are answered with this body without storing
+    /// anything: a busy Storage (544 DatabaseTimeout, 503 DatabaseReadOnly or LockTimeout, 423
+    /// ResourceLocked, 429), with HTTP 400, or the code when <see cref="StorageRealStatus"/>.
+    /// </summary>
+    public void FailStorage(string statusCode, string code, string error, int times = 1)
+    {
+        for (var i = 0; i < times; i++) _storageFailures.Enqueue((statusCode, code, error));
+    }
 
     /// <summary>Uploads that reached Storage, refused or not.</summary>
     public int StorageUploads => Volatile.Read(ref _storageUploads);
@@ -51,33 +67,41 @@ public sealed partial class FakeSupabase
         Interlocked.Increment(ref _storageUploads);
         if (!ApiKeyMatches(request)) return InvalidApiKey();
         if (!HttpMethods.IsPost(request.Method) && !HttpMethods.IsPut(request.Method))
-            return StorageError(405, "Method not allowed", "This fake takes only uploads.");
+            return StorageError(405, "MethodNotAllowed", "Method not allowed", "This fake takes only uploads.");
         var bearer = BearerToken(request);
         string? email = null;
         if (bearer is not null && !FixedTimeEquals(bearer, AnonKey))
         {
             var check = CheckAccessToken(bearer, out email);
-            if (check == TokenCheck.Expired) return StorageError(403, "InvalidJWT", "\"exp\" claim timestamp check failed");
-            if (check != TokenCheck.Live) return StorageError(403, "InvalidJWT", "invalid signature");
+            if (check == TokenCheck.Expired) return StorageError(400, "InvalidJWT", "InvalidJWT", "\"exp\" claim timestamp check failed");
+            if (check != TokenCheck.Live) return StorageError(400, "InvalidJWT", "InvalidJWT", "invalid signature");
+        }
+        if (_storageFailures.TryDequeue(out var failure))
+        {
+            var code = int.Parse(failure.StatusCode, System.Globalization.CultureInfo.InvariantCulture);
+            return FakeResponse.Json(StorageRealStatus ? code : 400, new JsonObject
+            {
+                ["statusCode"] = failure.StatusCode, ["code"] = failure.Code, ["error"] = failure.Error, ["message"] = failure.Error,
+            });
         }
         var slash = rest.IndexOf('/', StringComparison.Ordinal);
-        if (slash <= 0) return StorageError(400, "InvalidKey", "The object key is missing.");
+        if (slash <= 0) return StorageError(400, "InvalidKey", "InvalidKey", "The object key is missing.");
         var bucket = rest[..slash];
         var name = Uri.UnescapeDataString(rest[(slash + 1)..]);
 
         var rules = await BucketAsync(bucket);
-        if (rules is null) return StorageError(404, "Bucket not found", "Bucket not found");
+        if (rules is null) return StorageError(404, "NoSuchBucket", "Bucket not found", "Bucket not found");
         var contentType = request.ContentType?.Split(';')[0].Trim() ?? "";
         if (rules.Value.Mime is { Length: > 0 } allowed && !allowed.Contains(contentType, StringComparer.OrdinalIgnoreCase))
-            return StorageError(415, "invalid_mime_type", $"mime type {contentType} is not supported");
+            return StorageError(415, "InvalidMimeType", "invalid_mime_type", $"mime type {contentType} is not supported");
         using var buffer = new MemoryStream();
         await request.Body.CopyToAsync(buffer);
         var bytes = buffer.ToArray();
         if (rules.Value.Limit is { } limit && bytes.LongLength > limit)
-            return StorageError(413, "Payload too large", "The object exceeded the maximum allowed size");
+            return StorageError(413, "EntityTooLarge", "Payload too large", "The object exceeded the maximum allowed size");
         if (bucket == FeedbackShotsBucket && !FeedbackShotKey().IsMatch(name))
-            return StorageError(400, "InvalidKey", $"Invalid key: {name}");
-        if (email is null) return StorageError(403, "Unauthorized", "new row violates row-level security policy");
+            return StorageError(400, "InvalidKey", "InvalidKey", $"Invalid key: {name}");
+        if (email is null) return StorageError(403, "AccessDenied", "Unauthorized", "new row violates row-level security policy");
 
         try
         {
@@ -99,11 +123,11 @@ public sealed partial class FakeSupabase
         }
         catch (PostgresException e) when (e.SqlState == PostgresErrorCodes.UniqueViolation)
         {
-            return StorageError(409, "Duplicate", "The resource already exists");
+            return StorageError(409, "KeyAlreadyExists", "Duplicate", "The resource already exists");
         }
         catch (PostgresException e) when (e.SqlState == PostgresErrorCodes.InsufficientPrivilege)
         {
-            return StorageError(403, "Unauthorized", "new row violates row-level security policy");
+            return StorageError(403, "AccessDenied", "Unauthorized", "new row violates row-level security policy");
         }
         _objects[bucket + "/" + name] = new StoredObject(bucket, name, bytes, contentType, email);
         return FakeResponse.Json(200, new JsonObject { ["Key"] = bucket + "/" + name, ["Id"] = Guid.NewGuid().ToString() });
@@ -121,9 +145,11 @@ public sealed partial class FakeSupabase
         return (reader.IsDBNull(0) ? null : reader.GetInt64(0), reader.IsDBNull(1) ? null : reader.GetFieldValue<string[]>(1));
     }
 
-    private FakeResponse StorageError(int status, string error, string message)
-        => FakeResponse.Json(StorageLegacyStatus ? 400 : status, new JsonObject
+    // Storage's StorageBackendError rendered: HTTP 400 (a 500 stays 500), the real code as text in
+    // the body; the real code as the HTTP status too while StorageRealStatus.
+    private FakeResponse StorageError(int status, string code, string error, string message)
+        => FakeResponse.Json(StorageRealStatus || status == 500 ? status : 400, new JsonObject
         {
-            ["statusCode"] = status.ToString(System.Globalization.CultureInfo.InvariantCulture), ["error"] = error, ["message"] = message,
+            ["statusCode"] = status.ToString(System.Globalization.CultureInfo.InvariantCulture), ["code"] = code, ["error"] = error, ["message"] = message,
         });
 }
