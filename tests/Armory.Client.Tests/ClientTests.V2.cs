@@ -291,4 +291,131 @@ public sealed partial class ClientTests
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
             => Answer is { } answer && request.RequestUri!.Host == FakeNetworkHandler.S3Host ? Task.FromResult(answer(request)) : base.SendAsync(request, cancellationToken);
     }
+
+    // 0.3.3 (feedback N3, incident 7a6c7d95: one 31.5 MB download took 83 seconds while the
+    // others took 2 to 5, and the storage client's two hour timeout never bounds a body): a
+    // transfer that moves no bytes for StallAfter stalled. It is tried once more from the start
+    // with a fresh URL; a second stall fails that file alone. A slow transfer that keeps moving
+    // is never a stall.
+    [PostgresFact]
+    public async Task A_stalled_transfer_is_tried_again_with_a_fresh_url_and_a_second_stall_fails_that_file()
+    {
+        await using var env = await Env.StartAsync();
+        var (_, mentor, _, _) = env.SignedIn("pina@ideabosco.test", admin: true);
+        var project = await mentor.CreateProjectAsync("Robot", null, Guid.NewGuid());
+        await mentor.AddMemberAsync(project, "alex.kim@students.test", MemberRole.Student, Guid.NewGuid());
+        var (sessions, alex, _, _) = env.SignedIn("alex.kim@students.test");
+        var storage = new StallingStorage(new FakeNetworkHandler(env.S3));
+        using var http = new HttpClient(storage);
+        var flight = new Armory.Telemetry.FlightRecorder();
+        var blobs = new BlobClient(env.Http, http, env.Site.BaseUri, sessions, flight) { StallAfter = TimeSpan.FromMilliseconds(400) };
+        var bytes = RandomNumberGenerator.GetBytes(300_000);
+        var hash = Hash(bytes);
+        int Urls() => flight.Snapshot().Count(e => e.Kind == Armory.Telemetry.FlightKind.Rpc && e.Name == BlobClient.UrlCall);
+        int Stalls() => flight.Snapshot().Count(e => e.Kind == Armory.Telemetry.FlightKind.Transfer && e.Detail == "stalled");
+
+        // An upload whose body storage never reads: tried again with a fresh URL, and stored.
+        storage.StallPuts = 1;
+        Assert.True(await blobs.UploadAsync(project, hash, bytes.Length, () => new MemoryStream(bytes)));
+        Assert.Equal(2, storage.Puts);
+        Assert.Equal(2, Urls());
+        Assert.Equal(1, Stalls());
+        Assert.Contains(env.S3.Objects.Values, stored => stored.AsSpan().SequenceEqual(bytes));
+        // Stalled twice: that file alone fails, as storage trouble.
+        var other = RandomNumberGenerator.GetBytes(50_000);
+        storage.StallPuts = 2;
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var stalled = await Assert.ThrowsAsync<StorageStalledException>(() => blobs.UploadAsync(project, Hash(other), other.Length, () => new MemoryStream(other)));
+        Assert.Contains("stalled", stalled.Message);
+        Assert.IsAssignableFrom<StorageTransferException>(stalled);
+        Assert.InRange(watch.Elapsed, TimeSpan.FromMilliseconds(700), TimeSpan.FromSeconds(10));
+
+        var device = await alex.RegisterDeviceAsync("laptop", Guid.NewGuid());
+        var file = await alex.CreateFileAsync(project, "", "Gearbox.SLDASM", device, Guid.NewGuid());
+        await alex.AcquireLockAsync(file, device, Guid.NewGuid());
+        await alex.CommitVersionWithReleaseAsync(file, null, ContentObjectKey.FromHash(hash), hash, bytes.Length, device, Guid.NewGuid(), null);
+        // A download that stops after half its bytes: emptied, asked for again, and whole; the
+        // bytes so far start again from 0.
+        storage.StallGets = 1;
+        var gets = storage.Gets;
+        var copy = new MemoryStream();
+        var down = new Recorder();
+        await blobs.DownloadAsync(project, hash, bytes.Length, copy, progress: down);
+        Assert.Equal(bytes, copy.ToArray());
+        Assert.Equal(2, storage.Gets - gets);
+        var restart = Array.LastIndexOf(down.Values, 0L);
+        Assert.True(restart > 0, "The second download did not report from 0.");
+        AssertRunningTotal(down.Values[restart..], bytes.Length);
+        // Stalled twice: that file alone fails.
+        storage.StallGets = 2;
+        await Assert.ThrowsAsync<StorageStalledException>(() => blobs.DownloadAsync(project, hash, bytes.Length, new MemoryStream()));
+        // Slow, but moving all along (a chunk every 100 ms for over a second): never a stall.
+        storage.Trickle = true;
+        gets = storage.Gets;
+        copy = new MemoryStream();
+        await blobs.DownloadAsync(project, hash, bytes.Length, copy);
+        Assert.Equal(bytes, copy.ToArray());
+        Assert.Equal(1, storage.Gets - gets);
+    }
+
+    // File storage whose next answers stall: an upload whose body is never read, or a download
+    // that stops after half its bytes; or (Trickle) a download that comes slowly but steadily.
+    private sealed class StallingStorage(HttpMessageHandler inner) : DelegatingHandler(inner)
+    {
+        private int puts, gets;
+        public int StallPuts, StallGets;
+        public bool Trickle;
+        public int Puts => Volatile.Read(ref puts);
+        public int Gets => Volatile.Read(ref gets);
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            if (request.RequestUri!.Host != FakeNetworkHandler.S3Host) return await base.SendAsync(request, cancellationToken);
+            if (request.Method == HttpMethod.Put)
+            {
+                Interlocked.Increment(ref puts);
+                if (Interlocked.Decrement(ref StallPuts) >= 0) await Task.Delay(Timeout.Infinite, cancellationToken);
+                return await base.SendAsync(request, cancellationToken);
+            }
+            Interlocked.Increment(ref gets);
+            var response = await base.SendAsync(request, cancellationToken);
+            if (!response.IsSuccessStatusCode) return response;
+            var bytes = await response.Content.ReadAsByteArrayAsync(cancellationToken);
+            Stream body = Interlocked.Decrement(ref StallGets) >= 0 ? new Body(bytes[..(bytes.Length / 2)], stallAtEnd: true)
+                : Trickle ? new Body(bytes, stallAtEnd: false, chunk: 20_000) : new MemoryStream(bytes);
+            var answer = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(body) };
+            answer.Content.Headers.ContentLength = bytes.Length;
+            return answer;
+        }
+
+        // A body that gives its bytes (a chunk every 100 ms when chunked), then ends or waits
+        // forever for its reader to give up.
+        private sealed class Body(byte[] bytes, bool stallAtEnd, int chunk = 0) : Stream
+        {
+            private int at;
+            public override bool CanRead => true;
+            public override bool CanSeek => false;
+            public override bool CanWrite => false;
+            public override long Length => throw new NotSupportedException();
+            public override long Position { get => at; set => throw new NotSupportedException(); }
+            public override int Read(byte[] buffer, int offset, int count) => ReadAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
+            public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+            {
+                if (at >= bytes.Length)
+                {
+                    if (stallAtEnd) await Task.Delay(Timeout.Infinite, cancellationToken);
+                    return 0;
+                }
+                if (chunk > 0) await Task.Delay(100, cancellationToken);
+                var n = Math.Min(buffer.Length, Math.Min(bytes.Length - at, chunk > 0 ? chunk : int.MaxValue));
+                bytes.AsMemory(at, n).CopyTo(buffer);
+                at += n;
+                return n;
+            }
+            public override void Flush() { }
+            public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+            public override void SetLength(long value) => throw new NotSupportedException();
+            public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        }
+    }
 }
