@@ -1,0 +1,6 @@
+/* Written by tools/build-native.ps1, tools/build-native.sh or CMake into the build folder from
+ * the Version of src/Armory.Agent. The .rc files take their version resources from it. */
+#define ARMORY_VERSION_MAJOR @ARMORY_VERSION_MAJOR@
+#define ARMORY_VERSION_MINOR @ARMORY_VERSION_MINOR@
+#define ARMORY_VERSION_PATCH @ARMORY_VERSION_PATCH@
+#define ARMORY_VERSION_TEXT "@ARMORY_VERSION_MAJOR@.@ARMORY_VERSION_MINOR@.@ARMORY_VERSION_PATCH@"

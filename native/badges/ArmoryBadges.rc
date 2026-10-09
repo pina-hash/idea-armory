@@ -1,0 +1,40 @@
+// ArmoryBadges.dll resources. ArmoryVersion.h is generated into the build folder (passed with
+// /I or --include-dir) from native/ArmoryVersion.h.in.
+#include <winver.h>
+#include "ArmoryVersion.h"
+
+// Icon groups in this order: GetOverlayInfo returns the zero-based index (0 Attention, 1 Mine,
+// 2 Locked, 3 Synced). Drawn by tools/agent-icon/make_badges.py.
+1 ICON "attention.ico"
+2 ICON "mine.ico"
+3 ICON "locked.ico"
+4 ICON "synced.ico"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION ARMORY_VERSION_MAJOR, ARMORY_VERSION_MINOR, ARMORY_VERSION_PATCH, 0
+PRODUCTVERSION ARMORY_VERSION_MAJOR, ARMORY_VERSION_MINOR, ARMORY_VERSION_PATCH, 0
+FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+FILEFLAGS 0
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_DLL
+FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName", "IDEA, Don Bosco Tech"
+            VALUE "FileDescription", "IDEA Armory status on file icons"
+            VALUE "FileVersion", ARMORY_VERSION_TEXT
+            VALUE "InternalName", "ArmoryBadges"
+            VALUE "LegalCopyright", "IDEA, Don Bosco Tech"
+            VALUE "OriginalFilename", "ArmoryBadges.dll"
+            VALUE "ProductName", "IDEA Armory"
+            VALUE "ProductVersion", ARMORY_VERSION_TEXT
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

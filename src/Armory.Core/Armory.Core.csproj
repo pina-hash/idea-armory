@@ -1,1 +1,6 @@
-<Project Sdk="Microsoft.NET.Sdk" />
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <!-- BadgeTableTests force hash collisions through the internal Build and Lookup overloads. -->
+    <InternalsVisibleTo Include="Armory.Core.Tests" />
+  </ItemGroup>
+</Project>

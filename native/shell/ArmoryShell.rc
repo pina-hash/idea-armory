@@ -1,0 +1,36 @@
+// ArmoryShell.exe resources. ArmoryVersion.h is generated into the build folder (passed with
+// /I or --include-dir) from native/ArmoryVersion.h.in.
+#include <winver.h>
+#include "ArmoryVersion.h"
+
+// Runs as the person who clicked, never elevated (RT_MANIFEST is resource type 24, id 1).
+1 24 "ArmoryShell.manifest"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION ARMORY_VERSION_MAJOR, ARMORY_VERSION_MINOR, ARMORY_VERSION_PATCH, 0
+PRODUCTVERSION ARMORY_VERSION_MAJOR, ARMORY_VERSION_MINOR, ARMORY_VERSION_PATCH, 0
+FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+FILEFLAGS 0
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName", "IDEA, Don Bosco Tech"
+            VALUE "FileDescription", "IDEA Armory right-click menu"
+            VALUE "FileVersion", ARMORY_VERSION_TEXT
+            VALUE "InternalName", "ArmoryShell"
+            VALUE "LegalCopyright", "IDEA, Don Bosco Tech"
+            VALUE "OriginalFilename", "ArmoryShell.exe"
+            VALUE "ProductName", "IDEA Armory"
+            VALUE "ProductVersion", ARMORY_VERSION_TEXT
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

@@ -1,0 +1,4 @@
+LIBRARY ArmoryBadges
+EXPORTS
+    DllGetClassObject PRIVATE
+    DllCanUnloadNow PRIVATE
