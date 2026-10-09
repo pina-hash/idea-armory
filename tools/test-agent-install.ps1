@@ -619,9 +619,10 @@ function Assert-BadgesInstalled([string]$When) {
     Assert-MachineString $BadgesSetupKey 'Format' '1'
     $installedAt = Get-MachineValue $BadgesSetupKey 'InstalledAt'
     if (-not $installedAt -or $installedAt.Kind -ne [Microsoft.Win32.RegistryValueKind]::QWord) { Fail ('HKLM\' + $BadgesSetupKey + ' InstalledAt is not a REG_QWORD') }
-    $when = [DateTime]::FromFileTimeUtc([long]$installedAt.Value)
-    $age = [DateTime]::UtcNow - $when
-    if ($age.TotalHours -gt 2 -or $age.TotalMinutes -lt -5) { Fail ('HKLM\' + $BadgesSetupKey + ' InstalledAt is ' + $when.ToString('o') + ', not the time of this install') }
+    # Not $when: PowerShell names are case-insensitive, and $When is this function's [string] parameter.
+    $installedTime = [DateTime]::FromFileTimeUtc([long]$installedAt.Value)
+    $age = [DateTime]::UtcNow - $installedTime
+    if ($age.TotalHours -gt 2 -or $age.TotalMinutes -lt -5) { Fail ('HKLM\' + $BadgesSetupKey + ' InstalledAt is ' + $installedTime.ToString('o') + ', not the time of this install') }
     Assert-MachineString $BadgesAppsKey 'DisplayName' 'IDEA Armory badges (status on file icons)'
     Assert-MachineString $BadgesAppsKey 'DisplayVersion' $Version
     Assert-MachineString $BadgesAppsKey 'Publisher' 'IDEA, Don Bosco Tech'
@@ -633,7 +634,7 @@ function Assert-BadgesInstalled([string]$When) {
     if (($folders -join ',') -ne $Version) { Fail ('Version folders in ' + $BadgesFolder + ': ' + ($folders -join ', ') + ', expected only ' + $Version) }
     $pending = @(Get-PendingBadgeRenames)
     if ($pending.Count -gt 0) { Fail ('Files of the badges wait for a restart: ' + ($pending -join ', ')) }
-    Note ($When + ': every badges key and value exact (4 classes, 4 overlay identifiers, 4 approvals, Version ' + $Version + ', Format 1, InstalledAt ' + $when.ToString('u') + ', the Apps entry); ' + $BadgesDll + ' ' + $actual + '; nothing waits for a restart')
+    Note ($When + ': every badges key and value exact (4 classes, 4 overlay identifiers, 4 approvals, Version ' + $Version + ', Format 1, InstalledAt ' + $installedTime.ToString('u') + ', the Apps entry); ' + $BadgesDll + ' ' + $actual + '; nothing waits for a restart')
 }
 function Assert-NoBadges([string]$When) {
     $found = @()
