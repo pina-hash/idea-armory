@@ -526,7 +526,7 @@ public sealed class FolderScenarioTests
         await t.A.SyncAsync();
         var refused = await t.A.Engine.DeleteFolderAsync(t.Project, "Intake v2");
         Assert.False(refused.Ok);
-        Assert.Equal("Intake v2 can't be deleted now: Maria Lopez has 1 of its files checked out.", refused.Message);
+        Assert.Equal("Intake v2 can't be deleted now: Maria Lopez has 1 of its files checked out. Ask them to check it in, or ask a mentor or CAD lead to force check it in.", refused.Message);
         Assert.True((await t.B.UndoCheckOutAsync("Robot 2027/Intake v2/Roller.SLDPRT")).Ok);
         await t.A.SyncAsync();
         var deleted = await t.A.Engine.DeleteFolderAsync(t.Project, "Intake v2");

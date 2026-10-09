@@ -369,7 +369,7 @@ public sealed partial class SyncEngine
 
     private static string PutBackWhy(string? kind) => kind switch
     {
-        CheckedOutReason => "A folder is renamed or deleted only when nobody else has a file in it checked out. Ask them to check the files in, then try again.",
+        CheckedOutReason => "A folder is renamed or deleted only when nobody else has a file in it checked out. Ask them to check the files in, or ask a mentor or CAD lead to force check them in, then try again.",
         OutsideProjectReason => "Folders can be renamed and moved inside a project, never into another one.",
         TargetExistsReason => "Choose another name, or rename the other folder first.",
         NameInUseReason => "A folder can take a name once the files that had it are gone from Armory. Try again in a moment.",
@@ -678,7 +678,7 @@ public sealed partial class SyncEngine
         Remember(NoticeKinds.FolderPutBack, null, folder, reason is null ? $"{name} was put back" : $"{name} was put back: {reason}.",
             reasonKind switch
             {
-                CheckedOutReason => "A folder is renamed or deleted only when nobody else has a file in it checked out. Its files are coming back now. Ask them to check the files in, then try again.",
+                CheckedOutReason => "A folder is renamed or deleted only when nobody else has a file in it checked out. Its files are coming back now. Ask them to check the files in, or ask a mentor or CAD lead to force check them in, then try again.",
                 NewerWorkReason => "Armory removes a folder for the team only when this computer has every file in it as the team has it now. Its files are coming back now. Delete the folder again if it should still go.",
                 OutsideProjectReason => "It was moved out of its project and then went missing, so its files are coming back where they belong.",
                 _ => "Armory couldn't remove it for the team, so its files are coming back. Try again later.",
@@ -716,7 +716,7 @@ public sealed partial class SyncEngine
         var people = locks.Where(l => OwnershipOf(l) == LockOwnership.OtherPerson).ToList();
         if (people.Count == 0)
         {
-            var devices = locks.Select(l => l.HolderDeviceName ?? "another computer").Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            var devices = locks.Select(l => DeviceLabel(l.HolderDeviceName, l.HolderDeviceId)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             return ($"you have {locks.Count:N0} of {what} checked out on {string.Join(" and ", devices)}", null);
         }
         var names = people.GroupBy(l => DisplayName(l.HolderEmail), StringComparer.Ordinal).OrderByDescending(g => g.Count()).ThenBy(g => g.Key, StringComparer.Ordinal).Select(g => g.Key).ToList();
@@ -1056,10 +1056,14 @@ public sealed partial class SyncEngine
 
     // Rename folder: for everyone first (one armory_rename_folder, refused while someone else has
     // a file in it checked out), then on this computer (one move). Durable before the call: a lost
-    // answer is asked again with the same id and finished here from the same record.
+    // answer is asked again with the same id and finished here from the same record. With force, a
+    // mentor or CAD lead force checks in the check outs in the way first, in this same action (N5).
     public async Task<ActionResult> RenameFolderAsync(Guid projectId, string folder, string newName, CancellationToken cancellationToken = default)
+        => await RenameFolderAsync(projectId, folder, newName, force: false, cancellationToken);
+
+    public async Task<ActionResult> RenameFolderAsync(Guid projectId, string folder, string newName, bool force, CancellationToken cancellationToken = default)
     {
-        if (!engineThread.IsCurrent) return await engineThread.InvokeAsync(() => RenameFolderAsync(projectId, folder, newName, cancellationToken));
+        if (!engineThread.IsCurrent) return await engineThread.InvokeAsync(() => RenameFolderAsync(projectId, folder, newName, force, cancellationToken));
         newName = newName?.Trim() ?? "";
         if (!VaultPath.TryValidateName(newName, out var problem)) return new(false, problem ?? "That name can't be used for a folder.");
         await EnterActionAsync(cancellationToken);
@@ -1085,27 +1089,34 @@ public sealed partial class SyncEngine
                 return new(false, $"Armory is still sending files in {name}. Try again in a moment.");
             if (OpenUnder(from) is { } open) return new(false, $"Close {open} in SolidWorks first.");
             var holders = HeldUnder(from, ps);
-            if (holders.Count > 0) return new(false, $"{name} can't be renamed now: {HoldersWords(holders, "its files").Text}.");
+            if (holders.Count > 0 && !force) return new(false, $"{name} can't be renamed now: {HoldersWords(holders, "its files").Text}.{InTheWay(holders, ps)}");
+            if (holders.Count > 0 && !ps.CanTakeBack) return new(false, "Only a mentor or CAD lead can force a check in.");
             if (!caseOnly && RekeyCollides(from, to)) return new(false, $"{newName} still has files in Armory. Try again in a moment.");
             if (online != true) return Offline("Folders can be renamed once this computer is back online.");
+            Forced? forced = null;
+            if (holders.Count > 0)
+            {
+                (forced, var refusal) = await ForceCheckInForAsync(HeldTargets(from, ps), null, $"{name} wasn't renamed.", cancellationToken);
+                if (refusal is not null) return refusal;
+            }
             var op = new PendingFolderOp(AppRenameOp, OperationIds.Derive(NextId("folder"), AppRenameOp), ps.Id, from, to);
             state.FolderOps.Add(op);
             SaveNow();
             ActionResult answer;
             try { answer = await SendAppRenameAsync(op, ps, cancellationToken); }
-            catch (ArmoryOfflineException)
+            catch (Exception error) when (Stopped(error))
             {
                 online = false;
                 PublishLocked();
-                return new(true, $"You're offline. Armory renames {name} to {newName} as soon as this computer is back online.");
+                return With(forced, new(true, $"You're offline. Armory renames {name} to {newName} as soon as this computer is back online."), done: false);
             }
             catch (ArmoryClientException error)
             {
                 deps.Log?.Invoke($"rename folder {from}: {error.Message}");
-                return new(true, $"Armory couldn't reach the server to rename {name}. It tries again by itself.");
+                return With(forced, new(true, $"Armory couldn't reach the server to rename {name}. It tries again by itself."), done: false);
             }
-            if (answer.Ok) await PassLockedAsync(cancellationToken, PassScope.Under(to, from));
-            return answer;
+            if (answer.Ok || forced is not null) await PassLockedAsync(cancellationToken, PassScope.Under(to, from));
+            return With(forced, answer);
         }
         finally { LeaveAction(); }
     }
@@ -1139,7 +1150,7 @@ public sealed partial class SyncEngine
                     state.FolderOps.Remove(op);
                     SaveNow();
                     if (FolderRefusal.TryParse(error.Details) is { IsTargetExists: true }) return new(false, $"{ps.Name} already has a folder named {newName}.");
-                    if (error.IsInUse) return new(false, $"{name} can't be renamed now: {(await HoldersAsync(op.LocalFrom, ps, ct)).Text}.");
+                    if (error.IsInUse) return new(false, $"{name} can't be renamed now: {(await HoldersAsync(op.LocalFrom, ps, ct)).Text}.{InTheWay(HeldUnder(op.LocalFrom, ps), ps)}");
                     return new(false, $"Armory couldn't rename {name}. Try again in a moment.");
                 }
             }
@@ -1158,10 +1169,13 @@ public sealed partial class SyncEngine
     // Delete folder: for everyone first (one armory_delete_folder; refused while someone else
     // has a file in it checked out), then here: each file is kept in its history on the server
     // and moved to Armory's recovery folder, and the empty folder goes. Durable before the call,
-    // like Rename folder.
+    // like Rename folder, and with force like it too (N5).
     public async Task<ActionResult> DeleteFolderAsync(Guid projectId, string folder, CancellationToken cancellationToken = default)
+        => await DeleteFolderAsync(projectId, folder, force: false, cancellationToken);
+
+    public async Task<ActionResult> DeleteFolderAsync(Guid projectId, string folder, bool force, CancellationToken cancellationToken = default)
     {
-        if (!engineThread.IsCurrent) return await engineThread.InvokeAsync(() => DeleteFolderAsync(projectId, folder, cancellationToken));
+        if (!engineThread.IsCurrent) return await engineThread.InvokeAsync(() => DeleteFolderAsync(projectId, folder, force, cancellationToken));
         await EnterActionAsync(cancellationToken);
         try
         {
@@ -1181,32 +1195,43 @@ public sealed partial class SyncEngine
                 return new(false, $"Armory is still sending files in {name}. Try again in a moment.");
             if (OpenUnder(path) is { } open) return new(false, $"Close {open} in SolidWorks first.");
             var holders = HeldUnder(path, ps);
-            if (holders.Count > 0) return new(false, $"{name} can't be deleted now: {HoldersWords(holders, "its files").Text}.");
+            if (holders.Count > 0 && !force) return new(false, $"{name} can't be deleted now: {HoldersWords(holders, "its files").Text}.{InTheWay(holders, ps)}");
+            if (holders.Count > 0 && !ps.CanTakeBack) return new(false, "Only a mentor or CAD lead can force a check in.");
             if (online != true) return Offline("Folders can be deleted once this computer is back online.");
+            Forced? forced = null;
+            if (holders.Count > 0)
+            {
+                (forced, var refusal) = await ForceCheckInForAsync(HeldTargets(path, ps), null, $"{name} wasn't deleted.", cancellationToken);
+                if (refusal is not null) return refusal;
+            }
             var op = new PendingFolderOp(AppDeleteOp, OperationIds.Derive(NextId("folder"), AppDeleteOp), ps.Id, path, path);
             state.FolderOps.Add(op);
             SaveNow();
             ActionResult answer;
             try { answer = await SendAppDeleteAsync(op, ps, cancellationToken); }
-            catch (ArmoryOfflineException)
+            catch (Exception error) when (Stopped(error))
             {
                 online = false;
                 PublishLocked();
-                return new(true, $"You're offline. Armory deletes {name} as soon as this computer is back online.");
+                return With(forced, new(true, $"You're offline. Armory deletes {name} as soon as this computer is back online."), done: false);
             }
             catch (ArmoryClientException error)
             {
                 deps.Log?.Invoke($"delete folder {path}: {error.Message}");
-                return new(true, $"Armory couldn't reach the server to delete {name}. It tries again by itself.");
+                return With(forced, new(true, $"Armory couldn't reach the server to delete {name}. It tries again by itself."), done: false);
             }
-            if (!answer.Ok) return answer;
+            if (!answer.Ok)
+            {
+                if (forced is not null) await PassLockedAsync(cancellationToken, PassScope.Under(path));
+                return With(forced, answer);
+            }
             // Nothing of it on this computer but empty folders: gone at once.
             if (FolderOnDisk(path) && !local.Keys.Any(k => Inside(k, path)) && fs.DeleteEmptyFolder(path)) ForgetFolder(path);
             SaveNow();
             // Kept copies first where needed, then recovery, then the empty folder (two passes at most).
             await PassLockedAsync(cancellationToken, PassScope.Under(path));
             if (local.Keys.Any(k => Inside(k, path))) await PassLockedAsync(cancellationToken, PassScope.Under(path));
-            return answer;
+            return With(forced, answer);
         }
         finally { LeaveAction(); }
     }
@@ -1233,7 +1258,7 @@ public sealed partial class SyncEngine
                 deps.Log?.Invoke($"delete folder {op.LocalFrom}: {error.Message}");
                 state.FolderOps.Remove(op);
                 SaveNow();
-                if (error.IsInUse) return new(false, $"{name} can't be deleted now: {(await HoldersAsync(op.LocalFrom, ps, ct)).Text}.");
+                if (error.IsInUse) return new(false, $"{name} can't be deleted now: {(await HoldersAsync(op.LocalFrom, ps, ct)).Text}.{InTheWay(HeldUnder(op.LocalFrom, ps), ps)}");
                 return new(false, $"Armory couldn't delete {name}. Try again in a moment.");
             }
         }
@@ -1303,9 +1328,12 @@ public sealed partial class SyncEngine
     private ProjectState? ProjectFor(Guid id) => state.Projects.TryGetValue(id, out var ps) && ps.Usable ? ps : null;
 
     // Files under a folder someone else (or my other computer) has checked out, as this pass read them.
-    private List<RemoteLock> HeldUnder(string folder, ProjectState ps)
+    private List<RemoteLock> HeldUnder(string folder, ProjectState ps) => HeldTargets(folder, ps).Select(t => t.Held).ToList();
+
+    // The same check outs, as Force check in ends them (N5).
+    private List<TakeBackTarget> HeldTargets(string folder, ProjectState ps)
         => remoteById.Values.Where(r => r.Project.Id == ps.Id && !r.File.Deleted && Inside(r.Path.Value, folder) && r.File.Lock is { IsLive: true } held &&
-            OwnershipOf(held) is LockOwnership.OtherPerson or LockOwnership.MyOtherDevice).Select(r => r.File.Lock!).ToList();
+            OwnershipOf(held) is LockOwnership.OtherPerson or LockOwnership.MyOtherDevice).Select(r => new TakeBackTarget(r.File.Id, ps, r.File.Lock!)).ToList();
 
     // ---- Paths -----------------------------------------------------------------------------
 

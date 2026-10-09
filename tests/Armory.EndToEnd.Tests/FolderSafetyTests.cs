@@ -670,7 +670,7 @@ public sealed class FolderSafetyTests
         Assert.Equal(NoticeKinds.FolderPutBack, card.Kind);
         Assert.Equal(2, card.Count);
         Assert.Equal("2 folders were put back: Maria Lopez has files in them checked out", card.Title);
-        Assert.Equal("A folder is renamed or deleted only when nobody else has a file in it checked out. Ask them to check the files in, then try again.", card.Detail);
+        Assert.Equal("A folder is renamed or deleted only when nobody else has a file in it checked out. Ask them to check the files in, or ask a mentor or CAD lead to force check them in, then try again.", card.Detail);
         Assert.Equal(("Show them", "expand"), (card.Action!.Label, card.Action.Command));
         Assert.All(card.Items, i => Assert.Equal("Maria Lopez has 1 of its files checked out.", i.Detail));
         Assert.Equal(["Gearbox", "Intake"], card.Items.Select(i => i.Name).Order(StringComparer.Ordinal));

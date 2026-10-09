@@ -77,10 +77,12 @@ public static class SyncStates
 }
 public static class FileStatuses
 {
+    // NoVersion: a server record whose first version never arrived (its add stopped between the
+    // create and the first check in), with nothing of it on its way from this computer.
     public const string Synced = "synced", Changed = "changed", Uploading = "uploading", Downloading = "downloading", Waiting = "waiting",
-        NewerWaiting = "newerWaiting", KeptCopy = "keptCopy", NotInArmory = "notInArmory", NotOnThisComputer = "notOnThisComputer";
+        NewerWaiting = "newerWaiting", KeptCopy = "keptCopy", NotInArmory = "notInArmory", NotOnThisComputer = "notOnThisComputer", NoVersion = "noVersion";
     public static readonly IReadOnlySet<string> All = new HashSet<string>(StringComparer.Ordinal)
-        { Synced, Changed, Uploading, Downloading, Waiting, NewerWaiting, KeptCopy, NotInArmory, NotOnThisComputer };
+        { Synced, Changed, Uploading, Downloading, Waiting, NewerWaiting, KeptCopy, NotInArmory, NotOnThisComputer, NoVersion };
 }
 public static class CheckoutStates
 {

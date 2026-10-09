@@ -41,11 +41,24 @@ public sealed partial class SyncEngine
             : online == false ? new SyncView(SyncStates.Offline, "You're offline. Your work is safe on this computer.", pending > 0 ? null : LastChecked(), pending)
             // While files move, the status line is the activity's line ("Downloading 412 of 1,280 files, ...").
             : syncing ? new SyncView(SyncStates.Syncing, moving.Line ?? "Checking for changes.", null, pending)
-            : notices.Any(n => n.Tone != NoticeTones.Info) ? new SyncView(SyncStates.Attention, "Everything else is saved. A few files need you.", LastChecked(), pending)
+            : notices.Any(n => n.Tone != NoticeTones.Info) ? new SyncView(SyncStates.Attention, AttentionLine(notices, pending), LastChecked(), pending)
             : pending > 0 ? new SyncView(SyncStates.Syncing, "Uploading your saves.", null, pending)
             : new SyncView(SyncStates.Synced, "Everything is saved to Armory.", LastChecked(), 0);
         return new AgentView(connection, new ConnectView(connectPhase, connectMessage), account, sync, moving, options.VaultRoot,
             notices, Prompt(), MyFiles(files), Projects(), settings, effectiveTheme);
+    }
+
+    // The status line while files need the student: what is saved, and what waits for them. Files
+    // that can't be added for their names are said by number (IDEA-06 read "A few files need you"
+    // over 148 of them, and never why).
+    private static string AttentionLine(IReadOnlyList<NoticeGroupView> notices, int pending)
+    {
+        var needYou = notices.Where(n => n.Tone != NoticeTones.Info).ToList();
+        var names = needYou.FirstOrDefault(n => n.Kind == NoticeKinds.NameShared)?.Count ?? 0;
+        var why = names == 0 ? "A few files need you."
+            : (names == 1 ? "1 file can't be added until it has a name of its own." : $"{names:N0} files can't be added until they have names of their own.") +
+              (needYou.Any(n => n.Kind != NoticeKinds.NameShared) ? " A few others need you too." : "");
+        return pending > 0 ? why + " Your other saves are uploading." : "Everything else is saved. " + why;
     }
 
     private string? LastChecked() => lastOnline is { } at ? "Last checked " + Relative(at) + "." : null;
@@ -54,6 +67,9 @@ public sealed partial class SyncEngine
         var age = deps.Clock.GetUtcNow() - at;
         return age < TimeSpan.FromMinutes(1) ? "just now" : age < TimeSpan.FromHours(1) ? $"{(int)age.TotalMinutes} min ago" : at.ToLocalTime().ToString("h:mm tt", CultureInfo.InvariantCulture);
     }
+
+    // A file of an archived project that is not this computer's to finish there (decision D8).
+    private bool ArchivedForMe(FileState st) => state.Projects.GetValueOrDefault(st.ProjectId) is { Archived: true } && !MineToFinish(st);
 
     // Saves of this file that have not reached the server yet (refused ones are notices).
     private bool Unsent(FileState st)
@@ -158,7 +174,9 @@ public sealed partial class SyncEngine
             var name = NameOf(st.Path);
             TryLocal(st.Path, out var file);
             var remote = st.FileId is { } id && remoteById.TryGetValue(id, out var r) ? r.File : null;
-            if (st.Refusal is not null)
+            // An archived project's refusals are not news (decision D8: nothing of it is sent),
+            // unless the file is mine to finish there.
+            if (st.Refusal is not null && !ArchivedForMe(st))
             {
                 var kind = st.RefusalKind == NameTakenKind ? NoticeKinds.NameShared : NoticeKinds.CantSend;
                 Add(kind, new RawItem($"{kind}:{st.Path}", st.FileId, st.Path, st.Refusal, Flavor: st.RefusalKind));
@@ -175,14 +193,14 @@ public sealed partial class SyncEngine
                 Add(NoticeKinds.NewerWaiting, new RawItem($"removed:{st.Path}", st.FileId, st.Path,
                     $"Close {name} in SolidWorks, and Armory moves your copy aside. Nothing is lost.",
                     $"{name} was removed from {ProjectName(st)}", Flavor: "removed"));
-            // One item per file: the newest take back, and the newest kept copy.
+            // One item per file: the newest Force check in, and the newest kept copy. It names who
+            // force checked it in, speaks of changes only when there were some, and says how to keep
+            // working when the file is still open in SolidWorks.
             var recent = st.Sides.Where(s => now - s.At < KeptCopiesShownFor).ToList();
             if (recent.LastOrDefault(s => s.Reason == LockBrokenReason) is { } taken && !st.BreakNotice)
-                Add(NoticeKinds.TakenBack, new RawItem($"taken:{taken.VersionId}", st.FileId, st.Path,
-                    "A mentor or CAD lead took it back. Your changes that weren't checked in are kept in its history."));
+                Add(NoticeKinds.TakenBack, ForcedItem($"taken:{taken.VersionId}", st, changed: true));
             else if (st.BreakNotice)
-                Add(NoticeKinds.TakenBack, new RawItem($"taken:{st.Path}", st.FileId, st.Path,
-                    "A mentor or CAD lead took it back. Armory is keeping your changes that weren't checked in in its history, so nothing is lost."));
+                Add(NoticeKinds.TakenBack, ForcedItem($"taken:{st.Path}", st, changed: file is not null && file.Hash != st.BaseHash));
             if (recent.LastOrDefault(s => s.Reason is ChangedWithoutCheckOutReason or ConflictReason) is { } kept)
             {
                 if (kept.Reason == ConflictReason)
@@ -241,7 +259,8 @@ public sealed partial class SyncEngine
                 n == 1 ? null : expand),
             NoticeKinds.NameShared => (NoticeTones.Look,
                 n == 1 ? "1 file shares a name with another file in this project" : $"{n:N0} files share a name with other files in this project",
-                "A project keeps one file per name, because SolidWorks finds parts by name. Rename these to add them.", expand),
+                items.All(i => IsSolidWorksPath(i.Path)) ? NameSharedSolidWorksWords
+                    : "A project keeps one file per name, because SolidWorks finds parts by name. Rename these to add them.", expand),
             NoticeKinds.CantSend => (NoticeTones.Bad,
                 n == 1 ? first.Title ?? $"{name} can't be uploaded" : $"{n:N0} files can't be uploaded",
                 n == 1 ? first.Detail ?? "" : items.All(i => i.Flavor == GateKind)
@@ -271,12 +290,12 @@ public sealed partial class SyncEngine
                     : "Nothing was lost: each change is in its file's history.", new NoticeActionView("OK", BridgeMessages.DismissNotice, [])),
             NoticeKinds.TakenBack => (NoticeTones.Look,
                 n == 1 ? $"{name} was force checked in" : $"{n:N0} of your files were force checked in",
-                n == 1 ? first.Detail ?? "" : "A mentor or CAD lead took them back. Your changes that weren't checked in are kept in their history, so nothing was lost.",
+                n == 1 ? first.Detail ?? "" : ForcedCardWords(items),
                 new NoticeActionView("OK", BridgeMessages.DismissNotice, [])),
             NoticeKinds.FolderPutBack => (NoticeTones.Look,
                 n == 1 ? first.Title ?? $"{name} was put back where it was" : PutBackTitle(items),
                 n == 1 ? first.Detail ?? "" : items.All(i => i.ReasonKind == CheckedOutReason)
-                    ? "A folder is renamed or deleted only when nobody else has a file in it checked out. Ask them to check the files in, then try again."
+                    ? "A folder is renamed or deleted only when nobody else has a file in it checked out. Ask them to check the files in, or ask a mentor or CAD lead to force check them in, then try again."
                     : "Each one says why.", n == 1 ? null : expand),
             NoticeKinds.Import => (NoticeTones.Info,
                 n == 1 ? first.Title ?? $"Added files to {name}" : $"Added {items.Sum(i => i.Tally?.Added ?? 0):N0} of {items.Sum(i => i.Tally?.Total ?? 0):N0} files to {n:N0} folders",
@@ -295,6 +314,47 @@ public sealed partial class SyncEngine
         };
         return new NoticeGroupView(g.Key, g.Kind, tone, title, detail, n, action,
             items.Take(NoticeItemsShown).Select(i => new NoticeItemView(i.FileId?.ToString(), i.Path, NameOf(i.Path), i.ItemDetail ?? i.Detail)).ToArray());
+    }
+
+    // The nameShared card for SolidWorks copies (a copied subassembly, a vendor part saved twice):
+    // which of the two ways out fits.
+    internal const string NameSharedSolidWorksWords = "A project keeps one file per name, because SolidWorks finds parts by name. " +
+        "If it's the same part as the team's, delete your copy and use the team's. If it's a different part, give it a new name in SolidWorks " +
+        "(Save As, or Pack and Go with a prefix) so your assemblies follow it.";
+
+    private static bool IsSolidWorksPath(string path) => VaultPath.TryCreate(path, out var vault, out _) && Reconciler.IsSolidWorks(vault);
+
+    // A file of this computer's someone force checked in (N5): who did it (Who), whether there were
+    // changes that weren't checked in, and whether it is still open in SolidWorks (Flavor).
+    private RawItem ForcedItem(string id, FileState st, bool changed)
+    {
+        var open = markerDocuments.Contains(st.Path);
+        return new RawItem(id, st.FileId, st.Path, ForcedNotice(st, changed, open), Flavor: (changed ? "changed" : "same") + (open ? "Open" : ""),
+            Who: st.BrokenBy is { } by ? DisplayName(by) : null);
+    }
+
+    // "Pina force checked in Plate.SLDPRT. Your changes that weren't checked in are kept as your own
+    // copy in its history. If it's still open in SolidWorks, use Save As to keep working on a copy."
+    private static string ForcedNotice(FileState st, bool changed, bool open)
+        => $"{BreakerName(st, capital: true)} force checked in {NameOf(st.Path)}." +
+           (changed ? " Your changes that weren't checked in are kept as your own copy in its history." : "") +
+           (open ? " If it's still open in SolidWorks, use Save As to keep working on a copy." : "");
+
+    // Who force checked this file in from this computer: their name from lock_broken's "by", or
+    // "a mentor or CAD lead" when the server didn't say.
+    private static string BreakerName(FileState st, bool capital = false)
+        => st.BrokenBy is { } by ? DisplayName(by) : capital ? "A mentor or CAD lead" : "a mentor or CAD lead";
+
+    // The card for several of this computer's files that were force checked in.
+    private static string ForcedCardWords(List<RawItem> items)
+    {
+        var who = items.Select(i => i.Who).Distinct(StringComparer.Ordinal).ToList();
+        var text = (who is [{ } one] ? one : "A mentor or CAD lead") + " force checked them in.";
+        if (items.Any(i => i.Flavor?.StartsWith("changed", StringComparison.Ordinal) == true))
+            text += " Your changes that weren't checked in are kept as your own copies in their history.";
+        if (items.Any(i => i.Flavor?.EndsWith("Open", StringComparison.Ordinal) == true))
+            text += " If one is still open in SolidWorks, use Save As to keep working on a copy.";
+        return text;
     }
 
     // "3 files in Robot 2027 were saved in SolidWorks 2026"; files of several projects or years
@@ -473,12 +533,18 @@ public sealed partial class SyncEngine
         if (remote is null || remote.Deleted)
         {
             if (st?.Refusal is not null || file is null) return FileStatuses.NotInArmory;
+            // An archived project's new files stay as they are (decision D8): nothing uploads them,
+            // and the window says the project is archived.
+            if ((st is not null ? state.Projects.GetValueOrDefault(st.ProjectId) : ProjectOf(file.Path)) is { Archived: true } && !MineToFinish(st))
+                return FileStatuses.NotInArmory;
             return online == true ? FileStatuses.Uploading : FileStatuses.Waiting;
         }
         if (st?.Inflight is { Kind: "create" or "commit" or "side" or "archive" }) return FileStatuses.Uploading;
         if (st?.NewerWaiting == true)
             return file is not null && st.Preserved == file.Hash && remote.Current?.Hash == st.BaseHash ? FileStatuses.KeptCopy : FileStatuses.NewerWaiting;
-        if (file is null) return remote.Current is null ? FileStatuses.Uploading : FileStatuses.NotOnThisComputer;
+        // A record with no version and nothing of it on its way from here: added without its first
+        // version (until 0.3.3, "uploading" forever on every computer).
+        if (file is null) return remote.Current is null ? FileStatuses.NoVersion : FileStatuses.NotOnThisComputer;
         if (st is null) return FileStatuses.Synced;
         if (file.Hash != st.BaseHash)
             return ownership != LockOwnership.ThisDevice && st.Preserved == file.Hash ? FileStatuses.KeptCopy : FileStatuses.Changed;
@@ -507,7 +573,7 @@ public sealed partial class SyncEngine
                 ? new(CheckoutStates.Mine, "Checked out by you", state.Email is { } email ? DisplayName(email) : null, state.Email, deps.Sessions.Current?.DeviceName, null)
                 : Available;
         var name = DisplayName(held.Email);
-        var device = held.DeviceName ?? "another computer";
+        var device = DeviceLabel(held.DeviceName, held.Device);
         var since = held.Since.ToString("O", CultureInfo.InvariantCulture);
         return ownership switch
         {
@@ -519,12 +585,44 @@ public sealed partial class SyncEngine
 
     private static readonly CheckoutView Available = new(CheckoutStates.Available, "Available", null, null, null, null);
 
+    // Device names two or more computers share in what this computer knows (itself and the check
+    // outs it has read), such as two lab computers both imaged as IDEA-06. Built again after the
+    // server is read or a lock changes here (null until then).
+    private HashSet<string>? sharedDeviceNames;
+
+    // A computer's name in check-out lines: "IDEA-06", or "IDEA-06 (a030)", with the first four
+    // characters of its device id, when another computer has that name too.
+    private string DeviceLabel(string? name, Guid device)
+    {
+        if (string.IsNullOrEmpty(name)) return "another computer";
+        if (sharedDeviceNames is null)
+        {
+            var seen = new Dictionary<string, Guid>(StringComparer.OrdinalIgnoreCase);
+            var shared = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var session = deps.Sessions.Current;
+            void See(string? seenName, Guid id)
+            {
+                if (string.IsNullOrEmpty(seenName)) return;
+                // This computer's own ids (a reconnect registers a new one) are one computer.
+                var who = state.IsMine(id) || id == session?.DeviceId ? Guid.Empty : id;
+                if (!seen.TryAdd(seenName, who) && seen[seenName] != who) shared.Add(seenName);
+            }
+            if (session is not null) See(session.DeviceName, session.DeviceId);
+            foreach (var known in remoteById.Values)
+                if (known.File.Lock is { IsLive: true } held) See(held.HolderDeviceName, held.HolderDeviceId);
+            foreach (var st in state.Files.Values)
+                if (st.Holder is { } holder) See(holder.DeviceName, holder.Device);
+            sharedDeviceNames = shared;
+        }
+        return sharedDeviceNames.Contains(name) ? $"{name} ({device.ToString("N")[..4]})" : name;
+    }
+
     // Who has the file checked out, in the words every row shows.
     private CheckoutView CheckoutOf(RemoteLock? held)
     {
         if (held is not { IsLive: true }) return Available;
         var name = DisplayName(held.HolderEmail);
-        var device = held.HolderDeviceName ?? "another computer";
+        var device = DeviceLabel(held.HolderDeviceName, held.HolderDeviceId);
         var since = held.AcquiredAt.ToString("O", CultureInfo.InvariantCulture);
         return OwnershipOf(held) switch
         {

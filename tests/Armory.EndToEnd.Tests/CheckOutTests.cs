@@ -385,7 +385,7 @@ public sealed class CheckOutTests
         await t.B.SyncAsync();
         var refused = await t.B.Engine.RenameFileAsync(Plate, "Plate-Left.SLDPRT");
         Assert.False(refused.Ok);
-        Assert.Equal("Alex Kim on student A laptop has Plate.SLDPRT checked out, so it can't be renamed now.", refused.Message);
+        Assert.Equal("Alex Kim on student A laptop has Plate.SLDPRT checked out, so it can't be renamed now. Ask them to check it in, or ask a mentor or CAD lead to force check it in.", refused.Message);
         Assert.True((await t.A.CheckInAsync(Plate)).Ok);
         await t.B.SyncAsync();
         Assert.True((await t.B.Engine.RenameFileAsync(Plate, "Plate-Left.SLDPRT")).Ok);

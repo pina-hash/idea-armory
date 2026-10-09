@@ -11,6 +11,7 @@ namespace Armory.Agent.Engine;
 public sealed partial class SyncEngine
 {
     private const int MaximumNoticesRecorded = 200;
+    internal const int SnapshotItemsPerCard = 20;
     private const int PassesKept = 3;
     private readonly FlightRecorder? flight;
     private long phaseStarted;
@@ -61,6 +62,9 @@ public sealed partial class SyncEngine
 
     private JsonObject DescribeNow()
     {
+        // The view as it is now, never one left from earlier in the pass (IDEA-06's slowPass
+        // snapshots showed "Uploading 0 of 142 files", a view published at the pass's first file).
+        if (!refreshing) PublishLocked();
         var current = View;
         var described = DescribeView(current);
         var requests = new JsonObject();
@@ -84,6 +88,10 @@ public sealed partial class SyncEngine
         requests["localMoves"] = moves;
         requests["writesInFlight"] = inflight;
         requests["savesWaiting"] = journaled;
+        // Why files are not on the server, by kind (nameTaken, tooLarge, gate, refused).
+        var refusals = new JsonObject();
+        foreach (var kind in state.Files.Values.Where(f => f.RefusalKind is not null).GroupBy(f => f.RefusalKind!).OrderBy(g => g.Key, StringComparer.Ordinal))
+            refusals[kind.Key] = kind.Count();
         described["engine"] = new JsonObject
         {
             ["online"] = online,
@@ -119,6 +127,7 @@ public sealed partial class SyncEngine
             ["releasesRead"] = releases.Count,
         };
         described["pendingRequests"] = requests;
+        described["refusals"] = refusals;
         described["lastPasses"] = new JsonArray(recentPasses.Select(p => (JsonNode)p.DeepClone()).ToArray());
         return described;
     }
@@ -154,7 +163,14 @@ public sealed partial class SyncEngine
             ["filesByStatus"] = statuses,
             ["checkedOutHere"] = view.MyFiles.Count,
             ["checkedOutHerePaths"] = new JsonArray(view.MyFiles.Take(50).Select(f => (JsonNode)JsonValue.Create(f.Path)).ToArray()),
-            ["notices"] = new JsonArray(view.Notices.Select(n => (JsonNode)new JsonObject { ["kind"] = n.Kind, ["title"] = n.Title, ["count"] = n.Count }).ToArray()),
+            // Each card with its first items (path and words), so an incident names the files.
+            ["notices"] = new JsonArray(view.Notices.Select(n => (JsonNode)new JsonObject
+            {
+                ["kind"] = n.Kind,
+                ["title"] = n.Title,
+                ["count"] = n.Count,
+                ["items"] = new JsonArray(n.Items.Take(SnapshotItemsPerCard).Select(i => (JsonNode)new JsonObject { ["path"] = i.Path, ["detail"] = i.Detail }).ToArray()),
+            }).ToArray()),
             ["prompt"] = view.Prompt?.Path,
             ["settings"] = new JsonObject
             {

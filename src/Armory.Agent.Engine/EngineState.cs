@@ -325,6 +325,7 @@ internal sealed class FileState
     private string? markerEntry;
     private int attempt;
     private bool breakNotice;
+    private string? brokenBy;
     private string? refusal;
     private string? refusalKind;
     private bool releaseNotChecked;
@@ -391,6 +392,9 @@ internal sealed class FileState
     public string? MarkerEntry { get => markerEntry; set => Set(ref markerEntry, value); }
     public int Attempt { get => attempt; set => Set(ref attempt, value); }
     public bool BreakNotice { get => breakNotice; set => Set(ref breakNotice, value); }
+    // Who force checked this file in from this computer last (lock_broken's "by", an email; null
+    // from a server that does not say), so the notice names them (N5).
+    public string? BrokenBy { get => brokenBy; set => Set(ref brokenBy, value); }
     public string? Refusal { get => refusal; set => Set(ref refusal, value); }
     public string? RefusalKind { get => refusalKind; set => Set(ref refusalKind, value); }
     public bool ReleaseNotChecked { get => releaseNotChecked; set => Set(ref releaseNotChecked, value); }

@@ -33,7 +33,8 @@ ring unless an incident is saved.
 | `rpc` | `PostgrestClient`, `BlobClient` (`blob-url`) | function name, ms, HTTP status (0 when none), error code (`offline`, `signedOut`, `canceled`, a SQLSTATE or PostgREST code) |
 | `transfer` | `BlobClient` | `upload` or `download`, bytes, ms, ok, status, error |
 | `windowAction` | `Bridge` | action type, how many files or folders it named, ms from the window's request to its answer (Add files: from when the picker closed), ok |
-| `notice` | the engine | every problem, and the first 200 notices of a pass: kind, path, the raw text the log gets |
+| `notice` | the engine | every problem, and the first 200 notices of a pass: kind, path, the raw text the log gets. A stale `~$` marker is recorded once while it stays stale, not on every pass (0.3.3: IDEA-06's 224 markers spent every pass's 200) |
+| `refusal` | the engine (`SetRefusal`, 0.3.3) | a file's refusal started or changed: path, `refusal` (`nameTaken`, `tooLarge`, `gate`, `refused`) and, for a taken name, `namesake` (the path of the file that holds it); or ended (`refusal: "ended"`). Never again while it stands, so a pass that only re-finds the same refusals records none |
 | `fileFailed` | the engine | path, exception type, message, stack |
 | `fileRecovered` | the engine | path of a file that failed before and went through |
 | `exception` | the engine (loop, engine thread), the bridge, the crash handlers | type, where, message, stack, fatal |
@@ -89,6 +90,7 @@ so a person can hand the files over by hand today.
   "kind": "slowPass",
   "summary": "A loop pass took 74.0 s: 12 downloaded, 0 uploaded, 0 kept copies, 0 refused.",   // at most 500 characters
   "appVersion": "0.3.0", "osVersion": "Microsoft Windows 10.0.22631 (X64)", "deviceName": "LAB-PC-07", "email": "alex.kim@students.test",
+  "machineId": "3f9c0a7e2b14d865", // 0.3.3: tells apart computers that share a deviceName (below); null off Windows
   "projectId": null,
   "feedback": null,              // { "kind": "bug", "body": "..." } for a userReport
   "feedbackId": null,            // the site's id once the words were sent
@@ -97,15 +99,29 @@ so a person can hand the files over by hand today.
   "snapshot": {                  // SyncEngine.DescribeAsync, plus what the host knows
     "connection": "signedIn", "sync": { "state": "syncing", "line": "...", "pendingCount": 3 },
     "files": 412, "filesByStatus": { "synced": 400, "downloading": 12 },
-    "checkedOutHere": 2, "checkedOutHerePaths": [ "..." ], "notices": [ ... ], "settings": { "vaultRoot": "C:\\IDEA\\Armory", ... },
+    "checkedOutHere": 2, "checkedOutHerePaths": [ "..." ], "settings": { "vaultRoot": "C:\\IDEA\\Armory", ... },
+    "notices": [ { "kind": "nameShared", "title": "...", "count": 148,
+                   "items": [ { "path": "...", "detail": "FRC 2026 Off-Season already has WCP-0563.SLDPRT in COTS." }, ...the first 20... ] } ],
     "engine": { "online": true, "paused": false, "inPass": true, "records": 412, "projects": [ ... ], ... },
     "pendingRequests": { "checkOut": 0, "checkIn": 1, "undo": 0, "savesWaiting": 0, ... },
+    "refusals": { "nameTaken": 148, "tooLarge": 0 },   // 0.3.3: files not on the server, by why
     "lastPasses": [ ...the last three passes... ],
     "host": { "runtimeProblem": null, "connectPhase": "idle", "signedIn": true, "transfersRunning": 6 }
   },
   "log": [ "...the last 300 lines of agent.log..." ]
 }
 ```
+
+The snapshot is of the view as it is when the incident is built: the engine publishes a fresh
+one first (0.3.3). Before, it read the view last published, which during a long pass could be
+the one raised at its first file (IDEA-06's slowPass incidents froze "Uploading 0 of 142 files,
+260.9 MB left" for files that were never going to upload).
+
+**machineId.** Two lab computers imaged alike both report `deviceName` IDEA-06. On Windows the
+incident carries the first 16 hex characters of the SHA-256 of Windows' own install id
+(`HKLM\SOFTWARE\Microsoft\Cryptography`, `MachineGuid`, under Armory's own prefix), never the
+id itself: the same for a computer across accounts and reinstalls of Armory, and different for
+two computers with one name. Null where there is no such id (`MachineId`, `MachineIdTests`).
 
 **The last flight.** A stack overflow ends the process with no chance to write anything. So
 while passes run, the last 500 events are written to `incidents\last-flight.json.gz` at most
@@ -201,6 +217,8 @@ older than that). Files that waited on a computer before 0.3 go on the uploader'
 the reader), `ClientTests` (the uploader against the fake network, every call recorded without
 a token), `TelemetryTests` in `Armory.EndToEnd.Tests` (a pass with its phases, a read-only bit
 cleared by hand, a repaired check out, a file failing three passes in a row, the snapshot) and
-`AgentTelemetryTests` (no token in any file; Report a problem). The ones a change must keep
+`AgentTelemetryTests` (no token in any file; Report a problem), `MachineIdTests`, `RefusalEventTests` and
+`HonestyTests` in `Armory.EndToEnd.Tests` (a refusal in the flight once, with its namesake; a stale
+marker once; a snapshot that names the first 20 files of a card and counts refusals by kind). The ones a change must keep
 are in `tests/GUARDS.txt`. `tools/agent-ui/check-ui.mjs` sends both new window messages from
 their controls and walks the dialog.
