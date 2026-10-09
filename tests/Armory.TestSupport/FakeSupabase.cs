@@ -106,11 +106,59 @@ public sealed partial class FakeSupabase : FakeHttpServer
     private FakeSession IssueSession(string normalized, TimeSpan lifetime, Guid family)
     {
         var expiresAt = DateTimeOffset.FromUnixTimeSeconds(Clock.GetUtcNow().Add(lifetime).ToUnixTimeSeconds());
-        var access = "access-" + RandomToken(32);
+        var access = AccessTokenFor(normalized, expiresAt);
         var refresh = "refresh-" + RandomToken(32);
         _accessTokens[access] = new AccessTokenState(normalized, expiresAt, Expired: false);
         lock (_refreshGate) _refreshTokens[refresh] = new RefreshTokenState(normalized, family, Used: false, Revoked: false);
         return new FakeSession(access, refresh, expiresAt) { Email = normalized, UserId = UserIdFor(normalized) };
+    }
+
+    // A token shaped like GoTrue's: a JWT whose payload carries sub (the user id), email, role, aud
+    // and exp, so a client can read its own auth uid. The signature is random bytes: this fake
+    // never verifies one, it looks every token up in its registry (an unknown token is invalid).
+    private string AccessTokenFor(string email, DateTimeOffset expiresAt)
+    {
+        var header = Base64Url(JsonSerializer.SerializeToUtf8Bytes(new { alg = "HS256", typ = "JWT" }));
+        var payload = Base64Url(JsonSerializer.SerializeToUtf8Bytes(new Dictionary<string, object>
+        {
+            ["aud"] = "authenticated", ["exp"] = expiresAt.ToUnixTimeSeconds(), ["sub"] = UserIdFor(email).ToString(), ["email"] = email,
+            ["role"] = "authenticated", ["session_id"] = Guid.NewGuid().ToString(),
+        }));
+        return header + "." + payload + "." + RandomToken(32);
+    }
+
+    // The claims PostgREST hands the database for a caller (request.jwt.claims), so auth.uid() works.
+    private string ClaimsFor(string email) => new JsonObject
+    {
+        ["sub"] = UserIdFor(email).ToString(), ["email"] = email, ["role"] = "authenticated", ["aud"] = "authenticated",
+    }.ToJsonString();
+
+    private readonly ConcurrentDictionary<string, byte> _hidden = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, ConcurrentQueue<(string Code, string Message)>> _failures = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Makes an RPC answer 404 PGRST202, as a site without its migration does: every overload, or
+    /// only the call with <paramref name="argumentCount"/> named arguments (for example the
+    /// eight-argument armory_submit_app_feedback while its five-argument form still answers).
+    /// </summary>
+    public void HideFunction(string function, int? argumentCount = null) => _hidden[HiddenKey(function, argumentCount)] = 0;
+
+    /// <summary>Undoes <see cref="HideFunction"/>.</summary>
+    public void ShowFunction(string function, int? argumentCount = null) => _hidden.TryRemove(HiddenKey(function, argumentCount), out _);
+
+    private static string HiddenKey(string function, int? argumentCount) => argumentCount is { } n ? function + "/" + n.ToString(System.Globalization.CultureInfo.InvariantCulture) : function;
+
+    private bool IsHidden(string function, int argumentCount) => _hidden.ContainsKey(function) || _hidden.ContainsKey(HiddenKey(function, argumentCount));
+
+    /// <summary>
+    /// The next <paramref name="times"/> calls to an RPC answer this SQLSTATE without running (as a
+    /// call the database rolled back does: a 40P01 deadlock, a 40001 serialization failure), with
+    /// PostgREST's status for it.
+    /// </summary>
+    public void FailRpc(string function, string sqlState, string message, int times = 1)
+    {
+        var queue = _failures.GetOrAdd(function, static _ => new());
+        for (var i = 0; i < times; i++) queue.Enqueue((sqlState, message));
     }
 
     /// <summary>Makes an access token answer 401 "JWT expired" (<see cref="ExpiredTokenCode"/>) from now on.</summary>
@@ -181,6 +229,7 @@ public sealed partial class FakeSupabase : FakeHttpServer
         var path = context.Request.Path.Value ?? "/";
         if (path == TokenPath) return TokenEndpointAsync(context);
         if (path.StartsWith(RpcPathPrefix, StringComparison.Ordinal)) return RpcAsync(context, path[RpcPathPrefix.Length..]);
+        if (path.StartsWith(StoragePathPrefix, StringComparison.Ordinal)) return StorageAsync(context, path[StoragePathPrefix.Length..]);
         return Task.FromResult(FakeResponse.Json(404, new JsonObject { ["message"] = "no Route matched with those values" }));
     }
 
@@ -287,8 +336,10 @@ public sealed partial class FakeSupabase : FakeHttpServer
         if (RecordRpcArguments) _rpcArguments.Enqueue((function, email, body.Clone()));
         var arguments = body.EnumerateObject().ToList();
         var names = arguments.Select(a => a.Name).ToList();
-        if (!FunctionNamePattern().IsMatch(function) || names.Any(n => !ArgumentNamePattern().IsMatch(n)))
+        if (!FunctionNamePattern().IsMatch(function) || names.Any(n => !ArgumentNamePattern().IsMatch(n)) || IsHidden(function, names.Count))
             return FunctionNotFound(function, names);
+        if (_failures.TryGetValue(function, out var failures) && failures.TryDequeue(out var failure))
+            return PostgrestError(PostgrestStatusFor(failure.Code, anonymous), failure.Code, failure.Message, null, null);
 
         try
         {
@@ -303,6 +354,13 @@ public sealed partial class FakeSupabase : FakeHttpServer
             var (sql, parameters) = target.BuildCall(arguments);
             var result = await Database.RunAsCallerAsync(email, AdminEmails, async (connection, cancellationToken) =>
             {
+                if (email is not null)
+                {
+                    // PostgREST hands the database the caller's JWT claims (auth.uid() reads sub).
+                    await using var claims = new NpgsqlCommand("select set_config('request.jwt.claims', $1, true)", connection);
+                    claims.Parameters.Add(new NpgsqlParameter { Value = ClaimsFor(email) });
+                    await claims.ExecuteNonQueryAsync(cancellationToken);
+                }
                 await using var command = new NpgsqlCommand(sql, connection);
                 command.Parameters.AddRange(parameters.ToArray());
                 var value = await command.ExecuteScalarAsync(cancellationToken);
