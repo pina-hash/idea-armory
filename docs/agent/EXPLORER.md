@@ -186,8 +186,9 @@ that the server is `IdeaArmory.exe` from its own folder (the same rule as step 4
 pipe exception), calls `AllowSetForegroundWindow` for it, and exits 0 on `0x06`. Anything that
 is not exactly a link goes over as `idea-armory:` alone, which only opens the window. When the
 pipe can't be reached, it signals the first instance's Show event and exits 1. The pipe starts
-in `Program.Main` right after the single-instance check, before the tray, the window or
-WebView2 (`ShellDesk.StartInbox`); batches that close before the tray exists wait in
+in `Program.Main` right after the single-instance check and the log's `started` line (so the
+previous run's last lines are read as it left them), before the tray, the window or WebView2
+(`ShellDesk.StartInbox`, which logs `shell: listening on <pipe>`); batches that close before the tray exists wait in
 `ShellDesk`. If another program holds the name, Armory logs it and runs without the pipe.
 
 The server (`ShellInbox`) creates its pipe with `CreateNamedPipeW` itself, because
