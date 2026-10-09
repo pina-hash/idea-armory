@@ -21,6 +21,39 @@ computers: the sponsorship's 2026). Every file in the vault must stay openable a
 in 2025. Armory reads each project's pinned year (`pinned_release`) and treats it as the
 newest year a file may have.
 
+### A2. Armory reads each file's SolidWorks year itself, free, with no Document Manager key
+Until 0.3.2 the year check never ran: `AgentHost.cs` passed no reader (`ReleaseReader = null`),
+so every SolidWorks file was "release not checked", Warn-mode projects (the server's default)
+accepted anything, and a 2025 part saved in 2026 was checked in with no warning. 0.3.3 reads
+the year from the file's own bytes: SolidWorks 2015 and later files carry the release code in
+two independent places (the `_MO_VERSION_<code>` stream names and the last entry of the
+History stream, which is exactly what SolidWorks' own `VersionHistory` returns). Armory gives a
+year only when both agree and the code is in SolidWorks' published table (2025 = 18000, 2026 =
+19000); anything else is "unknown", so a 2025 file can never be read as 2026. Measured on 158
+public SolidWorks files from 2017 to 2025: 158 read correctly, 0 unknown, 94 ms in total;
+6,320 truncated or corrupted copies gave 0 wrong years. Files saved in 2026 and files saved
+down from 2026 to 2025 were not available here; they are tested on synthetic files and are
+the first items of the lab checklist (`docs/agent/solidworks-lab-checklist.md`).
+
+**The Document Manager key is not needed.** If Mr. Pina wants a vendor cross-check anyway, the
+exact steps are in `docs/agent/SOLIDWORKS.md` (free to request, tied to his SolidWorks account,
+never put in the repo, the installer or students' computers).
+
+### A3. What the year check does now
+- A file newer than the project's year is refused in both Warn and Enforce and stays on that
+  computer as a private draft; it is never uploaded as 2026.
+- Files sent earlier as "release not checked" are read from identical copies on each computer
+  after a loop pass (at most 2 seconds a pass, never during a click) and flagged: "3 files in
+  Robot 2027 were saved in SolidWorks 2026", with what a person on a 2026 computer must do.
+- A disk error while reading a year used to be swallowed (the file went up unchecked); now the
+  file waits for the next pass with a "can't read" notice.
+- Stamps (the year the SolidWorks link saw a save write) are kept by content hash and pruned
+  30 days after their bytes reach the server; stamps whose bytes never reach the server are
+  dropped after 90 days.
+- **Yours to change:** once the lab checklist passes, switching projects from Warn to Enforce
+  makes an unreadable year a private draft too. Today Warn still uploads a file whose year
+  can't be read, marked "release not checked".
+
 ## B. The SolidWorks add-in
 
 ### B1. The "add-in" is a SolidWorks link inside IdeaArmory.exe, not a DLL loaded by SolidWorks
