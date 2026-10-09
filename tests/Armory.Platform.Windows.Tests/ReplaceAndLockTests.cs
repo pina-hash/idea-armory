@@ -307,6 +307,42 @@ public sealed class ReplaceAndLockTests
         Assert.All(files, f => Assert.Equal(detector.Inspect(f).IsOpen, open.Contains(f)));
     }
 
+    // 0.3.3 (feedback N6): 1,500 read-only files with some held, asked off the caller's thread
+    // with a short budget. The answer comes within about the budget (the probe answers what
+    // Restart Manager had not cleared, and finds the held files), a second question while the
+    // first's query still runs never starts another (Restart Manager one question at a time), and
+    // a canceled question ends at once.
+    [WindowsFact]
+    public async Task The_open_files_question_keeps_its_budget_and_runs_one_query_at_a_time()
+    {
+        using var vault = new TestVault();
+        Directory.CreateDirectory(vault.File("Robot"));
+        var files = Enumerable.Range(0, 1500).Select(i => vault.File($"Robot/part-{i:D4}.SLDPRT")).ToArray();
+        foreach (var file in files)
+        {
+            File.WriteAllBytes(file, [1, 2, 3]);
+            File.SetAttributes(file, FileAttributes.ReadOnly);
+        }
+        using var first = new ChildProcess("hold", files[17]);
+        Assert.Equal("READY", await first.ReadLine());
+        using var second = new ChildProcess("hold", files[1031]);
+        Assert.Equal("READY", await second.ReadLine());
+        var detector = new OpenFileDetector();
+        var budget = TimeSpan.FromSeconds(1);
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var answer = await detector.OpenAmongAsync(files, budget, fresh: false, CancellationToken.None);
+        watch.Stop();
+        Assert.True(watch.Elapsed < budget + TimeSpan.FromSeconds(2), $"the question took {watch.Elapsed.TotalSeconds:F1} s");
+        Assert.Contains(files[17], answer.Open);
+        Assert.Contains(files[1031], answer.Open);
+        var again = await detector.OpenAmongAsync(files, budget, fresh: false, CancellationToken.None);
+        Assert.Contains(files[17], again.Open);
+        Assert.Equal(1, detector.MostAtOnce);
+        using var stop = new CancellationTokenSource();
+        stop.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => detector.OpenAmongAsync(files, budget, fresh: true, stop.Token));
+    }
+
     [WindowsFact]
     public async Task Crash_mid_attribute_update_recovers_to_current_users_lock()
     {

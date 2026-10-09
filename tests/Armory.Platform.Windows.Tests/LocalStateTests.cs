@@ -206,6 +206,72 @@ public sealed class LocalStateTests(ITestOutputHelper output)
         Assert.Equal(1, scanner.Scan(fullRescan: true).HashesComputed);
     }
 
+    // 0.3.3: the first scan after a start hashed the whole vault again (10 to 38 seconds in the
+    // field). The file map is kept in .armory: a second detector (the next start) hashes nothing it
+    // can trust and every file whose bytes, size or time changed, and a file whose id changed (a
+    // new file at the old path, even with the same size and time restored) is hashed too. The
+    // residual risk is the scan's own: the same file rewritten with its size and time put back.
+    [WindowsFact]
+    public void The_first_scan_after_a_start_reuses_the_hashes_it_kept()
+    {
+        using var vault = new TestVault();
+        foreach (var i in Enumerable.Range(0, 30)) File.WriteAllText(vault.File($"part-{i:D2}.txt"), "bytes " + i);
+        var old = DateTime.UtcNow.AddMinutes(-5);
+        foreach (var file in Directory.EnumerateFiles(vault.Root)) File.SetLastWriteTimeUtc(file, old);
+        string before;
+        using (var first = new LocalChangeDetector(vault.Paths))
+        {
+            Assert.Equal(30, first.Scan().HashesComputed);
+            before = first.Scan().Files.Single(f => f.Path.Value == "part-07.txt").Hash;
+        }
+        Assert.True(File.Exists(Path.Combine(vault.Root, ".armory", "file-hashes.json")));
+        File.WriteAllText(vault.File("part-03.txt"), "changed bytes");
+        File.SetLastWriteTimeUtc(vault.File("part-03.txt"), old.AddSeconds(30));
+        // A different file at part-07's path with its size and time put back: a new NTFS id.
+        File.Delete(vault.File("part-07.txt"));
+        File.WriteAllText(vault.File("part-07.txt"), "bytes x7");
+        File.SetLastWriteTimeUtc(vault.File("part-07.txt"), old);
+        using var second = new LocalChangeDetector(vault.Paths);
+        var scan = second.Scan();
+        Assert.Equal(2, scan.HashesComputed);
+        Assert.Null(scan.Renames); // the first scan after a start still proves no rename from it
+        Assert.Equal(TestVault.Hash("changed bytes"u8.ToArray()), scan.Files.Single(f => f.Path.Value == "part-03.txt").Hash);
+        Assert.NotEqual(before, scan.Files.Single(f => f.Path.Value == "part-07.txt").Hash);
+        Assert.Equal(TestVault.Hash("bytes 12"u8.ToArray()), scan.Files.Single(f => f.Path.Value == "part-12.txt").Hash);
+    }
+
+    // A file the scan hashed and nobody touched since is known unchanged without reading it; one
+    // written since is not; one hashed inside the racy window is never trusted (0.3.3: check out
+    // reuses the scan's hash).
+    [WindowsFact]
+    public void A_file_is_unchanged_since_the_scan_only_while_its_id_size_and_time_are()
+    {
+        using var vault = new TestVault();
+        var file = vault.File("part.txt");
+        File.WriteAllText(file, "first");
+        File.SetLastWriteTimeUtc(file, DateTime.UtcNow.AddMinutes(-5));
+        using var scanner = new LocalChangeDetector(vault.Paths);
+        var entry = scanner.Scan().Files.Single();
+        Assert.True(FileIdentity.StillAsHashed(file, entry.FileId, entry.Size, entry.LastWriteUtc, entry.HashedAt));
+        Assert.False(FileIdentity.StillAsHashed(file, entry.FileId, entry.Size, entry.LastWriteUtc, new DateTimeOffset(entry.LastWriteUtc.AddSeconds(1), TimeSpan.Zero)));
+        File.WriteAllText(file, "other");
+        Assert.False(FileIdentity.StillAsHashed(file, entry.FileId, entry.Size, entry.LastWriteUtc, entry.HashedAt));
+        Assert.Null(FileIdentity.Of(vault.File("missing.txt")));
+    }
+
+    // A quit or Windows ending the session stops a scan between files, at once.
+    [WindowsFact]
+    public void A_canceled_scan_stops_between_files()
+    {
+        using var vault = new TestVault();
+        foreach (var i in Enumerable.Range(0, 50)) File.WriteAllText(vault.File($"part-{i:D2}.txt"), "bytes " + i);
+        using var scanner = new LocalChangeDetector(vault.Paths);
+        using var stop = new CancellationTokenSource();
+        stop.Cancel();
+        Assert.ThrowsAny<OperationCanceledException>(() => scanner.Scan(cancellationToken: stop.Token));
+        Assert.Equal(50, scanner.Scan().HashesComputed);
+    }
+
     [WindowsFact]
     public void An_edit_inside_the_racy_window_is_rehashed_even_with_the_same_size_and_time()
     {

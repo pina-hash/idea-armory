@@ -205,6 +205,46 @@ public sealed class WindowsVaultFileSystemTests
             Assert.True(File.GetAttributes(vault.File(names[1])).HasFlag(FileAttributes.ReadOnly));
     }
 
+    // 0.3.3: a check out or a check in of many files sets their bits in one batch (one manifest
+    // write), before it returns, and says which it could not set (none here).
+    [WindowsFact]
+    public void ApplyLockAttributesNow_sets_a_thousand_bits_in_one_call()
+    {
+        using var vault = new TempFolder();
+        var names = Enumerable.Range(0, 1000).Select(i => $"Robot/part-{i:D4}.SLDPRT").ToArray();
+        Directory.CreateDirectory(vault.File("Robot"));
+        foreach (var name in names) File.WriteAllBytes(vault.File(name), A);
+        using var files = new WindowsVaultFileSystem(vault.Root);
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        Assert.Empty(files.ApplyLockAttributesNow([.. names.Select(name => (TempFolder.PathValue(name), LockOwnership.Free))]));
+        watch.Stop();
+        Assert.All(names, name => Assert.True(File.GetAttributes(vault.File(name)).HasFlag(FileAttributes.ReadOnly)));
+        Assert.Empty(files.ApplyLockAttributesNow([.. names.Select(name => (TempFolder.PathValue(name), LockOwnership.ThisDevice))]));
+        Assert.All(names, name => Assert.False(File.GetAttributes(vault.File(name)).HasFlag(FileAttributes.ReadOnly)));
+        Assert.Empty(files.Scan().Problems);
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(10), $"1,000 bits took {watch.Elapsed.TotalSeconds:F1} s");
+    }
+
+    // A file the scan hashed is known unchanged without reading it again while nothing touched it
+    // (check out reuses the scan's hash, 0.3.3); a write since, or a hash taken right after a write,
+    // is not trusted.
+    [WindowsFact]
+    public void A_file_is_unchanged_since_the_scan_until_it_is_written()
+    {
+        using var vault = new TempFolder();
+        Directory.CreateDirectory(vault.File("Robot"));
+        File.WriteAllBytes(vault.File("Robot/plate.SLDPRT"), A);
+        File.SetLastWriteTimeUtc(vault.File("Robot/plate.SLDPRT"), DateTime.UtcNow.AddMinutes(-5));
+        using var files = new WindowsVaultFileSystem(vault.Root);
+        var scanned = Assert.Single(files.Scan().Files);
+        Assert.NotNull(scanned.Stamp);
+        Assert.True(files.UnchangedSinceScan(scanned));
+        File.WriteAllBytes(vault.File("Robot/plate.SLDPRT"), B);
+        Assert.False(files.UnchangedSinceScan(scanned));
+        var again = Assert.Single(files.Scan().Files);
+        Assert.False(files.UnchangedSinceScan(again)); // hashed within two seconds of its write
+    }
+
     [WindowsFact]
     public void Scan_reports_the_read_only_bit_and_its_change()
     {
