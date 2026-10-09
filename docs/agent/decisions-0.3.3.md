@@ -213,6 +213,11 @@ sit on disk for SolidWorks.
   because it was opened. With the SolidWorks link, only documents the student opened themselves
   ask (never the parts inside an assembly), and the document becomes editable in place without
   being closed; it is never closed with unsaved changes.
+- **The question before a save down (B2) is a notification too.** While the window is hidden,
+  "When you save <name>, Armory saves it in SolidWorks 2025" lists what 2025 can't keep, with
+  **Save in 2025** and **Keep on this computer only**. It asks once per drop list, is withdrawn
+  once answered, saved or closed, and no answer means Save in 2025 (the team's rule), so nothing
+  waits on it. While the window shows, its notice card asks instead.
 - **The app now targets the Windows 10 1809 SDK** for notifications: the install grows by about
   24 MB (6 MB zipped). Every supported Windows 10 and 11 has it.
 - **On the Armory folder itself** the right-click Check in checks in every file checked out here;
