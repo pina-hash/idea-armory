@@ -146,4 +146,54 @@ public sealed class ReconcilerTests
             Assert.Empty(Reconciler.Plan(input with { IsOnline = false }).Actions);
         }
     }
+
+    // One plan's every observable part: each action with its reason, flags and why, and each intent.
+    private static string Describe(SyncPlan plan)
+        => string.Join(";", plan.Actions.Select(a => $"{a.Kind}|{a.Reason}|{a.ReleaseNotChecked}|{a.Why}")) + "#" +
+           string.Join(";", plan.Intents.Select(i => $"{i.Kind}|{i.Path}|{i.Hash}"));
+
+    // The property the engine's open-file question rests on (0.3.3, feedback N6): where OpenMatters
+    // says no, the plan is the same whether the file is open or not, over the whole small state
+    // space in both check out modes and with every request. The engine then asks the platform only
+    // about the files where it says yes.
+    [Fact]
+    public void Open_state_never_changes_a_plan_where_open_matters_says_it_does_not()
+    {
+        var asked = 0;
+        var skipped = 0;
+        foreach (var shape in CheckoutTests.SmallStateSpace())
+        foreach (var mode in Enum.GetValues<CheckoutMode>())
+        foreach (var request in Enum.GetValues<CheckoutRequest>())
+        {
+            var input = shape with { Checkout = mode, Request = request };
+            var closed = Describe(Reconciler.Plan(input with { IsOpen = false }));
+            var open = Describe(Reconciler.Plan(input with { IsOpen = true }));
+            var matters = Reconciler.OpenMatters(input);
+            Assert.Equal(matters, Reconciler.OpenMatters(input with { IsOpen = !input.IsOpen }));
+            if (matters) { asked++; continue; }
+            skipped++;
+            Assert.True(closed == open, $"{input}: {closed} when closed, {open} when open");
+        }
+        // Not trivially true: most of the space needs no question at all.
+        Assert.True(skipped > asked, $"{skipped} inputs skipped the question and {asked} asked it");
+    }
+
+    // The cases a pass meets most: a synced file, a saved file checked out here, an offline pass and
+    // a new file never need the question; a newer version, a removal, a missing file and bytes kept
+    // before the shared version comes back do.
+    [Fact]
+    public void Open_matters_only_where_the_plan_would_wait_for_the_file_to_close()
+    {
+        var synced = Fixtures.Input with { Checkout = CheckoutMode.Explicit };
+        Assert.False(Reconciler.OpenMatters(synced));
+        Assert.False(Reconciler.OpenMatters(synced with { LocalHash = "edit", Lock = LockOwnership.ThisDevice }));
+        Assert.False(Reconciler.OpenMatters(synced with { LocalHash = "edit", Lock = LockOwnership.ThisDevice, Request = CheckoutRequest.CheckIn }));
+        Assert.False(Reconciler.OpenMatters(synced with { Remote = Fixtures.Newer, IsOnline = false }));
+        Assert.False(Reconciler.OpenMatters(synced with { Base = null, Remote = null, LocalHash = "new" }));
+        Assert.True(Reconciler.OpenMatters(synced with { Remote = Fixtures.Newer }));
+        Assert.True(Reconciler.OpenMatters(synced with { Remote = new("v3", null, "Maria") }));
+        Assert.True(Reconciler.OpenMatters(synced with { LocalHash = null }));
+        Assert.True(Reconciler.OpenMatters(synced with { LocalHash = "edit" }));
+        Assert.True(Reconciler.OpenMatters(synced with { LocalHash = "edit", Lock = LockOwnership.ThisDevice, Request = CheckoutRequest.Undo }));
+    }
 }
