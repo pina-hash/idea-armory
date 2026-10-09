@@ -1,6 +1,7 @@
 # File Explorer: right-click items and status badges
 
-Armory reaches into File Explorer in two ways, both free and both per Windows user:
+Armory reaches into File Explorer in two ways, and into Windows' notifications in a third, all
+free and all per Windows user:
 
 - **Right-click items** (no administrator, always on): an "IDEA Armory" item on files and
   folders inside the vault, with Check out, Check out and open, Check in, Undo check out, Show in
@@ -9,6 +10,10 @@ Armory reaches into File Explorer in two ways, both free and both per Windows us
 - **Status badges** (optional, one administrator step per computer): four icon overlays that
   show at a glance what Armory knows of each file. A native DLL that only reads what the running
   Armory publishes.
+- **Windows notifications** (section 7): the check-out question about a file SolidWorks opened,
+  with Check out and reopen, and the answer to a right-click item while Armory's window is
+  hidden. Buttons open an `idea-armory:` link that a second `IdeaArmory.exe` hands to the
+  running one over the same pipe as the right-click items.
 
 | Piece | Where |
 |---|---|
@@ -20,16 +25,23 @@ Armory reaches into File Explorer in two ways, both free and both per Windows us
 | Badge icons | `tools/agent-icon/make_badges.py` writes `native/badges/*.ico` |
 | The administrator step | `installer/IdeaArmoryBadges.iss`, `installer/usb/Show Armory status on file icons.cmd` |
 | Lab check | `tools/check-overlays.ps1` |
+| The host's half: the menu kept in step, the badges published, their health, Turn on | `src/Armory.Agent/AgentHost.Shell.cs` (`HostShell`, `PublishPace`) |
+| What each right-click item and link does, its question and its sentence | `src/Armory.Agent/ShellDesk.cs` (`ShellDesk`, `ShellPaths`, `ShellWords`) |
+| The window, the confirmations, the notifications and the open-file questions | `src/Armory.Agent/TrayApp.Shell.cs`, `Notifier.cs` (`Notifier`, `OpenAsks`), `ToastXml.cs`, `WindowsToasts.cs` |
+| Links, their tokens, the second launch's forwarder; Armory's identity for Windows | `src/Armory.Agent/ProtocolLink.cs` (`ProtocolLink`, `LinkForwarder`), `ToastTokens.cs`, `ShellIdentity.cs` |
+| The engine's facts for the badges | `src/Armory.Agent.Engine/SyncEngine.Badges.cs` (`BadgeFactsAsync`) |
 
-The host (AgentHost, TrayApp, the page) calls these pieces; none of them calls the engine.
+The host (AgentHost, TrayApp, ShellDesk, the page) calls these pieces; none of them calls the engine.
 
 ## 1. Right-click items
 
 ### 1.1 Registry layout
 
-Written by `ShellVerbs.Apply(vaultRoot, appFolder, forceCheckInFolders)`, never by an installer.
-`<app>` is the folder of `IdeaArmory.exe` (`%LOCALAPPDATA%\Programs\IDEA Armory`), `<vault>` the
-vault root from settings. All values are REG_SZ unless marked. Keys are relative to
+Written by `ShellVerbs.Apply(vaultRoot, appFolder, forceCheckInFolders)`, never by an installer,
+and only by the installed copy: `IdeaArmory.exe` in `%LOCALAPPDATA%\Programs\IDEA Armory`, not a
+test instance (`ARMORY_DATA_DIR`), with `ArmoryShell.exe` beside it (a developer's build leaves
+the keys as they are and says so in its log). `<app>` is that folder, `<vault>` the vault root
+from settings. All values are REG_SZ unless marked. Keys are relative to
 `HKCU\Software\Classes`.
 
 ```
@@ -84,10 +96,15 @@ IDEAArmory.BackgroundMenu\shell
 **Compare before write.** `ShellVerbs.Changes(existing, layout)` lists exactly what differs:
 values set where missing or different (type included), values and keys under the four roots
 that the layout does not name deleted. `Apply` writes only those and sends
-`SHChangeNotify(SHCNE_ASSOCCHANGED)` only when there was at least one. The host calls it at
-start, when the vault root changes, on sign-in and sign-out, and when the force-check-in
-folders change. `ShellVerbs.Remove()` deletes the four roots; both uninstall routes delete the
-same four keys plus `HKCU\Software\IDEA Armory`.
+`SHChangeNotify(SHCNE_ASSOCCHANGED)` only when there was at least one. The host
+(`AgentHost.Shell.cs`) looks at every view and writes, on a thread-pool thread and always the
+newest wish, whenever the vault root or the force-check-in folders change: at start, after a
+vault root change, on sign-in and on sign-out (signed out, the base menu stays and Force check in
+goes). The force-check-in folders (`HostShell.ForceCheckInFolders`) are the first part of the
+paths of each `CanTakeBack` project's files, or the project's name while it has none.
+`ShellVerbs.Remove()` deletes the four roots; Armory itself never calls it (`--quit` removes
+nothing): both uninstall routes delete the same four keys plus `HKCU\Software\IDEA Armory` and
+the keys of section 7.
 
 ### 1.2 What each item does (host behavior)
 
@@ -100,9 +117,38 @@ same four keys plus `HKCU\Software\IDEA Armory`.
 | Show in Armory | one item | The window on that file, or Team files at that folder; the vault root opens Home | n/a |
 | Force check in | 1 to 100, allowed projects only | Resolve paths to files held by someone else, then the existing force check in | Always, with the window's words |
 
-A path outside the vault or ignored answers "That isn't in the Armory folder." Not signed in:
-the window opens on Connect with "Connect this computer first." The answer is the action's one
-sentence, in the window's foot line when the window shows, otherwise as one tray notification.
+`ShellDesk` runs each batch as it closes, after the host has started (at most 60 seconds of
+waiting, for a forwarder that just started Armory), each on its own so a long check out never
+holds up a Show in Armory; questions are asked one at a time.
+
+- Paths become vault paths with `ShellPaths.TryVaultPath`: inside the vault root (any case,
+  either separator, a trailing backslash dropped), accepted by `VaultPath`, and not a name
+  Armory ignores (`~$` markers, `.armory`, `desktop.ini`, `Thumbs.db`). One path that is not
+  refuses the whole batch with "That isn't in the Armory folder."
+- Not signed in: the window opens (on Connect) and says "Connect this computer first."
+- The vault folder itself (the background menu at the vault root): Check in checks in every file
+  this computer has checked out (`view.myFiles`; none: "Nothing there is checked out by you."),
+  Show in Armory shows Home, and anything else answers "Pick files or folders inside a project
+  for that."
+- Check out with a folder in the pick asks "Check out all" first, the window's words (how many
+  files nobody has, in which folders, and how many someone else has, which stay with them);
+  files alone, or a folder with nothing to check out, go straight through. Check out and open of
+  a folder is a Check out of it.
+- Force check in takes the files at or under the picked paths that someone else (or this person
+  on another computer) has checked out, in projects where this account may force a check in
+  (none: "None of those files is checked out by someone else now.", none allowed: "Only a mentor
+  or CAD lead can force a check in."), asks with the window's words naming who has them, then
+  calls the window's Force check in of those file ids (`TakeBackAsync(fileIds)`,
+  `armory_break_locks`).
+- Questions are a WinForms `TaskDialog` (`TrayApp.Ask`) owned by the window when it shows, else
+  centered on the screen, brought to the front (`ArmoryShell.exe` let Armory take the
+  foreground), starting on Cancel; Force check in's has the warning icon. Cancel does nothing and
+  says nothing.
+- The answer is the action's one sentence: while the window shows (and is not minimized), as an
+  `actionResult` with `requestId: "shell"` in its foot line (queued until the page is ready);
+  otherwise as a Windows notification (section 7), an answer within 6 seconds of the last
+  replacing it.
+- Show in Armory opens the window and sends the page `reveal { path }` (docs/agent/BRIDGE.md).
 
 ### 1.3 ArmoryShell.exe and the pipe (normative)
 
@@ -131,6 +177,19 @@ console:
 6. Write one UTF-8 line `1<TAB>verb<TAB>path<TAB>GetTickCount64()<LF>` and read one byte: `0x06`
    means Armory took the line (exit 0); `0x15`, a closed pipe or anything else means it did not
    (exit 1). A watchdog ends the process after 60 seconds whatever happens.
+
+**The link verb.** `uri` is the one verb `ArmoryShell.exe` never sends: a second
+`IdeaArmory.exe` started for a notification's link (section 7) writes
+`1<TAB>uri<TAB><link><TAB>tick<LF>` with the same framing (`LinkForwarder`): it connects with
+`SECURITY_IDENTIFICATION`, retrying for up to 10 seconds while the first instance starts, checks
+that the server is `IdeaArmory.exe` from its own folder (the same rule as step 4, the same test
+pipe exception), calls `AllowSetForegroundWindow` for it, and exits 0 on `0x06`. Anything that
+is not exactly a link goes over as `idea-armory:` alone, which only opens the window. When the
+pipe can't be reached, it signals the first instance's Show event and exits 1. The pipe starts
+in `Program.Main` right after the single-instance check and the log's `started` line (so the
+previous run's last lines are read as it left them), before the tray, the window or WebView2
+(`ShellDesk.StartInbox`, which logs `shell: listening on <pipe>`); batches that close before the tray exists wait in
+`ShellDesk`. If another program holds the name, Armory logs it and runs without the pipe.
 
 The server (`ShellInbox`) creates its pipe with `CreateNamedPipeW` itself, because
 `NamedPipeServerStream` does not set `PIPE_REJECT_REMOTE_CLIENTS`: overlapped, byte mode,
@@ -313,16 +372,21 @@ Exports `DllGetClassObject` and `DllCanUnloadNow`; one class factory per CLSID.
 
 ### 2.4 What the host publishes and when
 
-On a view change, at most every 500 ms, only while the badges are registered (`BadgeHealth`
-at start and every 10 minutes): `BadgeRules.Entries(engine facts)`, then
-`BadgePublisher.Publish(vaultRoot, entries)`, then
-`ShellNotify.Send(ShellChangePlan.For(vaultRoot, previous, entries))` on a background thread
-(SHChangeNotify can wait on Explorer). The plan names each changed item (added, removed or
+On a view change, at most every 500 ms (`PublishPace`: the first change starts one at once, a
+change while one runs starts one more 500 ms after the last began, and no change is lost), only
+while an account is signed in and the badges are installed (`BadgeHealth` is known and not
+`off`): `BadgeRules.Entries(await engine.BadgeFactsAsync())`, then
+`BadgePublisher.Publish(vaultRoot, entries)` (under its own lock, never on the engine's thread),
+then `ShellNotify.Send(ShellChangePlan.For(vaultRoot, previous, entries))` on a background
+thread (SHChangeNotify can wait on Explorer). An engine that does not answer within 30 seconds
+(it is stopping) skips that publication; the next view asks again. A test instance publishes
+under its own header name (`AgentPaths.InstanceSuffix`). The plan names each changed item (added, removed or
 changed state) when there are up to 256 (`SHCNE_UPDATEITEM`, the last with
 `SHCNF_FLUSHNOWAIT`), else each folder that holds them when there are up to 256
 (`SHCNE_UPDATEDIR`, a top-level item's folder being the vault root), else the vault root once.
-When the vault root changes, publish for the new root and notify both. On sign-out and quit,
-`Clear` or `Dispose`.
+When the vault root changes, publish for the new root and notify both. On sign-out, or when
+the health says `off`, `Clear` (and Explorer is told every badge went); on quit `Dispose`, so
+every badge goes at once (generation 0).
 
 ### 2.5 Installing the badges, both routes, and removal
 
@@ -379,6 +443,18 @@ The count is the number of other handlers before our first one; the app names ar
 names trimmed, without trailing digits and then without a trailing `Ext` or `Ico`, each once.
 `Detail` carries the reason for the log only.
 
+**In Settings** (`SettingsView.badges`, docs/agent/BRIDGE.md): a "Status on file icons" row with
+the state's line and, for `off` and `broken`, a Turn on key (`turnOnBadges`). The host checks
+at start, every 10 minutes, each time the window opens (Settings sends nothing when it opens, so
+the window's opening stands for it) and after Turn on; a change of state is logged with its
+`Detail` and redraws the view. Turn on closes Settings, runs
+`<app>\badges\IDEA-Armory-Badges-Setup.exe /SILENT /SUPPRESSMSGBOXES /NORESTART` with the
+`runas` verb, waits for it, checks again and answers in the window's foot with the new line; a
+canceled password prompt (error 1223) answers "Nothing changed. This one step needs an
+administrator's password.", an exit code other than 0 "The badges setup stopped before it
+finished, so nothing changed.", and a missing file "The badges setup isn't in Armory's folder on
+this computer. Ask an administrator to run IDEA-Armory-Badges-Setup."
+
 ## 3. Building the native parts
 
 - **CI and releases** (windows-latest): `pwsh tools/build-native.ps1` finds Visual Studio with
@@ -413,6 +489,11 @@ names trimmed, without trailing digits and then without a trailing `Ext` or `Ico
 | T9 | `tools/test-agent-install.ps1 -Kind Badges` (host wiring) | the badges setup's keys and files, `BadgeProbe.exe --com` creates all four, `check-overlays.ps1` lists ours, a second run is clean, uninstall removes everything |
 | T10 | `-Kind Setup` and `-Kind Usb` (host wiring) | the HKCU verb keys after Armory starts, gone after uninstall; the payload holds ArmoryShell.exe and the badges setup with the right version resources |
 | T11 | `tools/build-native.ps1` | warnings are errors; imports and version resources as in section 3 |
+| T12 | `Armory.Agent.Tests` `ShellDeskTests` | each item to its engine call with vault paths, the folder question and Cancel, files alone never asked, Force check in's files and words, nothing held or no right, the vault folder itself, outside the vault and ignored names, not signed in, a link once and an unknown one only opening the window |
+| T13 | `Armory.Agent.Tests` `ProtocolLinkTests`, `ToastTokensTests`, `ToastXmlTests`, `NotifierTests`, `OpenAsksTests` | section 7: the link grammar, tokens once for 30 minutes and at most 200, escaped XML with protocol links and silent audio, tags, notifications off (nothing), a failing API (the tray), answers replaced within 6 seconds, one question per open, groups, never while the window shows |
+| T14 | `Armory.Agent.Tests` `HostShellTests` | the badges' pace, the Force check in folders, the opened files a notification names, the Settings row and its states, the command line, the identity keys with compare before write, the installed copy only; on Windows a private registry key and a real shortcut |
+| T15 | `Armory.Agent.Tests` `ShellProcessTests` (Windows) | a link's second launch forwards to a running child IdeaArmory.exe and exits 0 (an odd link only opens the window); the running pipe refuses bad lines with 0x15; three lines of one right-click are one batch; with the native build, four real ArmoryShell.exe processes are one batch |
+| T16 | `Armory.EndToEnd.Tests` `BadgeFactsTests` (PostgreSQL), `Armory.Agent.Engine.Tests` `BadgeNamesTests` | a team's badges from the engine's facts (synced, mine and its folders, locked, new and waiting, changed without a check out, checked in, nothing outside a project); every status the engine says has a badge name |
 
 Measured here under Wine 9.0 with the mingw build (logic and parity, not Windows timing): 32 of
 32 parity queries matched for 5,000 and 20,000 files; 100 forwarders started back to back all
@@ -461,3 +542,82 @@ signed.
 of on-demand placeholders, rewriting the engine's model of whole local files that SolidWorks
 opens directly, for a status column; and overlay handlers do not even run under cloud-synced
 folders.
+
+## 7. Windows notifications (C5, the host's half)
+
+**Identity.** One AppUserModelID, `IdeaBosco.Armory` (`ShellIdentity.AppId`), for the process
+(`SetCurrentProcessExplicitAppUserModelID` before any window), the Start menu shortcut and the
+registration that names the app and its icon in a notification and in Settings > Notifications.
+Keys relative to `HKCU\Software\Classes`, all REG_SZ (`ShellIdentity.Layout`):
+
+```
+AppUserModelId\IdeaBosco.Armory      DisplayName = IDEA Armory
+                                     IconUri     = <app>\Assets\armory.ico
+idea-armory                          (Default)   = URL:IDEA Armory
+                                     URL Protocol = (empty)
+idea-armory\DefaultIcon              (Default)   = "<app>\IdeaArmory.exe",0
+idea-armory\shell\open\command       (Default)   = "<app>\IdeaArmory.exe" "%1"
+```
+
+Both installers write them and delete both keys at uninstall (docs/agent/INSTALL.md). The
+installed copy writes them again at start when one differs (compare before write), on a thread
+of its own STA apartment, and gives `%APPDATA%\Microsoft\Windows\Start Menu\Programs\IDEA
+Armory.lnk` the property `System.AppUserModel.ID` = `IdeaBosco.Armory` when it points to this
+`IdeaArmory.exe` and lacks it (the flash drive's shortcut is made without it; `ShortcutAppId`,
+through the shell's property store). Any other copy (a test instance, a developer's build)
+takes none of this and speaks through the tray balloon.
+
+**Links.** A notification's body and buttons open exactly
+`idea-armory:act?t=<token>&a=checkout|show` (`ProtocolLink`): the scheme in any case, a token of
+22 characters of `[A-Za-z0-9_-]` (128 random bits), at most 80 characters, no path and no name.
+Anything else (`idea-armory:` alone, a trailing slash, quotes, spaces, percent signs, another
+parameter, another action) only opens the window. Windows runs `"<app>\IdeaArmory.exe" "<link>"`:
+a second launch forwards it (section 1.3) and exits; a first launch starts with its window open
+and hands the link to itself, where its token means nothing. `AgentCommandLine.Link` keeps the
+argument as Windows gave it; a link beside `--background` still opens the window.
+
+**Tokens** (`ToastTokens`, in memory only): each stands for one action (`checkout` or `show`) on
+the vault paths of one notification, answers once and only for 30 minutes, and at most 200 live
+(the oldest goes first); a token named with the other action answers nothing. Quit clears them,
+and Armory clears its notifications at start and at quit, so an old notification's button only
+opens the window. Only a `checkout` token of a notification Armory showed for those files ever
+checks anything out (`CheckOutAndReopenAsync`); nothing is checked out because it was opened.
+
+**Which way a notification goes** (`Notifier`): a Windows notification (`WindowsToasts`, the only
+class that touches WinRT, through the Windows 10 1809 SDK projection of
+`net10.0-windows10.0.17763.0`) when `ToastNotifier.Setting` is `Enabled`; nothing at all when
+notifications are off for Armory, for the person or by policy (the window's card and foot line
+carry the same words; logged once); the tray balloon only when the notification API itself
+throws (logged once), and for a copy without the identity. Focus Assist is Windows' business:
+the notification waits silently in the notification center and its button still works. Every
+Armory notification is silent (`<audio silent="true"/>`), and its XML is built with
+`System.Xml.Linq` (`ToastXml`), so every name is escaped.
+
+**The check-out question about opened files** (decisions D13 and C5; `OpenAsks`, `TrayApp.Shell.cs`).
+Each view, the tray reads the open files without a check out here
+(`AgentHost.CurrentOpenPrompts()`), each asking once per open (a file asks again only after it
+closed), never while the window shows (its card asks, and that open is spent), and opens close
+together as one: a question is due 1.5 seconds after the last open, at most 10 seconds after the
+first, and none goes out if the window came up meanwhile. A notification is withdrawn when none
+of its files is open without a check out here any more (closed, or checked out by any route).
+Its tag is the first 16 hex digits of SHA-256 over its vault paths in lower case, so a second
+question about the same files replaces the first and no file name reaches Windows' store; its
+group is `open`; it expires after an hour.
+
+| Case | Title | Text | Buttons |
+|---|---|---|---|
+| One file, free | Check out Plate.SLDPRT to edit it? | SolidWorks opened it read-only. Check it out, then close it in SolidWorks and open it again to save changes. | Check out and reopen (`checkout`), Not now (Windows' dismiss) |
+| One file, someone else has it | Plate.SLDPRT is checked out by Maria Lopez on LAB-PC-07 | You can look at it, but you can't save changes until it's checked in. | none |
+| One file, on my other computer | Plate.SLDPRT is checked out by you on LAPTOP-9 | as above | none |
+| Several at once | SolidWorks opened 3 files you haven't checked out | Open Armory to check out the ones you'll change. | Open Armory (`show`), Not now |
+| An answer (window hidden) | its first sentence | the rest | none; a click opens the window |
+
+A click on a notification's body opens the window (a `show` token). The tray balloon, when it
+stands in, uses `CheckOutPrompts.Words` (clicking it opens the window).
+
+**Until the SolidWorks link lands** two host members are seams, marked so in
+`AgentHost.Shell.cs`: `CurrentOpenPrompts()` reads the engine's `OpenWithoutCheckOut` (every
+`~$` marker, components of an assembly included) with each file's row, and
+`CheckOutAndReopenAsync(paths)` is `CheckOutAsync(paths, open: true)` (a file still open in
+SolidWorks answers "Close Plate.SLDPRT in SolidWorks first, then open it again."). Both are
+repointed to the engine's `OpenPrompts` and `CheckOutAndReopenAsync` when the link's work merges.

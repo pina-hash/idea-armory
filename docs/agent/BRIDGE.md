@@ -92,9 +92,10 @@ page's own crumbs are: "Added 4,987 of 5,000 files to Robot 2027 › CopyDesignT
 | `view` | `view: AgentView` | on `ready` and whenever anything changes (at most every 500 ms during a pass); the page redraws from it |
 | `fileDetail` | `detail: FileDetailView` | the answer to `openFile` |
 | `activity` | `activity: ActivityView` | while files move, at most 4 a second; the page patches only Right now and the status line, so focus, scroll and typing never move |
-| `actionResult` | `requestId`, `ok`, `message`, `offer` | once for each action (see Page to host); the page shows `message` in a quiet line at the window's foot, never an alert and never a focus change. `offer` is null, except `"withoutPicture"` after a `sendFeedback` with a picture that couldn't go (0.3.3; Send feedback shows that answer in its own dialog) |
+| `actionResult` | `requestId`, `ok`, `message`, `offer` | once for each action (see Page to host); the page shows `message` in a quiet line at the window's foot, never an alert and never a focus change. `offer` is null, except `"withoutPicture"` after a `sendFeedback` with a picture that couldn't go (0.3.3; Send feedback shows that answer in its own dialog) | 0.3.3: also with `requestId: "shell"` for answers to File Explorer's right-click or a notification.
 | `windowShot` | `requestId`, `ok`, `id`, `url`, `width`, `height`, `bytes`, `scaled`, `message` | the answer to `captureWindow` (0.3.3): a picture of this window (`WindowShotView`, its fields flat in the message); `url` serves exactly the bytes that would be sent; not `ok`: `message` says why, in one sentence |
 | `myFeedback` | `requestId`, `state`, `pictures`, `message`, `notes` | the answer to `readMyFeedback` (0.3.3): Your feedback (`FeedbackListView`, its fields flat in the message) |
+| `reveal` | `path` | 0.3.3: Show in Armory from File Explorer's right-click, after the host opened the window; `path` is vault-relative ("" is the Armory folder itself). The page shows the file's detail (a file in Armory), Team files at that folder (a folder, or the folder of a file Armory doesn't have yet), or Home; never while its small dialog is asking something. Sent once the page has said `ready`, right after its `view` |
 
 ```
 AgentView {
@@ -213,7 +214,12 @@ FileStatus = "synced" | "changed" | "uploading" | "downloading" | "waiting" | "n
                                       // SolidWorks (or unreadable) now; checked in as soon as it is closed
            | "noVersion"                    // 0.3.3: a record whose first version never arrived ("No first version";
                                             // File detail: "Added without its first version"), never "uploading"
-SettingsView { vaultRoot: string, startAtSignIn: boolean, theme: "system" | "idea" | "spaceWhite" }
+SettingsView { vaultRoot: string, startAtSignIn: boolean, theme: "system" | "idea" | "spaceWhite",
+               badges: BadgesView | null }   // 0.3.3; null until the host has checked
+BadgesView {                        // 0.3.3: Armory's status on file icons (docs/agent/EXPLORER.md 2.6)
+  state: "off" | "on" | "afterSignIn" | "crowded" | "partial" | "broken"   // BadgeHealthReport.Key
+  line: string                      // Settings' sentence, e.g. "Armory's status shows on file icons."
+}                                   // Settings draws the row with Turn on (turnOnBadges) for off and broken
 
 FileDetailView {
   fileId: string, name: string, path: string, project: string, folder: string,
@@ -280,7 +286,7 @@ answers it with exactly one `actionResult` carrying the same id and a plain sent
 Plate.SLDPRT.", "Close Plate.SLDPRT in SolidWorks first."). The actions are
 `launchFile`, `checkOut`, `checkIn`, `undoCheckOut`, `takeBack`, `takeBackAll`, `createFolder`,
 `renameFolder`, `deleteFolder`, `renameFile`, `addFiles`, `dropFiles`, `reportProblem`,
-`sendFeedback`, `takeOverFolder` and `putBackKeptCopy`. An **ask** (0.3.3, `ASKS` in bridge.js) carries a `requestId`
+`sendFeedback`, `takeOverFolder`, `putBackKeptCopy` and `turnOnBadges`. An **ask** (0.3.3, `ASKS` in bridge.js) carries a `requestId`
 too and is answered by a message of its own, never `actionResult`: `captureWindow` by `windowShot`,
 `readMyFeedback` by `myFeedback`.
 
@@ -325,6 +331,7 @@ replaces all of it. The spinner holds still under `prefers-reduced-motion`.
 | `captureWindow` | `width`, `height`, `requestId` | Add a picture of this window, in Send feedback (an ask) | 0.3.3: the page's size in CSS pixels (1 to 16,384). The host takes a picture of this window only and answers `windowShot` (see "Send feedback's picture" below) |
 | `readMyFeedback` | `requestId` | opening Settings or Send feedback (at most once a minute), and Your feedback (an ask) | 0.3.3: the host answers `myFeedback` |
 | `openIncidents` | | Open incidents folder (Settings) | opens `%LOCALAPPDATA%\IDEA Armory\incidents` in File Explorer, so the files can be handed over by hand |
+| `turnOnBadges` | `requestId` | Turn on, in Settings' "Status on file icons" row (only for `off` and `broken`); Settings closes so the answer shows at the window's foot | 0.3.3: the host runs `<app>\badges\IDEA-Armory-Badges-Setup.exe /SILENT /SUPPRESSMSGBOXES /NORESTART` with the `runas` verb (Windows asks for an administrator's password), waits for it, checks the badges again (a new `view`) and answers with the new Settings line ("Armory's status shows on file icons after you sign out of Windows and back in."), or "Nothing changed. This one step needs an administrator's password." for a canceled prompt (error 1223), "The badges setup stopped before it finished, so nothing changed." for an exit code other than 0, and "The badges setup isn't in Armory's folder on this computer. Ask an administrator to run IDEA-Armory-Badges-Setup." when the file is missing |
 | `putBackKeptCopy` | `fileId`, `versionId`, `requestId` | Put back on this computer, on a File detail history entry of kind `keptCopy` (0.3.3, feedback N4) | `versionId` is the entry's `id`. The host's `PutBackKeptCopyAsync` (docs/agent/ENGINE.md, "Put back on this computer"): only the signed-in person's own kept copy; the file is checked out first when it is checked out to nobody; any save on disk the server doesn't have is kept first, and an open file is refused; the copy is put in place and stays checked out, shared only at check in. Answers "Put your copy of Plate.SLDPRT back on this computer. It's checked out to you: look at it in SolidWorks, then check it in to share it.", or why not ("That copy of Plate.SLDPRT is Maria Lopez's. Only your own kept copies can be put back here.", "Close Plate.SLDPRT in SolidWorks first, then put your copy back.") |
 
 ## Send feedback's picture of the window (0.3.3)

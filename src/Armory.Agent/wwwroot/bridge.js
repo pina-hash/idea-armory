@@ -54,6 +54,7 @@
 	 * @typedef {'version' | 'keptCopy' | 'removed'} HistoryKind
 	 * @typedef {'system' | 'idea' | 'spaceWhite'} ThemeSetting
 	 * @typedef {'idea' | 'spaceWhite'} EffectiveTheme
+	 * @typedef {'off' | 'on' | 'afterSignIn' | 'crowded' | 'partial' | 'broken'} BadgesState
 	 */
 
 	/**
@@ -218,10 +219,18 @@
 	 */
 
 	/**
+	 * Armory's status on file icons in File Explorer (the badges), as the host found it.
+	 * @typedef {object} BadgesView
+	 * @property {BadgesState} state   Settings offers Turn on (turnOnBadges) for off and broken
+	 * @property {string} line         Settings' sentence about it
+	 */
+
+	/**
 	 * @typedef {object} SettingsView
 	 * @property {string} vaultRoot
 	 * @property {boolean} startAtSignIn
 	 * @property {ThemeSetting} theme
+	 * @property {BadgesView | null} badges   null until the host has checked
 	 */
 
 	/**
@@ -318,7 +327,10 @@
 
 	/**
 	 * Host to page.
-	 * @typedef {{ type: 'view', view: AgentView } | { type: 'fileDetail', detail: FileDetailView } | { type: 'activity', activity: ActivityView } | { type: 'actionResult', requestId: string, ok: boolean, message: string, offer: string | null } | { type: 'windowShot', requestId: string, ok: boolean, id: string | null, url: string | null, width: number, height: number, bytes: number, scaled: boolean, message: string | null } | { type: 'myFeedback', requestId: string, state: FeedbackListState, pictures: boolean, message: string | null, notes: FeedbackNoteView[] }} HostMessage
+	 * An actionResult with requestId 'shell' answers something File Explorer's right-click or a
+	 * notification asked for; reveal is Show in Armory (a file's detail, or Team files at a
+	 * folder; '' is Home).
+	 * @typedef {{ type: 'view', view: AgentView } | { type: 'fileDetail', detail: FileDetailView } | { type: 'activity', activity: ActivityView } | { type: 'actionResult', requestId: string, ok: boolean, message: string, offer: string | null } | { type: 'windowShot', requestId: string, ok: boolean, id: string | null, url: string | null, width: number, height: number, bytes: number, scaled: boolean, message: string | null } | { type: 'myFeedback', requestId: string, state: FeedbackListState, pictures: boolean, message: string | null, notes: FeedbackNoteView[] } | { type: 'reveal', path: string }} HostMessage
 	 */
 
 	/**
@@ -353,12 +365,13 @@
 	 *   openIncidents: none                   (opens the incidents folder in File Explorer)
 	 *   putBackKeptCopy: { fileId, versionId } (File detail: one of your kept copies, a keptCopy history
 	 *                                          entry's id, put back on this computer and checked out to you)
+	 *   turnOnBadges: none                    (Settings: the badges setup, as an administrator; one sentence back)
 	 * @typedef {'ready' | 'connect' | 'cancelConnect' | 'signOut' | 'pause' | 'resume'
 	 *   | 'openVault' | 'openFile' | 'launchFile' | 'showInFolder' | 'checkOut' | 'checkIn'
 	 *   | 'undoCheckOut' | 'takeBack' | 'createFolder' | 'renameFolder' | 'deleteFolder' | 'renameFile'
 	 *   | 'addFiles' | 'dropFiles' | 'dismissNotice' | 'saveSettings' | 'chooseVaultRoot'
 	 *   | 'reportProblem' | 'openIncidents' | 'sendFeedback' | 'takeBackAll' | 'takeOverFolder' | 'switchAccount'
-	 *   | 'putBackKeptCopy' | 'captureWindow' | 'readMyFeedback'} PageMessageType
+	 *   | 'putBackKeptCopy' | 'captureWindow' | 'readMyFeedback' | 'turnOnBadges'} PageMessageType
 	 */
 
 	/**
@@ -382,10 +395,10 @@
 	/* ------------------------------------------------------- Message lists */
 
 	/** Page to host message types (BRIDGE.md, "Page to host"). */
-	var PAGE_TO_HOST = ['ready', 'connect', 'cancelConnect', 'signOut', 'pause', 'resume', 'openVault', 'openFile', 'launchFile', 'showInFolder', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'dismissNotice', 'saveSettings', 'chooseVaultRoot', 'reportProblem', 'openIncidents', 'sendFeedback', 'takeBackAll', 'takeOverFolder', 'switchAccount', 'putBackKeptCopy', 'captureWindow', 'readMyFeedback'];
+	var PAGE_TO_HOST = ['ready', 'connect', 'cancelConnect', 'signOut', 'pause', 'resume', 'openVault', 'openFile', 'launchFile', 'showInFolder', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'dismissNotice', 'saveSettings', 'chooseVaultRoot', 'reportProblem', 'openIncidents', 'sendFeedback', 'takeBackAll', 'takeOverFolder', 'switchAccount', 'putBackKeptCopy', 'captureWindow', 'readMyFeedback', 'turnOnBadges'];
 
 	/** Host to page message types (BRIDGE.md, "Host to page"). */
-	var HOST_TO_PAGE = ['view', 'fileDetail', 'activity', 'actionResult', 'windowShot', 'myFeedback'];
+	var HOST_TO_PAGE = ['view', 'fileDetail', 'activity', 'actionResult', 'windowShot', 'myFeedback', 'reveal'];
 
 	/** Required fields per page-to-host type, as the host's message records name them. */
 	var REQUIRED = {
@@ -412,7 +425,7 @@
 	};
 
 	/** Actions: each carries a requestId, and the host answers it with one actionResult. */
-	var ACTIONS = ['launchFile', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'reportProblem', 'sendFeedback', 'takeBackAll', 'takeOverFolder', 'putBackKeptCopy'];
+	var ACTIONS = ['launchFile', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'reportProblem', 'sendFeedback', 'takeBackAll', 'takeOverFolder', 'putBackKeptCopy', 'turnOnBadges'];
 
 	/** Asks: each carries a requestId too, and the host answers it with a message of its own
 	 *  (windowShot, myFeedback), never actionResult. */
@@ -852,7 +865,7 @@
 					break;
 				case 'saveSettings':
 					var movedOut = view.connection === 'vaultOwnedByOther' && message.vaultRoot !== view.settings.vaultRoot;
-					view.settings = { vaultRoot: message.vaultRoot, startAtSignIn: !!message.startAtSignIn, theme: message.theme };
+					view.settings = { vaultRoot: message.vaultRoot, startAtSignIn: !!message.startAtSignIn, theme: message.theme, badges: view.settings.badges };
 					view.vaultRoot = message.vaultRoot;
 					// A folder of the student's own ends the "folder belongs to someone else"
 					// stop, as the engine would: the demo goes on as if connected.
@@ -892,6 +905,12 @@
 					break;
 				case 'readMyFeedback':
 					myFeedback(message);
+					break;
+				case 'turnOnBadges':
+					// In the app Windows asks for an administrator's password first; the demo's is given.
+					view.settings.badges = { state: 'afterSignIn', line: 'Armory\'s status shows on file icons after you sign out of Windows and back in.' };
+					postView();
+					result(message, true, view.settings.badges.line);
 					break;
 				case 'openVault':
 				case 'showInFolder':
@@ -982,7 +1001,7 @@
 
 		/**
 		 * Calls `handler` with every host message (view, fileDetail, activity, actionResult,
-		 * windowShot, myFeedback).
+		 * windowShot, myFeedback, reveal).
 		 * @param {(message: HostMessage) => void} handler
 		 * @returns {() => void} stops listening
 		 */

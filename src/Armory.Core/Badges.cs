@@ -19,8 +19,11 @@ public enum BadgeState : byte
 }
 
 // A file's status and who has it checked out, in Core's words. They map one to one to the
-// engine's FileStatuses and CheckoutStates names (BadgeFacts.FromNames).
-public enum BadgeFileStatus { Synced, Changed, Uploading, Downloading, Waiting, NewerWaiting, KeptCopy, NotInArmory, NotOnThisComputer }
+// engine's FileStatuses and CheckoutStates names (BadgeFacts.FromNames). CheckingInWhenClosed:
+// checked out by you and asked to be checked in, but open in SolidWorks (or unreadable) now,
+// so it is checked in as soon as it is closed (feedback N4). NoVersion: a server record whose
+// first version never arrived, so there is nothing of it on this computer to badge.
+public enum BadgeFileStatus { Synced, Changed, Uploading, Downloading, Waiting, NewerWaiting, KeptCopy, NotInArmory, NotOnThisComputer, CheckingInWhenClosed, NoVersion }
 public enum BadgeCheckout { Available, Mine, Other, MyOtherComputer }
 
 // What the engine knows of one file in the vault. Path is vault-relative, either separator
@@ -45,6 +48,8 @@ public sealed record BadgeFacts(string Path, BadgeFileStatus Status, BadgeChecko
         "keptCopy" => BadgeFileStatus.KeptCopy,
         "notInArmory" => BadgeFileStatus.NotInArmory,
         "notOnThisComputer" => BadgeFileStatus.NotOnThisComputer,
+        "checkingInWhenClosed" => BadgeFileStatus.CheckingInWhenClosed,
+        "noVersion" => BadgeFileStatus.NoVersion,
         _ => throw new ArgumentException($"Unknown file status \"{status}\".", nameof(status)),
     };
 
@@ -67,7 +72,7 @@ public static class BadgeRules
     public static BadgeState For(BadgeFacts facts)
     {
         // Nothing on this computer to put a badge on.
-        if (facts.Status == BadgeFileStatus.NotOnThisComputer) return BadgeState.None;
+        if (facts.Status is BadgeFileStatus.NotOnThisComputer or BadgeFileStatus.NoVersion) return BadgeState.None;
         if (facts.CantSend || facts.CantRead || facts.Status == BadgeFileStatus.KeptCopy) return BadgeState.Attention;
         // A change you can make is always on a file you have checked out here; any other
         // change was made without a check out.

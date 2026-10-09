@@ -1215,7 +1215,7 @@ for (const size of SIZES) {
 		expect(await page.evaluate(() => document.getElementById('settings').open), 'Settings did not open');
 		// A theme pad says its name and, under it, what it is ("Dark", "Light"); the name is the setting.
 		const keys = await page.$$eval('#settings button', (b) => b.map((x) => (x.querySelector('.seg-name') || x).textContent.trim()));
-		expect(keys.join('|') === 'Done|Change|On|Match Windows|IDEA|Space White|Report a problem|Send feedback|Your feedback (3)|Open incidents folder', `sheet holds ${keys.join(', ')}`);
+		expect(keys.join('|') === 'Done|Change|On|Match Windows|IDEA|Space White|Turn on|Report a problem|Send feedback|Your feedback (3)|Open incidents folder', `sheet holds ${keys.join(', ')}`);
 		await page.click('[data-key="set-theme-spaceWhite"]');
 		await settle(page);
 		expect((await page.getAttribute('html', 'data-theme')) === 'spaceWhite', 'Space White did not apply');
@@ -1386,7 +1386,9 @@ const CONTRACT = {
 	putBackKeptCopy: ['fileId', 'versionId', ...ACT],
 	// Asks (0.3.3): a requestId, answered by windowShot and myFeedback.
 	captureWindow: ['width', 'height', ...ACT],
-	readMyFeedback: [...ACT]
+	readMyFeedback: [...ACT],
+	// 0.3.3: Settings' Turn on for Armory's status on file icons (the badges setup, as an administrator).
+	turnOnBadges: [...ACT]
 };
 tally.bridgeFailures = 0;
 tally.bridgeTypes = 0;
@@ -1703,6 +1705,21 @@ tally.bridgeTypes = 0;
 		m = await click('[data-key="prompt-checkout"]');
 		expect(m.type === 'checkOut' && m.open === true && m.paths.join() === reopened.prompt.path, 'Check out and reopen sent ' + JSON.stringify(m));
 
+		// Show in Armory from File Explorer's right-click (reveal): a file's detail, then the
+		// files of a folder, then Home for the Armory folder itself.
+		await host({ type: 'view', view: view('synced') });
+		await host({ type: 'reveal', path: GEARBOX });
+		const revealed = await take();
+		all.push(...revealed);
+		expect((await page.getAttribute('body', 'data-screen')) === 'detail' && revealed.some((x) => x.type === 'openFile'), 'reveal of a file did not open its detail: ' + JSON.stringify(revealed));
+		await host({ type: 'reveal', path: 'Robot 2027/Drivetrain' });
+		expect((await page.getAttribute('body', 'data-screen')) === 'home' && /Drivetrain/.test((await page.textContent('.crumb-here').catch(() => '')) || ''), 'reveal of a folder did not show its files');
+		await host({ type: 'reveal', path: '' });
+		expect((await page.getAttribute('body', 'data-screen')) === 'home', 'reveal of the Armory folder did not show Home');
+		// An answer for File Explorer's right-click comes to the window's foot like any other.
+		await host({ type: 'actionResult', requestId: 'shell', ok: true, message: 'Checked in 3 files.' });
+		expect((await page.textContent('#result-word')) === 'Checked in 3 files.', 'an answer for File Explorer was not shown');
+
 		await click('[data-key="hdr-settings"]');
 		m = await click('[data-key="set-root"]');
 		expect(m.type === 'chooseVaultRoot', 'Change sent ' + JSON.stringify(m));
@@ -1722,6 +1739,17 @@ tally.bridgeTypes = 0;
 		expect((await page.getAttribute('html', 'data-theme')) === 'idea', 'once a view carried the picked theme, the host\'s views did not decide again');
 		m = await click('[data-key="set-incidents"]');
 		expect(m.type === 'openIncidents', 'Open incidents folder sent ' + JSON.stringify(m));
+		// Turn on (0.3.3): the badges setup as an administrator. Settings steps aside, and the
+		// answer comes to the window's foot; with the badges on there is nothing to turn on.
+		m = await click('[data-key="set-badges"]');
+		expect(m.type === 'turnOnBadges' && typeof m.requestId === 'string', 'Turn on sent ' + JSON.stringify(m));
+		await host({ type: 'actionResult', requestId: m.requestId, ok: false, message: 'Nothing changed. This one step needs an administrator\'s password.' });
+		expect((await page.textContent('#result-word')) === 'Nothing changed. This one step needs an administrator\'s password.', 'Turn on\'s answer was not shown');
+		const badgesOn = view('synced');
+		badgesOn.settings = { ...badgesOn.settings, badges: { state: 'on', line: 'Armory\'s status shows on file icons.' } };
+		await host({ type: 'view', view: badgesOn });
+		await click('[data-key="hdr-settings"]');
+		expect(!(await page.$('[data-key="set-badges"]')) && /shows on file icons/.test(await page.textContent('#set-badges-value')), 'Settings offered Turn on with the badges on');
 		// Report a problem: nothing goes until Send, and empty words are refused in the page.
 		m = await click('[data-key="set-report"]');
 		expect(!m.type && (await page.evaluate(() => document.getElementById('ask').open)), 'Report a problem did not open its dialog: ' + JSON.stringify(m));

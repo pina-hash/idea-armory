@@ -25,6 +25,10 @@ internal sealed class MainWindow : Form, IBridgeWindow
     private string? pendingActivity;
     private bool activityPostScheduled;
     private readonly object viewGate = new();
+    // Messages for a page that has not said ready yet (a reveal, or an answer for File
+    // Explorer's right-click): posted, in order, right after the view the ready gets.
+    private readonly Queue<string> forReadyPage = new();
+    private bool pageReady;
 
     internal MainWindow(AgentHost host, AgentPaths paths, AgentLog log, Icon icon)
     {
@@ -129,6 +133,8 @@ internal sealed class MainWindow : Form, IBridgeWindow
                 else ServeThumbnail(core, args);
             };
             core.NavigationStarting += (_, args) => KeepInsideApp(args.Uri, () => args.Cancel = true);
+            // The page loads again: it is ready once it says so.
+            core.NavigationStarting += (_, args) => { if (IsAppUri(args.Uri)) pageReady = false; };
             // A frame never leaves the app and never opens the browser by itself.
             core.FrameNavigationStarting += (_, args) => { if (!IsAppUri(args.Uri)) args.Cancel = true; };
             core.NewWindowRequested += (_, args) =>
@@ -146,6 +152,7 @@ internal sealed class MainWindow : Form, IBridgeWindow
                 try { json = args.WebMessageAsJson; }
                 catch (ArgumentException) { return; }
                 await bridge.HandleAsync(json, DroppedFiles(args));
+                if (Bridge.TryRead(json, out var type, out var parsed) && type == BridgeMessages.Ready) PageReady();
             };
             core.ProcessFailed += (_, args) =>
             {
@@ -158,6 +165,7 @@ internal sealed class MainWindow : Form, IBridgeWindow
                     {
                         if (web is not null) { Controls.Remove(web); web.Dispose(); web = null; }
                         initialized = false;
+                        pageReady = false;
                         if (Visible) Open();
                     });
                     return;
@@ -424,6 +432,24 @@ internal sealed class MainWindow : Form, IBridgeWindow
         if (json is null || web?.CoreWebView2 is not { } core) return;
         try { core.PostWebMessageAsJson(json); }
         catch (Exception error) when (error is InvalidOperationException or System.Runtime.InteropServices.COMException) { }
+    }
+
+    // On the window thread: now when the page is ready, else right after its ready.
+    internal void PostWhenReady(string json)
+    {
+        if (pageReady && web?.CoreWebView2 is not null)
+        {
+            ((IBridgeWindow)this).Post(json);
+            return;
+        }
+        forReadyPage.Enqueue(json);
+        while (forReadyPage.Count > 16) forReadyPage.Dequeue();
+    }
+
+    private void PageReady()
+    {
+        pageReady = true;
+        while (forReadyPage.TryDequeue(out var json)) ((IBridgeWindow)this).Post(json);
     }
 
     void IBridgeWindow.Post(string json)

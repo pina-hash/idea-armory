@@ -22,7 +22,7 @@ public sealed class BadgeRulesTests
     public void Every_status_and_checkout_has_exactly_the_documented_badge(BadgeFileStatus status, BadgeCheckout checkout, bool inArmory)
     {
         var expected =
-            status == BadgeFileStatus.NotOnThisComputer ? BadgeState.None
+            status is BadgeFileStatus.NotOnThisComputer or BadgeFileStatus.NoVersion ? BadgeState.None
             : status == BadgeFileStatus.KeptCopy ? BadgeState.Attention
             : status == BadgeFileStatus.Changed && checkout != BadgeCheckout.Mine ? BadgeState.Attention
             : checkout == BadgeCheckout.Mine ? BadgeState.Mine
@@ -50,7 +50,7 @@ public sealed class BadgeRulesTests
     public void Attention_is_stronger_than_every_other_fact()
     {
         foreach (var checkout in Enum.GetValues<BadgeCheckout>())
-        foreach (var status in Enum.GetValues<BadgeFileStatus>().Where(s => s != BadgeFileStatus.NotOnThisComputer))
+        foreach (var status in Enum.GetValues<BadgeFileStatus>().Where(s => s is not (BadgeFileStatus.NotOnThisComputer or BadgeFileStatus.NoVersion)))
         {
             Assert.Equal(BadgeState.Attention, BadgeRules.For(File(status, checkout, cantSend: true)));
             Assert.Equal(BadgeState.Attention, BadgeRules.For(File(status, checkout, cantRead: true)));
@@ -75,11 +75,25 @@ public sealed class BadgeRulesTests
         Assert.Equal(BadgeState.None, BadgeRules.For(File(BadgeFileStatus.NewerWaiting, BadgeCheckout.Available)));
     }
 
+    // Feedback N4: a check in asked for while the file is open waits for it to close. It is
+    // still checked out by you on this computer until then, changed or not.
+    [Fact]
+    public void A_check_in_waiting_for_its_file_to_close_stays_mine()
+    {
+        Assert.Equal(BadgeState.Mine, BadgeRules.For(File(BadgeFileStatus.CheckingInWhenClosed, BadgeCheckout.Mine)));
+        Assert.Equal(BadgeState.Attention, BadgeRules.For(File(BadgeFileStatus.CheckingInWhenClosed, BadgeCheckout.Mine, cantRead: true)));
+        Assert.Equal(BadgeState.Mine, BadgeRules.For(BadgeFacts.FromNames("Robot 2027/Arm/Plate.SLDPRT", "checkingInWhenClosed", "mine", true, false, false)));
+    }
+
     [Fact]
     public void A_file_that_is_not_on_this_computer_never_has_a_badge()
     {
         foreach (var checkout in Enum.GetValues<BadgeCheckout>())
+        {
             Assert.Equal(BadgeState.None, BadgeRules.For(File(BadgeFileStatus.NotOnThisComputer, checkout, cantSend: true, cantRead: true)));
+            // A record whose first version never arrived has no file here either.
+            Assert.Equal(BadgeState.None, BadgeRules.For(File(BadgeFileStatus.NoVersion, checkout, cantSend: true, cantRead: true)));
+        }
     }
 
     [Fact]
@@ -158,7 +172,7 @@ public sealed class BadgeRulesTests
     [Fact]
     public void The_engine_names_map_one_to_one_and_unknown_names_throw()
     {
-        string[] statuses = ["synced", "changed", "uploading", "downloading", "waiting", "newerWaiting", "keptCopy", "notInArmory", "notOnThisComputer"];
+        string[] statuses = ["synced", "changed", "uploading", "downloading", "waiting", "newerWaiting", "keptCopy", "notInArmory", "notOnThisComputer", "checkingInWhenClosed", "noVersion"];
         Assert.Equal(Enum.GetValues<BadgeFileStatus>(), statuses.Select(BadgeFacts.StatusOf));
         string[] checkouts = ["available", "mine", "other", "myOtherComputer"];
         Assert.Equal(Enum.GetValues<BadgeCheckout>(), checkouts.Select(BadgeFacts.CheckoutOf));

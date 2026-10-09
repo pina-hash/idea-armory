@@ -1,10 +1,10 @@
 namespace Armory.Agent;
 
 // Decision D13, the quiet check-out prompt outside the window. While the window shows, its
-// prompt card asks (it never steals focus from SolidWorks). While it is hidden, the tray shows
-// one balloon per opened file; clicking it opens the window on that card, which has the
-// Check out button. A file asks again only after it was closed. No WinForms here, so the rule
-// is tested on every host; TrayApp shows the balloon.
+// prompt card asks (it never steals focus from SolidWorks). While it is hidden, each opened file
+// asks once (OpenAsks gathers them into a Windows notification, C5); the tray balloon with these
+// words stands in only when Windows' notifications fail. A file asks again only after it was
+// closed. No WinForms here, so the rule is tested on every host.
 internal sealed class CheckOutPrompts
 {
     // NotifyIcon refuses a longer balloon title.

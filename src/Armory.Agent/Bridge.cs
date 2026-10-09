@@ -42,6 +42,8 @@ internal sealed record SendFeedbackMessage(string? Kind, string? Body, string? T
 internal sealed record CaptureWindowMessage(int? Width, int? Height, string? RequestId);
 // "Your feedback": answered with myFeedback, never actionResult.
 internal sealed record ReadMyFeedbackMessage(string? RequestId);
+// Settings' Turn on for the badges on file icons: the bundled badges setup, as an administrator.
+internal sealed record TurnOnBadgesMessage(string? RequestId);
 
 // What the bridge needs from the window it lives in. Every member runs on the UI thread.
 internal interface IBridgeWindow
@@ -105,6 +107,7 @@ internal sealed class Bridge(AgentHost host, IBridgeWindow window, AgentLog log)
         [BridgeMessages.PutBackKeptCopy] = typeof(PutBackKeptCopyMessage),
         [BridgeMessages.CaptureWindow] = typeof(CaptureWindowMessage),
         [BridgeMessages.ReadMyFeedback] = typeof(ReadMyFeedbackMessage),
+        [BridgeMessages.TurnOnBadges] = typeof(TurnOnBadgesMessage),
     };
 
     // The answer to an action the window sent with something unusable in it.
@@ -312,6 +315,10 @@ internal sealed class Bridge(AgentHost host, IBridgeWindow window, AgentLog log)
                 case BridgeMessages.ReadMyFeedback:
                     var mine = Read<ReadMyFeedbackMessage>(message);
                     window.Post(BridgeMessages.MyFeedbackMessage(mine?.RequestId, await host.ReadMyFeedbackAsync()));
+                    break;
+                case BridgeMessages.TurnOnBadges:
+                    var badges = Read<TurnOnBadgesMessage>(message);
+                    await AnswerAsync(type, 0, asked, badges?.RequestId, host.TurnOnBadgesAsync());
                     break;
                 case BridgeMessages.OpenIncidents:
                     // The incidents folder, so a person can hand the files over by hand today.

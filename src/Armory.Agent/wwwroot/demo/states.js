@@ -325,6 +325,10 @@
 	/* ------------------------------------------------------------- Views */
 
 	var SETTINGS = { vaultRoot: 'C:\\IDEA\\Armory', startAtSignIn: true, theme: 'system' };
+	// Armory's status on file icons (the badges): not installed on this computer yet.
+	function badgesOff() {
+		return { state: 'off', line: 'Armory\'s status isn\'t shown on file icons on this computer. Turning it on needs an administrator once.' };
+	}
 
 	function signedIn(parts) {
 		var view = {
@@ -338,7 +342,7 @@
 			prompt: parts.prompt || null,
 			myFiles: [],
 			projects: projects(parts.changes, parts.opts),
-			settings: { vaultRoot: SETTINGS.vaultRoot, startAtSignIn: SETTINGS.startAtSignIn, theme: SETTINGS.theme },
+			settings: { vaultRoot: SETTINGS.vaultRoot, startAtSignIn: SETTINGS.startAtSignIn, theme: SETTINGS.theme, badges: badgesOff() },
 			effectiveTheme: 'idea'
 		};
 		view.myFiles = myFilesOf(view, parts.notes);
@@ -357,7 +361,7 @@
 			prompt: null,
 			myFiles: [],
 			projects: [],
-			settings: { vaultRoot: SETTINGS.vaultRoot, startAtSignIn: SETTINGS.startAtSignIn, theme: SETTINGS.theme },
+			settings: { vaultRoot: SETTINGS.vaultRoot, startAtSignIn: SETTINGS.startAtSignIn, theme: SETTINGS.theme, badges: badgesOff() },
 			effectiveTheme: 'idea'
 		};
 	}
@@ -473,6 +477,19 @@
 			screens: ['home', 'detail', 'settings'],
 			detailFileId: 'f-wheel-hub',
 			view: signedIn({ sync: SYNCED, changes: shared({}) })
+		},
+
+		badgesCrowded: {
+			label: 'Settings: the badges are installed, but other apps\' badges come first',
+			screens: ['settings'],
+			view: (function () {
+				var v = signedIn({ sync: SYNCED, changes: shared({}) });
+				v.settings.badges = {
+					state: 'crowded',
+					line: 'Windows isn\'t showing Armory\'s badges because 12 badges from other apps come first (Dropbox, OneDrive). Windows shows only 11.'
+				};
+				return v;
+			})()
 		},
 
 		checkedOutByMe: {

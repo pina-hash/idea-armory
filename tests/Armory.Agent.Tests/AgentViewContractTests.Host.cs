@@ -94,6 +94,9 @@ public sealed partial class AgentViewContractTests
             (BridgeMessages.ActionResult, BridgeMessages.ActionResultMessage("r8", false, "Your note wasn't sent.", ActionResult.WithoutPicture)),
             (BridgeMessages.WindowShot, BridgeMessages.WindowShotMessage("r9", new WindowShotView(true, new string('a', 32), "https://armory.local/shot/x.png", 1120, 760, 219113, false, null))),
             (BridgeMessages.MyFeedback, BridgeMessages.MyFeedbackMessage("r10", new FeedbackListView(FeedbackListView.Shown, true, null, [note]))),
+            // File Explorer's answers come as an actionResult too, and Show in Armory as reveal.
+            (BridgeMessages.ActionResult, BridgeMessages.ActionResultMessage(BridgeMessages.ShellRequest, true, "Checked in 3 files.")),
+            (BridgeMessages.Reveal, BridgeMessages.RevealMessage("Robot/Drivetrain/Plate.SLDPRT")),
         })
         {
             using var document = JsonDocument.Parse(json);

@@ -9,8 +9,10 @@ using Microsoft.Win32.SafeHandles;
 
 namespace Armory.Agent;
 
-// The right-click items (docs/agent/EXPLORER.md), in the words ArmoryShell.exe sends.
-internal enum ShellVerb { CheckOut, CheckOutAndOpen, CheckIn, Undo, Show, ForceCheckIn }
+// The right-click items (docs/agent/EXPLORER.md), in the words ArmoryShell.exe sends, and Uri:
+// a second IdeaArmory.exe handing over the idea-armory: link a notification's button started it
+// with (ProtocolLink), its argument the link in place of a path. ArmoryShell.exe never sends it.
+internal enum ShellVerb { CheckOut, CheckOutAndOpen, CheckIn, Undo, Show, ForceCheckIn, Uri }
 
 internal static class ShellVerbNames
 {
@@ -22,14 +24,15 @@ internal static class ShellVerbNames
         ["undo"] = ShellVerb.Undo,
         ["show"] = ShellVerb.Show,
         ["forcecheckin"] = ShellVerb.ForceCheckIn,
+        ["uri"] = ShellVerb.Uri,
     };
 
     internal static bool TryParse(string name, out ShellVerb verb) => ByName.TryGetValue(name, out verb);
 
     internal static string Name(ShellVerb verb) => ByName.First(p => p.Value == verb).Key;
 
-    // These act on one item at once (their menu items allow a single selection).
-    internal static bool IsSingle(ShellVerb verb) => verb is ShellVerb.CheckOutAndOpen or ShellVerb.Show;
+    // These act on one item at once (their menu items allow a single selection; a link is one click).
+    internal static bool IsSingle(ShellVerb verb) => verb is ShellVerb.CheckOutAndOpen or ShellVerb.Show or ShellVerb.Uri;
 }
 
 // One click on one item: the verb, the full path Explorer gave, the forwarder's
