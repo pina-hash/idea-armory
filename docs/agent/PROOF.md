@@ -138,6 +138,29 @@ and `HardeningTests` adds one test per class of problem:
 The server gained `ACommitToARemovedFileIsKeptAsASideVersion`: a commit to a removed file
 becomes a side version instead of advancing it.
 
+## 0.3.3: the SolidWorks year (2026-10-09)
+
+The real reader (`SolidWorksSavedReleaseReader`) on synthetic containers built in code
+(`SwContainer`, never a CAD file); docs/agent/ENGINE.md, "The SolidWorks year".
+
+| Test | Holds |
+|---|---|
+| `ReleaseTests.A_2026_part_stays_a_private_draft_and_the_words_say_what_this_computer_can_do` | a 2026 part makes no server call in Warn or Enforce and its bytes stay as they were; the words follow what the SolidWorks link says (none, 2026 SP4, 2026 SP2, no save down); saved again as 2025 it uploads checked, and the 2026 save stays a private draft, never an earlier save |
+| `ReleaseTests.An_unreadable_year_is_not_checked_in_warn_and_kept_here_in_enforce` | a container whose two fields disagree is unknown: Warn takes it "release not checked", Enforce keeps it here |
+| `ReleaseTests.A_stamp_counts_for_exactly_its_bytes_and_is_pruned_after_its_commit` | a stamp decides a file the reader can't place, a stamp for other bytes or no SHA-256 changes nothing, a stamp against the reader is unknown and recorded, and stamps are pruned 30 days after their commit (90 uncommitted) |
+| `ReleaseTests.Files_uploaded_before_the_reader_are_read_here_and_a_newer_one_is_flagged` | B5: files uploaded "release not checked" are read from identical copies once per hash, across restarts too; a 2026 one has its year on the row and detail, a project count and one notice whose tone and words fit the computer; fixed, it all goes |
+| `ReleaseTests.A_pass_over_1500_synced_files_reads_nothing_and_is_not_slower` | the measurement below |
+
+```
+RELEASE files=1500 first_pass_with_b5_s=2.7 first_pass_without_reader_s=2.4 b5_reads=1500 steady_pass_ms_with_reader=73 steady_pass_ms_without=71 steady_pass_ms_with_reader_after_restart=82
+```
+
+A steady pass over 1,500 synced SolidWorks files reads nothing and costs the same with the
+reader as without it; uploads read only the bytes that changed (10 new files, 10 reads). The
+one-time B5 read of 1,500 files uploaded before the reader added about 0.3 s to a first pass
+that also downloaded them (Linux, the portable file system, small synthetic files; real
+files read at about 0.6 ms each).
+
 ## Seeded run
 
 `SeededRunTests.Seeded_engines_preserve_every_save_and_converge_end_to_end` runs 200 seeds

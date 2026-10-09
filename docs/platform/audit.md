@@ -21,7 +21,7 @@ Exact interface mapping:
 |---|---|
 | `Armory.Core.IJournalStore` | `DurableJournalStore` |
 | `Armory.Core.ISaveSnapshotStore` | `DurableSnapshotStore` |
-| `Armory.Core.ISavedReleaseReader` | No production implementation: byte-level release detection was not validated |
+| `Armory.Core.ISavedReleaseReader` | No production implementation in C2: byte-level release detection was not validated then. Since 0.3.3: `Armory.Core.SolidWorksSavedReleaseReader`, validated on 158 public files ([saved release](../spike/saved-release.md)) and registered by the agent |
 | `SyncInput.IsOpen` | Supplied from `OpenFileDetector.Inspect(...).IsOpen` |
 | `SyncInput.LocalHash` | Supplied from `LocalChangeDetector.Scan()` inventory |
 | `Armory.Core.IIntentSink` | Server-side boundary; not implemented in this disk-only lane |
