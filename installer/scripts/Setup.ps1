@@ -1,25 +1,34 @@
 # IDEA Armory setup. Runs under Windows PowerShell 5.1 (Windows 10 and 11) and PowerShell 7.
-# It never needs administrator rights: everything it writes is inside the profile and the
-# registry (HKCU) of the Windows user who runs it, so each Windows account needs one run.
+# Every mode but Badges never needs administrator rights: everything it writes is inside the
+# profile and the registry (HKCU) of the Windows user who runs it, so each Windows account
+# needs one run.
 #
 #   -Mode Install        copy the app to %LOCALAPPDATA%\Programs\IDEA Armory, add the Start menu
-#                        shortcut, start at sign-in and the Apps entry, then start it in the tray
-#   -Mode Uninstall      remove all of that and %LOCALAPPDATA%\IDEA Armory (settings, logs,
-#                        this computer's sign-in, WebView2 cache)
+#                        shortcut, start at sign-in, the Apps entry and the notification and link
+#                        registration, then start it in the tray (which writes File Explorer's
+#                        right-click items itself)
+#   -Mode Uninstall      remove all of that, every per-user key Armory writes, and
+#                        %LOCALAPPDATA%\IDEA Armory (settings, logs, this computer's sign-in,
+#                        WebView2 cache)
 #   -Mode Check          read-only report; changes nothing
 #   -Mode Stop           (IDEA-Armory-Setup.exe) close a running IDEA Armory from this install
 #   -Mode InnoUninstall  (IDEA-Armory-Setup.exe's uninstaller) close it, then remove
-#                        %LOCALAPPDATA%\IDEA Armory and the start at sign-in entry
+#                        %LOCALAPPDATA%\IDEA Armory, the start at sign-in entry and every
+#                        per-user key Armory writes
+#   -Mode Badges         OPTIONAL, for the whole computer: run <Source>\badges\
+#                        IDEA-Armory-Badges-Setup.exe as an administrator (Windows asks for the
+#                        password), so Armory's status shows on file icons for every account
 #
 # No mode ever deletes, moves or writes the vault folder (C:\IDEA\Armory, or the vaultRoot in
 # settings.json) or anything inside it. Deletion refuses any folder that is a vault, is inside
-# one, or holds a vault's .armory folder, and it never follows a junction or symbolic link.
+# one, or holds a vault's .armory folder, and it never follows a junction or symbolic link. No
+# mode writes HKLM itself; only the badges setup does, with its own uninstaller.
 #
-# -Source <folder>  the "files" folder that holds IdeaArmory.exe (Install; Check reports it)
+# -Source <folder>  the "files" folder that holds IdeaArmory.exe (Install, Badges; Check reports it)
 # -LogDir <folder>  also append one line per run to <folder>\<COMPUTERNAME>.txt (the flash drive)
 # Ends with one large PASS or FAIL line and exit code 0 (PASS) or 1 (FAIL).
 param(
-    [Parameter(Mandatory = $true)][ValidateSet('Install', 'Uninstall', 'Check', 'Stop', 'InnoUninstall')][string]$Mode,
+    [Parameter(Mandatory = $true)][ValidateSet('Install', 'Uninstall', 'Check', 'Stop', 'InnoUninstall', 'Badges')][string]$Mode,
     [string]$Source = '',
     [string]$LogDir = ''
 )
@@ -55,6 +64,23 @@ $UninstallKey = $UninstallRoot + '\IDEA Armory'
 $InnoKey = $UninstallRoot + '\' + $InnoAppId + '_is1'
 $Shortcut = Join-Path ([Environment]::GetFolderPath('Programs')) 'IDEA Armory.lnk'
 $ManifestName = 'scripts\payload.sha256'
+# Must match ShellIdentity.AppId and the Aumid in installer\IdeaArmory.iss (tools\package-agent.ps1
+# checks it): the name Windows gives Armory's notifications.
+$Aumid = 'IdeaBosco.Armory'
+# Every per-user key Armory or this setup writes, relative to HKCU (docs/agent/INSTALL.md):
+# the notification registration, the idea-armory: link scheme, File Explorer's right-click items
+# (written by IdeaArmory.exe when it starts) and the badges' heartbeat. Uninstall removes them all.
+$IdentityKey = 'Software\Classes\AppUserModelId\' + $Aumid
+$SchemeKey = 'Software\Classes\idea-armory'
+$VerbKeys = @('Software\Classes\AllFilesystemObjects\shell\IDEAArmory', 'Software\Classes\IDEAArmory.Menu',
+    'Software\Classes\Directory\Background\shell\IDEAArmory', 'Software\Classes\IDEAArmory.BackgroundMenu')
+$PerUserKeys = @($IdentityKey, $SchemeKey) + $VerbKeys + @('Software\IDEA Armory')
+# The optional badges (docs/agent/EXPLORER.md): their setup, and what it records for the computer.
+$BadgesSetupName = 'badges\IDEA-Armory-Badges-Setup.exe'
+$BadgesKey = 'SOFTWARE\IDEA Armory\Badges'
+$OverlaysKey = 'SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\ShellIconOverlayIdentifiers'
+$BadgeNames = @(' IDEAArmory1Attention', ' IDEAArmory2Mine', ' IDEAArmory3Locked', ' IDEAArmory4Synced')
+$OverlayLimit = 11
 if (-not $Source) { $Source = Split-Path -Parent $PSScriptRoot }
 $Watch = [Diagnostics.Stopwatch]::StartNew()
 $Notes = New-Object System.Collections.Generic.List[string]
@@ -432,6 +458,124 @@ function Write-AppsEntry {
     foreach ($name in @('NoModify', 'NoRepair')) { [void](New-ItemProperty -LiteralPath $UninstallKey -Name $name -PropertyType DWord -Value 1 -Force) }
     [void](New-ItemProperty -LiteralPath $UninstallKey -Name 'EstimatedSize' -PropertyType DWord -Value $kb -Force)
 }
+# The notification registration and the link scheme, exactly as ShellIdentity.Layout writes them
+# (all REG_SZ; "" is the key's default value).
+function Get-IdentityLayout {
+    $quotedExe = '"' + $Exe + '"'
+    return @(
+        @{ Key = $IdentityKey; Name = 'DisplayName'; Value = $AppName },
+        @{ Key = $IdentityKey; Name = 'IconUri'; Value = (Join-Path $Target 'Assets\armory.ico') },
+        @{ Key = $SchemeKey; Name = ''; Value = 'URL:IDEA Armory' },
+        @{ Key = $SchemeKey; Name = 'URL Protocol'; Value = '' },
+        @{ Key = $SchemeKey + '\DefaultIcon'; Name = ''; Value = ($quotedExe + ',0') },
+        @{ Key = $SchemeKey + '\shell\open\command'; Name = ''; Value = ($quotedExe + ' "%1"') })
+}
+# A REG_SZ value under HKCU, or $null.
+function Get-UserString([string]$key, [string]$name) {
+    $open = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($key)
+    if (-not $open) { return $null }
+    try {
+        if ($null -eq $open.GetValue($name, $null)) { return $null }
+        if ($open.GetValueKind($name) -ne [Microsoft.Win32.RegistryValueKind]::String) { return $null }
+        return [string]$open.GetValue($name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+    } finally { $open.Close() }
+}
+# The identity values that are missing or differ (their key and name).
+function Get-IdentityProblems {
+    $wrong = @()
+    foreach ($value in Get-IdentityLayout) {
+        if ((Get-UserString $value.Key $value.Name) -cne $value.Value) { $wrong += ($value.Key + '\' + $(if ($value.Name) { $value.Name } else { '(Default)' })) }
+    }
+    return $wrong
+}
+# Writes the values that differ, as Armory does at start. True when it wrote any.
+function Set-ShellIdentity {
+    $wrote = $false
+    foreach ($value in Get-IdentityLayout) {
+        if ((Get-UserString $value.Key $value.Name) -ceq $value.Value) { continue }
+        $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($value.Key)
+        try { $key.SetValue($value.Name, $value.Value, [Microsoft.Win32.RegistryValueKind]::String) } finally { $key.Close() }
+        $wrote = $true
+    }
+    return $wrote
+}
+# Tells File Explorer that associations changed (SHCNE_ASSOCCHANGED), so the right-click items
+# and the link scheme come and go at once. Where PowerShell may not compile code (a locked-down
+# computer), Explorer catches up at the next sign-in instead.
+function Send-AssociationsChanged {
+    try {
+        $shell = @(Add-Type -Namespace IdeaArmorySetup -Name ShellNotify -PassThru -MemberDefinition '[DllImport("shell32.dll")] public static extern void SHChangeNotify(int eventId, uint flags, IntPtr item1, IntPtr item2);')[0]
+        $shell::SHChangeNotify(0x08000000, 0, [IntPtr]::Zero, [IntPtr]::Zero)
+    } catch { $Notes.Add('File Explorer was not told at once (' + $_.Exception.Message + '); it catches up at the next sign-in') }
+}
+# Deletes every per-user key Armory writes, then tells Explorer once. Returns the keys still there.
+function Remove-PerUserKeys {
+    $removed = $false
+    foreach ($key in $PerUserKeys) {
+        $open = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($key)
+        if (-not $open) { continue }
+        $open.Close()
+        # A key that will not go is named below, by what is still there.
+        try { [Microsoft.Win32.Registry]::CurrentUser.DeleteSubKeyTree($key, $false); $removed = $true } catch {}
+    }
+    if ($removed) { Send-AssociationsChanged }
+    $still = @()
+    foreach ($key in $PerUserKeys) {
+        $open = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($key)
+        if ($open) { $open.Close(); $still += ('HKCU\' + $key) }
+    }
+    return $still
+}
+# File Explorer's right-click items, as this account's Armory wrote them.
+function Describe-RightClickItems {
+    $appliesTo = Get-UserString $VerbKeys[0] 'AppliesTo'
+    $command = Get-UserString ($VerbKeys[1] + '\shell\01checkout\command') ''
+    if (-not $appliesTo -and -not $command) { return 'not written yet (Armory writes them when it starts)' }
+    $forwarder = '"' + (Join-Path $Target 'ArmoryShell.exe') + '"'
+    if (-not $command -or -not $command.StartsWith($forwarder, [StringComparison]::OrdinalIgnoreCase)) { return ('point somewhere else: ' + $command) }
+    $vault = [regex]::Match([string]$appliesTo, '~<"(.*)\\"$').Groups[1].Value
+    return ('present, inside ' + $vault.Replace('""', '"'))
+}
+# What the badges setup recorded for the whole computer (any account may read it), and where
+# Armory's four badges stand among Windows' overlay handlers (Windows shows the first 11).
+function Get-BadgesState {
+    $state = New-Object psobject -Property @{ Version = $null; Format = $null; Registered = 0; Shown = 0; First = 0; Total = 0 }
+    try {
+        $machine = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine, [Microsoft.Win32.RegistryView]::Registry64)
+        try {
+            $setup = $machine.OpenSubKey($BadgesKey)
+            if ($setup) { $state.Version = [string]$setup.GetValue('Version'); $state.Format = [string]$setup.GetValue('Format'); $setup.Close() }
+            $list = $machine.OpenSubKey($OverlaysKey)
+            if ($list) {
+                $names = @($list.GetSubKeyNames())
+                $list.Close()
+                $state.Total = $names.Count
+                for ($i = 0; $i -lt $names.Count; $i++) {
+                    if ($BadgeNames -notcontains $names[$i]) { continue }
+                    $state.Registered++
+                    if ($i -lt $OverlayLimit) { $state.Shown++ }
+                    if (-not $state.First) { $state.First = $i + 1 }
+                }
+            }
+        } finally { $machine.Close() }
+    } catch {}
+    return $state
+}
+function Describe-Badges($state) {
+    if (-not $state.Version -and $state.Registered -eq 0) { return 'not installed (optional: "Show Armory status on file icons.cmd" adds them, with an administrator''s password once for this computer)' }
+    if (-not $state.Version -or $state.Registered -ne $BadgeNames.Count) { return ('BROKEN: ' + $state.Registered + ' of ' + $BadgeNames.Count + ' badges registered, version ' + $state.Version + '. Run "Show Armory status on file icons.cmd" again.') }
+    $where = 'all 4 within the ' + $OverlayLimit + ' Windows shows'
+    if ($state.Shown -eq 0) { $where = 'NONE within the ' + $OverlayLimit + ' Windows shows (other apps come first)' }
+    elseif ($state.Shown -lt $BadgeNames.Count) { $where = 'only ' + $state.Shown + ' of 4 within the ' + $OverlayLimit + ' Windows shows (other apps come first)' }
+    return ('installed, version ' + $state.Version + ' (format ' + $state.Format + '); ' + $where + ', from position ' + $state.First + ' of ' + $state.Total)
+}
+# The ShellExecute "runas" error when the person said no to the password prompt.
+function Test-Cancelled($exception) {
+    for ($e = $exception; $e; $e = $e.InnerException) {
+        if ($e -is [ComponentModel.Win32Exception] -and $e.NativeErrorCode -eq 1223) { return $true }
+    }
+    return $false
+}
 function Describe-RunValue($settings) {
     $value = Get-RunValue
     if ($value -and [string]::Equals($value, $RunCommand, [StringComparison]::OrdinalIgnoreCase)) { return 'on' }
@@ -448,6 +592,12 @@ function Get-Problems($settings) {
         if (-not $value -or -not [string]::Equals($value, $RunCommand, [StringComparison]::OrdinalIgnoreCase)) { $problems.Add('the start at sign-in entry is missing or points somewhere else') }
     }
     if (-not (Test-Path -LiteralPath $UninstallKey) -and -not (Test-Path -LiteralPath $InnoKey)) { $problems.Add('the Apps entry is missing') }
+    # Only this version's install writes them (an older one installed here never did).
+    $installed = Get-InstalledVersion
+    if ($installed -and ($Version -eq 'dev' -or $installed -eq $Version)) {
+        $wrong = @(Get-IdentityProblems)
+        if ($wrong.Count -gt 0) { $problems.Add('the notification and link registration is missing or points somewhere else (' + ($wrong -join ', ') + ')') }
+    }
     return $problems
 }
 function Get-CheckProblem($check, $runtime) {
@@ -528,6 +678,10 @@ function Install {
     }
 
     New-StartMenuShortcut
+    # The notification registration and the link scheme (Armory gives the shortcut its
+    # AppUserModelID at start, which WScript.Shell cannot set, and writes the right-click items).
+    if (Set-ShellIdentity) { Send-AssociationsChanged }
+    Say 'Notifications:     registered (IDEA Armory, with the idea-armory: links)'
     $startOff = Test-StartAtSignInOff $settings
     if ($startOff) { Say 'Start at sign-in:  off (this person turned it off in IDEA Armory settings; left off)' }
     else { Set-RunValue; Say 'Start at sign-in:  on' }
@@ -569,9 +723,11 @@ function Uninstall {
     if (Test-Path -LiteralPath $Shortcut) { Remove-Item -LiteralPath $Shortcut -Force }
     Remove-RunValue
     foreach ($key in @($UninstallKey, $InnoKey)) { if (Test-Path -LiteralPath $key) { Remove-Item -LiteralPath $key -Recurse -Force } }
+    $keysLeft = @(Remove-PerUserKeys)
     foreach ($folder in @($Target, ($Target + '.new'), ($Target + '.old'), $DataDir)) { Remove-Tree $folder }
 
     $left = New-Object System.Collections.Generic.List[string]
+    foreach ($key in $keysLeft) { $left.Add($key) }
     if ((Test-Path -LiteralPath $Target) -and -not (Test-KeptInside $Target)) { $left.Add('the program folder') }
     if (Get-RunValue) { $left.Add('the start at sign-in entry') }
     if ((Test-Path -LiteralPath $UninstallKey) -or (Test-Path -LiteralPath $InnoKey)) { $left.Add('the Apps entry') }
@@ -609,6 +765,12 @@ function Check {
     Say ('WebView2 runtime:   ' + (Format-WebView2 $runtime))
     Say ('Vault folder:       ' + $vault + $(if (Test-Path -LiteralPath $vault) { '' } else { '  (not created yet)' }))
     Say ('Running now:        ' + $(if (@(Get-ArmoryProcesses).Count -gt 0) { 'yes' } else { 'no' }))
+    $wrong = @(Get-IdentityProblems)
+    $registered = { param($prefix) if (@($wrong | Where-Object { $_.StartsWith($prefix + '\', [StringComparison]::OrdinalIgnoreCase) }).Count -eq 0) { 'registered' } else { 'MISSING' } }
+    Say ('Notifications:      ' + (& $registered $IdentityKey))
+    Say ('Link scheme:        ' + (& $registered $SchemeKey))
+    Say ('Right-click items:  ' + (Describe-RightClickItems))
+    Say ('File icons:         ' + (Describe-Badges (Get-BadgesState)))
     if (-not $installed) { throw 'IDEA Armory is not installed for this Windows account.' }
     $problems = Get-Problems $settings
     if (Test-Path -LiteralPath (Join-Path $Target $ManifestName)) {
@@ -628,16 +790,54 @@ function Stop {
     return ('IDEA Armory ' + $how + '.')
 }
 
+# The one optional administrator step, for the whole computer: the badges setup, run as an
+# administrator through Windows' password prompt (ShellExecute's "runas", as Start-Process -Verb
+# RunAs does, but with the cancel told apart by its error number, whatever Windows' language),
+# silent but for its progress, and waited for. Armory itself stays installed per account.
+function Badges {
+    $resolved = Resolve-Path -LiteralPath $Source -ErrorAction SilentlyContinue
+    if (-not $resolved) { throw ('The files folder is missing (' + $Source + '). Copy the whole folder from the ZIP again.') }
+    $setup = Join-Path $resolved.ProviderPath $BadgesSetupName
+    if (-not (Test-Path -LiteralPath $setup)) { throw ('The badges setup is missing (' + $setup + '). Copy the whole folder from the ZIP again.') }
+    Say ('Windows account:   ' + (Get-UserName))
+    Say ('For:               every Windows account on ' + $env:COMPUTERNAME)
+    Say ('Before:            ' + (Describe-Badges (Get-BadgesState)))
+    Say 'Windows now asks for an administrator password. Armory itself needs none.'
+    $info = New-Object Diagnostics.ProcessStartInfo
+    $info.FileName = $setup
+    $info.Arguments = '/SILENT /SUPPRESSMSGBOXES /NORESTART'
+    $info.WorkingDirectory = Split-Path -Parent $setup
+    $info.UseShellExecute = $true
+    $info.Verb = 'runas'
+    try { $process = [Diagnostics.Process]::Start($info) }
+    catch {
+        if (Test-Cancelled $_.Exception) { throw 'Nothing changed: an administrator''s password is needed for this one step.' }
+        throw ('The badges setup did not start (' + $_.Exception.Message + '), so nothing changed.')
+    }
+    if (-not $process) { throw 'The badges setup did not start, so nothing changed.' }
+    $process.WaitForExit()
+    $code = $process.ExitCode
+    $process.Dispose()
+    if ($code -ne 0) { throw ('The badges setup stopped before it finished (exit ' + $code + '), so nothing changed.') }
+    $state = Get-BadgesState
+    if (-not $state.Version -or $state.Registered -ne $BadgeNames.Count) { throw ('The badges setup finished, but ' + (Describe-Badges $state)) }
+    if ($Version -ne 'dev' -and $state.Version -ne $Version) { throw ('The badges setup finished, but this computer records badges ' + $state.Version + ', not ' + $Version + '.') }
+    Say ('After:             ' + (Describe-Badges $state))
+    if ($state.Shown -lt $BadgeNames.Count) { $Notes.Add('other apps'' badges come first, so Windows shows only ' + $state.Shown + ' of Armory''s 4 (tools\check-overlays.ps1 lists them)') }
+    return ('Armory''s status shows on file icons for every account on ' + $env:COMPUTERNAME + ' after each person signs out of Windows and back in (badges ' + $state.Version + ').')
+}
+
 function InnoUninstall {
     $settings = Read-Settings
     Set-Vaults $settings
     [void](Stop-Armory)
     Remove-RunValue
     if (Test-Path -LiteralPath $UninstallKey) { Remove-Item -LiteralPath $UninstallKey -Recurse -Force }
+    foreach ($key in @(Remove-PerUserKeys)) { $script:Left.Add($key) }
     foreach ($folder in @(($Target + '.new'), ($Target + '.old'), $DataDir)) { Remove-Tree $folder }
     if ($script:Left.Count -gt 0) { throw ('Some parts could not be removed: ' + ($script:Left -join '; ')) }
     foreach ($item in $script:Kept) { $Notes.Add('kept ' + $item + ' because a vault folder is there') }
-    return ('Removed the settings, logs and sign-in of IDEA Armory. The vault folder ' + ($script:Vaults -join ' and ') + ' and every file in it were not touched.')
+    return ('Removed the settings, logs, sign-in and File Explorer items of IDEA Armory. The vault folder ' + ($script:Vaults -join ' and ') + ' and every file in it were not touched.')
 }
 
 try {
@@ -649,6 +849,7 @@ try {
             'Check' { Check }
             'Stop' { Stop }
             'InnoUninstall' { InnoUninstall }
+            'Badges' { Badges }
         })
     $reason = [string]$output[-1]
     if ($Notes.Count) { $reason += ' Note: ' + ($Notes -join '; ') + '.' }

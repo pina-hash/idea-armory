@@ -15,6 +15,7 @@ A. PUT IT ON THE FLASH DRIVE (once)
       Install IDEA Armory.cmd
       Uninstall IDEA Armory.cmd
       Check IDEA Armory.cmd
+      Show Armory status on file icons.cmd   (optional, see G)
       README.txt
       files   (folder)
       logs    (folder)
@@ -70,8 +71,28 @@ F. CHECK OR REMOVE
 ------------------
 - "Check IDEA Armory.cmd" shows the installed version, whether it starts
   at sign-in, the WebView2 part Windows needs to show the Armory window,
-  and the vault folder. It changes nothing.
+  the vault folder, Armory's items on File Explorer's right-click menu,
+  and whether file icons show Armory's status. It changes nothing.
 - "Uninstall IDEA Armory.cmd" removes Armory, its settings and this
   computer's sign-in from the Windows account that runs it. It never
   deletes C:\IDEA\Armory or any file in it. Armory can also be removed
   from Settings > Apps > IDEA Armory.
+
+
+G. OPTIONAL: ARMORY'S STATUS ON FILE ICONS (once per computer)
+---------------------------------------------------------------
+Armory can mark each file's icon in File Explorer: synced, checked out by
+you, checked out by someone else, or needs attention. This one step needs
+an administrator's password, once for the whole computer, and works for
+every Windows account on it. Everything else in this folder needs none.
+1. Double-click "Show Armory status on file icons.cmd".
+2. Windows asks for an administrator's password. Type it, or ask someone
+   who has one.
+3. Wait for the green PASS line. Each person sees the marks after signing
+   out of Windows and back in.
+   - Without the password, the red FAIL line says nothing changed.
+     Armory works the same without the marks.
+IT can run the same setup silently on each computer instead:
+   files\badges\IDEA-Armory-Badges-Setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+To remove it: Settings > Apps > "IDEA Armory badges (status on file icons)".
+Uninstalling Armory for one account leaves it for the others.

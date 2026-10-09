@@ -392,7 +392,8 @@ every badge goes at once (generation 0).
 
 **The badges setup** `IDEA-Armory-Badges-Setup-v<version>.exe` (`installer/IdeaArmoryBadges.iss`,
 `PrivilegesRequired=admin`, no override): installs `ArmoryBadges.dll` (x64, or ARM64 on Windows
-on ARM) into `C:\Program Files\IDEA Armory Badges\<version>\`, registers the four CLSIDs
+on ARM when the build had the ARM64 C++ tools; without them the setup carries x64 alone and
+installs on x64 Windows only) into `C:\Program Files\IDEA Armory Badges\<version>\`, registers the four CLSIDs
 (InprocServer32, ThreadingModel Apartment), the four `ShellIconOverlayIdentifiers` keys and their
 `Shell Extensions\Approved` values, and `HKLM\SOFTWARE\IDEA Armory\Badges` with `Version`,
 `Format` = `1` and `InstalledAt` (REG_QWORD FILETIME UTC). Each version gets its own folder, so a
@@ -409,10 +410,12 @@ each person sees the badges after signing out of Windows and back in. Silent, fo
   `/SILENT /SUPPRESSMSGBOXES /NORESTART`; a canceled password prompt (error 1223) answers
   "Nothing changed. This one step needs an administrator's password."
 - **Flash drive route**: `Show Armory status on file icons.cmd` (optional, first comment line)
-  runs `files\scripts\Setup.ps1 -Mode Badges`, which starts the badges setup as an
-  administrator, waits, and ends with the usual PASS or FAIL banner and one drive log line (a
-  canceled prompt is a FAIL: "Nothing changed: an administrator's password is needed for this
-  one step").
+  runs `files\scripts\Setup.ps1 -Mode Badges`, which starts
+  `files\badges\IDEA-Armory-Badges-Setup.exe /SILENT /SUPPRESSMSGBOXES /NORESTART` as an
+  administrator (ShellExecute's `runas`), waits, checks the HKLM keys, and ends with the usual PASS
+  or FAIL banner and one drive log line (a canceled prompt, error 1223 read from the exception
+  whatever Windows' language, is a FAIL: "Nothing changed: an administrator's password is needed
+  for this one step"). Setup.ps1's Check reports the badges' state and position.
 - **Removal**: the badges have their own Apps entry, "IDEA Armory badges (status on file icons)",
   which needs an administrator. Uninstalling Armory for one account never removes them; with no
   Armory publishing for a person, the handlers show that person nothing.
@@ -457,9 +460,14 @@ this computer. Ask an administrator to run IDEA-Armory-Badges-Setup."
 
 ## 3. Building the native parts
 
-- **CI and releases** (windows-latest): `pwsh tools/build-native.ps1` finds Visual Studio with
+- **CI and releases** (windows-latest): the composite action `.github/actions/package-agent`
+  runs `pwsh tools/build-native.ps1` after the solution's build and before the agent's tests and
+  the publish; `tools/package-agent.ps1` then puts `ArmoryShell.exe` beside `IdeaArmory.exe` in
+  the payload, builds the badges setup from the DLLs, and checks each binary's version resource
+  again. The script finds Visual Studio with
   vswhere, takes each architecture's environment from `VsDevCmd.bat`, and builds into
-  `publish\native\<arch>\`: `ArmoryBadges.dll` for x64 and ARM64 (`/O2 /W4 /WX /permissive- /sdl
+  `publish\native\<arch>\`: `ArmoryBadges.dll` for x64 and, when Visual Studio has the ARM64 C++
+  tools, ARM64 (otherwise a warning, a `::warning::` on GitHub Actions) (`/O2 /W4 /WX /permissive- /sdl
   /GS /guard:cf /MT /EHsc /std:c++17`, linked `/guard:cf /DYNAMICBASE /NXCOMPAT`, `/CETCOMPAT` on
   x64, `/WX`), and for x64 `ArmoryShell.exe` (C, the same hardening, `/SUBSYSTEM:WINDOWS`),
   `BadgeProbe.exe` and `ShellPipeTest.exe`. It then checks that the DLL imports only KERNEL32
@@ -486,9 +494,9 @@ this computer. Ask an administrator to run IDEA-Armory-Badges-Setup."
 | T6 | `Armory.Agent.Tests` `ExplorerMenuTests` (Windows, native build) | shell32's own context menu shows "IDEA Armory" and its items inside the vault only, Force check in only in an allowed project, and Check out reaches the pipe through ArmoryShell.exe |
 | T7 | `Armory.Platform.Windows.Tests` `BadgeProbeTests` (Windows, native build) | a C#-built table answered by the DLL exactly as the C# lookup answers; median call time under 5 microseconds inside and outside the vault; nothing after generation 0; badges gone within 1.5 s of the publisher's end; the DLL reads what BadgePublisher publishes; a copy named explorer.exe writes the four heartbeats |
 | T8 | `Armory.Platform.Windows.Tests` `BadgePublisherTests`, `ShellChangePlanTests`, `BadgeHealthTests` | publish, republish, keep-alive, clear and quit, a restart over a living header; the change plan; every health state and sentence |
-| T9 | `tools/test-agent-install.ps1 -Kind Badges` (host wiring) | the badges setup's keys and files, `BadgeProbe.exe --com` creates all four, `check-overlays.ps1` lists ours, a second run is clean, uninstall removes everything |
-| T10 | `-Kind Setup` and `-Kind Usb` (host wiring) | the HKCU verb keys after Armory starts, gone after uninstall; the payload holds ArmoryShell.exe and the badges setup with the right version resources |
-| T11 | `tools/build-native.ps1` | warnings are errors; imports and version resources as in section 3 |
+| T9 | `tools/test-agent-install.ps1 -Kind Badges` (agent.yml and release.yml) | every key and value of the badges setup with exact data, the DLL at the registered path, `BadgeProbe.exe --attach --com` creates all four through `CoCreateInstance`, `ExtractIconEx` gives the four icons, `check-overlays.ps1` lists ours (kept as evidence), a second run through the drive's file icons step is clean, uninstall removes every key, file and the Apps entry |
+| T10 | `-Kind Setup`, `-Kind Usb` and `-Kind Upgrade` | after Armory starts: the HKCU verb keys exactly as 1.1 with this install's paths and the vault in `AppliesTo`, the section 7 registration and the shortcut's AppUserModelID; a link launch reaches the running Armory and no second one stays; the payload holds ArmoryShell.exe and the badges setup with the right version resources; no SolidWorks registry footprint; every key gone after uninstall |
+| T11 | `tools/build-native.ps1`, `tools/package-agent.ps1` | warnings are errors; imports and version resources as in section 3; ARM64 skipped with a warning when its tools are missing; every shipped binary's version resource checked again when packaging |
 | T12 | `Armory.Agent.Tests` `ShellDeskTests` | each item to its engine call with vault paths, the folder question and Cancel, files alone never asked, Force check in's files and words, nothing held or no right, the vault folder itself, outside the vault and ignored names, not signed in, a link once and an unknown one only opening the window |
 | T13 | `Armory.Agent.Tests` `ProtocolLinkTests`, `ToastTokensTests`, `ToastXmlTests`, `NotifierTests`, `OpenAsksTests` | section 7: the link grammar, tokens once for 30 minutes and at most 200, escaped XML with protocol links and silent audio, tags, notifications off (nothing), a failing API (the tray), answers replaced within 6 seconds, one question per open, groups, never while the window shows |
 | T14 | `Armory.Agent.Tests` `HostShellTests` | the badges' pace, the Force check in folders, the opened files a notification names, the Settings row and its states, the command line, the identity keys with compare before write, the installed copy only; on Windows a private registry key and a real shortcut |

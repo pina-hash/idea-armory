@@ -1,0 +1,64 @@
+name: Agent window checks
+# The Armory window's hard rules on every rendered screen, state, size and theme
+# (tools/agent-ui/check-ui.mjs: 44 px targets, no network, contrast, keyboard, plain words, the
+# click flows and the bridge) and identical geometry in both themes (tools/agent-ui/bbox-diff.mjs),
+# in headless Chromium, whenever the page or the tools change. The pages load from file://, so
+# no server and no secret. Playwright and its Chromium come from npm at the version the tools were
+# checked with (1.56.1, Chromium build 1194); both are free.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/Armory.Agent/wwwroot/**'
+      - 'tools/agent-ui/**'
+      - '.github/workflows/ui.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/Armory.Agent/wwwroot/**'
+      - 'tools/agent-ui/**'
+      - '.github/workflows/ui.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ui-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  window:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Outside the repository, so no package.json or node_modules lands in the checkout;
+      # tools/agent-ui/lib.mjs finds it through PLAYWRIGHT_MODULE.
+      - name: Playwright 1.56.1 with Chromium
+        run: |
+          mkdir -p "$RUNNER_TEMP/playwright"
+          npm install --prefix "$RUNNER_TEMP/playwright" --no-save --no-audit --no-fund playwright@1.56.1
+          "$RUNNER_TEMP/playwright/node_modules/.bin/playwright" install --with-deps chromium
+          echo "PLAYWRIGHT_MODULE=$RUNNER_TEMP/playwright/node_modules/playwright" >> "$GITHUB_ENV"
+
+      - name: The window's hard rules (check-ui.mjs)
+        run: |
+          mkdir -p evidence
+          node tools/agent-ui/check-ui.mjs | tee evidence/check-ui.txt
+
+      - name: The same geometry in both themes (bbox-diff.mjs)
+        run: node tools/agent-ui/bbox-diff.mjs | tee evidence/bbox-diff.txt
+
+      - name: Upload the evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-evidence
+          path: evidence/
+          if-no-files-found: warn

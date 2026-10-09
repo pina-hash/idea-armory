@@ -1,9 +1,10 @@
 name: Build and package the IDEA Armory agent
 description: >-
-  Restores with the lock files, builds with warnings as errors, runs the agent's tests,
-  publishes the self-contained win-x64 app, and builds both installers into dist/ with a
-  .sha256 file beside each. Used by agent.yml and release.yml after actions/checkout, on
-  windows-latest.
+  Restores with the lock files, builds with warnings as errors, builds the native parts with
+  Visual Studio's compilers (the badge handlers and the right-click forwarder), runs the agent's
+  tests (which find that native build), publishes the self-contained win-x64 app, and builds the
+  badges setup, the flash-drive zip and the per-user installer into dist/ with a .sha256 file
+  beside each. Used by agent.yml and release.yml after actions/checkout, on windows-latest.
 outputs:
   version:
     description: The agent version, the Version of src/Armory.Agent.
@@ -20,6 +21,15 @@ outputs:
   setup-sha256:
     description: SHA-256 of the installer.
     value: ${{ steps.package.outputs.setup_sha256 }}
+  badges-exe:
+    description: Path of dist/IDEA-Armory-Badges-Setup-v<version>.exe, the optional administrator step.
+    value: ${{ steps.package.outputs.badges_exe }}
+  badges-sha256:
+    description: SHA-256 of the badges setup.
+    value: ${{ steps.package.outputs.badges_sha256 }}
+  arm64:
+    description: true when the badges setup carries the ARM64 DLL too.
+    value: ${{ steps.package.outputs.arm64 }}
 runs:
   using: composite
   steps:
@@ -35,9 +45,16 @@ runs:
       shell: pwsh
       run: dotnet build --no-restore -warnaserror
 
+    # MSVC from the image's Visual Studio: ArmoryBadges.dll (x64, and ARM64 when its C++ tools
+    # are there; else a warning), ArmoryShell.exe, and the test tools BadgeProbe.exe and
+    # ShellPipeTest.exe, into publish/native. Imports and version resources are checked.
+    - name: Native parts (badge handlers, the right-click forwarder) with Visual Studio's compilers
+      shell: pwsh
+      run: ./tools/build-native.ps1 -OutDir publish/native
+
     - name: Agent tests
       shell: pwsh
-      run: dotnet test tests/Armory.Agent.Tests --logger "console;verbosity=normal" --logger "trx;LogFileName=agent-tests.trx"
+      run: dotnet test tests/Armory.Agent.Tests --no-build --logger "console;verbosity=normal" --logger "trx;LogFileName=agent-tests.trx"
 
     # The restore inside publish adds empty win-x64 sections to the referenced projects'
     # lock files on the runner; package versions stay the ones the locked restore proved.
@@ -70,9 +87,9 @@ runs:
         Write-Host ('Inno Setup ' + $found.Version + ' (from ' + $found.Source + '): ' + $iscc)
         "ARMORY_ISCC=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-    - name: Package the flash-drive zip and the installer
+    - name: Package the badges setup, the flash-drive zip and the installer
       id: package
       shell: pwsh
       run: |
         New-Item -ItemType Directory -Force evidence | Out-Null
-        ./tools/package-agent.ps1 -PublishDir publish/agent -OutDir dist | Tee-Object -FilePath evidence/package.txt
+        ./tools/package-agent.ps1 -PublishDir publish/agent -NativeDir publish/native -OutDir dist | Tee-Object -FilePath evidence/package.txt

@@ -6,6 +6,9 @@
 ; administrator; without Armory running for a person, the handlers show nothing for them.
 ; tools\package-agent.ps1 builds it from tools\build-native.ps1's output and passes:
 ;   /DAppVersion=0.3.3   /DNativeDir=<publish\native, holding x64\ and arm64\>   /DOutputDir=<dist>   /DIconFile=<.ico>
+; arm64\ArmoryBadges.dll is there when the build computer's Visual Studio has the ARM64 C++ tools;
+; without it this setup carries the x64 DLL alone and installs on x64 Windows only (Windows on ARM
+; runs an ARM64 Explorer, which cannot load an x64 DLL).
 ;
 ; Each version installs into its own folder ({app}\<version>): the DLL a running Explorer has
 ; loaded is never overwritten, so no restart is needed. Older version folders are removed after
@@ -21,6 +24,9 @@
 #endif
 #ifndef OutputDir
   #define OutputDir "..\dist"
+#endif
+#if FileExists(NativeDir + "\arm64\ArmoryBadges.dll")
+  #define HasArm64
 #endif
 ; The doubled brace is Inno's escape for a literal "{".
 #define AppId "{{EA89842F-F4B2-4F97-8FB3-B90F36C40D3C}"
@@ -61,8 +67,13 @@ DisableDirPage=yes
 UsePreviousAppDir=no
 DisableProgramGroupPage=yes
 DisableWelcomePage=yes
+#ifdef HasArm64
 ; x64compatible includes Windows 11 on ARM, which gets the ARM64 DLL (its Explorer is ARM64).
 ArchitecturesAllowed=x64compatible
+#else
+; No ARM64 DLL in this build: x64 Windows only.
+ArchitecturesAllowed=x64os
+#endif
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
 OutputDir={#OutputDir}
@@ -90,8 +101,12 @@ ConfirmUninstall=Remove Armory's status from file icons for everyone on this com
 UninstalledAll=Armory's status no longer shows on file icons. Windows lets go of the last file when each person signs out.
 
 [Files]
+#ifdef HasArm64
 Source: "{#NativeDir}\x64\ArmoryBadges.dll"; DestDir: "{app}\{#AppVersion}"; Check: not IsArm64; Flags: uninsrestartdelete
 Source: "{#NativeDir}\arm64\ArmoryBadges.dll"; DestDir: "{app}\{#AppVersion}"; Check: IsArm64; Flags: uninsrestartdelete
+#else
+Source: "{#NativeDir}\x64\ArmoryBadges.dll"; DestDir: "{app}\{#AppVersion}"; Flags: uninsrestartdelete
+#endif
 
 [Registry]
 ; Each handler: its COM class (InprocServer32, Apartment), its overlay identifier, and its

@@ -1,6 +1,7 @@
 # Builds IDEA Armory's native parts with Visual Studio's compilers (docs/agent/EXPLORER.md):
 #   <OutDir>\x64\ArmoryBadges.dll     the four File Explorer badge handlers (badges setup)
-#   <OutDir>\arm64\ArmoryBadges.dll   the same for Windows on ARM (Explorer is native ARM64 there)
+#   <OutDir>\arm64\ArmoryBadges.dll   the same for Windows on ARM (Explorer is native ARM64 there),
+#                                     when Visual Studio has the ARM64 C++ tools (else a warning)
 #   <OutDir>\x64\ArmoryShell.exe      what the right-click items run (ships beside IdeaArmory.exe)
 #   <OutDir>\x64\BadgeProbe.exe       CI only: checks the DLL the way Explorer uses it
 #   <OutDir>\x64\ShellPipeTest.exe    lab only: times forwarders started back to back
@@ -36,11 +37,21 @@ if (-not $parts.Success) { throw ('Version must look like 0.3.3, not "' + $Versi
 $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
 if (-not (Test-Path -LiteralPath $vswhere)) { throw 'Visual Studio (vswhere.exe) was not found.' }
 
+function Get-ToolsComponent([string]$arch) {
+    if ($arch -eq 'arm64') { return 'Microsoft.VisualStudio.Component.VC.Tools.ARM64' }
+    return 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64'
+}
+
+# The Visual Studio with this architecture's C++ tools, or $null.
 function Find-VisualStudio([string]$arch) {
-    $component = if ($arch -eq 'arm64') { 'Microsoft.VisualStudio.Component.VC.Tools.ARM64' } else { 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64' }
-    $found = & $vswhere -latest -products * -requires $component -property installationPath
-    if (-not $found) { throw ('Visual Studio with the C++ tools for ' + $arch + ' (' + $component + ') was not found.') }
+    $found = & $vswhere -latest -products * -requires (Get-ToolsComponent $arch) -property installationPath
+    if (-not $found) { return $null }
     return @($found)[0]
+}
+
+# A warning in the log, and on GitHub Actions also in the run's summary.
+function Write-BuildWarning([string]$text) {
+    if ($env:GITHUB_ACTIONS -eq 'true') { Write-Host ('::warning::' + $text) } else { Write-Warning $text }
 }
 
 # Runs one tool and stops the build when it fails.
@@ -82,6 +93,18 @@ $saved = @{}
 Get-ChildItem Env: | ForEach-Object { $saved[$_.Name] = $_.Value }
 foreach ($arch in $Architectures) {
     if ($arch -notin @('x64', 'arm64')) { throw ('Unknown architecture ' + $arch + '; use x64 or arm64.') }
+    # x64 must build. ARM64 is built when Visual Studio has its C++ tools; without them the badges
+    # setup carries the x64 DLL only and installs on x64 Windows only (installer\IdeaArmoryBadges.iss).
+    $vs = Find-VisualStudio $arch
+    if (-not $vs) {
+        if ($arch -eq 'arm64') {
+            Write-BuildWarning ('Visual Studio has no C++ tools for ARM64 (' + (Get-ToolsComponent $arch) + '), so ArmoryBadges.dll is built for x64 only and the badges setup installs on x64 Windows only.')
+            $stale = Join-Path $out 'arm64'
+            if (Test-Path -LiteralPath $stale) { Remove-Item -LiteralPath $stale -Recurse -Force }
+            continue
+        }
+        throw ('Visual Studio with the C++ tools for ' + $arch + ' (' + (Get-ToolsComponent $arch) + ') was not found.')
+    }
     $bin = Join-Path $out $arch
     $obj = Join-Path $out ('obj\' + $arch)
     New-Item -ItemType Directory -Force -Path $bin, $obj | Out-Null
@@ -92,7 +115,6 @@ foreach ($arch in $Architectures) {
     [IO.File]::WriteAllText((Join-Path $obj 'ArmoryVersion.h'), $header, (New-Object Text.UTF8Encoding($false)))
 
     # This architecture's developer environment, on a clean copy of the original one.
-    $vs = Find-VisualStudio $arch
     $devcmd = Join-Path $vs 'Common7\Tools\VsDevCmd.bat'
     @(Get-ChildItem Env: | Where-Object { -not $saved.ContainsKey($_.Name) }) | ForEach-Object { Remove-Item -LiteralPath ('Env:' + $_.Name) }
     foreach ($name in $saved.Keys) { Set-Item -LiteralPath ('Env:' + $name) -Value $saved[$name] }
