@@ -233,3 +233,66 @@ itself when the name frees up. The card tells a student what a SolidWorks copy n
 - Organizing files others have checked out: a mentor or CAD lead can force check them in and
   rename, delete or move in one action. Moving without breaking the check out, and an
   "instructor" role, need server changes (docs/agent/website-requests-v0.3.3.md).
+
+## F. Several students taking turns on one computer
+
+Full design: `docs/agent/PROFILES.md`. Settings: "This computer is shared by several students",
+off by default; with it off Armory builds exactly the same objects as 0.3.2 and touches no
+profiles folder (a test proves it).
+
+### F1. Each student has a profile with their own sign-in
+Each profile keeps its own sign-in (its own connection objects), so switching never needs the
+browser again. Adding a student is the normal browser sign-in once; the waiting step tells them
+to click "Not you? Use another account" because a shared browser is usually still signed in as
+the last student. The same address renews that profile instead of adding a second.
+
+### F2. A 4-digit PIN per profile, on by default (**yours to change**)
+Set when the profile is added, asked at each switch, so one student can't check out, check in or
+force check in as another. Easy PINs (1111, 1234) are refused. Stored only as a PBKDF2-SHA256
+hash (600,000 iterations, a salt) next to the profile's sign-in, protected by Windows. Five wrong
+tries are free, then waits from 30 seconds doubling to 15 minutes, never a permanent lockout; the
+wait survives a restart. "Forgot your PIN?" is a browser sign-in as that same student. A PIN
+stops casual impersonation on a shared Windows login; it is not a security boundary against a
+determined student with tools (PROFILES.md says so).
+
+**How Mr. Pina turns PINs off:** Settings > Shared computer > "Ask for a PIN when switching
+students". It is per computer, only a mentor's own profile in use can change it (the server is
+asked whether they are a mentor), and who changed it and when is shown under the switch. A
+team-wide switch on the website would need a server field (a website request).
+
+### F3. When the picker shows
+When the window opens from hidden (after the X, from the taskbar, Start menu, desktop, tray or a
+second launch), on the first open of the day, after Windows is locked, and on Switch student.
+Not on minimize. Closing with X leaves Armory running and syncing as the current student.
+While the picker shows, Armory keeps working for the student who was in use, but the window shows
+none of their files, File Explorer's items and notification buttons open the picker instead of
+acting, and the tray says "Switch student".
+
+### F4. One shared folder, handed over by the 0.3.2 rule
+The folder goes to the next student only when the last one has nothing waiting in it. If they do,
+their tile says so ("Alex has 2 files checked out here") and the new student chooses: wait for
+Alex, or continue in a folder of their own (`C:\IDEA\Armory-<name>`). **How waiting work finishes
+later:** it stays that student's; when they pick themselves again they finish it in the shared
+folder. Once nothing of a student's waits in their own folder, Armory moves them back to the
+shared folder by itself. Assemblies saved in an own folder store that folder's paths; other
+computers correct them by themselves (SolidWorks looks in the assembly's folder first), which
+PROFILES.md explains. While the next student works in their own folder, the last student's
+checked-out files in the shared folder are made read-only until they return.
+
+### F5. Switching never lets two students write one folder
+A switch stops the old student's sync for good before the new one starts (a new stop guarantee:
+nothing is written to disk, state or journal after it returns; tested byte for byte), one switch
+at a time, one sync per folder, and a lock file per folder. If a stop takes more than 15 seconds
+the picker says "Still finishing..."; after 60 seconds that folder is parked and refused to anyone
+else until it stops.
+
+### F6. Remove a profile, and who is using Armory
+Remove forgets the student's sign-in and PIN (and signs that session out on the server when it
+can) and never deletes a file. A student may remove themselves, a mentor anyone, and anyone may
+remove anyone when PINs are off. Settings and the tray show who is using Armory now. Saved notes
+and incident reports are sent only while their writer is the student in use.
+
+### F7. Not built, and why
+- Profile pictures: initials on a color only. The pictures are on the website, and reading them
+  needs the team list per student; left for a later version.
+- The website's sending limits are kept per computer, not per student.
