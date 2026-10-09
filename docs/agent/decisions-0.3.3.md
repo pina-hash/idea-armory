@@ -87,6 +87,56 @@ of process on one of our licenses, the in-process add-in recipe (per-user COM ke
 optional administrator step for the HKLM key) is written down in `docs/agent/SOLIDWORKS.md`
 and can be built then.
 
+### B2. Saving down to 2025 uses SolidWorks' own "Save to Version" option, at the same path
+SolidWorks 2026 Service Pack 3 added a system option that makes every ordinary Save write an
+older release (one or two back). While the student works on a vault file in a project pinned to
+2025, Armory turns that option on (and puts the student's own setting back when SolidWorks closes,
+when Armory quits, or after a crash), so their normal Save writes 2025 at the same path and name
+and every assembly keeps finding it. The other API route ("save as previous version" to a file)
+cannot write over the document's own path, and a copy elsewhere would give the team a file
+whose stored references point into a temporary folder, so it was rejected.
+
+**Never silently.** Before the save, Armory runs SolidWorks' own compatibility check plus its own
+count of what 2025 can't keep (appearances, decals, lights, custom properties, explode steps,
+simulation studies) and tells the student, with "Save in 2025" and "Keep this file on this
+computer only". A file that uses something 2025 doesn't have is saved as 2026 on this computer
+only (a private draft, never uploaded) with words naming what to change.
+
+**Fail safe.** The option's two API numbers are not published (the lab reads them; until then a
+setting holds them and, empty, save down is off), SolidWorks 2026 before Service Pack 3 has no
+such option, and whether the sponsorship license allows saving to a previous version is
+unknown (B4). In each case the file stays a private draft on that computer with a plain message,
+and is never uploaded as 2026. A save down that SolidWorks didn't confirm in the file's own
+history is kept on the computer even in Warn projects.
+
+### B3. Do references survive a save down at the same path?
+Proven as far as this lab-less night allows: SolidWorks finds a referenced file by name and path
+first, and checks the internal ID only when it finds a different file; Save to Version is an
+ordinary Save of the same open document to its own path, so the name and path in every parent
+stay right. Whether the internal ID and mate faces survive is reasoned yes and is the first item
+of `docs/agent/solidworks-lab-checklist.md` (steps L3 to L5 on a real 2025 and 2026 computer).
+
+### B4. Is Save as Previous Version allowed under the sponsorship license?
+Unknown. Dassault says it needs an active subscription; the FRC sponsorship is a Student Edition
+license, and nothing published says whether that counts. Armory fails safe (B2) and the lab
+checklist answers it in two minutes (step L2).
+
+### B5. Files already uploaded as 2026
+Armory reads the year of every file the server holds as "release not checked" from identical
+local copies and lists those saved in 2026, with what a person on a 2026 computer must do:
+check it out, open it in SolidWorks 2026, click Save (Armory saves it as 2025), check it in. On a
+2025 computer the same file says it can be looked at but not changed, and who can fix it. With
+SolidWorks open, a 2026 computer also offers "Save it in 2025 now" on such a file.
+
+### B6. The C5 question and "Check out and reopen"
+Only documents the student opened themselves ask (never the parts inside an assembly), once per
+SolidWorks session, grouped when several open together. "Check out and reopen" makes the open
+document editable in place (SolidWorks' SetReadOnlyState); it reloads only a document with no
+unsaved changes and never closes or discards anything. Without SolidWorks running Armory falls
+back to the `~$` lock files and reopens the file once when the student closes it.
+**Yours to change:** ARMORY.md's rule 3 says the first edit could take the check out silently;
+0.3.3 asks instead, as the request said.
+
 ## C. File Explorer
 
 ### C1. Right-click items: static verbs Armory writes for this Windows user
