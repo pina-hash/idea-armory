@@ -53,6 +53,17 @@ stops a scan between files (the agent quitting), and what it had read is dropped
 (the same id, size and last-write time, hashed outside the racy window): a check out uses the
 scan's hash then instead of reading the file again (`IVaultFileSystem.UnchangedSinceScan`).
 
+A download Armory put in place itself is known by its hash (`Seed`, through
+`IVaultFileSystem.Wrote`, 0.3.3, feedback N3: the scan after a 542 MB slice of a download read
+all of it once more). The engine passes the SHA-256 it checked as the bytes streamed; the
+detector reads the file's NTFS id, size and last-write time now and keeps that entry, so the next
+scan takes the hash for this very file. The entry is not racy: the staged copy was complete and
+closed before the rename put it in place, so no write came between those bytes and the
+last-write time kept. Any write after it moves the last-write time (or replaces the file, a new
+id), and the scan reads the file again. A file that can't be read for it is simply scanned as
+before. It runs under the adapter's lock, like `Replace`, and the engine calls it only after the
+scan of its pass has been taken in.
+
 Renames require an identical NTFS volume/file id. Ambiguous hard-link identities are not
 guessed. File renames come in path order, except that a rename onto a path another rename
 leaves comes after it, so a chain (Plate to "Plate old", then "Plate v2" to Plate) applies

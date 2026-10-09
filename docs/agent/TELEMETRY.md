@@ -29,11 +29,11 @@ ring unless an incident is saved.
 | `passStart` | the engine | pass kind (`loop`, `action`, `whole`) |
 | `passPhase` | the engine | phase (`scan`, `server`, `plan`, `move`, `finish`), ms since the last phase |
 | `passEnd` | the engine | pass kind, ok, ms, downloaded, uploaded, kept copies, refused |
-| `passYield` | the engine | why a loop pass gave way (`slice`: its 8 seconds were up; `action`: a window action waited), units or paths left, ms |
+| `passYield` | the engine | why a loop pass gave way (`slice`: its slice was up; `action`: a window action waited; `pause`, 0.3.3: Armory was paused), units or paths left, ms, and (0.3.3) `carried`: the units still in flight it carried on to the passes after it (docs/agent/ENGINE.md, "The transfer queue") |
 | `openFiles` | the engine (`AskOpenAsync`, 0.3.3) | one open-files question: ms, how many files it asked about, `timedOut` (the platform's budget ran out and the probe alone answered the rest); a question a window action ended for a loop pass is not recorded |
 | `power` | the agent (`SystemEvents.PowerModeChanged`, 0.3.3) | `suspend` or `resume`: the computer went to sleep or woke |
 | `rpc` | `PostgrestClient`, `BlobClient` (`blob-url`) | function name, ms, HTTP status (0 when none), error code (`offline`, `signedOut`, `canceled`, a SQLSTATE or PostgREST code) |
-| `transfer` | `BlobClient` | `upload` or `download`, bytes, ms, ok, status, error |
+| `transfer` | `BlobClient` | `upload` or `download`, bytes, ms, ok, status, error (`stalled`, 0.3.3: no bytes moved for 30 seconds, and it was tried once more with a fresh URL; a second stall ends as `StorageStalledException`) |
 | `windowAction` | `Bridge` | action type, how many files or folders it named, ms from the window's request to its answer (Add files: from when the picker closed), ok |
 | `notice` | the engine | every problem, and the first 200 notices of a pass: kind, path, the raw text the log gets |
 | `fileFailed` | the engine | path, exception type, message, stack |

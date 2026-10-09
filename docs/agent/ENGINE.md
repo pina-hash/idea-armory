@@ -161,6 +161,11 @@ A pass has four phases. A, B and D run one step at a time; C moves files several
 **Phase C. The units**, at most `EngineOptions.TransferConcurrency` at once. A unit runs its
    files' plans in order and each plan's actions in order; any failure stops that file until
    the next pass. Going offline in a unit starts no new unit (the rest are planned offline).
+   A loop pass runs its units in the transfer queue (0.3.3, "The transfer queue" below): at its
+   slice's end it starts no more and carries the units in flight on, instead of waiting for them.
+   A kept copy already kept (the file's current version, a kept copy the server acknowledged, or
+   the preserved hash) moves nothing: it is never counted as moving or shown as uploading
+   (0.3.3: a checked-out file saved once read "Uploading 0 of 1 file" on every pass after).
 
 **Phase D, in order.**
 
@@ -272,13 +277,18 @@ immutable snapshot bytes.
   across the crash and the saved records, with a 40 ms disk). A cancellation (the engine
   stopping) is not such a failure: every unit stops between two steps, so what is in memory
   may still be saved. Folder, project and move work (phase A) stays one step at a time; the
-  check outs and releases of phase D go several at a time.
+  check outs and releases of phase D go several at a time. Since 0.3.3 a loop pass's units run
+  in the transfer queue and may go on after their pass ends ("The transfer queue", under The
+  loop and the window's actions): the same rules hold for them, across passes, and the passes
+  after them leave their files alone until they have landed.
 - **A storage refusal or timeout is one file's problem.** `BlobClient` throws
   `StorageTransferException` when file storage answers with anything but success, takes too
   long, or cuts a download off, and when ideabosco.com takes too long to sign a transfer; that
   file shows one `cantSend` item ("Plate.SLDPRT didn't go through this time") and goes again on
   the next pass. Only a connection that cannot be made (and the site's 5xx for storage, as the
-  client guard tests require) is offline.
+  client guard tests require) is offline. Since 0.3.3 a transfer that moves no bytes for 30
+  seconds has stalled: it is tried once more with a fresh URL, and a second stall is that file's
+  problem the same way (`StorageStalledException`, docs/agent/CLIENT.md "Stalls").
 - **One request per file body.** A file goes up in one PUT and comes down in one streamed GET
   (its SHA-256 checked as it streams). There is no multipart upload: the contract signs one
   PUT URL with a signed content length (decision D11). Ranged downloads of one file in
@@ -335,8 +345,43 @@ Since 0.3.2 the tracker also keeps the running lines (`ActivityView.log`): the l
 Armory did, from the last 3 minutes, each one plain sentence ("Downloaded Plate.SLDPRT
 (612 KB)", "Getting 1,400 files ready to check out", "Asking the server to check out 1,400
 files", "Checked out 500 of 1,400 files", "Checked in 500 of 1,400 files", "Force checked in
-160 of 200 files", "Sync finished: 94 files downloaded.", going offline and back). The window
-shows them in Right now, the newest at the foot, so a long operation shows it is working.
+160 of 200 files", going offline and back). The window shows them in Right now, the newest at
+the foot, so a long operation shows it is working.
+
+**Runs (0.3.3, feedback N2 and N3; SyncEngine.Lines.cs).** Until 0.3.3 every pass that moved a
+file wrote "Sync finished: 83 files downloaded." and a long download is many passes (its slices),
+so a 1,429-file download said it was finished 18 times with hundreds of files still to come, the
+pass end published a view that said nothing was moving (the tray and the status display flipped
+to "saved" and back), and the lane disappeared between slices. Now the passes that move files one
+after the other are one run: a loop pass that left files for the next one, or carried some in
+flight (see "The transfer queue"), keeps the run going (`continuing`): the view stays `syncing`
+with the lane's line, the lanes keep their counts, and the running lines say how far it got at
+most every 10 seconds ("Downloaded 600 of 1,429 files", "Uploaded 30 of 200 files"). The pass
+that ends it (nothing left, nothing in flight) writes one line for all of it: "Finished: 1,429
+files downloaded in 7 min." (the time from a minute on; "3 files uploaded and 1 kept copy saved").
+An action's pass in the middle of the loop's run is part of it; one outside a run is a run of its
+own. A pass offline ends the run with what it did so far on the offline line ("This computer is
+offline. Armory keeps trying by itself. 412 files downloaded so far."), and so does a pause, once
+the files in flight have landed ("Paused: 412 files downloaded so far."); a pass that failed
+ends it silently. No running line says "sync" (decision D5).
+
+**What a window action is doing (0.3.3, feedback N8).** A check out, an undo and a Force check in
+of several files have a lane of their own from the click to the answer (`ActivityTracker.CheckOut`,
+`Undo`, `TakeBack`): "Checking out 500 of 1,400 files" (each file done when its lock is taken,
+and out of the count when its answer is something else), "Undoing 3 of 10 check outs" (done when
+its lock goes), "Force checking in 120 of 300 files" (done when its check out is ended). They are
+shown as the download direction (a check out) or the upload direction (the others) while nothing
+moves that way, as the check in's "Checking in 412 of 4,900 files" is; the end of a pass leaves
+them, and each goes once it is complete. A Force check in's lines and count reach the window as
+each call is answered (`Line`: logged and raised at once), never all together after the pass that
+follows. Steps that can be long say what they do once they have gone on for a second (0.3
+seconds in a click's own pass): "Looking over 1,467 files on this computer" (the scan), "Asking
+Armory what changed" (the first read of the server); counts say how far they got at most every
+second once they have taken one: "Read 600 of 1,400 files" (the copies a check out must read, and
+those a check in reads before its locks go), "Copying 300 of 1,000 files into Intake" (Add files).
+A folder deleted says "Deleting Gearbox (120 files)" at the click, and a folder moved "Moved 120
+files to Chassis" when it is done. The answer of an action of many files, and of a folder
+action, is also its last running line ("Checked out 1,400 files.").
 
 `ActivityTracker` keeps, per direction (Uploading, Downloading, Moving), files and bytes done
 and in all, the speed and the time left, the files moving now (at most 8 listed) and the
@@ -364,9 +409,15 @@ status line (`SyncView.Line`) follows it while files move. Waiting: "3 files are
 to upload. They upload when this computer is back online." (offline or paused) or "2
 checked-out files have changes. Check them in to share them." (never for an archived project).
 `ActivityChanged` is raised from a timer, at most four times a second while a pass runs (or
-a window action moves a folder) and once more when it ends; the host posts `{type: 'activity', activity}` without the whole view
+a window action moves a folder, or units a pass carried still move) and once more when it ends,
+and at once for a click's own line or count; the host posts `{type: 'activity', activity}` without the whole view
 (the page patches the panel and the status line in place), and the full view is rebuilt at
-most every 500 ms during a pass and at its end.
+most every 500 ms during a pass (or while carried units move) and at its end. A long download's
+lane is kept across its passes: the files a pass did not start stay expected for the next one
+(until 0.3.3 they were dropped at the slice, and between two slices the window had no Downloading
+direction and said "Checking for changes."), and the next loop pass lets go of the ones it no
+longer plans (`ActivityTracker.Prune`); the lanes go when the run ends
+(`Carried_downloads_stay_visible_between_continuation_passes`).
 
 ## Check out (D1 to D4, D18; v2-design.md 4.2)
 
@@ -961,22 +1012,27 @@ moved everything again. Now:
 
 - **An action never waits behind a whole pass.** An action counts itself while it waits for
   the pass gate (`EnterActionAsync`). While one waits, the loop's pass starts no new unit in
-  phase C: the units in flight finish, the rest are simply left (they are planned again from
-  scratch by the next pass; online, nothing of them is journaled), and phase D still runs
-  (the check ins, undos and check outs already asked for, `TidyFolders`, the read-only rule).
-  The gate then goes to the action.
+  phase C: the units in flight are carried on (since 0.3.3; until then the pass waited for
+  them), the rest are simply left (they are planned again from scratch by the next pass;
+  online, nothing of them is journaled), and phase D still runs (the check ins, undos and
+  check outs already asked for, `TidyFolders`, the read-only rule). The gate then goes to the
+  action, whose pass first waits for the carried units holding its own files.
 - **An action's pass is scoped** (`PassScope`). Phases A, B and D are whole (a scan of 5,000
   files is about 60 ms, and phase D must see every lock), but phase C runs only the units that
   hold the action's files (by record, by server id, or at or under the folder it named).
   Check in, undo and check out finish in phase D from those units alone. When the action
   ends it wakes the loop, which carries on with everything else at once.
 - **Time slices.** A loop pass starts no new unit after `PassSlice` (8 seconds) of phase C,
-  finishes the ones in flight and its phase D, and the loop starts the next pass at once, so
-  the server is read again (others' check outs and versions appear) at least every 10 seconds
-  or so even during a bulk download or upload. The activity panel keeps its counts across
-  these slices ("Downloading 412 of 1,280 files").
+  carries the ones in flight on (the transfer queue, below), runs its phase D, and the loop
+  starts the next pass at once, so the server is read again (others' check outs and versions
+  appear) at least every 10 seconds or so even during a bulk download or upload. With live
+  updates joined (0.3.3) the team's changes arrive as they happen: a slice ends at a live event
+  that comes after `PassSlice`, and at the latest after `LivePassSlice` (60 seconds), so a long
+  download is not cut into slices for nothing. The activity panel keeps its counts across
+  these slices ("Downloading 412 of 1,280 files"), and the window says files are moving all
+  along (see Activity, "Runs").
 - `SyncOnceAsync` (tests, and anything that wants everything done) is still a whole pass:
-  it neither gives way nor slices.
+  it neither gives way nor slices, and first waits for every unit a loop pass carried.
 
 `ResponsivenessTests` holds all three: a check out answers in about a quarter of a second
 while 200 files download (the whole download takes about 9 seconds), a check in answers in
@@ -1053,3 +1109,79 @@ one release call; views and a quiet pass never ask file by file; stopping return
 the question is slow; stale markers are not asked about again until they change; a folder check
 out reads no unchanged file and sets bits in batches; Open, File detail, Pause and a check out
 answer while the loop's question is slow.
+
+### The transfer queue (0.3.3, feedback N3)
+
+Mr. Pina: "downloading over a thousand files fresh. armory is visibly starting and stopping...
+when im downloading a large volume of files, the process should be smooth and uninterrupted."
+On 0.3.2 a loop pass started no file after its 8 second slice, waited for every file in flight,
+ran its phase D, and only then did the next pass scan, read the server and plan: a 1,429-file
+download stopped 18 times for 3 to 12 seconds (no download ran for 41% of it), one straggling
+31.5 MB file held its pass and five idle lanes for 77 seconds, and between slices the window had
+no Downloading direction and said "Checking for changes." (and the tray, "saved"). Now
+(`SyncEngine.Queue.cs`):
+
+- **The loop pass's units run in a queue the engine owns.** Phase C starts units while lanes are
+  free (`TransferConcurrency`, the queue's carried units counted) until its slice is over, a
+  click waits for the gate or Armory is paused (each ends the wait at once). It then starts no
+  more and carries the units in flight on instead of waiting for them, runs its phase D, and the
+  loop starts the next pass at once; that pass's units fill the lanes as carried ones end. A pass
+  that has started all its units still carries the slow ones once its slice is over, and the
+  last carried unit to end wakes the loop, whose pass finishes their files (phase D) and ends the
+  run.
+- **Downloads keep starting while the next pass scans and reads the server.** The downloads the
+  slice planned and did not start (units of downloads only: a write rechecks that the file is
+  closed and unchanged, and nothing is sent to the team) are started by the queue itself, carried,
+  as lanes free, until the next loop pass has read the server; then they are its to plan again
+  (`Feed`, `StopFeeding`). The scan and the read of the server, 0.4 to 1.7 seconds a pass in the
+  field, no longer leave every lane idle.
+- **A carried unit's files are left alone** by every step of a pass whose scan began before the
+  unit ended (`Fenced`: rebuilt at each pass start from the carried units in flight, plus those
+  the pass carries itself): never captured, adopted (`AdoptIdenticalBases`), planned, finished in
+  phase D, made read-only, resent as a write a crash left in flight, archived as an earlier save,
+  moved for the team, opened once here or read for its SolidWorks year; a file sharing a name with
+  one is not planned beside it (one unit, so which gets the name never depends on timing); a
+  folder with one in it is not moved, removed or tidied, and a folder move (the team's rename, a
+  project renamed on the site, a folder put back) waits until its files have landed
+  (`CarriedUnder`). The first pass whose scan began after the unit ended takes its files in.
+- **A carried unit writes into the vault only once a scan in progress is taken in**
+  (`AfterScanAsync`: a download's `Replace`, a copy moved aside), so a scan never reports a file
+  half taken in and the engine's own picture of a file it just wrote is never replaced by the
+  scan's older one; and a download checks the folder it was planned into (`FolderMovedAway`), so
+  a folder the student moved since, even one a later scan already took in, is never made again.
+  A write a carried unit made is read again with its project by the next pass, and the notices it
+  makes between two passes are the next pass's.
+- **Clicks.** An action's pass first waits for the carried units holding its files (by record,
+  server id, or under the folder it named), a whole pass (`SyncOnceAsync`) for every one, a
+  folder rename or deletion for those in the folder; anything else goes on.
+- **Crashes.** Any unit's failure that is not one file's (a `SimulatedCrash` in tests, a bug)
+  stops all saving at the moment it is thrown (`StopSaving`, as before), cancels every queued
+  unit, carried or not (`queueStop`), and is thrown, once every unit has stopped and every save
+  serialized before it is on disk, by the pass then running or, if none runs, by the next one
+  before it starts (`SettleQueueFailureAsync`); the loop records it as before. Crash points fire
+  in carried units exactly as in a pass's own. Stopping the engine cancels the queue and waits
+  for it (`StopLoopAsync`).
+- **The window.** The run goes on (`continuing`) while the loop's last pass left files or carried
+  some: the view stays `syncing` with the lane's line, the lanes keep their counts (files not
+  started stay expected; the next pass prunes the ones it no longer plans), the view is rebuilt
+  and the activity raised while carried units move, and the running lines say how far it got and,
+  once, that it finished (see Activity, "Runs").
+- **Slices with live updates.** With channels joined, a slice ends at a live event after
+  `PassSlice` and at the latest after `LivePassSlice` (60 seconds): this computer's own uploads
+  emit events, so an upload still reads the server every 8 seconds or so, while a download is not
+  cut for nothing.
+- **Stalls.** A transfer that moves no bytes for 30 seconds is tried once more with a fresh URL
+  (docs/agent/CLIENT.md, "Stalls"), and one straggler never holds the others: the lanes around it
+  keep moving.
+- **The scan after a download.** A download tells the platform the hash of what it put in place
+  (`IVaultFileSystem.Wrote`; on Windows `LocalChangeDetector.Seed`, docs/platform/local-changes.md),
+  so the next scan takes it instead of reading the file again (the scan after a 542 MB slice read
+  all of it once more).
+
+`ContinuousTransferTests` holds it: 1,500 files with one second slices and a one second read of
+the server never have a stretch of a second with no download running after the first starts
+(about 20 ms at most, on Linux with the portable file system), and every view and activity
+message in between says files are downloading; one stalled download of 200 does not hold the
+other 199; a long download says it finished once, at the end; pausing says how far it got; a
+downloaded file is not read again by the next scan; a save already kept never moves again. Each
+of these fails on 0.3.3's engine before the queue (checked by running them against it).
