@@ -1733,7 +1733,7 @@ const CONTRACT = {
 	setSharedComputer: ['on', 'pin', ...ACT],
 	setPinsRequired: ['on', ...ACT],
 	// 0.3.3: the SolidWorks link's notice buttons (Keep this file on this computer only, Save it in
-	// 2025 now); the page's keys come with the window's final pass, so these report "never sent" until then.
+	// 2025 now), pressed in solidWorksBridge.
 	keepLocal: ['paths', ...ACT],
 	saveDown: ['paths', ...ACT]
 };
@@ -1741,6 +1741,20 @@ const CONTRACT = {
 // A shared computer's messages, inside the stand-in host: each is sent by the control that
 // should send it. Home's Sign out gives way to Switch student; the picker is a screen of
 // its own that the view alone decides; a PIN goes at its fourth digit and never before.
+// 0.3.3, the SolidWorks link: the notice's own button sends keepLocal (before a save in the
+// project's year that drops something) or saveDown (a file kept here), with the file's path.
+async function solidWorksBridge({ page, host, click, view, expect }) {
+	const GEAR = 'Robot 2027/Drivetrain/Gearbox.SLDASM';
+	await host({ type: 'view', view: view('solidWorksDrops') });
+	let m = await click('[data-key="nt-act-solidWorks"]');
+	expect(m.type === 'keepLocal' && m.paths.join() === GEAR && typeof m.requestId === 'string', 'Keep this file on this computer only sent ' + JSON.stringify(m));
+	await host({ type: 'actionResult', requestId: m.requestId, ok: true, message: 'Gearbox.SLDASM stays on this computer only when you save it.' });
+	await host({ type: 'view', view: view('solidWorksKept') });
+	m = await click('[data-key="nt-act-solidWorks"]');
+	expect(m.type === 'saveDown' && m.paths.join() === GEAR && typeof m.requestId === 'string', 'Save it in 2025 now sent ' + JSON.stringify(m));
+	await host({ type: 'actionResult', requestId: m.requestId, ok: true, message: 'Saved Gearbox.SLDASM in SolidWorks 2025.' });
+}
+
 async function profilesBridge({ page, host, click, take, view, expect, all }) {
 	const MARIA = '1a2b3c4d5e6f708192a3b4c5d6e7f801';
 	const SAM = '3c4d5e6f708192a3b4c5d6e7f8091a23';
@@ -1819,7 +1833,7 @@ async function profilesBridge({ page, host, click, take, view, expect, all }) {
 	// The folder-taken screen names the folder's owner from FolderOwnerView, not the message.
 	await host({ type: 'view', view: view('vaultOwnedByOther') });
 	expect(/This folder belongs to Alex Kim/i.test(await page.textContent('.lcd-plate')) && /still has 1\sfile checked out here/.test(await page.textContent('main')),
-		'the folder-taken screen does not name Alex and what of his waits');
+		'the folder-taken screen does not name Alex and what of theirs waits');
 	await host({ type: 'view', view: view('synced') });
 }
 tally.bridgeFailures = 0;
@@ -2371,6 +2385,7 @@ tally.bridgeTypes = 0;
 		expect((await page.getAttribute('body', 'data-screen')) === 'connect', 'an unknown host message changed the screen');
 
 		await profilesBridge({ page, host, click, take, view, expect, all });
+		await solidWorksBridge({ page, host, click, view, expect });
 
 		for (const x of all) {
 			const want = CONTRACT[x.type];

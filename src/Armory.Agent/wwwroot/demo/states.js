@@ -360,7 +360,7 @@
 			effectiveTheme: 'idea',
 			folderOwner: null,
 			profiles: null,
-			solidWorks: null
+			solidWorks: parts.solidWorks || null
 		};
 		view.myFiles = myFilesOf(view, parts.notes);
 		return view;
@@ -1062,6 +1062,54 @@
 			})
 		},
 
+		solidWorksDrops: {
+			label: 'SolidWorks 2026 linked: before a save, what 2025 can\'t keep, with Keep this file on this computer only; Settings says it saves team files in 2025',
+			screens: ['home', 'settings'],
+			view: signedIn({
+				sync: SYNCED,
+				notices: [
+					notice(
+						'solidWorks',
+						'solidWorks',
+						'look',
+						'When you save Gearbox.SLDASM, Armory saves it in SolidWorks 2025',
+						'Your team uses 2025, and 2025 can\'t keep: 3 appearances (colors), 2 explode steps. Part numbers and descriptions are kept by Armory.',
+						1,
+						{ label: 'Keep this file on this computer only', command: 'keepLocal', paths: ['Robot 2027/Drivetrain/Gearbox.SLDASM'] },
+						[item('f-gearbox', 'Robot 2027/Drivetrain/Gearbox.SLDASM', 'When you save Gearbox.SLDASM, Armory saves it in SolidWorks 2025. Your team uses 2025, and 2025 can\'t keep: 3 appearances (colors), 2 explode steps.')]
+					)
+				],
+				changes: shared({ 'f-gearbox': { checkout: mine(35 * MIN), changed: true } }),
+				solidWorks: { state: 'attached', line: 'Linked to SolidWorks 2026 SP3. It saves team files in 2025.', detail: null }
+			})
+		},
+
+		solidWorksKept: {
+			label: 'A file kept on this computer only, with Save it in 2025 now; Settings says why this SolidWorks can\'t save team files in 2025 yet',
+			screens: ['home', 'settings'],
+			view: signedIn({
+				sync: { state: 'attention', line: 'Everything else is saved. A few files need you.', detail: 'Last checked just now.', pendingCount: 0 },
+				notices: [
+					notice(
+						'solidWorks',
+						'solidWorks',
+						'look',
+						'Gearbox.SLDASM is saved on this computer only',
+						'You chose to keep it here. Until it is saved in SolidWorks 2025, nobody else gets these changes.',
+						1,
+						{ label: 'Save it in 2025 now', command: 'saveDown', paths: ['Robot 2027/Drivetrain/Gearbox.SLDASM'] },
+						[item('f-gearbox', 'Robot 2027/Drivetrain/Gearbox.SLDASM', 'Gearbox.SLDASM is saved on this computer only. You chose to keep it here.')]
+					)
+				],
+				changes: shared({ 'f-gearbox': { checkout: mine(35 * MIN), changed: true } }),
+				solidWorks: {
+					state: 'cantSaveDown',
+					line: 'Linked to SolidWorks 2026 SP2. It can\'t save team files in 2025.',
+					detail: 'Update SolidWorks 2026 to Service Pack 3 or newer so Armory can save team files in 2025. Until then, files you save stay on this computer only.'
+				}
+			})
+		},
+
 		bigProject: {
 			label: 'A folder of 5,000 files, drawn a screenful at a time',
 			screens: ['home'],
@@ -1271,7 +1319,7 @@
 	};
 
 	states.pickerWaiting = {
-		label: 'Shared computer: Alex is in use, and his tile says what waits for him',
+		label: 'Shared computer: Alex is in use, and Alex\'s tile says what waits',
 		screens: ['picker'],
 		view: picking(
 			profilesOf({
@@ -1287,7 +1335,7 @@
 	};
 
 	states.pickerPin = {
-		label: 'Shared computer: Maria picked herself and types her PIN',
+		label: 'Shared computer: Maria picked their own tile and types the PIN',
 		screens: ['picker'],
 		view: picking(profilesOf({ showing: true, tiles: labTiles(), step: pickerStep('pin', { profileId: PROFILE.maria.id, triesLeft: 5 }) }))
 	};
@@ -1334,7 +1382,7 @@
 	};
 
 	states.pickerFolderBusy = {
-		label: "Shared computer: Jordan picked himself; Alex's 2 check outs are in the folder: wait, or a folder of his own",
+		label: "Shared computer: Jordan picked their own tile; Alex's 2 check outs are in the folder: wait, or a folder of Jordan's own",
 		screens: ['picker'],
 		view: picking(
 			profilesOf({
@@ -1363,7 +1411,7 @@
 	};
 
 	states.pickerSignInAgain = {
-		label: "Shared computer: Maria's sign-in ended; her tile and her Sign in again",
+		label: "Shared computer: Maria's sign-in ended; Maria's tile and its Sign in again",
 		screens: ['picker'],
 		view: picking(profilesOf({ showing: true, tiles: labTiles({ mariaSignIn: true }), step: pickerStep('signInAgain', {
 			profileId: PROFILE.maria.id,
@@ -1390,7 +1438,7 @@
 	};
 
 	states.sharedOwnFolder = {
-		label: "Shared computer: Jordan in a folder of his own while Alex's work waits in the shared one",
+		label: "Shared computer: Jordan in a folder of their own while Alex's work waits in the shared one",
 		screens: ['home'],
 		view: (function () {
 			var v = sharedHome(
@@ -1500,7 +1548,7 @@
 					: { profileId: id, triesLeft: 0, waitSeconds: 30, message: 'Too many wrong tries. Try again in 30 seconds, or sign in with Google instead.' })
 			};
 		},
-		/** A just-added student: Sam Patel, unless he is here already. */
+		/** A just-added student: Sam Patel, unless Sam is here already. */
 		added: function (v) {
 			var out = sharedDemo.step(v, 'newPin', { profileId: PROFILE.sam.id });
 			if (!out.profiles.profiles.some(function (t) { return t.id === PROFILE.sam.id; })) out.profiles.profiles.push(profileTile('sam', { lastUsedAt: null }));

@@ -318,10 +318,12 @@ public sealed class ReplaceAndLockTests
         using var vault = new TestVault();
         Directory.CreateDirectory(vault.File("Robot"));
         var files = Enumerable.Range(0, 1500).Select(i => vault.File($"Robot/part-{i:D4}.SLDPRT")).ToArray();
-        foreach (var file in files)
+        // A synced vault is read-only; the two held files are checked out here and open in
+        // SolidWorks, so writable (the probe holds a file open for writing).
+        for (var i = 0; i < files.Length; i++)
         {
-            File.WriteAllBytes(file, [1, 2, 3]);
-            File.SetAttributes(file, FileAttributes.ReadOnly);
+            File.WriteAllBytes(files[i], [1, 2, 3]);
+            if (i is not (17 or 1031)) File.SetAttributes(files[i], FileAttributes.ReadOnly);
         }
         using var first = new ChildProcess("hold", files[17]);
         Assert.Equal("READY", await first.ReadLine());
