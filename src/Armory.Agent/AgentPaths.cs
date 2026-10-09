@@ -19,6 +19,9 @@ public sealed record AgentPaths(string DataFolder, bool IsOverridden)
     public string CrashFile => Path.Combine(LogFolder, "crash.log");
     public string SecretsFolder => Path.Combine(DataFolder, "secrets");
     public string ProfilesFolder => Path.Combine(DataFolder, "profiles");
+    // The SolidWorks link's own file (docs/agent/SOLIDWORKS.md): the student's Save to Version
+    // setting while Armory changed it, put back after a crash.
+    public string SolidWorksFile => Path.Combine(DataFolder, "solidworks.json");
     public string IncidentsFolder => Path.Combine(DataFolder, "incidents");
     public string LastFlightFile => Path.Combine(IncidentsFolder, "last-flight.json.gz");
     public string WebView2Folder => Path.Combine(DataFolder, "WebView2");

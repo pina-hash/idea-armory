@@ -247,12 +247,14 @@ internal sealed class HostParts
     internal TimeSpan StopPatience { get; init; } = TimeSpan.FromSeconds(60);
     internal TimeSpan StillFinishingAfter { get; init; } = TimeSpan.FromSeconds(15);
 
-    internal static HostParts Windows(AgentLog log, AgentTelemetry telemetry) => new()
+    // solidWorksFile: where the SolidWorks link keeps the student's own Save to Version setting
+    // (AgentPaths.SolidWorksFile); null makes runtimes without a link.
+    internal static HostParts Windows(AgentLog log, AgentTelemetry telemetry, string? solidWorksFile = null) => new()
     {
         SecretsIn = folder => new DpapiSecretStore(folder, problem => log.Error(problem)),
         Http = AgentHost.Http,
         Browser = new DefaultBrowserLauncher(),
-        Runtime = (root, c) => VaultRuntime.Create(root, c.Sessions, c.Api, c.Blobs, log, telemetry.Recorder, new RealtimeFeed(c.Sessions, log: log.Info)),
+        Runtime = (root, c) => VaultRuntime.Create(root, c.Sessions, c.Api, c.Blobs, log, telemetry.Recorder, new RealtimeFeed(c.Sessions, log: log.Info), solidWorksFile),
         StateOf = root => new FileStateStore(Path.Combine(root, ".armory", "state.json")),
         OpenInSolidWorks = AnyMarkerIn,
     };

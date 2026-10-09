@@ -120,6 +120,7 @@ AgentView {
   effectiveTheme: "idea" | "spaceWhite"
   folderOwner: FolderOwnerView | null  // 0.3.3: connection vaultOwnedByOther: whose the folder is
   profiles: ProfilesView | null        // 0.3.3: a shared computer's students and picker; null otherwise
+  solidWorks: SolidWorksView | null // 0.3.3: the SolidWorks link's line for Settings; null on a computer with no link
 }
 ConnectView { phase: "idle" | "waitingForBrowser" | "finishing" | "failed", message: string | null }
 AccountView { email: string, deviceName: string }
@@ -158,7 +159,7 @@ NoticeGroupView {
   key: string,                      // dismissNotice sends it back
   kind: "import" | "nameShared" | "newerWaiting" | "keptCopy" | "takenBack" | "folderPutBack"
       | "projectPutBack" | "projectRenaming" | "projectDeleted" | "cantSend" | "cantRead" | "checkInPartial"
-      | "newerRelease",
+      | "newerRelease" | "solidWorks",
   tone: "info" | "look" | "bad",    // the page shows info green, look amber, bad red
   title: string,                    // e.g. "14 files share a name with other files in this project"
   detail: string,
@@ -170,7 +171,7 @@ NoticeActionView { label: string, command: string, paths: string[] }
   // command is a page-to-host type the page sends for it:
   //   checkOut {paths, open: false}, checkIn {paths}, undoCheckOut {paths},
   //   launchFile {path: paths[0]}, showInFolder {path: paths[0]}, dismissNotice {key},
-  //   openFile (the first item's fileId)
+  //   openFile (the first item's fileId), keepLocal {paths}, saveDown {paths} (0.3.3, solidWorks cards)
   // or "expand", which the page handles itself: it opens and closes the card's list.
 NoticeItemView { fileId: string | null, path: string, name: string, detail: string | null }
 
@@ -262,6 +263,15 @@ PickerStepView {
   ownFolder: string | null, ownerName: string | null, ownerWaiting: string | null,  // folderBusy
   fromName: string | null,                                        // switching
   connectPhase: "idle" | "waitingForBrowser" | "finishing" | "failed" | null  // adding, signInAgain
+SolidWorksView {                    // 0.3.3: the SolidWorks link (docs/agent/SOLIDWORKS.md), drawn in Settings
+                    // 0.3.3: docs/agent/SOLIDWORKS.md section 8
+  state: "none" | "attached" | "cantSaveDown" | "administrator",
+  line: string,                     // "SolidWorks isn't running.", "Linked to SolidWorks 2026 SP4.1. It saves team files in 2025.",
+                                    // "Linked to SolidWorks 2026 SP2. It can't save team files in 2025.",
+                                    // "SolidWorks was started as administrator, so Armory can't link to it."
+  detail: string | null             // cantSaveDown: why, and what to do ("Update SolidWorks 2026 to Service Pack 3 or newer
+                                    // so Armory can save team files in 2025. Until then, files you save stay on this
+                                    // computer only."); administrator: "Close SolidWorks and start it normally, not as administrator."
 }
 
 FileDetailView {
@@ -307,12 +317,30 @@ any other card. `savedRelease`, `newerThanPin` and `newerThanPinCount` are for a
 row and File detail ("SolidWorks 2026") and a count on the project; the window's page does
 not show them yet.
 
+The SolidWorks link's card (0.3.3, kind `solidWorks`; docs/agent/SOLIDWORKS.md section 3 has
+every sentence) holds one item per open document that needs something before or around a
+save in its project's SolidWorks year, plus one when SolidWorks was started as administrator.
+A card of one shows that item's own title, detail and button: "When you save Bracket.SLDASM,
+Armory saves it in SolidWorks 2025" with "Keep this file on this computer only" (`keepLocal`);
+"Bracket.SLDASM is saved on this computer only" (kept, or blocked by what 2025 doesn't have)
+with "Save it in 2025 now" (`saveDown`) where that can work; "SolidWorks couldn't save
+Plate.SLDPRT in 2025, so it isn't saved yet" (tone `bad`); "Plate.SLDPRT was saved in
+SolidWorks 2026" with "Save it in 2025 now". A card of several says "SolidWorks needs you",
+"Each one says what to do.", with "Show them" (`expand`); each item's `detail` is its title and
+words. Tone `look` otherwise. Done dismisses it as any card. A page that does not know the kind
+yet shows it as any other card, and a page that does not know `keepLocal` or `saveDown` shows
+the button doing nothing: `app.js`'s `runNotice` needs the two cases (`act(command, {paths})`,
+like `checkIn`), and Settings needs a line for `solidWorks` (its `line`, and `detail` under it
+when there is one). Neither is in this change; the host side and `bridge.js` are.
+
 The check-out question (`prompt`): "Check out Plate-Left.SLDPRT to edit it?", "SolidWorks
 opened it read-only. Check it out, then close it in SolidWorks and open it again here to
 save changes.", with Check out and reopen (`checkOut` with `open: true`; the host checks
-it out and opens it again here, or, while SolidWorks still has it open read-only, answers
-"Checked out Plate-Left.SLDPRT. Close Plate-Left.SLDPRT in SolidWorks first, then open it
-again.") and Not now (`dismissNotice` with the question's `key`: that one question goes,
+it out and, with the SolidWorks link (0.3.3), makes it writable right there in SolidWorks:
+"Checked out Plate-Left.SLDPRT. You can save it in SolidWorks now."; without the link, or
+when SolidWorks couldn't, "Checked out Plate-Left.SLDPRT. Close it in SolidWorks and Armory
+opens it again, ready to save.", and it opens again once the student closes it, within five
+minutes; docs/agent/ENGINE.md, "SolidWorks opened a file") and Not now (`dismissNotice` with the question's `key`: that one question goes,
 the page hides it by that key at once, the host moves on to the next file SolidWorks has
 open without a check out, and the next open of the file asks again). When someone else
 has it, it says who and offers OK (the same `dismissNotice`).
@@ -335,6 +363,7 @@ too and is answered by a message of its own, never `actionResult`: `captureWindo
 `sendFeedback`, `takeOverFolder`, and (0.3.3) `pickProfile`, `enterPin`, `setPin`,
 `addProfile`, `forgotPin`, `chooseFolder`, `removeProfile`, `setSharedComputer` and
 `setPinsRequired`.
+`sendFeedback`, `takeOverFolder`, `keepLocal` and `saveDown`.
 
 The page shows an action is under way from the moment it is sent until its
 `actionResult` arrives (v0.2.1): the pressed key gets `aria-busy="true"` and
@@ -369,6 +398,8 @@ replaces all of it. The spinner holds still under `prefers-reduced-motion`.
 | `renameFile` | `path`, `newName`, `force`, `requestId` | Rename on a notice's file that shares a name (after the small dialog refuses a name the project has, a lost extension or a character Windows forbids; `force: false`); its second key, Force check in and rename, for a mentor or CAD lead while someone else has the file checked out (`force: true`) | renames that one file in its folder: a file Armory doesn't have is renamed on disk (and then added); a file in Armory is renamed for everyone (`armory_move_file`), refused while someone else has it checked out. `force`: as for `renameFolder` |
 | `addFiles` | `projectId`, `folder`, `requestId` | Add files | host shows a file picker, then copies the files in (never over a file already there) and adds them: one import summary; closing the picker answers with an empty message, which the page doesn't show |
 | `dropFiles` | `projectId`, `folder`, `requestId` (+ the dropped files) | a drop on the open folder's list | host copies the dropped files in, a dropped folder whole, the same way |
+| `keepLocal` | `paths`, `requestId` | 0.3.3: "Keep this file on this computer only" on a `solidWorks` card | the open document's saves write this computer's SolidWorks year and stay on this computer only (a private draft) until it is saved in the project's year: "Bracket.SLDASM stays on this computer only when you save it. Nobody else gets those changes until it is saved in SolidWorks 2025." |
+| `saveDown` | `paths`, `requestId` | 0.3.3: "Save it in 2025 now" on a `solidWorks` card | SolidWorks saves the open, checked-out document again in its project's year: "Saved Plate.SLDPRT in SolidWorks 2025.", or why not ("Check out Plate.SLDPRT first: SolidWorks has it read-only.", "Open Plate.SLDPRT in SolidWorks first.", ...) |
 | `dismissNotice` | `key` | a notice's Done or OK (`dismissNotice` action); Not now or OK on the check-out question (its `PromptView.key`) | the host drops that notice card, or that one question and asks about the next file SolidWorks has open without a check out |
 | `saveSettings` | `vaultRoot`, `startAtSignIn`, `theme` | a setting, Use (a folder of my own) | saves settings; host answers with `view` |
 | `chooseVaultRoot` | | Change, Choose another folder | host shows a folder picker, then answers with `view` |
@@ -464,6 +495,25 @@ The picker's steps (`profiles.step.kind`):
 
 Escape goes back to the tiles from every step but `choose` (where nothing lets the picker
 go without a student picked) and `switching`.
+
+## Host-facing, not the page (0.3.3)
+
+What Windows notifications (C5, built in the host) read from `AgentHost`, never sent to the
+page:
+
+- `OpenPrompts` and `OpenPromptsChanged`: `OpenPrompt(Path, Name, FileId, CheckedOutBy,
+  ViaSolidWorks, Group, Kind)`, one per file SolidWorks opened that this computer hasn't
+  checked out (with the SolidWorks link only the documents the student opened, once per
+  SolidWorks session); prompts with the same `Group` are one notification; `Kind` is
+  `CheckOut`, `Reopen`, `HeldByOther` or `HeldOnMyOtherComputer` (`CheckedOutBy` then says
+  "Maria Lopez on LAB-PC-07"). Show each (Path, Group) once.
+- `CheckOutAndReopenAsync(paths)`: the notification's "Check out and reopen" (one
+  `ActionResult` sentence, as `checkOut` with `open: true`).
+- `SaveDownPrompts`: `SaveDownPrompt(Key, Path, Name, Title, Text, PinnedRelease)`, the
+  question before a save down that drops something, with "Save in 2025"
+  (`AnswerSaveDownAsync(path, keepLocal: false)`; no answer means the same) and "Keep this file
+  on this computer only" (`AnswerSaveDownAsync(path, keepLocal: true)`).
+- `KeepLocalAsync(paths)` and `SaveDownNowAsync(paths)`: what `keepLocal` and `saveDown` call.
 
 ## Thumbnails (0.3.2)
 

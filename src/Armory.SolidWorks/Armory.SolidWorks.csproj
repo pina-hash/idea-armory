@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The SolidWorks link (docs/agent/SOLIDWORKS.md): out of process, through the Running Object
+       Table, late-bound IDispatch by name and ComEventsHelper for events. No Dassault assembly,
+       no interop package: every id it needs is in SwConstants.cs. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Armory.Core/Armory.Core.csproj" />
+    <ProjectReference Include="../Armory.Agent.Engine/Armory.Agent.Engine.csproj" />
+    <InternalsVisibleTo Include="Armory.SolidWorks.Tests" />
+  </ItemGroup>
+</Project>

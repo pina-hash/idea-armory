@@ -128,6 +128,13 @@
           "Armory.Core": "[1.0.0, )"
         }
       },
+      "armory.solidworks": {
+        "type": "Project",
+        "dependencies": {
+          "Armory.Agent.Engine": "[1.0.0, )",
+          "Armory.Core": "[1.0.0, )"
+        }
+      },
       "armory.storage": {
         "type": "Project"
       },
@@ -149,6 +156,7 @@
           "Armory.Client": "[1.0.0, )",
           "Armory.Core": "[1.0.0, )",
           "Armory.Platform.Windows": "[1.0.0, )",
+          "Armory.SolidWorks": "[1.0.0, )",
           "Microsoft.Web.WebView2": "[1.0.4258.31, )"
         }
       }

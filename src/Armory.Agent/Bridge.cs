@@ -44,6 +44,10 @@ internal sealed record CaptureWindowMessage(int? Width, int? Height, string? Req
 internal sealed record ReadMyFeedbackMessage(string? RequestId);
 // Settings' Turn on for the badges on file icons: the bundled badges setup, as an administrator.
 internal sealed record TurnOnBadgesMessage(string? RequestId);
+// The SolidWorks link's two buttons on a solidWorks notice (docs/agent/SOLIDWORKS.md): "Keep this
+// file on this computer only", and "Save it in 2025 now" (the project's pinned year).
+internal sealed record KeepLocalMessage(IReadOnlyList<string>? Paths, string? RequestId);
+internal sealed record SaveDownMessage(IReadOnlyList<string>? Paths, string? RequestId);
 
 // What the bridge needs from the window it lives in. Every member runs on the UI thread.
 internal interface IBridgeWindow
@@ -120,6 +124,8 @@ internal sealed partial class Bridge(AgentHost host, IBridgeWindow window, Agent
         [BridgeMessages.RemoveProfile] = typeof(RemoveProfileMessage),
         [BridgeMessages.SetSharedComputer] = typeof(SetSharedComputerMessage),
         [BridgeMessages.SetPinsRequired] = typeof(SetPinsRequiredMessage),
+        [BridgeMessages.KeepLocal] = typeof(KeepLocalMessage),
+        [BridgeMessages.SaveDown] = typeof(SaveDownMessage),
     };
 
     // The answer to an action the window sent with something unusable in it.
@@ -304,6 +310,14 @@ internal sealed partial class Bridge(AgentHost host, IBridgeWindow window, Agent
                 case BridgeMessages.DismissNotice:
                     var dismiss = Read<DismissNoticeMessage>(message);
                     if (!string.IsNullOrWhiteSpace(dismiss?.Key)) host.DismissNotice(dismiss.Key);
+                    break;
+                case BridgeMessages.KeepLocal:
+                    var keep = Read<KeepLocalMessage>(message);
+                    await AnswerAsync(type, keep?.Paths?.Count ?? 0, asked, keep?.RequestId, TryPaths(keep?.Paths, out var keepPaths) ? host.KeepLocalAsync(keepPaths) : Refuse(NotAFile));
+                    break;
+                case BridgeMessages.SaveDown:
+                    var saveDown = Read<SaveDownMessage>(message);
+                    await AnswerAsync(type, saveDown?.Paths?.Count ?? 0, asked, saveDown?.RequestId, TryPaths(saveDown?.Paths, out var downPaths) ? host.SaveDownNowAsync(downPaths) : Refuse(NotAFile));
                     break;
                 case BridgeMessages.SaveSettings:
                     await SaveSettingsAsync(Read<SaveSettingsMessage>(message));

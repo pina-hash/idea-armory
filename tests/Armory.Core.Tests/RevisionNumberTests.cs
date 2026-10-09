@@ -43,4 +43,13 @@ public sealed class RevisionNumberTests
         Assert.Equal(new SolidWorksRevision(34, 4, 1), SolidWorksRevision.Parse("34.4.1"));
         Assert.Equal(-3, SolidWorksRevision.Parse("23.-3.0")!.Value.Minor);
     }
+
+    [Theory]
+    [InlineData("34.4.1", "SolidWorks 2026 SP4.1")]
+    [InlineData("34.3.0", "SolidWorks 2026 SP3")]
+    [InlineData("34.0.0", "SolidWorks 2026 SP0")]
+    [InlineData("33.5.0", "SolidWorks 2025 SP5")]
+    [InlineData("23.-3.0", "SolidWorks 2015 beta")]
+    public void A_revision_is_named_as_SolidWorks_names_itself(string revision, string name)
+        => Assert.Equal(name, SolidWorksRevision.Parse(revision)!.Value.DisplayName);
 }

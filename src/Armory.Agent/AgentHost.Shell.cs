@@ -45,14 +45,10 @@ internal sealed partial class AgentHost : IShellHost
     bool IShellHost.PickerShowing => PickerShowing;
 
     // The files SolidWorks has open that this computer has not checked out, for the notifications
-    // that ask about them (TrayApp.Shell.cs).
-    // seam: repointed to the engine's OpenPrompts/CheckOutAndReopenAsync when the SolidWorks link lands
-    internal IReadOnlyList<OpenPromptInfo> CurrentOpenPrompts() => HostShell.OpenPrompts(View, OpenWithoutCheckOut);
-
-    // A notification's "Check out and reopen". Never called because a file was opened: only for
-    // the button of a notification Armory showed (ShellDesk, ToastTokens).
-    // seam: repointed to the engine's OpenPrompts/CheckOutAndReopenAsync when the SolidWorks link lands
-    internal Task<ActionResult> CheckOutAndReopenAsync(IReadOnlyList<string> paths) => CheckOutAsync(paths, open: true);
+    // that ask about them (TrayApp.Shell.cs): the engine's OpenPrompts (SyncEngine.Open.cs), which
+    // with the SolidWorks link are only the documents the student opened themselves, never the
+    // parts inside an assembly. "Check out and reopen" is AgentHost.SolidWorks.cs's.
+    internal IReadOnlyList<OpenPromptInfo> CurrentOpenPrompts() => HostShell.OpenPrompts(OpenPrompts);
 
     // The settings the window shows, with the badges' health.
     private SettingsView SettingsNow()
@@ -338,6 +334,10 @@ internal static class HostShell
 
     // The open files without a check out here, as the notifications name them; a file the view
     // does not list (yet) is left out.
+    // The engine's questions in the notifications' shape: a file someone else has can't be checked out.
+    internal static IReadOnlyList<OpenPromptInfo> OpenPrompts(IReadOnlyList<Armory.Agent.Engine.OpenPrompt> prompts)
+        => prompts.Select(p => new OpenPromptInfo(p.Path, p.Name, p.CheckedOutBy is null, p.CheckedOutBy)).ToArray();
+
     internal static IReadOnlyList<OpenPromptInfo> OpenPrompts(AgentView view, IReadOnlyCollection<string> open)
     {
         if (open.Count == 0) return [];

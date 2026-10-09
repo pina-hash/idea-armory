@@ -64,4 +64,39 @@ public sealed class SavedReleaseRuleTests
         Assert.Equal(Stamp(2026, early, "other"), SavedReleaseRule.Merge(Stamp(2025, late), Stamp(2026, early, "other")));
         Assert.Equal(Stamp(2025), SavedReleaseRule.Merge(null, Stamp(2025)));
     }
+
+    // ISldWorks.VersionHistory: the last entry names the release that wrote the file; its
+    // bracket is a build date and is never read as the release.
+    [Fact]
+    public void The_last_entry_of_the_version_history_names_the_year()
+    {
+        Assert.Equal(2021, VersionHistory.LastYear(["13000[2020/296]", "14000[2021/166]"]));
+        Assert.Equal(2026, VersionHistory.LastYear(["18000[2025/261]", "19000[2025/300]"]));   // 2026 built in 2025
+        Assert.Equal(2025, VersionHistory.LastYear(["17000[2024/100]", "19000[2026/225]", "18000[2026/230]"])); // last, not largest
+        Assert.Equal(2026, VersionHistory.LastYear([" 19000 "]));
+        Assert.Equal(2026, VersionHistory.LastYear(["18800[2025/90]"]));                       // a 2026 beta
+        Assert.Null(VersionHistory.LastYear([]));
+        Assert.Null(VersionHistory.LastYear(null));
+        Assert.Null(VersionHistory.LastYear(["abc"]));
+        Assert.Null(VersionHistory.LastYear(["19000x"]));
+        Assert.Null(VersionHistory.LastYear(["7000[2014/1]"]));                                  // before 2015's codes
+        Assert.Null(VersionHistory.LastYear(["12345678901[1]"]));
+    }
+
+    // A save the link meant to save down whose year SolidWorks didn't confirm stays here in both
+    // gate modes; a confirmed one, a stamp on open (nothing meant) and no stamp do not.
+    [Fact]
+    public void A_save_down_SolidWorks_did_not_confirm_is_unverified()
+    {
+        var at = DateTimeOffset.UnixEpoch;
+        Assert.True(SavedReleaseRule.UnverifiedSaveDown(new ReleaseStamp("h", null, "34.4.1", 2026, 2025, at)));
+        Assert.True(SavedReleaseRule.UnverifiedSaveDown(new ReleaseStamp("h", 1990, "34.4.1", 2026, 2025, at)));
+        Assert.False(SavedReleaseRule.UnverifiedSaveDown(new ReleaseStamp("h", 2025, "34.4.1", 2026, 2025, at)));
+        Assert.False(SavedReleaseRule.UnverifiedSaveDown(new ReleaseStamp("h", null, "34.4.1", 2026, null, at)));
+        Assert.False(SavedReleaseRule.UnverifiedSaveDown(new ReleaseStamp("h", 2026, "34.4.1", 2026, null, at)));
+        Assert.False(SavedReleaseRule.UnverifiedSaveDown(null));
+        // The stamp the rule makes for a save down that wrote 2026 instead is exactly that.
+        var stamp = new ReleaseStamp("h", SavedReleaseRule.StampYear(2026, 2025), "34.4.1", 2026, 2025, at);
+        Assert.True(SavedReleaseRule.UnverifiedSaveDown(stamp));
+    }
 }

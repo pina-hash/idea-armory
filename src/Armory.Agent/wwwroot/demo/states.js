@@ -345,7 +345,8 @@
 			settings: { vaultRoot: SETTINGS.vaultRoot, startAtSignIn: SETTINGS.startAtSignIn, theme: SETTINGS.theme, badges: badgesOff(), sharedComputer: false },
 			effectiveTheme: 'idea',
 			folderOwner: null,
-			profiles: null
+			profiles: null,
+			solidWorks: null
 		};
 		view.myFiles = myFilesOf(view, parts.notes);
 		return view;
@@ -366,7 +367,8 @@
 			settings: { vaultRoot: SETTINGS.vaultRoot, startAtSignIn: SETTINGS.startAtSignIn, theme: SETTINGS.theme, badges: badgesOff(), sharedComputer: false },
 			effectiveTheme: 'idea',
 			folderOwner: null,
-			profiles: null
+			profiles: null,
+			solidWorks: null
 		};
 	}
 

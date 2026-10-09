@@ -43,4 +43,50 @@ public sealed class SaveDownPlanTests
             Assert.Equal(plan switch { SaveDownPlan.Penultimate => 1, SaveDownPlan.Antepenultimate => 2, _ => (int?)null }, plan.SaveToVersionValue());
         }
     }
+
+    [Theory]
+    [InlineData("34.4.1", true, true, false, SaveToVersionSupport.Available)]
+    [InlineData("35.0.0", true, true, false, SaveToVersionSupport.Available)]
+    [InlineData("34.2.0", true, true, false, SaveToVersionSupport.OldServicePack)]   // no option before SP3
+    [InlineData("34.4.1", false, true, false, SaveToVersionSupport.NotConfigured)]   // numbers unknown: never guessed
+    [InlineData("34.4.1", true, false, false, SaveToVersionSupport.NotLicensed)]     // didn't read back
+    [InlineData("34.4.1", true, true, true, SaveToVersionSupport.NotLicensed)]       // a save with it on wrote 2026 (B4)
+    [InlineData("33.5.0", true, true, false, SaveToVersionSupport.Unsupported)]
+    [InlineData("34.2.0", false, false, true, SaveToVersionSupport.OldServicePack)]
+    public void Support_says_whether_this_SolidWorks_can_save_down(string revision, bool enumsKnown, bool readBack, bool failed, SaveToVersionSupport expected)
+        => Assert.Equal(expected, SaveDown.Support(SolidWorksRevision.Parse(revision)!.Value, enumsKnown, readBack, failed));
+
+    [Theory]
+    [InlineData(SaveDownPlan.Penultimate, true, true, false, false, SaveToVersionChoice.SaveDown)]
+    [InlineData(SaveDownPlan.Antepenultimate, true, true, false, false, SaveToVersionChoice.SaveDown)]
+    [InlineData(SaveDownPlan.Penultimate, true, true, true, false, SaveToVersionChoice.Off)]          // blocked: saved here as 2026
+    [InlineData(SaveDownPlan.Penultimate, true, true, false, true, SaveToVersionChoice.Off)]          // kept on this computer
+    [InlineData(SaveDownPlan.Penultimate, true, false, false, false, SaveToVersionChoice.StudentOwn)] // not in the vault
+    [InlineData(SaveDownPlan.Penultimate, false, true, false, false, SaveToVersionChoice.StudentOwn)] // option not usable: never touched
+    [InlineData(SaveDownPlan.Penultimate, false, true, true, true, SaveToVersionChoice.StudentOwn)]
+    [InlineData(SaveDownPlan.NotNeeded, true, true, false, false, SaveToVersionChoice.StudentOwn)]
+    [InlineData(SaveDownPlan.TooFarApart, true, true, false, false, SaveToVersionChoice.StudentOwn)]
+    [InlineData(SaveDownPlan.OldServicePack, true, true, false, false, SaveToVersionChoice.StudentOwn)]
+    [InlineData(SaveDownPlan.Unsupported, true, true, true, true, SaveToVersionChoice.StudentOwn)]
+    public void Choose_sets_the_option_only_for_vault_documents_that_can_go_back(SaveDownPlan plan, bool usable, bool vault, bool blocked, bool keepLocal, SaveToVersionChoice expected)
+        => Assert.Equal(expected, SaveDown.Choose(plan, usable, vault, blocked, keepLocal));
+
+    // Over every input: the option is only ever turned on for a vault document SolidWorks can
+    // save down, never for a blocked one or one the student keeps here.
+    [Fact]
+    public void The_option_is_on_only_where_a_save_down_can_happen()
+    {
+        var bools = new[] { false, true };
+        foreach (var plan in Enum.GetValues<SaveDownPlan>())
+        foreach (var usable in bools)
+        foreach (var vault in bools)
+        foreach (var blocked in bools)
+        foreach (var keepLocal in bools)
+        {
+            var choice = SaveDown.Choose(plan, usable, vault, blocked, keepLocal);
+            if (choice == SaveToVersionChoice.SaveDown) Assert.True(plan.CanSave() && usable && vault && !blocked && !keepLocal);
+            if (choice == SaveToVersionChoice.Off) Assert.True(plan.CanSave() && usable && vault && (blocked || keepLocal));
+            if (!vault || !usable) Assert.Equal(SaveToVersionChoice.StudentOwn, choice);
+        }
+    }
 }

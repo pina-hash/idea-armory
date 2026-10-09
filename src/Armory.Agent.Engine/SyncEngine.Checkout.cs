@@ -28,20 +28,34 @@ public sealed partial class SyncEngine
     private readonly HashSet<string> dismissedPrompts = new(StringComparer.OrdinalIgnoreCase);
     internal const string PromptPrefix = "prompt:";
 
-    // Check out (and "Check out and open"). A folder means every file the server has under it.
-    // The lock is taken only over a copy that is the live shared version
+    // Check out (and "Check out and reopen": open). A folder means every file the server has
+    // under it. The lock is taken only over a copy that is the live shared version
     // (CheckoutRules.NextCheckOutStep): a copy that is behind, or holds bytes saved without a
     // check out, gets one pass with the lock free (it downloads, or keeps those bytes as a kept
-    // copy and puts the shared version back), and then the rule is asked again.
+    // copy and puts the shared version back), and then the rule is asked again. With open, once
+    // the gate is released, each file SolidWorks has open is made editable there or opened again
+    // once it is closed, and a single file that is not open is opened (SyncEngine.Open.cs).
     public async Task<ActionResult> CheckOutAsync(IReadOnlyList<string> paths, bool open = false, CancellationToken cancellationToken = default)
     {
         if (!engineThread.IsCurrent) return await engineThread.InvokeAsync(() => CheckOutAsync(paths, open, cancellationToken));
+        var (answer, words, mine) = await CheckOutLockedAsync(paths, open, cancellationToken);
+        if (answer is not null) return answer;
+        // Never while holding the gate: the link's calls into SolidWorks can take seconds.
+        return await ReopenAfterCheckOutAsync(words, mine, cancellationToken);
+    }
+
+    // The check out itself, under the gate, with its answer (its words decided while the gate is
+    // held, from this action's own results). With open, no answer yet: what the check out came to
+    // and the files checked out, for ReopenAfterCheckOutAsync once the gate is released.
+    private async Task<(ActionResult? Answer, string Words, List<(FileState State, VaultPath Path)> Mine)> CheckOutLockedAsync(IReadOnlyList<string> paths,
+        bool open, CancellationToken cancellationToken)
+    {
         await EnterActionAsync(cancellationToken);
         try
         {
-            if (Unready() is { } why) return why;
-            await EnsureKnownAsync(cancellationToken);
             var targets = new List<(FileState State, VaultPath Path)>();
+            if (Unready() is { } why) return (why, "", []);
+            await EnsureKnownAsync(cancellationToken);
             foreach (var (file, project, path) in remoteById.Values.OrderBy(r => r.Path.Value, StringComparer.OrdinalIgnoreCase))
             {
                 if (file.Deleted || file.Current is null || !Under(path.Value, paths)) continue;
@@ -56,8 +70,8 @@ public sealed partial class SyncEngine
             }
             if (targets.Count == 0)
             {
-                if (online != true) return Offline("Files can be checked out once this computer is back online.");
-                return new(false, paths.Count == 1 && !IsFolder(paths[0]) ? $"{NameOf(paths[0])} isn't in Armory yet." : "There are no files there to check out.");
+                if (online != true) return (Offline("Files can be checked out once this computer is back online."), "", []);
+                return (new(false, paths.Count == 1 && !IsFolder(paths[0]) ? $"{NameOf(paths[0])} isn't in Armory yet." : "There are no files there to check out."), "", []);
             }
             await FlushAsync(); // the requests are durable before any server call
             checkOutResults.Clear();
@@ -80,13 +94,35 @@ public sealed partial class SyncEngine
             PublishLocked();
             // A lock taken before the connection dropped is a check out all the same.
             if (!wasOnline && !targets.Any(t => checkOutResults.GetValueOrDefault(t.State) is CheckOutOutcome.Done or CheckOutOutcome.AlreadyMine))
-                return Offline("Files can be checked out once this computer is back online.");
-            return CheckOutAnswer(targets, open, wasOnline);
+                return (Offline("Files can be checked out once this computer is back online."), "", []);
+            if (!open) return (CheckOutAnswer(targets, wasOnline), "", []);
+            var (words, mine) = CheckOutWords(targets, wasOnline);
+            return (mine.Count == 0 ? new ActionResult(false, words) : null, words, mine);
         }
         finally { LeaveAction(); }
     }
 
-    private ActionResult CheckOutAnswer(List<(FileState State, VaultPath Path)> targets, bool open, bool wasOnline)
+    // Plain Check out's answer.
+    private ActionResult CheckOutAnswer(List<(FileState State, VaultPath Path)> targets, bool wasOnline)
+    {
+        var (message, mine) = CheckOutWords(targets, wasOnline);
+        // SolidWorks opened these read-only before they were checked out: it saves them only
+        // once they are opened again.
+        var outcomes = targets.Select(t => (t.State, t.Path, Outcome: checkOutResults.GetValueOrDefault(t.State))).ToList();
+        var done = outcomes.Where(o => o.Outcome == CheckOutOutcome.Done).ToList();
+        using (KnowOpen(done.Select(o => o.Path)))
+        {
+            var reopen = done.Where(o => IsOpenNow(o.Path)).Select(o => o.Path).ToList();
+            if (reopen.Count == 1 && targets.Count == 1) message += " Close it in SolidWorks and open it again to save changes.";
+            else if (reopen.Count == 1) message += $" Close {reopen[0].Name} in SolidWorks and open it again to save changes.";
+            else if (reopen.Count > 1) message += $" Close {Count(reopen.Count, "file", "files")} in SolidWorks and open them again to save changes.";
+        }
+        return new(mine.Count > 0, message);
+    }
+
+    // What the check out came to, in one sentence (before anything about opening), and the
+    // files this computer has checked out now.
+    private (string Message, List<(FileState State, VaultPath Path)> Mine) CheckOutWords(List<(FileState State, VaultPath Path)> targets, bool wasOnline)
     {
         var outcomes = targets.Select(t => (t.State, t.Path, Outcome: checkOutResults.GetValueOrDefault(t.State))).ToList();
         var mine = outcomes.Where(o => o.Outcome is CheckOutOutcome.Done or CheckOutOutcome.AlreadyMine).ToList();
@@ -119,28 +155,7 @@ public sealed partial class SyncEngine
                 message += wasOnline ? $" {Count(rest, "file needs", "files need")} you first: open {(rest == 1 ? "it" : "them")} here to see why."
                     : $" The {(rest == 1 ? "other one" : "others")} can be checked out once this computer is back online.";
         }
-        if (open && mine.Count == 1)
-        {
-            var path = mine[0].Path;
-            if (IsOpenNow(path)) message += $" Close {path.Name} in SolidWorks first, then open it again.";
-            else
-            {
-                var launched = fs.Launch(path);
-                if (!launched.Succeeded) message += " " + launched.Problem;
-            }
-        }
-        else if (!open)
-        {
-            // SolidWorks opened these read-only before they were checked out: it saves them only
-            // once they are opened again.
-            var done = outcomes.Where(o => o.Outcome == CheckOutOutcome.Done).ToList();
-            using var known = KnowOpen(done.Select(o => o.Path));
-            var reopen = done.Where(o => IsOpenNow(o.Path)).Select(o => o.Path).ToList();
-            if (reopen.Count == 1 && targets.Count == 1) message += " Close it in SolidWorks and open it again to save changes.";
-            else if (reopen.Count == 1) message += $" Close {reopen[0].Name} in SolidWorks and open it again to save changes.";
-            else if (reopen.Count > 1) message += $" Close {Count(reopen.Count, "file", "files")} in SolidWorks and open them again to save changes.";
-        }
-        return new(mine.Count > 0, message);
+        return (message, mine.Select(m => (m.State, m.Path)).ToList());
     }
 
     // Who has the files a check out could not take, in one sentence per kind of holder:

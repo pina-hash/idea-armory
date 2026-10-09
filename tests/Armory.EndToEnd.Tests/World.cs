@@ -177,6 +177,10 @@ internal sealed class Computer : IAsyncDisposable
     public MemoryStateStore State { get; } = new();
     public InMemorySecretStore Secrets { get; } = new();
     public ISavedReleaseReader? ReleaseReader { get; set; }
+    // The SolidWorks link the engine gets at its next Restart (null: none, as on a computer
+    // without SolidWorks). A link's records go to the engine made with it: tests that use one
+    // don't restart.
+    public FakeSolidWorksLink? SolidWorks { get; set; }
     public Action<string>? CrashPoint { get; set; }
     public TestClock Clock { get; } = new();
     // This computer's flight recorder, across restarts (docs/agent/TELEMETRY.md).
@@ -237,7 +241,7 @@ internal sealed class Computer : IAsyncDisposable
         {
             Files = Disk, Journal = Journal, Snapshots = Snapshots, State = State, Sessions = Sessions, Api = api,
             Blobs = new BlobClient(http, http, world.Site.BaseUri, Sessions, Flight), ReleaseReader = ReleaseReader, Clock = Clock,
-            Log = line => { lock (Logged) Logged.Add(line); }, Recorder = Flight, Live = Feed,
+            Log = line => { lock (Logged) Logged.Add(line); }, Recorder = Flight, Live = Feed, SolidWorks = SolidWorks,
         })
         { CrashPoint = CrashPoint };
         Engine.ViewChanged += view => Views?.Invoke(view);
@@ -246,6 +250,16 @@ internal sealed class Computer : IAsyncDisposable
     }
 
     public Task<SyncReport> SyncAsync() => Engine.SyncOnceAsync();
+    // Gives this computer a SolidWorks link (a new engine with it) and attaches it to a SolidWorks.
+    public FakeSolidWorksLink LinkSolidWorks(string revision = "34.4.1", SaveToVersionSupport support = SaveToVersionSupport.Available)
+    {
+        SolidWorks = new FakeSolidWorksLink(World.Root);
+        Restart();
+        SolidWorks.Attach(revision, support);
+        return SolidWorks;
+    }
+    // Every record the SolidWorks link sent so far is handled.
+    public Task LinkSettledAsync() => Engine.LinkSettledAsync();
     // This computer's own server calls (its session and device), for tests that make the server
     // hold something this computer's records don't know of.
     public ArmoryApi Api => new(new PostgrestClient(http, Sessions));

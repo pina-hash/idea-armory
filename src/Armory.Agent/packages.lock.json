@@ -33,6 +33,13 @@
           "Armory.Core": "[1.0.0, )"
         }
       },
+      "armory.solidworks": {
+        "type": "Project",
+        "dependencies": {
+          "Armory.Agent.Engine": "[1.0.0, )",
+          "Armory.Core": "[1.0.0, )"
+        }
+      },
       "armory.storage": {
         "type": "Project"
       },

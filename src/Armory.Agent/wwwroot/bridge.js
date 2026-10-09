@@ -51,12 +51,13 @@
 	 * @typedef {'upload' | 'download' | 'move'} Direction
 	 * @typedef {'info' | 'look' | 'bad'} NoticeTone
 	 * @typedef {'import' | 'nameShared' | 'newerWaiting' | 'keptCopy' | 'takenBack' | 'folderPutBack'
-	 *   | 'projectPutBack' | 'projectRenaming' | 'projectDeleted' | 'cantSend' | 'cantRead' | 'checkInPartial' | 'newerRelease'} NoticeKind
+	 *   | 'projectPutBack' | 'projectRenaming' | 'projectDeleted' | 'cantSend' | 'cantRead' | 'checkInPartial' | 'newerRelease' | 'solidWorks'} NoticeKind
 	 * @typedef {'version' | 'keptCopy' | 'removed'} HistoryKind
 	 * @typedef {'system' | 'idea' | 'spaceWhite'} ThemeSetting
 	 * @typedef {'idea' | 'spaceWhite'} EffectiveTheme
 	 * @typedef {'off' | 'on' | 'afterSignIn' | 'crowded' | 'partial' | 'broken'} BadgesState
 	 * @typedef {'choose' | 'pin' | 'newPin' | 'adding' | 'folderBusy' | 'switching' | 'signInAgain' | 'tooNew'} PickerStep
+	 * @typedef {'none' | 'attached' | 'cantSaveDown' | 'administrator'} SolidWorksState
 	 */
 
 	/**
@@ -296,6 +297,14 @@
 	 */
 
 	/**
+	 * The SolidWorks link, for Settings (docs/agent/SOLIDWORKS.md).
+	 * @typedef {object} SolidWorksView
+	 * @property {SolidWorksState} state
+	 * @property {string} line           "SolidWorks isn't running.", "Linked to SolidWorks 2026 SP4.1. It saves team files in 2025."
+	 * @property {string | null} detail  why it can't save down and what to do (cantSaveDown, administrator)
+	 */
+
+	/**
 	 * @typedef {object} AgentView
 	 * @property {Connection} connection
 	 * @property {ConnectView} connect
@@ -311,6 +320,7 @@
 	 * @property {EffectiveTheme} effectiveTheme
 	 * @property {FolderOwnerView | null} folderOwner  connection vaultOwnedByOther: whose the folder is
 	 * @property {ProfilesView | null} profiles        a shared computer's students and picker
+	 * @property {SolidWorksView | null} solidWorks  null on a computer with no SolidWorks link
 	 */
 
 	/**
@@ -442,6 +452,8 @@
 	 *   removeProfile: { profileId }          (forgets their sign-in and PIN; no file is deleted)
 	 *   setSharedComputer: { on, pin }        (pin: the student in use's first PIN when turning on, else "")
 	 *   setPinsRequired: { on }               (a mentor only)
+	 *   keepLocal: { paths }                  (a solidWorks notice's "Keep this file on this computer only")
+	 *   saveDown: { paths }                   (a solidWorks notice's "Save it in 2025 now": saved again in the project's year)
 	 * @typedef {'ready' | 'connect' | 'cancelConnect' | 'signOut' | 'pause' | 'resume'
 	 *   | 'openVault' | 'openFile' | 'launchFile' | 'showInFolder' | 'checkOut' | 'checkIn'
 	 *   | 'undoCheckOut' | 'takeBack' | 'createFolder' | 'renameFolder' | 'deleteFolder' | 'renameFile'
@@ -449,7 +461,8 @@
 	 *   | 'reportProblem' | 'openIncidents' | 'sendFeedback' | 'takeBackAll' | 'takeOverFolder' | 'switchAccount'
 	 *   | 'putBackKeptCopy' | 'captureWindow' | 'readMyFeedback' | 'turnOnBadges'
 	 *   | 'showPicker' | 'pickProfile' | 'enterPin' | 'setPin' | 'addProfile' | 'forgotPin' | 'cancelPicker'
-	 *   | 'chooseFolder' | 'removeProfile' | 'setSharedComputer' | 'setPinsRequired'} PageMessageType
+	 *   | 'chooseFolder' | 'removeProfile' | 'setSharedComputer' | 'setPinsRequired'
+	 *   | 'keepLocal' | 'saveDown'} PageMessageType
 	 */
 
 	/**
@@ -473,7 +486,7 @@
 	/* ------------------------------------------------------- Message lists */
 
 	/** Page to host message types (BRIDGE.md, "Page to host"). */
-	var PAGE_TO_HOST = ['ready', 'connect', 'cancelConnect', 'signOut', 'pause', 'resume', 'openVault', 'openFile', 'launchFile', 'showInFolder', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'dismissNotice', 'saveSettings', 'chooseVaultRoot', 'reportProblem', 'openIncidents', 'sendFeedback', 'takeBackAll', 'takeOverFolder', 'switchAccount', 'putBackKeptCopy', 'captureWindow', 'readMyFeedback', 'turnOnBadges', 'showPicker', 'pickProfile', 'enterPin', 'setPin', 'addProfile', 'forgotPin', 'cancelPicker', 'chooseFolder', 'removeProfile', 'setSharedComputer', 'setPinsRequired'];
+	var PAGE_TO_HOST = ['ready', 'connect', 'cancelConnect', 'signOut', 'pause', 'resume', 'openVault', 'openFile', 'launchFile', 'showInFolder', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'dismissNotice', 'saveSettings', 'chooseVaultRoot', 'reportProblem', 'openIncidents', 'sendFeedback', 'takeBackAll', 'takeOverFolder', 'switchAccount', 'putBackKeptCopy', 'captureWindow', 'readMyFeedback', 'turnOnBadges', 'showPicker', 'pickProfile', 'enterPin', 'setPin', 'addProfile', 'forgotPin', 'cancelPicker', 'chooseFolder', 'removeProfile', 'setSharedComputer', 'setPinsRequired', 'keepLocal', 'saveDown'];
 
 	/** Host to page message types (BRIDGE.md, "Host to page"). */
 	var HOST_TO_PAGE = ['view', 'fileDetail', 'activity', 'actionResult', 'windowShot', 'myFeedback', 'reveal'];
@@ -507,11 +520,13 @@
 		chooseFolder: ['profileId', 'choice'],
 		removeProfile: ['profileId'],
 		setSharedComputer: ['on', 'pin'],
-		setPinsRequired: ['on']
+		setPinsRequired: ['on'],
+		keepLocal: ['paths'],
+		saveDown: ['paths']
 	};
 
 	/** Actions: each carries a requestId, and the host answers it with one actionResult. */
-	var ACTIONS = ['launchFile', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'reportProblem', 'sendFeedback', 'takeBackAll', 'takeOverFolder', 'putBackKeptCopy', 'turnOnBadges', 'pickProfile', 'enterPin', 'setPin', 'addProfile', 'forgotPin', 'chooseFolder', 'removeProfile', 'setSharedComputer', 'setPinsRequired'];
+	var ACTIONS = ['launchFile', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'reportProblem', 'sendFeedback', 'takeBackAll', 'takeOverFolder', 'putBackKeptCopy', 'turnOnBadges', 'pickProfile', 'enterPin', 'setPin', 'addProfile', 'forgotPin', 'chooseFolder', 'removeProfile', 'setSharedComputer', 'setPinsRequired', 'keepLocal', 'saveDown'];
 
 	/** Asks: each carries a requestId too, and the host answers it with a message of its own
 	 *  (windowShot, myFeedback), never actionResult. */
