@@ -188,3 +188,113 @@ at once when the state changes (`idle`, `syncing` while files move), and `offlin
 clean stop within 3 seconds. No suppression here: the server writes nothing for a call within
 20 seconds that changes nothing. It runs on its own task with a 15-second deadline per call,
 logs a failure once per kind, and waits 6 hours after a 404 PGRST202; it never touches a pass.
+
+## 7. Contract v3.1 and v3.2 calls (idea-app 0234 and 0235, Armory 0.3.3)
+
+The binding specs are idea-app `docs/ARMORY.md`, "The v0.3.1 server contract (migration 0234)"
+and "The v0.3.2 server contract (migration 0235)", and those two migrations' SQL. Every earlier
+call is unchanged.
+
+| Call | RPC | Answer |
+|---|---|---|
+| `BreakLocksAsync(files, device, op)` | `armory_break_locks` | `BatchResult`, each `BatchFileResult` with `Done` = `broken` (`false`: nobody had it checked out any more), or `Ok` false with the per-file `Code` and `Message` (`armory_break_lock`'s refusal). 1 to 500 distinct files, sent in id order (`ArmoryApi.Chunk` makes the calls); a replayed operation answers the first time and writes nothing. 404 PGRST202 on a site before 0234: send one `BreakLockAsync` per file |
+| `SubmitAppFeedbackAsync(kind, body, appVersion, deviceName, context, tried, area, screenshot)` | `armory_submit_app_feedback`, eight arguments | the note's id. All eight named arguments are always sent (the form has no defaults, so no call matches both forms), a blank `tried`, `area` or `screenshot` as null. `kind`: bug, idea, praise or other. 404 PGRST202 on a site before 0235 |
+| `SubmitAppFeedbackAsync(kind, body, appVersion, deviceName, context)` | the five-argument form | unchanged; it refuses `praise` (22023 `kind`, "The kind of note is bug, idea or other.") |
+| `MyAppFeedbackAsync(limit = 50)` | `armory_my_app_feedback` | the caller's own notes, newest first (`limit` clamped to 1 to 200 by the site), each an `AppFeedbackNote(Id, CreatedAt, Kind, Body, Tried, Area, HasScreenshot, AppVersion, DeviceName, Status, ReviewedAt)`; `Status` is new, seen, resolved or closed (a note the site marked spam reads closed, and a "spam" that ever arrived is read as closed too). **Null** on 404 PGRST202: the window hides "Your feedback". No session: `ArmoryRpcException` 42501. There are no replies from the team: the site has none, and the record has no field for one |
+
+The eight-argument form's refusals are 22023 with a JSON DETAIL: `{reason: too_long, field:
+tried, limit: 1000, size}`, `{reason: too_long, field: area, limit: 120, size}`, and for the
+screenshot `{reason: bad_path | not_found | in_use, field: screenshot}` (not the caller's
+`<auth uid>/<uuid>.png`, lowercase; not uploaded; already on another note). PT429 is shared by
+both forms: 20 notes an hour per account.
+
+**The screenshot's upload** (`FeedbackScreenshots.UploadAsync(png)`, returns the key):
+
+```
+POST {supabase_url}/storage/v1/object/armory-feedback-shots/<auth uid>/<new lowercase uuid>.png
+apikey: {anon_key}
+Authorization: Bearer {access_token}
+Content-Type: image/png
+x-upsert: false
+
+<the PNG bytes, at most 2097152>
+```
+
+The auth uid is the access token's `sub` claim (`AccessToken.Subject`: reads the JWT payload,
+checks nothing, and never logs or keeps the token; a token without a uuid `sub` refuses the
+upload as `no_account`). This computer refuses first, before anything is sent, a picture over
+2097152 bytes (`too_large`) or one that does not start with the PNG signature (`not_png`).
+Storage's refusals carry `{"statusCode": "413", "error", "message"}`, with that code as the HTTP
+status or, on older Storage, with 400; the client reads the body's code first. They become
+`ScreenshotRefusedException(Reason, Status)`: 413 `too_large`, 403 `not_allowed` (the insert
+policy: only the caller's own folder), 409 `exists` (nothing overwrites an object), 404
+`not_available` (no bucket: the site before 0235), anything else 4xx `refused`. An expired token
+(`InvalidJWT`, or 401) is renewed once and the picture goes under a new key. 429, 502, 503, 504,
+any 5xx and no connection are `ArmoryOfflineException`. Each upload goes into the flight recorder
+as a transfer named `screenshot` (its size, how long, how it ended; never the token or the key).
+
+**Send feedback: `FeedbackSender`.** The window's one entry point (the host makes one,
+`AgentHost.Feedback`):
+
+```csharp
+public sealed record FeedbackNote(string Kind, string Body, string? Tried = null, string? Area = null,
+    byte[]? Screenshot = null, JsonObject? Context = null);
+public Task<FeedbackResult> FeedbackSender.SendAsync(FeedbackNote note, CancellationToken ct = default);
+```
+
+It never throws but for cancellation. In order: the body is trimmed and cut to 8000 characters
+(blank: `Failed("Write a few words first.")`), the kind is bug, idea, praise or other (anything
+else is other), `Tried` is trimmed and cut to 1000 characters and `Area` to 120 (counted as the
+site counts them, never inside a surrogate pair; blank is null), the version to 64, the context
+kept under 96 KiB as JSON (its largest entries give way first); a picture over 2 MiB or not a
+PNG is refused here; a wait the shared limiter holds (PT429) answers `RateLimited` without a
+call; the picture is uploaded; then the eight-argument note names it. On 404 PGRST202 the
+five-argument form takes the note without the new fields, `praise` going as `other` (that form
+refuses praise), and the wide form is not asked for again for `WideMissingRetry` (1 hour); in
+that hour a picture is not uploaded at all (no note could name it). The same picture sent again
+after `Offline`, `RateLimited` or `Failed` is named again rather than uploaded twice; once a note
+names it, it is never reused. A context the site measures too large is shortened to 24 KiB and
+sent once more, never the same payload twice.
+
+| `FeedbackResult` | When | `Ok` | `CanSendWithoutPicture` |
+|---|---|---|---|
+| `Sent(Id)` | the note went with every field it was given | yes | |
+| `SentWithoutNewFields(Id, Kind, KindChanged, LeftOutDetails)` | the five-argument fallback: `Kind` is what it went as (`other` for praise, `KindChanged`), `LeftOutDetails` when a picture, tried or area was given and left out | yes | |
+| `ScreenshotRefused(Reason)` | the note was NOT sent: `not_png`, Storage's `not_allowed`, `exists`, `not_available` or `refused`, or the site's 22023 `bad_path`, `not_found` or `in_use` (field screenshot) | | yes: send the same note with `Screenshot = null` |
+| `TooLarge(Field, Size, Limit)` | `screenshot` over 2 MiB here or Storage's 413 (offer it without the picture), or a field the site measured too long | | for `screenshot` |
+| `RateLimited(RetryAfter)` | PT429, or a PT429 still running: nothing goes before `RetryAfter` | | |
+| `Offline` | the site or Storage could not be reached | | |
+| `Failed(Reason)` | anything else, in plain words (`Message` is `Reason`): nothing to say, not connected, neither form on the site, another refusal | | |
+
+Every result has `Message`, one plain sentence the window can show as it is, for example
+"Sent. Thank you for the feedback.", "Your note wasn't sent: that screenshot is already on
+another note. You can send it without the picture." or "You've sent a lot of feedback this hour.
+Try again in 25 minutes.".
+
+`FeedbackSender.SubmitAsync(kind, body, version, deviceName, context, tried, area, screenshot)`
+is the same note without the upload, throwing as `ArmoryApi` does (a PGRST202 only when the site
+has neither form); it returns `FeedbackSubmission(Id, NewFields, Kind)`. The `IncidentUploader`
+sends a saved note's words through the sender when it has one (no new fields), so "Send
+feedback" today (`AgentTelemetry.SendFeedbackAsync`, saved first, then sent) takes the same path.
+
+**One limiter** (`SubmitLimiter`): the PT429 and not-live waits the uploader kept, now shared
+by the uploader and the sender over the incidents folder (`upload-wait.json`, across restarts).
+A PT429 either one meets (`retry_after_seconds`, 5 minutes when unreadable) holds both: the
+window's `SendAsync` answers `RateLimited` without a call, and the background round waits.
+
+**Version limits.** `armory_heartbeat` refuses an `app_version` over 40 characters (22023);
+feedback and incidents take 64. `TeamHeartbeat` cuts its version to
+`TeamHeartbeat.MaximumVersionCharacters` (40) when made, and if the server refuses the version
+anyway (22023, field `app_version`) it sends that beat again at once without one (null keeps
+what the server has) and every later beat too, so the refusal never repeats. `FeedbackSender`
+cuts to 64. `HostPiecesTests.The_app_version_fits_the_heartbeats_40_characters` holds the app's
+own version (`AgentPaths.Version`, from `Armory.Agent.csproj`'s `<Version>`) to 40.
+
+**Test switches** (`tests/Armory.TestSupport`). `ArmoryV3StandIn.ApplyBreakLocksAsync` and
+`ApplyFeedbackV2Async` copy 0234's and 0235's SQL as it is (with `auth.uid()` and a storage
+schema for 0235's bucket and policies). `FakeSupabase` mints GoTrue-shaped access tokens (a JWT
+whose `sub` is the auth uid), hands each call its JWT claims, serves Storage uploads with
+Storage's rules and error bodies (`StorageLegacyStatus` for the all-400 style), and has
+`HideFunction(function, argumentCount?)` (404 PGRST202 for a function or one overload) and
+`FailRpc(function, sqlState, message, times)` (a call answered with that SQLSTATE without
+running, such as 40P01).

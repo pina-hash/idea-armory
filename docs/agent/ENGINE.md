@@ -388,7 +388,9 @@ on the next pass, through the crash points every write already has (`before-lock
   resumed after a crash (no in-flight record): the mentor asks again, and the same id
   answers from the server's receipt. Asked from an older view after someone else took it
   back, it answers "Plate.SLDPRT isn't checked out any more." The holder's computer keeps
-  what was not checked in (`lockBroken`) and shows one notice.
+  what was not checked in (`lockBroken`) and shows one notice. Several files at once go in
+  `armory_break_locks` calls instead (0.3.3, see "Force check in of many files" under v0.3
+  below), and those calls do have a durable record.
 - **Moves and removals** take the lock only for themselves (`FileState.TransientLock`) and let
   it go as soon as the move or the removal is done, whatever is on disk; a removed file's
   lock is always let go. Core plans a file under such a lock as nobody's
@@ -630,10 +632,12 @@ durable value and the step: a Core journal entry id for `create` (`revive` and t
 file's id for a revival), `lock#attempt`, `commit#parent#attempt`, `side`, `tomb#attempt`;
 a check out's lock from its request id; every answer to a lock or commit spends the
 attempt. A release uses the lock's holder and acquisition time, a take back the check out it
-ends and the computer asking, and a move a persisted id. A folder rename or removal made on
+ends and the computer asking, an `armory_break_locks` call the take back ids of its files (in
+id order), and a move a persisted id. A folder rename or removal made on
 this disk derives its id from its own durable operation (`EngineState.FolderOps`) and the
 server's spelling of the folder. The in-flight record is written before every write the
-engine resumes (all but a take back, which the mentor asks again); a crash at any point
+engine resumes (all but a single file's take back, which the mentor asks again; an
+`armory_break_locks` call has its record in `EngineState.ForceCheckIns`); a crash at any point
 replays the same id and the server returns its receipt, so a save becomes exactly one
 version. The window's Rename folder and Delete folder derive theirs from their own durable
 operation too, so a lost answer or a stop is finished by the next pass with the same id
@@ -659,11 +663,43 @@ hold the new paths; the client half is in docs/agent/CLIENT.md section 6.
   force a check in."
 - **Force check in of many files** (0.3.1; `TakeBackAsync(IReadOnlyList<Guid>)`, the bridge's
   `takeBackAll`) is one action: the files someone else has checked out are sorted from the rest
-  once, each lock is broken with its own `armory_break_lock` and the same operation id as one
-  file's Force check in, `TakeBackConcurrency` (16) calls at a time, and ONE pass follows for
-  every file broken (and any the server would not take back as asked, to read them again).
-  Before, the window sent one action per file and each ran a whole pass, so a few hundred files
-  took the better part of an hour.
+  once, the locks are broken, and ONE pass follows for every file broken (and any the server
+  would not take back as asked, to read them again). Before 0.3.1, the window sent one action
+  per file and each ran a whole pass, so a few hundred files took the better part of an hour.
+  - **In batches** (0.3.3, idea-app 0234, `SyncEngine.Batches.cs`): `armory_break_locks`, at
+    most 500 files a call (`ArmoryApi.Chunk`: distinct, in id order, the calls in id order too).
+    A call's operation id derives from the take back ids of its files (each one's check out and
+    this computer), so asking again for the same check outs answers from the server's receipt
+    and writes nothing. Each call's record (`PendingForceCheckIn`: the id, the device, and each
+    file with the check out it ends) is saved before the call and dropped once its answer is
+    applied. A stop or a lost answer in between leaves it, and the next online pass sends it
+    again with the same id only while every file still has exactly that check out (the call did
+    not land, or landed with only refusals, which the receipt answers again); otherwise it is
+    dropped unsent, so a check out nobody asked about is never ended. Crash points:
+    `before-break-batch` (after the record is saved), `after-break-batch` (before the answer is
+    applied).
+  - **Every answer is read.** `broken: true` is force checked in; `broken: false` means nobody
+    had it checked out any more; a refusal is told by its code and words: "only a mentor or
+    cad_lead may break a lock" (or a 42501) is a role refusal, "not a project member" asks
+    whether the project is gone, as anywhere else, and anything else is reported in the
+    server's words and read again in the pass. A whole call the server rolled back with 40P01
+    or 40001 is resent by `PostgrestClient` with the same body (up to 3 times), as for the
+    other batches; a file the batch answers with 40P01 or 40001 (its savepoint rolled back)
+    goes again in a later call of its own files, with a new id, up to as many rounds, and is
+    then "busy on the server". A whole call refused otherwise (this computer's device is not
+    the caller's) counts its files as refused.
+  - **One sentence.** "Force checked in 212 files. Anything that wasn't checked in is kept as
+    its holder's own copy. 3 files weren't checked out any more." then, as they apply, "N files
+    are in a project where only a mentor or CAD lead can force a check in.", "N files are
+    checked out by you: check them in instead.", "N files are in a project you may no longer
+    be in.", "N files were busy on the server: try them again in a moment.", "N files were
+    refused: the server said ...", singular or plural. "No files were force checked in." when
+    none was; "Force checked in 300 of 1,200 files." and "You went offline: try again once this
+    computer is back online to finish the rest." when the connection dropped.
+  - **A site without `armory_break_locks`** (404 PGRST202) gets one `armory_break_lock` per
+    file with the same operation id as one file's Force check in, `TakeBackConcurrency` (16)
+    calls at a time (0.3.1's path), and is asked for the batch again in an hour
+    (`breakBatchMissingUntil`, kept apart from the other batches: 0234 is its own migration).
 - **No longer a member.** A project gone from `armory_my_projects`, or whose change feed or
   files answer "not a project member" (P0001 or 42501, read alike), is asked about once with
   `armory_project_purged`. The same answer from any other call (a lock, a side version, a
@@ -694,7 +730,9 @@ hold the new paths; the client half is in docs/agent/CLIENT.md section 6.
   answers true); a release in flight is dropped and decided again, as always. A site without the
   batch RPCs (404 PGRST202) gets the files one by one and is asked again in an hour. A single
   file still uses `armory_acquire_lock` and `armory_release_lock`. Crash points:
-  `before-lock-batch`, `after-lock-batch`, `before-release-batch`, `after-release-batch`.
+  `before-lock-batch`, `after-lock-batch`, `before-release-batch`, `after-release-batch`, and
+  for Force check in of many files (`armory_break_locks`, above) `before-break-batch` and
+  `after-break-batch`.
 
 ## Schedule (contract section 4)
 
