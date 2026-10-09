@@ -49,6 +49,9 @@ internal sealed class NetworkLink
 internal sealed class LatencyHandler(LatencyProfile profile, int sitePort, int rpcPort, HttpMessageHandler inner, NetworkLink? link = null) : DelegatingHandler(inner)
 {
     private readonly NetworkLink link = link ?? new NetworkLink();
+    // The profile in force now: a test builds a large vault at loopback speed, then measures its
+    // clicks on the school network (LargeVaultResponsivenessTests).
+    public LatencyProfile Profile { get; set; } = profile;
     private long storageRequests, storageGets, siteRequests, rpcRequests, storageBytes;
 
     public long StorageRequests => Interlocked.Read(ref storageRequests);
@@ -74,7 +77,7 @@ internal sealed class LatencyHandler(LatencyProfile profile, int sitePort, int r
             Interlocked.Increment(ref storageRequests);
             if (request.Method == HttpMethod.Get) Interlocked.Increment(ref storageGets);
             var sent = request.Content?.Headers.ContentLength ?? 0;
-            await Task.Delay(profile.StorageRoundTrip + Body(sent) + (StorageDelay?.Invoke(request) ?? TimeSpan.Zero), cancellationToken);
+            await Task.Delay(Profile.StorageRoundTrip + Body(sent) + (StorageDelay?.Invoke(request) ?? TimeSpan.Zero), cancellationToken);
             var response = await base.SendAsync(request, cancellationToken);
             var received = request.Method == HttpMethod.Get && response.IsSuccessStatusCode ? response.Content.Headers.ContentLength ?? 0 : 0;
             if (received > 0) await Task.Delay(Body(received), cancellationToken);
@@ -84,12 +87,12 @@ internal sealed class LatencyHandler(LatencyProfile profile, int sitePort, int r
         if (uri.Port == sitePort)
         {
             Interlocked.Increment(ref siteRequests);
-            await Task.Delay(profile.SiteRoundTrip, cancellationToken);
+            await Task.Delay(Profile.SiteRoundTrip, cancellationToken);
         }
         else if (uri.Port == rpcPort)
         {
             Interlocked.Increment(ref rpcRequests);
-            await Task.Delay(profile.RpcRoundTrip + (RpcDelay?.Invoke(uri.AbsolutePath) ?? TimeSpan.Zero), cancellationToken);
+            await Task.Delay(Profile.RpcRoundTrip + (RpcDelay?.Invoke(uri.AbsolutePath) ?? TimeSpan.Zero), cancellationToken);
         }
         return await base.SendAsync(request, cancellationToken);
     }
@@ -97,6 +100,7 @@ internal sealed class LatencyHandler(LatencyProfile profile, int sitePort, int r
     // Time for one body: the slower of its own connection and its place on the shared link.
     private TimeSpan Body(long bytes)
     {
+        var profile = Profile;
         if (bytes <= 0 || profile.StorageBytesPerSecond <= 0) return TimeSpan.Zero;
         var own = bytes / profile.StorageBytesPerSecond;
         var shared = profile.LinkBytesPerSecond > 0 ? link.Reserve(bytes, profile.LinkBytesPerSecond) : 0;

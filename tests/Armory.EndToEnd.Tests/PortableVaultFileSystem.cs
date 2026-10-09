@@ -157,6 +157,12 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
     // How long each Scan took (it reads and hashes every file, every time: the Windows adapter
     // hashes again only what changed).
     public List<TimeSpan> ScanTimes { get; } = [];
+    // As the Windows scan (LocalChangeDetector): a file's hash is used again while its size and
+    // last-write time are what they were and it was hashed outside the racy window. Off by default,
+    // so every other test still reads every file every scan; the large-vault measurements turn it
+    // on, so their scans cost what a Windows scan does.
+    public bool ReuseHashes { get; set; }
+    private Dictionary<string, (long Size, DateTime Written, DateTimeOffset HashedAt, string Hash)> hashed = new(StringComparer.OrdinalIgnoreCase);
 
     public VaultScan Scan() => Scan(CancellationToken.None);
 
@@ -195,12 +201,21 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
             }
             try
             {
-                var written = File.GetLastWriteTimeUtc(full);
-                var bytes = File.ReadAllBytes(full);
+                var info = new FileInfo(full);
+                var written = info.LastWriteTimeUtc;
                 bool bit;
                 lock (gate) bit = readOnlyBits.Contains(path.Value);
-                files.Add(new LocalFile(path, Convert.ToHexStringLower(SHA256.HashData(bytes)), bytes.Length, bit,
-                    Stamp: new FileStamp(path.Value, written, DateTimeOffset.UtcNow)));
+                if (ReuseHashes && hashed.TryGetValue(path.Value, out var known) && known.Size == info.Length && known.Written == written &&
+                    (known.HashedAt.UtcDateTime - written).Duration() >= RacyWindow)
+                {
+                    files.Add(new LocalFile(path, known.Hash, known.Size, bit, Stamp: new FileStamp(path.Value, written, known.HashedAt)));
+                    continue;
+                }
+                var bytes = File.ReadAllBytes(full);
+                var hash = Convert.ToHexStringLower(SHA256.HashData(bytes));
+                var now = DateTimeOffset.UtcNow;
+                if (ReuseHashes) hashed[path.Value] = (bytes.Length, written, now, hash);
+                files.Add(new LocalFile(path, hash, bytes.Length, bit, Stamp: new FileStamp(path.Value, written, now)));
             }
             catch (IOException error) { problems.Add($"{relative}: {error.Message}"); }
         }
@@ -232,33 +247,36 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
     public IReadOnlySet<string> OpenAmong(IReadOnlyCollection<VaultPath> paths)
     {
         // The Windows adapter's synchronous question pays the same cost, up to the same budget.
-        var cost = Asked(paths.Count);
+        var cost = Asked(paths);
         if (cost > TimeSpan.Zero) Thread.Sleep(cost < SyncEngine.OpenBudget ? cost : SyncEngine.OpenBudget);
         return OpenOf(paths);
     }
 
     // What the question costs on Windows (0.3.2's field data: about 14.7 ms per read-only file
-    // for Restart Manager, so 1,467 files took 21 seconds and always hit the budget): a test
-    // gives it per number of files asked. Past the budget the answer comes at the budget, from
+    // for Restart Manager, so 1,467 files took 21 seconds and always hit the budget, and about a
+    // fifth of that per writable one, a file checked out here): a test gives it for the number of
+    // read-only and of writable files asked. Past the budget the answer comes at the budget, from
     // the quicker check (the open files here are SolidWorks', which the exclusive-open probe
     // finds), and says it gave up. A canceled token ends the wait at once.
-    public Func<int, TimeSpan>? OpenAmongCost { get; set; }
+    public Func<int, int, TimeSpan>? OpenAmongCost { get; set; }
     public async Task<OpenFilesAnswer> OpenAmongAsync(IReadOnlyCollection<VaultPath> paths, TimeSpan budget, CancellationToken cancellationToken, bool fresh = false)
     {
-        var cost = Asked(paths.Count);
+        var cost = Asked(paths);
         var timedOut = cost > budget;
         if (cost > TimeSpan.Zero) await Task.Delay(timedOut ? budget : cost, cancellationToken);
         return new OpenFilesAnswer(OpenOf(paths), timedOut);
     }
 
-    private TimeSpan Asked(int files)
+    private TimeSpan Asked(IReadOnlyCollection<VaultPath> paths)
     {
+        int readOnly;
         lock (gate)
         {
             OpenAmongCalls++;
-            OpenAmongSizes.Add(files);
+            OpenAmongSizes.Add(paths.Count);
+            readOnly = paths.Count(p => readOnlyBits.Contains(p.Value));
         }
-        return OpenAmongCost?.Invoke(files) ?? TimeSpan.Zero;
+        return OpenAmongCost?.Invoke(readOnly, paths.Count - readOnly) ?? TimeSpan.Zero;
     }
 
     private HashSet<string> OpenOf(IReadOnlyCollection<VaultPath> paths)
@@ -467,7 +485,16 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
     // Windows refuses: ApplyLockAttribute throws, and a batch carries on with the others.
     public Func<string, bool>? RefuseAttribute { get; set; }
 
+    // Bits set one file at a time (each a manifest write on Windows), not through a batch.
+    public int SingleAttributeCalls { get; private set; }
+
     public void ApplyLockAttribute(VaultPath path, LockOwnership ownership)
+    {
+        lock (gate) SingleAttributeCalls++;
+        SetBit(path, ownership);
+    }
+
+    private void SetBit(VaultPath path, LockOwnership ownership)
     {
         if (RefuseAttribute?.Invoke(path.Value) == true) throw new IOException($"{path.Value}: the read-only attribute can't be changed now (test).");
         lock (gate)
@@ -486,7 +513,7 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
         lock (gate) AttributeBatches++;
         foreach (var (path, ownership) in attributes)
         {
-            try { ApplyLockAttribute(path, ownership); }
+            try { SetBit(path, ownership); }
             catch (IOException) { } // retried when the next scan finds the bit as it was
         }
     }
@@ -498,7 +525,7 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
         List<(VaultPath, string)> failed = [];
         foreach (var (path, ownership) in attributes)
         {
-            try { ApplyLockAttribute(path, ownership); }
+            try { SetBit(path, ownership); }
             catch (IOException error) { failed.Add((path, error.Message)); }
         }
         return failed;

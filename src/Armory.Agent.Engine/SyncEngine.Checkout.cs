@@ -123,7 +123,8 @@ public sealed partial class SyncEngine
         if (open && mine.Count == 1)
         {
             var path = mine[0].Path;
-            if (IsOpenNow(path)) message += $" Close {path.Name} in SolidWorks first, then open it again.";
+            // Asked now, off the engine thread (0.3.3), with SolidWorks' marker read here.
+            if (markerDocuments.Contains(path.Value) || await Task.Run(() => fs.IsOpen(path))) message += $" Close {path.Name} in SolidWorks first, then open it again.";
             else
             {
                 // Off the engine thread: the platform answers within about a second.
@@ -220,8 +221,10 @@ public sealed partial class SyncEngine
         if (Unready() is { } stillWhy) return stillWhy;
         var targets = MyCheckOuts(paths);
         if (targets.Count == 0) return new(false, "Nothing there is checked out by you.");
-        // Asked once for all of them, off the engine thread (the pass decides again by itself).
-        var known = await AskOpenAsync(targets.Select(t => t.Path), cancellationToken);
+        Working(targets.Count == 1 ? $"Undoing the check out of {targets[0].Path.Name}" : $"Undoing {Count(targets.Count, "check out", "check outs")}");
+        // A glance, asked once for all of them, off the engine thread and within a short budget:
+        // the pass asks again, fresh, before any lock goes, and waits for a file still open.
+        var known = await AskOpenAsync(targets.Select(t => t.Path), cancellationToken, budget: GlanceBudget);
         var open = targets.Where(t => OpenIn(known, t.Path)).ToList();
         if (open.Count == targets.Count)
             return new(false, open.Count == 1 ? $"Close {open[0].Path.Name} in SolidWorks first." : "Close these files in SolidWorks first.");
@@ -233,7 +236,6 @@ public sealed partial class SyncEngine
             st.CheckOut = null;
             releaseResults.Remove(st);
         }
-        Working(closed.Count == 1 ? $"Undoing the check out of {closed[0].Path.Name}" : $"Undoing {Count(closed.Count, "check out", "check outs")}");
         await FlushAsync(); // the requests are durable before any server call
         await JoinActionPassAsync(PassScope.Of(closed.Select(t => t.State)), cancellationToken);
         // Bytes not checked in were kept as a kept copy; the answer says so.
@@ -441,6 +443,7 @@ public sealed partial class SyncEngine
 
     private async Task<ActionResult> LaunchHereAsync(VaultPath file, CancellationToken cancellationToken)
     {
+        Working($"Opening {file.Name}");
         var outcome = await Task.Run(() => fs.Launch(file), cancellationToken);
         return outcome.Succeeded ? new ActionResult(true, $"Opening {file.Name}.") : new ActionResult(false, outcome.Problem ?? $"Armory couldn't open {file.Name}.");
     }
@@ -507,6 +510,7 @@ public sealed partial class SyncEngine
         if (!VaultPath.TryCreate(from.Value[..(slash + 1)] + newName, out var to, out var tooLong, options.VaultRoot)) return new(false, tooLong ?? "That name can't be used here.");
         if (string.Equals(from.Value, to.Value, StringComparison.Ordinal)) return new(false, "That is already its name.");
         Guid operation;
+        Working($"Renaming {from.Name} to {to.Name}");
         await EnterActionAsync(cancellationToken);
         try
         {
@@ -642,18 +646,29 @@ public sealed partial class SyncEngine
             var refused = SetAttributes(readOnlyFirst.Select(r => (r.State, r.Path)), LockOwnership.Free);
             foreach (var r in readOnlyFirst) if (!refused.Contains(r.State)) releases.Add((r.State, ReleaseFlight(r.State, r.Id, r.Held)));
         }
-        List<VaultPath> onDisk = [];
-        foreach (var st in checkOuts) if (TryLocal(st.Path, out var here)) onDisk.Add(here.Path);
+        // A check out over the shared version takes its lock open or not; only a copy that is
+        // behind or changed here is decided by whether it is open (0.3.3: a 500-file check out
+        // waited out the whole question). The others are glanced at, within GlanceBudget, only
+        // for the answer's "open it again" hint (KnownOpen reads it), before the question that
+        // decides.
+        List<VaultPath> onDisk = [], forTheHint = [];
+        foreach (var st in checkOuts)
+            if (TryLocal(st.Path, out var here)) (IsSharedVersion(st, here) ? forTheHint : onDisk).Add(here.Path);
+        if (forTheHint.Count > 0) await AskOpenAsync(forTheHint.Where(p => !markerDocuments.Contains(p.Value)), ct, budget: GlanceBudget);
         var open = new HashSet<ReleaseCheck>(ReferenceEqualityComparer.Instance);
-        // Asked once for the check outs and the check ins together, off the engine thread, and
+        // Asked once for those check outs and the check ins together, off the engine thread, and
         // fresh: a lock is let go only on what the disk says now, never on a remembered answer.
         // Nothing after this writes on what it says (each write asks again).
-        var answer = await AskOpenAsync(onDisk.Concat(checks.Select(c => c.File.Path)), ct, fresh: true);
+        var asked = onDisk.Concat(checks.Select(c => c.File.Path)).ToList();
+        var answer = await AskOpenAsync(asked, ct, fresh: true);
         foreach (var check in checks) if (OpenIn(answer, check.File.Path)) open.Add(check);
+        var askedPaths = asked.Select(p => p.Value).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        // A copy that changed since the scan is asked about on its own.
+        bool OpenNow(VaultPath path) => askedPaths.Contains(path.Value) ? OpenIn(answer, path) : IsOpenNow(path);
         List<(FileState State, VaultPath Path)> writable = [];
         await RunConcurrentlyAsync(checkOuts, async (st, token) =>
         {
-            try { await FinishCheckOutAsync(st, token, answer, writable, toLock); }
+            try { await FinishCheckOutAsync(st, token, OpenNow, writable, toLock); }
             catch (ArmoryOfflineException) { online = false; }
             catch (Exception error) when (error is ArmoryClientException or IOException or UnauthorizedAccessException)
             { FileProblem(st.Path, error); }
@@ -864,10 +879,16 @@ public sealed partial class SyncEngine
         return true;
     }
 
-    // open: the pass's open answer for the check outs (null: it failed, each is asked alone).
-    // writable: the files this computer holds already, made writable together afterwards. toLock:
-    // the files to take in one batch (FinishRequestsAsync); null takes this one's lock now.
-    private async Task FinishCheckOutAsync(FileState st, CancellationToken ct, IReadOnlySet<string>? open, List<(FileState State, VaultPath Path)> writable,
+    // A copy on this disk that, as the scan found it, is the live shared version this record is based on.
+    private bool IsSharedVersion(FileState st, LocalFile here)
+        => here.Hash == st.BaseHash && st.FileId is { } id && remoteById.TryGetValue(id, out var remote) && remote.File.Current is { } current &&
+           current.Id.ToString() == st.BaseId;
+
+    // openNow: whether a file is open (the pass's fresh answer, or asked on its own), asked only
+    // where the step depends on it. writable: the files this computer holds already, made
+    // writable together afterwards. toLock: the files to take in one batch (FinishRequestsAsync);
+    // null takes this one's lock now.
+    private async Task FinishCheckOutAsync(FileState st, CancellationToken ct, Func<VaultPath, bool> openNow, List<(FileState State, VaultPath Path)> writable,
         List<(FileState State, VaultPath Path)>? toLock = null)
     {
         if (st.Inflight is not null) return; // the resumed lock answers on the next pass
@@ -905,8 +926,11 @@ public sealed partial class SyncEngine
             catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException) { hash = null; }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException) { Answer(st, CheckOutOutcome.CantRead); return; }
         }
-        var isOpen = OpenIn(open, disk);
-        switch (CheckoutRules.NextCheckOutStep(st.Base, hash, RevisionOf(remote.File), isOpen))
+        // Whether it is open decides only for a copy that is not the shared version.
+        var step = CheckoutRules.NextCheckOutStep(st.Base, hash, RevisionOf(remote.File), isOpen: false);
+        var isOpen = step is CheckOutStep.DownloadFirst or CheckOutStep.KeepChangesFirst && openNow(disk);
+        if (isOpen) step = CheckoutRules.NextCheckOutStep(st.Base, hash, RevisionOf(remote.File), isOpen: true);
+        switch (step)
         {
             case CheckOutStep.TakeLock:
                 if (toLock is not null) { toLock.Add((st, path)); break; }
@@ -1006,21 +1030,25 @@ public sealed partial class SyncEngine
     // gate, before the state is saved and the view published.
     private Task JoinActionPassAsync(PassScope scope, CancellationToken ct, Func<bool>? again = null, Action? after = null)
     {
+        var start = false;
         if (waitingRun is not { Started: false } run)
         {
             waitingRun = run = new ActionRun();
-            _ = RunActionPassAsync(run);
+            start = true;
         }
         run.Scope.Add(scope);
         if (again is not null) run.Again.Add(again);
         if (after is not null) run.After.Add(after);
+        if (start) _ = RunActionPassAsync(run);
         return run.Done.Task.WaitAsync(ct);
     }
 
     // Its passes are the clicks' (as an action's always were): a loop stopped meanwhile does not
-    // cancel them, and each click can stop waiting with its own token.
+    // cancel them, and each click can stop waiting with its own token. It lets the clicks already
+    // queued on the engine thread join before it asks for the gate.
     private async Task RunActionPassAsync(ActionRun run)
     {
+        await Task.Yield();
         try { await EnterActionAsync(CancellationToken.None); }
         catch (OperationCanceledException error)
         {

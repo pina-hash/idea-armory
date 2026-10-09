@@ -1030,6 +1030,7 @@ public sealed partial class SyncEngine
         if (!engineThread.IsCurrent) return await engineThread.InvokeAsync(() => CreateFolderAsync(projectId, parent, name, cancellationToken));
         name = name?.Trim() ?? "";
         if (!VaultPath.TryValidateName(name, out var problem)) return new(false, problem ?? "That name can't be used for a folder.");
+        Working($"Making the folder {name}");
         await EnterActionAsync(cancellationToken);
         try
         {
@@ -1062,6 +1063,7 @@ public sealed partial class SyncEngine
         if (!engineThread.IsCurrent) return await engineThread.InvokeAsync(() => RenameFolderAsync(projectId, folder, newName, cancellationToken));
         newName = newName?.Trim() ?? "";
         if (!VaultPath.TryValidateName(newName, out var problem)) return new(false, problem ?? "That name can't be used for a folder.");
+        if (!string.IsNullOrEmpty(folder)) Working($"Renaming {Leaf(folder)} to {newName}");
         await EnterActionAsync(cancellationToken);
         try
         {
@@ -1162,6 +1164,7 @@ public sealed partial class SyncEngine
     public async Task<ActionResult> DeleteFolderAsync(Guid projectId, string folder, CancellationToken cancellationToken = default)
     {
         if (!engineThread.IsCurrent) return await engineThread.InvokeAsync(() => DeleteFolderAsync(projectId, folder, cancellationToken));
+        if (!string.IsNullOrEmpty(folder)) Working($"Deleting the folder {Leaf(folder)}");
         await EnterActionAsync(cancellationToken);
         try
         {
@@ -1251,6 +1254,7 @@ public sealed partial class SyncEngine
     {
         if (!engineThread.IsCurrent) return await engineThread.InvokeAsync(() => AddFilesAsync(projectId, folder, sources, cancellationToken));
         if (sources.Count == 0) return new(false, "");
+        Working(sources.Count == 1 ? $"Adding {Path.GetFileName(sources[0].TrimEnd('/', '\\'))}" : $"Adding {Count(sources.Count, "file or folder", "files and folders")}");
         await EnterActionAsync(cancellationToken);
         try
         {
@@ -1455,12 +1459,14 @@ public sealed partial class SyncEngine
         return null;
     }
 
-    // The same for a window action, asked off the engine thread (0.3.3).
+    // The same for a window action: a glance, off the engine thread and within a short budget
+    // (0.3.3); the folder's move asks again (MoveFolder refuses a folder with a file open), and so
+    // does each file's own move.
     private async Task<string?> OpenUnderAsync(string folder, CancellationToken ct)
     {
         foreach (var document in markerDocuments) if (Inside(document, folder)) return NameOf(document);
         var inside = local.Values.Where(f => Inside(f.Path.Value, folder)).Select(f => f.Path).ToList();
-        var open = await AskOpenAsync(inside, ct);
+        var open = await AskOpenAsync(inside, ct, budget: GlanceBudget);
         foreach (var path in inside) if (OpenIn(open, path)) return path.Name;
         return null;
     }
