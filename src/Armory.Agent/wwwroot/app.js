@@ -2245,8 +2245,10 @@
 				'</figcaption></figure>' +
 				'<button class="key" type="button" data-action="removeShot" data-key="ask-shot-remove">Remove picture</button>'
 			);
-		// The website can't take pictures yet: nothing to offer.
-		if (ui.myFeedback && ui.myFeedback.pictures === false) return '';
+		// The website can't take pictures yet (it said so, or it has no Your feedback either,
+		// which came with them): nothing to offer. Offline, the host's answer says so instead.
+		var m = ui.myFeedback;
+		if (m && (m.state === 'missing' || (m.state === 'shown' && !m.pictures))) return '';
 		return (
 			'<button class="key" type="button" data-action="addShot" data-key="ask-shot" aria-describedby="ask-shot-help">Add a picture of this window</button>' +
 			'<p class="setting-help" id="ask-shot-help">Only Armory\'s window is in it, with email addresses and file pictures hidden. You see it before it goes.</p>'

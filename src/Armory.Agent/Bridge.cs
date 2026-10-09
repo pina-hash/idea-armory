@@ -62,7 +62,8 @@ internal sealed record WindowCapture(byte[] Png, bool Scaled);
 // included. Nothing from the page reaches a process without validation: showInFolder
 // resolves only a valid VaultPath inside the vault root, openVault opens only the
 // configured root, and every path, folder, name and id of an action is checked here
-// before the host sees it.
+// before the host sees it (Send feedback's picture id is 32 lowercase hex digits, and the
+// size a picture of the window is asked at is 1 to 16,384 pixels each way).
 internal sealed class Bridge(AgentHost host, IBridgeWindow window, AgentLog log)
 {
     // Every page-to-host type and the record its fields are read into (null: no fields).

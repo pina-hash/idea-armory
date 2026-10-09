@@ -83,7 +83,9 @@ page's own crumbs are: "Added 4,987 of 5,000 files to Robot 2027 › CopyDesignT
 | `view` | `view: AgentView` | on `ready` and whenever anything changes (at most every 500 ms during a pass); the page redraws from it |
 | `fileDetail` | `detail: FileDetailView` | the answer to `openFile` |
 | `activity` | `activity: ActivityView` | while files move, at most 4 a second; the page patches only Right now and the status line, so focus, scroll and typing never move |
-| `actionResult` | `requestId`, `ok`, `message` | once for each action (see Page to host); the page shows `message` in a quiet line at the window's foot, never an alert and never a focus change |
+| `actionResult` | `requestId`, `ok`, `message`, `offer` | once for each action (see Page to host); the page shows `message` in a quiet line at the window's foot, never an alert and never a focus change. `offer` is null, except `"withoutPicture"` after a `sendFeedback` with a picture that couldn't go (0.3.3; Send feedback shows that answer in its own dialog) |
+| `windowShot` | `requestId`, `ok`, `id`, `url`, `width`, `height`, `bytes`, `scaled`, `message` | the answer to `captureWindow` (0.3.3): a picture of this window (`WindowShotView`, its fields flat in the message); `url` serves exactly the bytes that would be sent; not `ok`: `message` says why, in one sentence |
+| `myFeedback` | `requestId`, `state`, `pictures`, `message`, `notes` | the answer to `readMyFeedback` (0.3.3): Your feedback (`FeedbackListView`, its fields flat in the message) |
 
 ```
 AgentView {
@@ -234,7 +236,9 @@ answers it with exactly one `actionResult` carrying the same id and a plain sent
 Plate.SLDPRT.", "Close Plate.SLDPRT in SolidWorks first."). The actions are
 `launchFile`, `checkOut`, `checkIn`, `undoCheckOut`, `takeBack`, `takeBackAll`, `createFolder`,
 `renameFolder`, `deleteFolder`, `renameFile`, `addFiles`, `dropFiles`, `reportProblem`,
-`sendFeedback` and `takeOverFolder`.
+`sendFeedback` and `takeOverFolder`. An **ask** (0.3.3, `ASKS` in bridge.js) carries a `requestId`
+too and is answered by a message of its own, never `actionResult`: `captureWindow` by `windowShot`,
+`readMyFeedback` by `myFeedback`.
 
 The page shows an action is under way from the moment it is sent until its
 `actionResult` arrives (v0.2.1): the pressed key gets `aria-busy="true"` and
@@ -273,8 +277,52 @@ replaces all of it. The spinner holds still under `prefers-reduced-motion`.
 | `saveSettings` | `vaultRoot`, `startAtSignIn`, `theme` | a setting, Use (a folder of my own) | saves settings; host answers with `view` |
 | `chooseVaultRoot` | | Change, Choose another folder | host shows a folder picker, then answers with `view` |
 | `reportProblem` | `kind`, `body`, `requestId` | Send in Report a problem (Settings), after the page refuses empty words | `kind` is `bug`, `idea` or `other`; the host saves the words with a fresh `userReport` incident and sends them (docs/agent/TELEMETRY.md); the answer is one sentence: "Sent. Thank you for telling us.", or "Saved. It will be sent ..." when it can't go yet |
-| `sendFeedback` | `kind`, `body`, `requestId` | Send in Send feedback (the header's key, or Settings), after the page refuses empty words | v0.3: `kind` is `bug`, `idea` or `other`; a note on its own (`armory_submit_app_feedback`), saved first and sent at once when it can be, with Armory's version and what it was doing as its context, and no incident after it; the answer is one sentence, "Sent. Thank you for the feedback." or "Saved. It will be sent ..." |
+| `sendFeedback` | `kind`, `body`, `tried`, `area`, `shot`, `requestId` | Send (or Ctrl+Enter) in Send feedback (the header's key, or Settings), after the page refuses empty words; "Send without the picture" after the offer | 0.3.3, the same as the website's: `kind` is `bug`, `idea`, `praise` or `other`; `tried` what the person tried (at most 1,000 characters) or null; `area` the window or view it is about, filled in by the page (at most 120: "Settings", "File details: Gear.SLDPRT", "Home > Robot 2027 > Drivetrain", "Home"); `shot` the id of the picture `windowShot` answered with, or null (the host checks it is 32 lowercase hex digits). A note on its own (`armory_submit_app_feedback`), with Armory's version and what it was doing as its context, and no incident after it. Without a picture it is saved first and sent at once when it can be; with one it goes now and is never saved. The answer is one sentence ("Sent. Thank you for the feedback.", "Saved. It will be sent ..."); a picture that couldn't go is answered with `offer: "withoutPicture"` |
+| `captureWindow` | `width`, `height`, `requestId` | Add a picture of this window, in Send feedback (an ask) | 0.3.3: the page's size in CSS pixels (1 to 16,384). The host takes a picture of this window only and answers `windowShot` (see "Send feedback's picture" below) |
+| `readMyFeedback` | `requestId` | opening Settings or Send feedback (at most once a minute), and Your feedback (an ask) | 0.3.3: the host answers `myFeedback` |
 | `openIncidents` | | Open incidents folder (Settings) | opens `%LOCALAPPDATA%\IDEA Armory\incidents` in File Explorer, so the files can be handed over by hand |
+
+## Send feedback's picture of the window (0.3.3)
+
+"Add a picture of this window" in Send feedback. Before it asks, the page hides the dialog and
+its scrim (`dialog.away`), puts `html.shooting` on (every file picture, `img.thumb`, is hidden
+and its glyph shows), and replaces every email address in the page's text (`[\w.+-]+@[\w-]+(\.[\w-]+)+`,
+the signed-in person's own included) with `•••@domain`, keeping the originals; `view`,
+`activity` and `fileDetail` messages that arrive meanwhile wait. After two animation frames it
+sends `captureWindow { width, height }`. The host (`MainWindow`) takes
+`CoreWebView2.CapturePreviewAsync(Png)`: what this WebView draws, never the screen and never
+another window. Over 2,097,152 bytes it is taken again smaller with the DevTools protocol's
+`Page.captureScreenshot` (`{format: "png", captureBeyondViewport: false, clip: {x: 0, y: 0, width,
+height, scale}}`, `scale` from `ScreenshotFit.NextScale`, at most three times, never below 0.25),
+measured each time. Still over, or not taken: `windowShot` with `ok: false` and why. The host
+keeps the picture in memory only (`WindowShots`, the last one; a new one replaces it, a sent one
+is forgotten) and serves exactly those bytes at `https://armory.local/shot/<id>.png` with
+`Cache-Control: no-store`, so not even the WebView's cache keeps it. On `windowShot` the page puts
+back every address, picture and the dialog, applies the messages that waited, and shows the
+picture at the dialog's width with "This is the picture that will be sent: 1,120 by 760 pixels,
+214 KB. Email addresses and file pictures are hidden." ("It was made smaller to fit 2 MB." when
+`scaled`) and Remove picture. The person sees what is sent, and nothing else is.
+
+The dialog stays open, its keys held, until `sendFeedback` is answered: `ok` closes it and the
+sentence shows at the window's foot; `offer: "withoutPicture"` keeps the words, says why in the
+dialog and turns Send into "Send without the picture" (the same note, `shot: null`); any other
+refusal says why in the dialog and leaves Send to try again. Escape and a click outside wait
+while a note is on its way or a picture is being taken.
+
+## Your feedback (0.3.3)
+
+`myFeedback`: `state` is `shown` (`notes`, newest first, at most 50), `missing` (the website
+doesn't have `armory_my_app_feedback` yet: the page hides Your feedback everywhere), `offline` or
+`failed` (`message` says so in one sentence; Your feedback is still offered), or `signedOut`
+(hidden). `pictures` is true while the website takes pictures; when false, Send feedback offers no
+picture. Each `FeedbackNoteView` has `id`, `createdAt`, `kind`, `body`, `tried`, `area`,
+`hasScreenshot`, `appVersion`, `deviceName`, `status` (new, seen, resolved or closed; spam reads
+closed) and `statusWords` ("Not read yet", "Read by the IDEA team", "Done", "Closed"), and
+`reviewedAt`. Settings' "Something not working?" row offers "Your feedback (3)"; Send feedback
+offers it too, and Back to your note returns with the words kept. The list shows each note's kind,
+status, the first lines of its words, what was tried, and when, from which computer, about what,
+with a picture. **There are no replies in Armory**: the site keeps none, and the list's foot says
+"The IDEA team reads every note. There are no replies in Armory: the status shows where yours is."
 
 ## Thumbnails (0.3.2)
 
@@ -298,13 +346,18 @@ Outside WebView2, `?state=<name>` picks a demo state (`demo/states.js`), `theme=
 screen and `file=<fileId>` the file on File detail. The page-only places, so every
 state can be drawn without a click, are `project=<projectId>`, `folder=<path in the
 project>`, `select=<name>,<name>` (files in that folder), `expand=<notice key>`,
-`dialog=newFolder|renameFolder|deleteFolder|checkOutAll|takeBack|forceAll|renameFile|report|feedback`
+`dialog=newFolder|renameFolder|deleteFolder|checkOutAll|takeBack|forceAll|renameFile|report|feedback|myFeedback`
 (renameFile asks about the first file of the open notice list; forceAll is Force check in
-all for the open folder; report is Report a problem; feedback is Send feedback), `drag=1` (files held over the list), `at=browser` (Home
+all for the open folder; report is Report a problem; feedback is Send feedback; myFeedback is
+Your feedback), `words=<text>` (Send feedback opens with these words typed), `shot=1` (Send
+feedback takes a picture once it is open; `shot=offer` then sends it, and the demo answers that
+the picture can't go), `feedback=shown|missing|offline` (how the demo answers `readMyFeedback`),
+`drag=1` (files held over the list), `at=browser` (Home
 scrolled to Team files) and `press=<control key>` (the page presses that key once it is
 drawn, and the demo holds every answer, so the working state stays in view); `result=<words>` (with
 `resultOk=0` for a refusal) has the demo answer as if an action had just come back.
 The demo transport answers every page-to-host type the way the engine would (a check
 out changes the rows and answers with an `actionResult`, a rename adds the file and
-shortens its notice); `openVault`, `showInFolder`, `addFiles` and `dropFiles` only log,
+shortens its notice; `captureWindow` gets a small drawing of a window, the app's being the
+window itself, and `readMyFeedback` three sample notes); `openVault`, `showInFolder`, `addFiles` and `dropFiles` only log,
 since a browser has no File Explorer to open.

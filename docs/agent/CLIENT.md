@@ -224,14 +224,25 @@ The auth uid is the access token's `sub` claim (`AccessToken.Subject`: reads the
 checks nothing, and never logs or keeps the token; a token without a uuid `sub` refuses the
 upload as `no_account`). This computer refuses first, before anything is sent, a picture over
 2097152 bytes (`too_large`) or one that does not start with the PNG signature (`not_png`).
-Storage's refusals carry `{"statusCode": "413", "error", "message"}`, with that code as the HTTP
-status or, on older Storage, with 400; the client reads the body's code first. They become
-`ScreenshotRefusedException(Reason, Status)`: 413 `too_large`, 403 `not_allowed` (the insert
-policy: only the caller's own folder), 409 `exists` (nothing overwrites an object), 404
-`not_available` (no bucket: the site before 0235), anything else 4xx `refused`. An expired token
-(`InvalidJWT`, or 401) is renewed once and the picture goes under a new key. 429, 502, 503, 504,
-any 5xx and no connection are `ArmoryOfflineException`. Each upload goes into the flight recorder
-as a transfer named `screenshot` (its size, how long, how it ended; never the token or the key).
+Storage answers HTTP 400 for every refusal but a 500, with the real code as text in the body's
+`statusCode` (`{"statusCode": "413", "code": "EntityTooLarge", "error", "message"}`: its error
+handler sends `userStatusCode`, which is 400 unless the code is 500), so the client reads the body
+first and falls back to the HTTP status. The real code becomes `ScreenshotRefusedException(Reason,
+Status)`: 413 `too_large`, 403 `not_allowed` (the insert policy: only the caller's own folder), 409
+`exists` (nothing overwrites an object), 404 `not_available` (no bucket: the site before 0235, or
+0235 without its storage half), anything else 4xx `refused`. A busy Storage is never a refusal of
+the picture: a body code of 408, 423 (`ResourceLocked`), 429, 503 (`DatabaseReadOnly`,
+`LockTimeout`), 544 (`DatabaseTimeout`) or any other 5xx, an HTTP 429, 502, 503 or 504, and no
+connection are `ArmoryOfflineException` (the window says to try again; 0.3.2 offered to drop the
+picture for a 544). An expired token (`InvalidJWT` in the body's `error` or `code`, or 401) is
+renewed once and the picture goes under a new key. Each upload goes into the flight recorder as a
+transfer named `screenshot` (its size, how long, how it ended; never the token or the key).
+
+`FeedbackScreenshots.Dimensions(png)` reads a PNG's width and height from its IHDR (null for
+anything else). `ScreenshotFit.NextScale(bytes, scale)` is how much smaller the window's picture
+is taken again when it is over 2 MiB: aimed at 85% of the limit by area (a picture's bytes shrink
+with the square of its scale), in steps of 0.05, at least 0.1 smaller than the last try, never
+below `ScreenshotFit.Smallest` (0.25); null when it already fits or is already the smallest.
 
 **Send feedback: `FeedbackSender`.** The window's one entry point (the host makes one,
 `AgentHost.Feedback`):
@@ -249,9 +260,13 @@ site counts them, never inside a surrogate pair; blank is null), the version to 
 kept under 96 KiB as JSON (its largest entries give way first); a picture over 2 MiB or not a
 PNG is refused here; a wait the shared limiter holds (PT429) answers `RateLimited` without a
 call; the picture is uploaded; then the eight-argument note names it. On 404 PGRST202 the
-five-argument form takes the note without the new fields, `praise` going as `other` (that form
-refuses praise), and the wide form is not asked for again for `WideMissingRetry` (1 hour); in
-that hour a picture is not uploaded at all (no note could name it). The same picture sent again
+five-argument form takes the note, `praise` going as `other` (that form refuses praise), and
+what it has no argument for goes in its context, which the admin's list shows whole:
+`FeedbackSender.WithAsked(context, askedKind, tried, area)` adds `askedKind` ("praise", when it
+went as other), `tried` and `area`, each only when there is one, kept whole while the rest of the
+context gives way first. So only a picture is lost. The wide form is not asked for again for
+`WideMissingRetry` (1 hour); in that hour a picture is not uploaded at all (no note could name
+it). The same picture sent again
 after `Offline`, `RateLimited` or `Failed` is named again rather than uploaded twice; once a note
 names it, it is never reused. A context the site measures too large is shortened to 24 KiB and
 sent once more, never the same payload twice.
@@ -259,7 +274,7 @@ sent once more, never the same payload twice.
 | `FeedbackResult` | When | `Ok` | `CanSendWithoutPicture` |
 |---|---|---|---|
 | `Sent(Id)` | the note went with every field it was given | yes | |
-| `SentWithoutNewFields(Id, Kind, KindChanged, LeftOutDetails)` | the five-argument fallback: `Kind` is what it went as (`other` for praise, `KindChanged`), `LeftOutDetails` when a picture, tried or area was given and left out | yes | |
+| `SentWithoutNewFields(Id, Kind, KindChanged, LeftOutPicture)` | the five-argument fallback: `Kind` is what it went as (`other` for praise, `KindChanged`), `LeftOutPicture` when a picture was given and left out (tried and area went in the context). Its sentence says only what was left out: "Sent. Thank you for the feedback. The website can't take pictures yet, so it went without the picture." and, for praise, "The website doesn't take praise yet, so it went as other feedback." | yes | |
 | `ScreenshotRefused(Reason)` | the note was NOT sent: `not_png`, Storage's `not_allowed`, `exists`, `not_available` or `refused`, or the site's 22023 `bad_path`, `not_found` or `in_use` (field screenshot) | | yes: send the same note with `Screenshot = null` |
 | `TooLarge(Field, Size, Limit)` | `screenshot` over 2 MiB here or Storage's 413 (offer it without the picture), or a field the site measured too long | | for `screenshot` |
 | `RateLimited(RetryAfter)` | PT429, or a PT429 still running: nothing goes before `RetryAfter` | | |
@@ -274,8 +289,39 @@ Try again in 25 minutes.".
 `FeedbackSender.SubmitAsync(kind, body, version, deviceName, context, tried, area, screenshot)`
 is the same note without the upload, throwing as `ArmoryApi` does (a PGRST202 only when the site
 has neither form); it returns `FeedbackSubmission(Id, NewFields, Kind)`. The `IncidentUploader`
-sends a saved note's words through the sender when it has one (no new fields), so "Send
-feedback" today (`AgentTelemetry.SendFeedbackAsync`, saved first, then sent) takes the same path.
+sends a saved note's words, what was tried and the area through the sender when it has one (the
+eight-argument form, never a picture: a saved note has none); without one, the five-argument
+form, praise as other and the rest in the context (`WithAsked`), as the sender's fallback does.
+
+**The window's Send feedback** (`FeedbackDesk` in `src/Armory.Agent`, wired by
+`AgentHost.Feedback.cs`; the bridge half is in docs/agent/BRIDGE.md). A note **without** a picture
+takes the durable path: `AgentTelemetry.SendFeedbackAsync(kind, body, tried, area)` saves it in
+the incidents folder first (kind bug, idea, praise or other; tried and area scrubbed like the
+words), sends it at once through the uploader and the sender, and the uploader sends it later
+when it can't go now ("Saved. It will be sent when this computer is back online."). A note
+**with** a picture goes now and is never written to disk with its picture:
+`IncidentReporter.ComposeNoteAsync` builds the very document a saved note would hold (the same
+scrubbing: other people's addresses masked, this computer's tokens gone) without saving it, its
+context is `IncidentUploader.FeedbackContext` of that document, and `FeedbackSender.SendAsync`
+uploads the picture and sends the note. When it can't go, the answer offers the same note without
+the picture (`ActionResult.Offer` = `withoutPicture`): a refused picture (`CanSendWithoutPicture`),
+`Offline` ("You're offline, so your note and its picture weren't sent. Send it without the
+picture, and Armory sends it once this computer is back online.") and `RateLimited` (its sentence,
+then "Or send it without the picture, and Armory sends it then."). Without the picture it takes
+the durable path. So nothing a student typed is lost, and a picture of the window is never kept
+on disk. A sent picture is forgotten; the window keeps only its last picture, in memory
+(`WindowShots`), and a picture it no longer has is answered "That picture isn't here any more.
+Add it again, or send your note without it." with the offer.
+
+**Your feedback** (`FeedbackDesk.ReadAsync`): signed out is `signedOut` without a call; otherwise
+`MyAppFeedbackAsync(50)`: a list is `shown`, null (404 PGRST202) is `missing` and is not asked
+again for an hour, `ArmoryOfflineException` is `offline` ("You're offline. Your feedback shows
+here once this computer is back online."), `ArmorySignedOutException` or 42501 is `signedOut`,
+anything else `failed` ("Armory couldn't read your feedback. Try again in a moment."). Each note's
+status in words is `AppFeedbackNote.StatusWords`: new "Not read yet", seen "Read by the IDEA
+team", resolved "Done", closed (spam too) "Closed". `pictures` is true only for `shown` while the
+sender knows the eight-argument form (0235 brought the list and the picture bucket together).
+There are no replies in Armory: the site has none, and the window says so.
 
 **One limiter** (`SubmitLimiter`): the PT429 and not-live waits the uploader kept, now shared
 by the uploader and the sender over the incidents folder (`upload-wait.json`, across restarts).
@@ -292,9 +338,13 @@ own version (`AgentPaths.Version`, from `Armory.Agent.csproj`'s `<Version>`) to 
 
 **Test switches** (`tests/Armory.TestSupport`). `ArmoryV3StandIn.ApplyBreakLocksAsync` and
 `ApplyFeedbackV2Async` copy 0234's and 0235's SQL as it is (with `auth.uid()` and a storage
-schema for 0235's bucket and policies). `FakeSupabase` mints GoTrue-shaped access tokens (a JWT
-whose `sub` is the auth uid), hands each call its JWT claims, serves Storage uploads with
-Storage's rules and error bodies (`StorageLegacyStatus` for the all-400 style), and has
+schema for 0235's bucket and policies); `DropFeedbackShotsBucketAsync` leaves 0235's functions
+without its storage half (the migration's NOTICE path). `FakeSupabase` mints GoTrue-shaped access
+tokens (a JWT whose `sub` is the auth uid), hands each call its JWT claims, serves Storage uploads
+with Storage's rules and error bodies in Storage's own style (HTTP 400 with the real code and its
+name in the body; `StorageRealStatus` makes the code the HTTP status too; a bad or expired token is
+`{statusCode: "400", code: "InvalidJWT", error: "InvalidJWT"}` either way), answers the next
+uploads busy with `FailStorage(statusCode, code, error, times)` (544, 503, 423, 429), and has
 `HideFunction(function, argumentCount?)` (404 PGRST202 for a function or one overload) and
 `FailRpc(function, sqlState, message, times)` (a call answered with that SQLSTATE without
 running, such as 40P01).
