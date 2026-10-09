@@ -495,13 +495,14 @@ internal sealed partial class Bridge(AgentHost host, IBridgeWindow window, Agent
         }
     }
 
+    // The host's save raises the view that answers it (every way it returns), so the bridge posts
+    // no second one: a theme pick drew all of Home once for each view (N7).
     private async Task SaveSettingsAsync(SaveSettingsMessage? request)
     {
         if (request is null) return;
         var current = host.Settings;
         var problem = await host.SaveSettingsAsync(request.VaultRoot ?? current.VaultRoot, request.StartAtSignIn ?? current.StartAtSignIn, request.Theme ?? current.Theme);
         if (problem is not null) window.ShowProblem(problem);
-        PostView();
     }
 
     private async Task ChooseVaultRootAsync()
@@ -512,7 +513,10 @@ internal sealed partial class Bridge(AgentHost host, IBridgeWindow window, Agent
         {
             var problem = await host.SaveSettingsAsync(chosen, current.StartAtSignIn, current.Theme);
             if (problem is not null) window.ShowProblem(problem);
+            return;
         }
+        // Nothing chosen, or the same folder: the answer is the view as it is (the window drops it
+        // when the page has it already).
         PostView();
     }
 }

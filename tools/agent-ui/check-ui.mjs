@@ -20,9 +20,17 @@
 //               against the ground it sits on; so does the divider between two rows.
 //   keyboard    Tab reaches every control, and each one shows a focus ring at least 2px
 //               wide that holds 3:1 against its ground.
-//   copy        the words a student sees never use jargon: lock, unlock, conflict, sync,
-//               journal, side version, intent, RPC, hash, vault. Upload and download are
-//               allowed (v2 decision D5: Mr. Pina's own words for what is moving).
+//   copy        the words a student sees or hears never use jargon: lock, unlock, conflict,
+//               sync, journal, side version, intent, RPC, hash, vault (tooltips included).
+//               Upload and download are allowed (v2 decision D5: Mr. Pina's own words for
+//               what is moving).
+//   tips        every visible button, tab and checkbox, in every state, has a tooltip
+//               (data-tip): one plain sentence that is more than the control's own word and
+//               ends in a period (0.3.3, N1). A planted control without one is caught. The
+//               flows hover a key, a key that is off and a control in the Settings sheet,
+//               and reach keys with Tab: the card shows after about 750 ms (300 ms by Tab),
+//               inside the window, describes its control, and goes on leaving, on a click and
+//               on Escape, which closes nothing else.
 //   offline     no file in wwwroot names a web address (the SVG namespace inside a data:
 //               URI is the one exception: it is an identifier, never fetched), loads a
 //               font with @font-face or anything with @import, or points url() anywhere
@@ -57,6 +65,15 @@
 //   logo        the IDEA gear turns (idea-gear-spin, 24s, linear, infinite) when motion is
 //               allowed, holds still when the student asks for reduced motion, and is
 //               fully painted in both.
+//   drawing     (0.3.3, N7 and X-full-render) inside a stand-in WebView2 host: a view the
+//               page has already changes nothing in #main, one whose settings alone changed
+//               changes the theme and Settings and nothing in #main, a theme pick paints
+//               within a frame with 1,401 files under a 4x slower CPU and a view that arrives
+//               meanwhile waits for that frame, ten near-identical big views stay under a time
+//               budget with the rows reused, and a row's picture is kept when Home is drawn
+//               again. Running lines (N8) are added at the foot and never redrawn, the box
+//               follows them only from its foot, and the newest line stays in sight in both
+//               window sizes. An action counts and marks only the files it touches (N9).
 //   bridge      inside a stand-in WebView2 host (no demo transport): the page says ready
 //               first, renders Home, detail and Connect from host messages alone, wears
 //               effectiveTheme, ignores a stray or unknown message, and every one of the
@@ -112,10 +129,19 @@ const tally = {
 	jargon: 0,
 	flows: 0,
 	flowFailures: 0,
+	tips: 0,
+	tipsMissing: 0,
 	emDash: 0
 };
 function problem(kind, where, detail) {
 	problems.push(`${kind.padEnd(10)} ${where}: ${detail}`);
+}
+
+/** What a check threw, in one line: its first line and, for a wait that ran out, what it waited for. */
+function threw(e) {
+	const lines = String((e && e.message) || e).split('\n');
+	const waited = lines.find((l) => /waiting for /.test(l));
+	return 'threw ' + lines[0] + (waited ? ' (' + waited.trim().replace(/^- /, '') + ')' : '');
 }
 
 /* ------------------------------------------------------------- Em dash */
@@ -301,7 +327,7 @@ for (const fine of ['Uploading 3 of 9 files', 'Downloading 412 of 1,280 files', 
 
 /** Runs in the page. Everything that can be read without moving the mouse or keyboard. */
 function inspect(jargonSources) {
-	const out = { controls: 0, small: [], grids: [], rowGrids: [], rowDecoration: [], chips: [], overflow: [], hairlines: [], jargon: [] };
+	const out = { controls: 0, small: [], grids: [], rowGrids: [], rowDecoration: [], chips: [], overflow: [], hairlines: [], jargon: [], tips: 0, untipped: [] };
 
 	const visible = (el) => {
 		const r = el.getBoundingClientRect();
@@ -529,9 +555,22 @@ function inspect(jargonSources) {
 		out.hairlines.push({ what: describe(well) + ' row divider', ratio: ratio(c, ground) });
 	}
 
+	// Tips (N1): every visible button, tab and checkbox says what it does in one sentence of its
+	// own, more than its word, ending in a period.
+	for (const el of document.querySelectorAll('button, [role=button], [role=tab], [role=checkbox], .switch')) {
+		if (!visible(el)) continue;
+		out.tips++;
+		const tip = (el.getAttribute('data-tip') || '').trim();
+		const own = (el.getAttribute('aria-label') || el.textContent || '').replace(/\s+/g, ' ').trim();
+		if (!tip) out.untipped.push(describe(el) + ': no tooltip');
+		else if (!/[.)]$/.test(tip)) out.untipped.push(describe(el) + `: tooltip "${tip.slice(0, 40)}" is not a sentence`);
+		else if (tip.replace(/[.\s]+$/, '').toLowerCase() === own.toLowerCase()) out.untipped.push(describe(el) + ': tooltip only repeats its word');
+	}
+
 	// Copy: what a student reads or hears (visible text, labels, tooltips) stays plain.
 	const words = [document.body.innerText, document.title];
-	for (const el of document.querySelectorAll('[aria-label], [title]')) words.push(el.getAttribute('aria-label') || '', el.getAttribute('title') || '');
+	for (const el of document.querySelectorAll('[aria-label], [title], [data-tip]'))
+		words.push(el.getAttribute('aria-label') || '', el.getAttribute('title') || '', el.getAttribute('data-tip') || '');
 	const said = words.join('\n');
 	for (const re of jargonSources.map((src) => new RegExp(src, 'i'))) {
 		const m = said.match(re);
@@ -651,6 +690,11 @@ for (const c of list) {
 			tally.jargon++;
 			problem('copy', where, j);
 		}
+		tally.tips += r.tips;
+		for (const u of r.untipped) {
+			tally.tipsMissing++;
+			problem('tips', where, u);
+		}
 		for (const h of r.hairlines) {
 			tally.hairlines++;
 			tally.hairlineMin = Math.min(tally.hairlineMin, h.ratio);
@@ -758,6 +802,9 @@ for (const c of list) {
 		main.insertAdjacentHTML('beforeend', '<button style="min-width:0;min-height:0;width:30px;height:30px;padding:0">x</button>');
 		main.insertAdjacentHTML('beforeend', '<div style="width:3000px;height:4px"></div>');
 		main.insertAdjacentHTML('beforeend', '<p>Lock held by Maria</p>');
+		// A key with no tooltip, and one whose tooltip uses a word a student never reads.
+		main.insertAdjacentHTML('beforeend', '<button class="key" type="button">Untipped</button>');
+		main.insertAdjacentHTML('beforeend', '<button class="key" type="button" data-tip="Sync this folder.">Tipped</button>');
 		main.insertAdjacentHTML('beforeend', '<img alt="" src="https://example.invalid/planted.png">');
 		document.querySelector('.chip').style.cursor = 'pointer';
 		// A rail planted on a card, off the main plate.
@@ -777,6 +824,8 @@ for (const c of list) {
 		overflow: r.overflow.length > 0,
 		hairline: r.hairlines.some((h) => h.ratio < 3),
 		copy: r.jargon.length > 0,
+		tips: r.untipped.some((x) => /Untipped/.test(x)),
+		'tip copy': r.jargon.some((x) => /Sync this folder/i.test(x)),
 		network: leaks.length > 0
 	};
 	tally.controlsCaught = Object.values(caught).filter(Boolean).length;
@@ -804,7 +853,7 @@ async function flow(name, size, state, run, screen) {
 		}
 	} catch (e) {
 		tally.flowFailures++;
-		problem('flow', where, 'threw ' + String(e.message || e).split('\n')[0]);
+		problem('flow', where, threw(e));
 	}
 	await context.close();
 }
@@ -947,9 +996,19 @@ for (const size of SIZES) {
 		expect((await text(page, '#result-word')) === 'Checked out 2 files.', `the result line says "${await text(page, '#result-word')}"`);
 		expect((await page.getAttribute('#result', 'data-on')) === 'true', 'the result line did not show');
 		expect(/Checked out by you$/.test(await text(page, 'li.row:has([data-key="row-f-wheel-hub"]) .chip.who')), 'Wheel-Hub does not say I have it now');
+		// N9: the answer to an action on several files stays as the Last action, until OK.
+		expect((await text(page, '#last-action .last-words')) === 'Checked out 2 files.', `the Last action says "${await text(page, '#last-action .last-words')}"`);
 		await page.keyboard.press('Escape');
 		await settle(page);
 		expect(!(await page.$('.sel-bar')), 'Escape did not let go of the selection');
+		if (size.w === SIZES[0].w) {
+			await page.waitForTimeout(8400);
+			expect((await page.getAttribute('#result', 'data-on')) === 'false', 'the line at the foot did not fade');
+			expect(!!(await page.$('#last-action')), 'the Last action faded with the line at the foot');
+		}
+		await page.click('[data-key="last-ok"]');
+		await settle(page);
+		expect(!(await page.$('#last-action')), 'OK did not put the Last action away');
 	});
 	await flow('folder dialog: refuses a bad name, renames, follows', size, 'checkedOutByOther', async (page, expect) => {
 		await page.click('[data-key="fk-rename"]');
@@ -1037,7 +1096,7 @@ for (const size of SIZES) {
 		await settle(page);
 		expect((await text(page, '#result-word')) === 'Checked in Wheel-Hub.SLDPRT.', `Check in said "${await text(page, '#result-word')}"`);
 	});
-	await flow('check out all asks first', size, 'synced', async (page, expect) => {
+	await flow('check out this folder asks first', size, 'synced', async (page, expect) => {
 		await page.click('[data-key="fk-out"]');
 		await settle(page);
 		expect(await page.evaluate(() => document.getElementById('ask').open), 'Check out all did not ask');
@@ -1080,8 +1139,8 @@ for (const size of SIZES) {
 		await page.click('[data-key="nt-expand-nameShared"]');
 		await settle(page);
 		const item = 'ni:nameShared:Robot 2027/CopyDesignTemp/Bracket.SLDPRT';
-		const hint = await page.getAttribute(`[data-key="row-${item}"]`, 'title');
-		expect(hint === 'See the Bracket.SLDPRT in Robot 2027 \u203a Intake', `the row goes to "${hint}"`);
+		const hint = await page.getAttribute(`[data-key="row-${item}"]`, 'data-tip');
+		expect(hint === 'See the Bracket.SLDPRT in Robot 2027 \u203a Intake, the file that already has this name.', `the row goes to "${hint}"`);
 		await page.click(`[data-key="rename-${item}"]`);
 		await settle(page);
 		expect(await page.evaluate(() => document.getElementById('ask').open), 'Rename did not ask');
@@ -1350,16 +1409,204 @@ for (const size of SIZES) {
 	}, 'picker');
 	await flow('shared settings', size, 'sharedSettings', async (page, expect) => {
 		expect(await page.evaluate(() => document.getElementById('settings').open), 'Settings did not open');
-		const keys = await page.$$eval('#settings button:not(:disabled)', (b) => b.map((x) => (x.querySelector('.seg-name') || x).textContent.trim()));
+		// A switch the student can't change is off (aria-disabled, so its tooltip says who can).
+		const keys = await page.$$eval('#settings button:not(:disabled):not([aria-disabled="true"])', (b) => b.map((x) => (x.querySelector('.seg-name') || x).textContent.trim()));
 		expect(keys.join('|') === 'Done|On|Match Windows|IDEA|Space White|Turn on|Remove|Report a problem|Send feedback|Your feedback (3)|Open incidents folder', `the sheet holds ${keys.join(', ')}`);
-		expect(await page.$eval('[data-key="set-pins"]', (b) => b.disabled), 'a student can change the PIN switch');
-		expect(await page.$eval('[data-key="set-shared"]', (b) => b.disabled), 'a student can turn shared mode off while others use the computer');
+		expect(await page.$eval('[data-key="set-pins"]', (b) => b.getAttribute('aria-disabled') === 'true'), 'a student can change the PIN switch');
+		expect(await page.$eval('[data-key="set-shared"]', (b) => b.getAttribute('aria-disabled') === 'true'), 'a student can turn shared mode off while others use the computer');
+		expect(/Only a mentor can/.test(await page.getAttribute('[data-key="set-pins"]', 'data-tip')), 'the PIN switch does not say who can change it');
+		const before = await page.getAttribute('[data-key="set-pins"]', 'aria-pressed');
+		await page.click('[data-key="set-pins"]', { force: true });
+		await settle(page);
+		expect((await page.getAttribute('[data-key="set-pins"]', 'aria-pressed')) === before, 'a switch that is off changed when pressed');
 		expect(/Jordan Reyes/.test(await text(page, '.shared-now')), 'Settings does not say who is using Armory now');
 		await page.click('[data-key="set-remove-' + JORDAN_ID + '"]');
 		await settle(page);
 		expect(/No files are deleted/.test(await text(page, '#ask-words')), 'Remove does not say no file is deleted');
 		expect((await page.evaluate(() => document.activeElement.getAttribute('data-key'))) === 'ask-cancel', 'Remove does not start on Cancel');
 	}, 'settings');
+	// N1: the tooltip card, by mouse. It waits about 750 ms, says what its control does, inside the
+	// window, describes it while it shows, and goes when the mouse leaves; a key that is off says
+	// why and does nothing when pressed; inside the Settings sheet it shows over the sheet.
+	const tipNow = (page) =>
+		page.evaluate(() => {
+			const t = document.getElementById('tip');
+			const r = t.getBoundingClientRect();
+			return {
+				shown: !t.hidden && getComputedStyle(t).display !== 'none',
+				text: t.textContent,
+				inside: r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight,
+				inDialog: !!t.closest('dialog[open]'),
+				on: t.getAttribute('data-on')
+			};
+		});
+	await flow('tooltip by mouse', size, 'emptyFolder', async (page, expect) => {
+		await page.hover('[data-key="hdr-settings"]');
+		await page.waitForTimeout(350);
+		expect(!(await tipNow(page)).shown, 'the card showed before about 750 ms');
+		await page.waitForTimeout(600);
+		let t = await tipNow(page);
+		const want = await page.getAttribute('[data-key="hdr-settings"]', 'data-tip');
+		expect(t.shown && t.text === want && t.inside, 'hovering Settings showed ' + JSON.stringify(t));
+		expect(/\btip\b/.test((await page.getAttribute('[data-key="hdr-settings"]', 'aria-describedby')) || ''), 'the card does not describe its control');
+		await page.mouse.move(2, 2);
+		await page.waitForTimeout(60);
+		expect(!(await tipNow(page)).shown, 'the card stayed after the mouse left');
+		expect(!/\btip\b/.test((await page.getAttribute('[data-key="hdr-settings"]', 'aria-describedby')) || ''), 'the control still names the card');
+		// A key that is off (this folder has no files) says why, and a press does nothing.
+		await page.$eval('[data-key="fk-out"]', (el) => el.scrollIntoView({ block: 'center' }));
+		await page.waitForTimeout(120);
+		await page.hover('[data-key="fk-out"]');
+		await page.waitForTimeout(900);
+		t = await tipNow(page);
+		expect((await page.getAttribute('[data-key="fk-out"]', 'aria-disabled')) === 'true', 'Check out this folder is not off in an empty folder');
+		expect(t.shown && t.text === 'This folder has no files to check out.' && t.inside, 'the key that is off said ' + JSON.stringify(t));
+		await page.click('[data-key="fk-out"]', { force: true });
+		await settle(page);
+		expect(!(await page.evaluate(() => document.getElementById('ask').open)), 'a key that is off asked its question');
+		expect(!(await tipNow(page)).shown, 'the card stayed after a click');
+		// Over the Settings sheet's scrim.
+		await page.click('[data-key="hdr-settings"]');
+		await settle(page);
+		await page.hover('[data-key="set-theme-spaceWhite"]');
+		await page.waitForTimeout(900);
+		t = await tipNow(page);
+		expect(t.shown && t.inDialog && t.text === 'The light Space White colors.' && t.inside, 'in the sheet the card showed ' + JSON.stringify(t));
+		const top = await page.evaluate(() => {
+			const r = document.getElementById('tip').getBoundingClientRect();
+			const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+			return at && (at.id === 'tip' || !!at.closest('#tip') || getComputedStyle(document.getElementById('tip')).pointerEvents === 'none');
+		});
+		expect(top, 'the card is under the sheet');
+	});
+	// N1: the tooltip card, by keyboard: Tab to a key shows it after about 300 ms; Escape closes
+	// the card and nothing else, a second Escape closes the sheet.
+	await flow('tooltip by keyboard', size, 'synced', async (page, expect) => {
+		await page.focus('[data-key="hdr-vault"]');
+		await page.keyboard.press('Tab');
+		await page.waitForTimeout(500);
+		const k = await page.evaluate(() => document.activeElement.getAttribute('data-key'));
+		let t = await tipNow(page);
+		const want = await page.getAttribute(`[data-key="${k}"]`, 'data-tip');
+		expect(t.shown && t.text === want && t.inside, `Tab to ${k} showed ` + JSON.stringify(t));
+		await page.keyboard.press('Escape');
+		await page.waitForTimeout(60);
+		expect(!(await tipNow(page)).shown, 'Escape left the card');
+		expect((await page.evaluate(() => document.activeElement.getAttribute('data-key'))) === k, 'Escape moved focus');
+		await page.click('[data-key="hdr-settings"]');
+		await settle(page);
+		await page.keyboard.press('Tab');
+		await page.keyboard.press('Tab');
+		await page.waitForTimeout(500);
+		t = await tipNow(page);
+		expect(t.shown && t.inDialog && t.inside, 'Tab in the sheet showed ' + JSON.stringify(t));
+		await page.keyboard.press('Escape');
+		await page.waitForTimeout(60);
+		expect(!(await tipNow(page)).shown && (await page.evaluate(() => document.getElementById('settings').open)), 'Escape closed more than the card');
+		await page.keyboard.press('Escape');
+		await page.waitForTimeout(60);
+		expect(!(await page.evaluate(() => document.getElementById('settings').open)), 'a second Escape did not close the sheet');
+	});
+	// N8: the running lines of a long check out and of a force check in, and the newest one in
+	// sight while the student works far down the list.
+	for (const [state, last, count] of [
+		['checkingOut', 'Checked out 500 of 1,400 files', 4],
+		['forcingIn', 'Force checked in 32 of 40 files', 3]
+	]) {
+		await flow('running lines: ' + state, size, state, async (page, expect) => {
+			const lines = await page.$$eval('#act-log li .act-log-line', (l) => l.map((x) => x.textContent.replace(/\u00a0/g, ' ')));
+			expect(lines.length === count && lines[lines.length - 1] === last, 'the running lines are ' + lines.join(' | '));
+			const log = await page.$eval('#act-log', (ol) => ol.scrollTop + ol.clientHeight >= ol.scrollHeight - 4);
+			expect(log, 'the running lines do not show their newest');
+			await toBottom(page);
+			await settle(page);
+			const seen = await page.evaluate(() => {
+				const el = [document.getElementById('sync-latest'), document.getElementById('latest-strip')].find((e) => e && e.getClientRects().length && getComputedStyle(e).display !== 'none');
+				if (!el) return null;
+				const r = el.getBoundingClientRect();
+				return { id: el.id, text: el.querySelector('.latest-line').textContent.replace(/\u00a0/g, ' '), inside: r.top >= 0 && r.bottom <= innerHeight && r.left >= 0 && r.right <= innerWidth };
+			});
+			expect(seen && seen.text === last && seen.inside, 'scrolled to the bottom, the newest line is ' + JSON.stringify(seen));
+			expect(!seen || seen.id === (size.w > 760 ? 'sync-latest' : 'latest-strip'), 'the newest line is in ' + (seen && seen.id));
+		});
+	}
+	// N9: a thousand rows, and the keys for all of them are on the first screen.
+	await flow('keys in sight at open', size, 'manyMine', async (page, expect) => {
+		const box = await page.evaluate(() =>
+			['mk-in', 'mk-undo'].map((k) => {
+				const r = document.querySelector(`[data-key="${k}"]`).getBoundingClientRect();
+				return r.top >= 0 && r.bottom <= innerHeight && r.left >= 0 && r.right <= innerWidth;
+			})
+		);
+		expect(box.every(Boolean), 'My files\' keys are not in sight at open: ' + box.join());
+		expect(/^Check in my 1,401 files$/.test((await text(page, '[data-key="mk-in"] .key-word')).replace(/\u00a0/g, ' ')), `My files' key says "${await text(page, '[data-key="mk-in"] .key-word')}"`);
+	});
+	await flow('folder keys in sight at open', size, 'bigProject', async (page, expect) => {
+		const box = await page.evaluate(() =>
+			['fk-out', 'fk-in'].map((k) => {
+				const r = document.querySelector(`[data-key="${k}"]`).getBoundingClientRect();
+				return r.top >= 0 && r.bottom <= innerHeight;
+			})
+		);
+		expect(box.every(Boolean), 'the folder\'s keys are not in sight at open: ' + box.join());
+		expect((await text(page, '[data-key="fk-in"] .key-word')) === 'Check in this folder', `the folder's key says "${await text(page, '[data-key="fk-in"] .key-word')}"`);
+	});
+	// N9: Select all in this folder, from the list's head and from the selection bar.
+	await flow('select all in this folder', size, 'bigProject', async (page, expect) => {
+		await page.click('[data-key="sel-all"]');
+		await settle(page);
+		expect((await text(page, '.sel-count')) === '5,000 selected', `the bar says ${await text(page, '.sel-count')}`);
+		expect((await page.getAttribute('[data-key="sel-all"]', 'aria-checked')) === 'true', 'the head box is not ticked');
+		await page.click('[data-key="sel-all"]');
+		await settle(page);
+		expect(!(await page.$('.sel-bar')), 'the head box did not let go of them all');
+		await page.click('#vl-browser .sel-key');
+		await settle(page);
+		expect((await page.getAttribute('[data-key="sel-all"]', 'aria-checked')) === 'mixed', 'the head box does not say some are picked');
+		await page.click('[data-key="sel-every"]');
+		await settle(page);
+		expect((await text(page, '.sel-count')) === '5,000 selected', `Select all said ${await text(page, '.sel-count')}`);
+	});
+	// N9 (X-sticky-focus): the arrow keys never leave the focused row under the pinned keys.
+	await flow('focus stays clear of the pinned keys', size, 'bigProject', async (page, expect) => {
+		await page.focus('#vl-browser [data-rove="row"][tabindex="0"]');
+		for (let i = 0; i < 40; i++) await page.keyboard.press('ArrowDown');
+		await settle(page);
+		const hidden = [];
+		for (let i = 0; i < 20; i++) {
+			await page.keyboard.press('ArrowUp');
+			const under = await page.evaluate(() => {
+				const head = document.querySelector('.browser-head');
+				const row = document.activeElement.closest('li[data-i]');
+				const h = head.getBoundingClientRect();
+				const r = row.getBoundingClientRect();
+				return r.top < h.bottom - 1 && getComputedStyle(head).position === 'sticky' ? row.getAttribute('data-i') : null;
+			});
+			if (under) hidden.push(under);
+		}
+		expect(!hidden.length, 'focused rows under the pinned keys: ' + hidden.join(', '));
+	});
+	// N9: Force check in names two people and how many others, never all of them.
+	await flow('force check in names a few', size, 'forceManyConfirm', async (page, expect) => {
+		const words = (await text(page, '#ask-words')).replace(/\u00a0/g, ' ');
+		expect(/^Force check in 40 files\? Alex, Maria and 17 others have them checked out now\./.test(words), `the question says "${words}"`);
+		expect((await text(page, '#ask-title')) === 'Force check in 40 files', `the title says ${await text(page, '#ask-title')}`);
+	});
+	// The merged branches' words on the page: check in when closed, no first version, a newer year.
+	await flow('checks in when closed, no first version', size, 'checkInWaits', async (page, expect) => {
+		const mine = await page.$eval('li.row:has([data-key="row-mine:f-gearbox"])', (li) => ({ chips: [...li.querySelectorAll('.chip')].map((c) => c.textContent.trim()), meta: li.querySelector('.row-meta').textContent }));
+		expect(mine.chips.includes('Checks in when closed') && mine.meta === 'Checks in as soon as you close it in SolidWorks.', 'My files says ' + JSON.stringify(mine));
+		const collar = await page.$eval('li.row:has([data-key="row-f-collar"])', (li) => ({ chips: [...li.querySelectorAll('.chip')].map((c) => c.textContent.trim()), keys: li.querySelectorAll('.row-extra .key').length }));
+		expect(collar.chips.includes('No first version') && collar.keys === 0, 'a file with no first version shows ' + JSON.stringify(collar));
+	});
+	await flow('saved in a newer SolidWorks', size, 'newerRelease', async (page, expect) => {
+		expect(/^3 files in Robot 2027 were saved in SolidWorks 2026$/.test((await text(page, '.attn-card[data-kind="newerRelease"] .attn-title')).replace(/\u00a0/g, ' ')), 'the card is missing');
+		const chip = await text(page, 'li.row:has([data-key="row-f-wheel-hub"]) .year-tag');
+		expect(chip === 'Saved in SolidWorks 2026', `Wheel-Hub's row says "${chip}"`);
+		await clickRow(page, 'row-f-wheel-hub');
+		await page.waitForSelector('.history-list');
+		expect((await text(page, '.title-sub .year-tag')) === 'Saved in SolidWorks 2026', 'File detail does not say the year');
+	});
 	await flow('connect', size, 'signedOut', async (page, expect) => {
 		const buttons = await page.$$eval('main button', (b) => b.map((x) => x.textContent.trim()));
 		expect(buttons.join('|') === 'Connect this computer', `Connect shows ${buttons.join(', ')}`);
@@ -1651,6 +1898,12 @@ tally.bridgeTypes = 0;
 		expect(mineBox.own && mineBox.tall <= 400 && mineBox.gap < 120, 'My files with 1,401 files did not scroll in its own box above Team files: ' + JSON.stringify(mineBox));
 		m = await click('[data-key="mk-in"]');
 		expect(m.type === 'checkIn' && m.paths.join() === 'Robot 2027', 'My files Check in all sent ' + JSON.stringify(m));
+		// N9: it touches my 1,401 files, not the 5,018 under Robot 2027, and only mine say so.
+		expect((await page.textContent('#result-word')) === 'Checking in 1,401 files...', 'Check in my files says "' + (await page.textContent('#result-word')) + '"');
+		const marked = await page.evaluate(() =>
+			[...document.querySelectorAll('.row-pending')].map((x) => !!x.closest('.row-line').querySelector('.chip.who[data-tone="ok"]'))
+		);
+		expect(marked.length > 0 && marked.every(Boolean), 'a row that is not mine says it is being checked in: ' + JSON.stringify(marked));
 		m = await click('[data-key="mk-undo"]');
 		expect(!m.type && (await page.evaluate(() => document.getElementById('ask').open)), 'Undo all did not ask first: ' + JSON.stringify(m));
 		expect(/^Undo all 1,401 check outs\?/.test((await page.textContent('#ask-words')).replace(/\u00a0/g, ' ')), 'Undo all asked: ' + (await page.textContent('#ask-words')));
@@ -1673,10 +1926,20 @@ tally.bridgeTypes = 0;
 		m = await click('[data-key="fk-out"]');
 		expect(!m.type && (await page.evaluate(() => document.getElementById('ask').open)), 'Check out all did not ask first: ' + JSON.stringify(m));
 		expect(/^Check out \d+ files in Drivetrain and its folders\?/.test((await page.textContent('#ask-words')).replace(/\u00a0/g, ' ')), 'Check out all asked: ' + (await page.textContent('#ask-words')));
+		const outCount = ((await page.textContent('#ask-words')).replace(/\u00a0/g, ' ').match(/^Check out (\d+) files/) || [])[1];
 		m = await click('[data-key="ask-ok"]');
 		expect(m.type === 'checkOut' && m.paths.join() === 'Robot 2027/Drivetrain' && m.open === false, 'Check out all sent ' + JSON.stringify(m));
+		// N9: the working line counts what the question counted.
+		expect((await page.textContent('#result-word')) === `Checking out ${outCount} files...`, `the question counted ${outCount}, the working line says "${await page.textContent('#result-word')}"`);
+		await host({ type: 'actionResult', requestId: m.requestId, ok: true, message: 'Checked out ' + outCount + ' files.' });
+		expect((await page.textContent('#last-action .last-words')).replace(/\u00a0/g, ' ') === 'Checked out ' + outCount + ' files.', 'an answer about many files is not the Last action');
 		m = await click('[data-key="fk-in"]');
 		expect(m.type === 'checkIn' && m.paths.join() === 'Robot 2027/Drivetrain', 'Check in all sent ' + JSON.stringify(m));
+		// Only Gearbox is mine in Drivetrain: the line names it, and no other row says it is checked in.
+		expect((await page.textContent('#result-word')) === 'Checking in Gearbox.SLDASM...', 'Check in this folder says "' + (await page.textContent('#result-word')) + '"');
+		const pendingRows = await page.$$eval(`.row-pending[data-req="${m.requestId}"]`, (x) => x.map((p) => p.closest('li').getAttribute('data-vkey')));
+		expect(pendingRows.every((k) => /f-gearbox$/.test(k)), 'rows that are not checked in say so: ' + pendingRows.join(', '));
+		await host({ type: 'actionResult', requestId: m.requestId, ok: true, message: 'Checked in Gearbox.SLDASM.' });
 		// Each row's one state key: Check out when nobody has it, Check in when I have it.
 		m = await click('[data-key="state-f-wheel-hub"]');
 		expect(m.type === 'checkOut' && m.paths.join() === HUB && m.open === false, 'a row\'s Check out sent ' + JSON.stringify(m));
@@ -1795,6 +2058,10 @@ tally.bridgeTypes = 0;
 		await host({ type: 'fileDetail', detail: toned });
 		const tones = await page.$$eval('.history-list > li', (li) => li.map((x) => x.getAttribute('data-copy') === 'true'));
 		expect(tones.length === 7 && tones[1] === true && tones[2] === false, 'a kept copy\'s tone did not follow routine: ' + JSON.stringify(tones));
+		// 0.3.3, N4: each kept copy can be put back on this computer.
+		m = await click('[data-key="put-back-k-news"]');
+		expect(m.type === 'putBackKeptCopy' && m.fileId === 'f-wheel-hub' && m.versionId === 'k-news' && typeof m.requestId === 'string', 'Put back on this computer sent ' + JSON.stringify(m));
+		await host({ type: 'actionResult', requestId: m.requestId, ok: true, message: 'Put your copy of Wheel-Hub.SLDPRT back on this computer.' });
 		await host({ type: 'fileDetail', detail: demo.detailFor('synced', 'f-wheel-hub') });
 		m = await click('[data-key="d-checkout"]');
 		expect(m.type === 'checkOut' && m.paths.join() === HUB && m.open === false, 'detail Check out sent ' + JSON.stringify(m));
@@ -2121,12 +2388,168 @@ tally.bridgeTypes = 0;
 		for (const t of Object.keys(CONTRACT)) if (!types.has(t)) fails.push('never sent ' + t);
 		expect(!requests.some((u) => /^https?:/i.test(u)), 'a request left file://');
 	} catch (e) {
-		fails.push('threw ' + String(e.message || e).split('\n')[0]);
+		fails.push(threw(e));
 	}
 	await context.close();
 	for (const f of fails) {
 		tally.bridgeFailures++;
 		problem('bridge', 'stand-in WebView2 host', f);
+	}
+}
+
+// Drawing (0.3.3, N7, X-full-render, N8): a view the page has changes nothing; a view whose
+// settings alone changed changes the theme and Settings, nothing in #main; a theme pick paints
+// within a frame with 1,401 files under a 4x slower CPU, a view that arrives meanwhile waiting
+// for that frame; ten near-identical big views stay under a budget and reuse their rows; the
+// running lines are added at the foot and never redrawn, followed only from the box's foot.
+tally.drawing = 0;
+{
+	const demo = demoStates();
+	const fails = [];
+	const expect = (ok, what) => {
+		if (!ok) fails.push(what);
+	};
+	const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, colorScheme: 'dark', reducedMotion: 'no-preference', timezoneId: 'America/Los_Angeles' });
+	await context.addInitScript(() => {
+		const t = new EventTarget();
+		window.__sent = [];
+		window.chrome = {
+			webview: {
+				addEventListener: (n, f) => t.addEventListener(n, f),
+				removeEventListener: (n, f) => t.removeEventListener(n, f),
+				postMessage: (m) => window.__sent.push(JSON.parse(JSON.stringify(m))),
+				postMessageWithAdditionalObjects: (m) => window.__sent.push(JSON.parse(JSON.stringify(m)))
+			}
+		};
+		window.__host = (m) => t.dispatchEvent(new MessageEvent('message', { data: m }));
+		// Counts what changes in #main and the header from now on.
+		window.__watch = () => {
+			window.__changes = 0;
+			const o = new MutationObserver((list) => (window.__changes += list.length));
+			o.observe(document.getElementById('main'), { subtree: true, childList: true, attributes: true, characterData: true });
+			o.observe(document.getElementById('header-keys'), { subtree: true, childList: true, attributes: true, characterData: true });
+			window.__stop = () => {
+				o.takeRecords().forEach(() => window.__changes++);
+				o.disconnect();
+				return window.__changes;
+			};
+		};
+	});
+	const page = await context.newPage();
+	page.on('pageerror', (e) => fails.push('page error: ' + e.message));
+	try {
+		await page.goto(pathToFileURL(path.join(WWWROOT, 'index.html')).href);
+		await page.waitForTimeout(100);
+		const view = (name, patch) => Object.assign(JSON.parse(JSON.stringify(demo.states[name].view)), patch || {});
+		const host = async (m) => {
+			await page.evaluate((x) => window.__host(x), m);
+			await page.waitForTimeout(40);
+		};
+		const big = view('manyMine');
+		await host({ type: 'view', view: big });
+		await page.waitForTimeout(300);
+		// The same view again: nothing changes.
+		await page.evaluate(() => window.__watch());
+		await host({ type: 'view', view: big });
+		let changes = await page.evaluate(() => window.__stop());
+		tally.drawing++;
+		expect(changes === 0, `a view the page already has changed #main or the header ${changes} times`);
+		// Only the settings changed: the theme and nothing in #main.
+		const light = JSON.parse(JSON.stringify(big));
+		light.settings.theme = 'spaceWhite';
+		light.effectiveTheme = 'spaceWhite';
+		await page.evaluate(() => window.__watch());
+		await host({ type: 'view', view: light });
+		changes = await page.evaluate(() => window.__stop());
+		tally.drawing++;
+		expect(changes === 0 && (await page.getAttribute('html', 'data-theme')) === 'spaceWhite', `a view with new settings alone changed #main ${changes} times, theme ${await page.getAttribute('html', 'data-theme')}`);
+		// A theme picked in Settings paints in the next frame, with 1,401 files and a CPU four times
+		// slower; a view that arrives meanwhile waits for that frame.
+		const cdp = await context.newCDPSession(page);
+		await cdp.send('Emulation.setCPUThrottlingRate', { rate: 4 });
+		await page.click('[data-key="hdr-settings"]');
+		await page.waitForTimeout(300);
+		const later = JSON.parse(JSON.stringify(light));
+		later.sync = Object.assign({}, later.sync, { detail: 'Last checked just now.' });
+		await page.evaluate((v) => {
+			window.__paint = null;
+			document.addEventListener(
+				'click',
+				() => {
+					const t0 = performance.now();
+					window.__watch();
+					// The host's next view comes at once, before the frame.
+					setTimeout(() => window.__host({ type: 'view', view: v }), 0);
+					requestAnimationFrame(() => {
+						window.__paint = { ms: performance.now() - t0, theme: document.documentElement.getAttribute('data-theme'), changes: window.__stop() };
+					});
+				},
+				{ capture: true, once: true }
+			);
+		}, later);
+		await page.click('[data-key="set-theme-idea"]');
+		await page.waitForFunction(() => window.__paint, null, { timeout: 5000 });
+		const paint = await page.evaluate(() => window.__paint);
+		tally.drawing++;
+		expect(paint.theme === 'idea' && paint.changes === 0 && paint.ms < 250, 'a theme pick with 1,401 files and a 4x slower CPU painted ' + JSON.stringify(paint));
+		await page.waitForTimeout(400);
+		expect((await page.textContent('.status-group .sync-detail')) === 'Last checked just now.', 'the view that waited for the theme never came');
+		await page.keyboard.press('Escape');
+		// Ten views that differ a little: each one changes only what changed, under a budget, and
+		// the rows stay the same rows.
+		await page.evaluate(() => (window.__row = document.querySelector('#vl-mine li.vrow')));
+		const times = [];
+		for (let i = 0; i < 10; i++) {
+			const v = JSON.parse(JSON.stringify(big));
+			v.sync = Object.assign({}, v.sync, { detail: 'Last checked ' + (i + 2) + ' seconds ago.' });
+			v.settings.theme = 'idea';
+			v.effectiveTheme = 'idea';
+			times.push(await page.evaluate((x) => {
+				const t0 = performance.now();
+				window.__host({ type: 'view', view: x });
+				return performance.now() - t0;
+			}, v));
+		}
+		const kept = await page.evaluate(() => !!window.__row && window.__row.isConnected);
+		const total = times.reduce((a, b) => a + b, 0);
+		tally.drawing++;
+		tally.drawMs = Math.round(total);
+		expect(total < 3000 && kept, `ten near-identical views of 1,401 files took ${Math.round(total)} ms (${times.map(Math.round).join(', ')}) under a 4x slower CPU; rows kept: ${kept}`);
+		await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 });
+		// The running lines: new ones at the foot, old ones leave at the top, nothing redrawn, and
+		// the box follows the newest only from its foot.
+		const at = (n) => new Date(Date.parse('2026-10-01T22:00:00Z') + n * 1000).toISOString();
+		const act = (lines) => ({ type: 'activity', activity: Object.assign({}, big.activity, { log: lines.map((n) => ({ at: at(n), line: 'Checked out ' + (n * 100).toLocaleString('en-US') + ' of 1,400 files' })) }) });
+		await host(act([1, 2, 3]));
+		await page.evaluate(() => (window.__lines = [...document.querySelectorAll('#act-log li')]));
+		await host(act([1, 2, 3, 4]));
+		let lines = await page.evaluate(() => {
+			const now = [...document.querySelectorAll('#act-log li')];
+			const ol = document.getElementById('act-log');
+			return { n: now.length, same: window.__lines.every((li, i) => now[i] === li), end: ol.scrollTop + ol.clientHeight >= ol.scrollHeight - 4 };
+		});
+		tally.drawing++;
+		expect(lines.n === 4 && lines.same && lines.end, 'a new running line redrew the others or left the foot: ' + JSON.stringify(lines));
+		await host(act([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]));
+		await page.evaluate(() => (document.getElementById('act-log').scrollTop = 0));
+		await host(act([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]));
+		lines = await page.evaluate(() => ({ top: document.getElementById('act-log').scrollTop, n: document.querySelectorAll('#act-log li').length }));
+		expect(lines.n === 12 && lines.top === 0, 'a student reading the first line was moved: ' + JSON.stringify(lines));
+		await page.evaluate(() => (window.__lines = [...document.querySelectorAll('#act-log li')]));
+		await host(act([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]));
+		lines = await page.evaluate(() => {
+			const now = [...document.querySelectorAll('#act-log li')];
+			return { n: now.length, gone: !window.__lines[0].isConnected, same: window.__lines.slice(1).every((li, i) => now[i] === li) };
+		});
+		expect(lines.n === 12 && lines.gone && lines.same, 'an old line leaving redrew the rest: ' + JSON.stringify(lines));
+		expect(/Checked out 1,300 of 1,400 files/.test((await page.textContent('#sync-latest')).replace(/\u00a0/g, ' ')), 'the newest line under the status is not the newest');
+	} catch (e) {
+		fails.push(threw(e));
+	}
+	await context.close();
+	for (const f of fails) {
+		tally.bridgeFailures++;
+		problem('drawing', 'stand-in WebView2 host', f);
 	}
 }
 
@@ -2185,13 +2608,20 @@ tally.bridgeTypes = 0;
 		expect(asked.every((a) => a.startsWith('/thumb/Robot 2027/')), 'a thumbnail was asked for outside the project: ' + asked.slice(0, 3).join(', '));
 		const glyphs = await page.evaluate(() => [...document.querySelectorAll('#vl-browser .thumb-slot')].filter((s) => !s.querySelector('.thumb')).length);
 		expect(glyphs > 0, 'a file with no picture (404) lost its glyph or kept a broken image');
+		// Home drawn again (Pause: a new view) keeps every picture it wore, and asks for none again.
+		const askedBefore = asked.length;
+		await page.evaluate(() => (window.__imgs = [...document.querySelectorAll('#vl-browser .thumb-slot[data-thumb="on"] img.thumb')]));
+		await page.click('[data-key="sync-toggle"]');
+		await page.waitForTimeout(400);
+		const keptPictures = await page.evaluate(() => ({ n: window.__imgs.length, kept: window.__imgs.filter((i) => i.isConnected && i.parentNode.getAttribute('data-thumb') === 'on').length }));
+		expect(keptPictures.n > 0 && keptPictures.kept === keptPictures.n && asked.length === askedBefore, 'drawing Home again lost pictures or asked again: ' + JSON.stringify(keptPictures) + ` asked ${asked.length - askedBefore} more`);
 		asked.length = 0;
 		await page.goto('https://armory.local/index.html?state=takeBack&theme=idea&screen=detail');
 		await page.waitForSelector('html[data-ready="true"]', { timeout: 15000 });
 		await page.waitForTimeout(300);
 		expect((await page.getAttribute('.detail-thumb', 'data-thumb')) === 'on' && asked.length === 1, 'File detail did not show its one picture: ' + asked.join(', '));
 	} catch (e) {
-		fails.push('threw ' + String(e.message || e).split('\n')[0]);
+		fails.push(threw(e));
 	}
 	await context.close();
 	for (const f of fails) {
@@ -2222,7 +2652,7 @@ tally.bridgeTypes = 0;
 		const size = png.length > 24 && png.toString('latin1', 12, 16) === 'IHDR' ? [png.readUInt32BE(16), png.readUInt32BE(20)] : null;
 		if (!size || size[0] !== 560 || size[1] !== 380) fails.push('clip.scale 0.5 of 1120x760 gave ' + JSON.stringify(size));
 	} catch (e) {
-		fails.push('threw ' + String(e.message || e).split('\n')[0]);
+		fails.push(threw(e));
 	}
 	await context.close();
 	for (const f of fails) {
@@ -2261,7 +2691,7 @@ console.log(
 		`grids=${tally.grids} rowGrids=${tally.rowGrids} plantedGridLayersFound=${tally.gridControl ?? 0}/3 rowDecoration=${tally.rowDecoration} ` +
 		`chipsLikeButtons=${tally.chipsLikeButtons} overflow=${tally.overflow} hairlines=${tally.hairlines} hairlineMin=${fmt(tally.hairlineMin)} ` +
 		`hairlineUnder3=${tally.hairlineUnder3} tabStops=${tally.tabStops} focusMissed=${tally.focusMissed} ringMin=${fmt(tally.ringMin)} ` +
-		`ringFailures=${tally.ringFailures} jargon=${tally.jargon} offline=${tally.offline} plantedOfflineFound=${tally.offlinePlanted}/5 flows=${tally.flows} flowFailures=${tally.flowFailures} logo=${tally.logo} logoFailures=${tally.logoFailures} plantedLogoFound=${tally.logoPlanted}/1 bridgeTypes=${tally.bridgeTypes}/${Object.keys(CONTRACT).length} bridgeFailures=${tally.bridgeFailures} plantedDefectsCaught=${tally.controlsCaught}/${tally.controlsPlanted} shapes=${tally.shapes} shapeFailures=${tally.shapeFailures} plantedShapesFound=${Math.min(tally.shapesPlanted, 2)}/2 emDash=${tally.emDash} files=${scanned.length}`
+		`ringFailures=${tally.ringFailures} jargon=${tally.jargon} offline=${tally.offline} plantedOfflineFound=${tally.offlinePlanted}/5 flows=${tally.flows} flowFailures=${tally.flowFailures} logo=${tally.logo} logoFailures=${tally.logoFailures} plantedLogoFound=${tally.logoPlanted}/1 bridgeTypes=${tally.bridgeTypes}/${Object.keys(CONTRACT).length} bridgeFailures=${tally.bridgeFailures} tips=${tally.tips} tipsMissing=${tally.tipsMissing} drawing=${tally.drawing} drawMs=${tally.drawMs ?? 'n/a'} plantedDefectsCaught=${tally.controlsCaught}/${tally.controlsPlanted} shapes=${tally.shapes} shapeFailures=${tally.shapeFailures} plantedShapesFound=${Math.min(tally.shapesPlanted, 2)}/2 emDash=${tally.emDash} files=${scanned.length}`
 );
 console.log(problems.length ? `CHECK-UI FAIL problems=${problems.length}` : 'CHECK-UI PASS');
 process.exit(problems.length ? 1 : 0);

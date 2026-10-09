@@ -29,6 +29,10 @@ internal sealed class MainWindow : Form, IBridgeWindow
     // Explorer's right-click): posted, in order, right after the view the ready gets.
     private readonly Queue<string> forReadyPage = new();
     private bool pageReady;
+    // The last view the page got: an identical one is never posted again (N7).
+    private readonly LastViewPosted lastView = new();
+    // The WebView2-missing button's tooltip (N1).
+    private ToolTip? runtimeTip;
     // A shared computer: a window left open overnight goes to the picker on the new day.
     private readonly System.Windows.Forms.Timer dayTimer = new() { Interval = 60_000 };
 
@@ -97,6 +101,7 @@ internal sealed class MainWindow : Form, IBridgeWindow
             host.ViewChanged -= OnViewChanged;
             host.ActivityChanged -= OnActivityChanged;
             dayTimer.Dispose();
+            runtimeTip?.Dispose();
             web?.Dispose();
         }
         base.Dispose(disposing);
@@ -148,8 +153,13 @@ internal sealed class MainWindow : Form, IBridgeWindow
                 else ServeThumbnail(core, args);
             };
             core.NavigationStarting += (_, args) => KeepInsideApp(args.Uri, () => args.Cancel = true);
-            // The page loads again: it is ready once it says so.
-            core.NavigationStarting += (_, args) => { if (IsAppUri(args.Uri)) pageReady = false; };
+            // The page loads again: it is ready once it says so, and has no view until it gets one.
+            core.NavigationStarting += (_, args) =>
+            {
+                if (!IsAppUri(args.Uri)) return;
+                pageReady = false;
+                lastView.Forget();
+            };
             // A frame never leaves the app and never opens the browser by itself.
             core.FrameNavigationStarting += (_, args) => { if (!IsAppUri(args.Uri)) args.Cancel = true; };
             core.NewWindowRequested += (_, args) =>
@@ -166,8 +176,11 @@ internal sealed class MainWindow : Form, IBridgeWindow
                 string json;
                 try { json = args.WebMessageAsJson; }
                 catch (ArgumentException) { return; }
+                var ready = Bridge.TryRead(json, out var type, out System.Text.Json.JsonElement _) && type == BridgeMessages.Ready;
+                // A page that says ready has no view yet: the one the bridge answers with always goes.
+                if (ready) lastView.Forget();
                 await bridge.HandleAsync(json, DroppedFiles(args));
-                if (Bridge.TryRead(json, out var type, out var parsed) && type == BridgeMessages.Ready) PageReady();
+                if (ready) PageReady();
             };
             core.ProcessFailed += (_, args) =>
             {
@@ -252,7 +265,9 @@ internal sealed class MainWindow : Form, IBridgeWindow
             var png = await host.ThumbnailAsync(vaultPath);
             args.Response = png is null
                 ? core.Environment.CreateWebResourceResponse(null, 404, "Not Found", "Cache-Control: no-store")
-                : core.Environment.CreateWebResourceResponse(new MemoryStream(png), 200, "OK", "Content-Type: image/png\r\nCache-Control: no-cache");
+                // The address carries the file's version (?v=), so a picture is kept as long as the page
+                // asks for that address: a row drawn again shows it at once instead of its glyph (N7).
+                : core.Environment.CreateWebResourceResponse(new MemoryStream(png), 200, "OK", "Content-Type: image/png\r\nCache-Control: private, max-age=31536000, immutable");
         }
         // An async void handler: nothing may escape it (it would end the app).
         catch (Exception error) when (error is not OutOfMemoryException)
@@ -404,7 +419,7 @@ internal sealed class MainWindow : Form, IBridgeWindow
             viewPostScheduled = false;
         }
         if (json is null) return;
-        if (web?.CoreWebView2 is { } core)
+        if (web?.CoreWebView2 is { } core && lastView.Take(json))
         {
             try { core.PostWebMessageAsJson(json); }
             catch (Exception error) when (error is InvalidOperationException or System.Runtime.InteropServices.COMException) { }
@@ -469,7 +484,7 @@ internal sealed class MainWindow : Form, IBridgeWindow
 
     void IBridgeWindow.Post(string json)
     {
-        if (web?.CoreWebView2 is not { } core) return;
+        if (web?.CoreWebView2 is not { } core || !lastView.Take(json)) return;
         try { core.PostWebMessageAsJson(json); }
         catch (Exception error) when (error is InvalidOperationException or System.Runtime.InteropServices.COMException) { }
     }
@@ -552,6 +567,9 @@ internal sealed class MainWindow : Form, IBridgeWindow
             Anchor = AnchorStyles.None,
         };
         button.Click += (_, _) => OpenOutside(RuntimeDownload.AbsoluteUri);
+        runtimeTip?.Dispose();
+        runtimeTip = new ToolTip();
+        runtimeTip.SetToolTip(button, HostTips.GetWebView2);
         panel.Controls.Add(new Panel { Height = 1 }, 0, 0);
         panel.Controls.Add(message, 0, 1);
         panel.Controls.Add(button, 0, 2);

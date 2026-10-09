@@ -63,8 +63,26 @@
 		readyWanted: false,
 		routed: false,
 		ready: false,
-		waitingForDetail: false
+		waitingForDetail: false,
+		// The view the page has, as JSON without its settings and theme (rest) and with only them
+		// (set): a view that is the same is skipped, one that differs only there redraws Settings
+		// and the theme and nothing else (N7).
+		viewRest: null,
+		viewSet: null,
+		themePaint: false, // a theme was just picked: it paints before anything heavy is drawn
+		heldView: null, // the newest view that arrived meanwhile
+		freshDraw: false, // the next draw starts the page anew (another file's detail)
+		lastAction: null // the last answer to an action on many files, kept until OK (N9)
 	};
+
+	/** What each region holds now, as the markup it was drawn from: one that would come out the
+	 *  same is left alone (X-full-render). */
+	var drawn = { header: null, main: null, sheet: null };
+
+	/** Pictures that arrived (by address): a row drawn again wears its picture at once. Pictures
+	 *  that Windows had none for, and when: not asked for again for a minute. */
+	var thumbsLoaded = {};
+	var thumbsMissing = {};
 
 	/* ------------------------------------------------------------- Words */
 
@@ -91,7 +109,9 @@
 		keptCopy: { chip: 'Your copy kept', tone: 'look' },
 		notInArmory: { chip: 'Not in Armory', tone: 'off' },
 		notOnThisComputer: { chip: 'Not here yet', tone: 'off' },
-		noVersion: { chip: 'No first version', tone: 'off' }
+		noVersion: { chip: 'No first version', tone: 'off' },
+		// 0.3.3: checked out here and asked to be checked in, but open in SolidWorks now.
+		checkingInWhenClosed: { chip: 'Checks in when closed', tone: 'look' }
 	};
 
 	/** A notice card's glyph, by kind. */
@@ -107,7 +127,10 @@
 		projectDeleted: 'trash',
 		cantSend: 'cant',
 		cantRead: 'cant',
-		checkInPartial: 'person'
+		checkInPartial: 'person',
+		// 0.3.3: files saved in a newer SolidWorks year, and the SolidWorks link's card.
+		newerRelease: 'newer',
+		solidWorks: 'part'
 	};
 
 	var SYNC = {
@@ -127,7 +150,7 @@
 	var KIND_WORD = { part: 'Part', asm: 'Assembly', drw: 'Drawing', file: 'File' };
 
 	/** Files whose team version is the one on this computer. */
-	var UP_TO_DATE = { synced: true, changed: true, uploading: true, waiting: true, keptCopy: true };
+	var UP_TO_DATE = { synced: true, changed: true, uploading: true, waiting: true, keptCopy: true, checkingInWhenClosed: true };
 
 	/** Characters Windows never allows in a folder name. */
 	var BAD_NAME = /[\\/:*?"<>|]/;
@@ -332,8 +355,21 @@
 		var head = tail && label.slice(-tail.length) === tail ? label.slice(0, -tail.length) : label;
 		if (head === label) tail = '';
 		return (
-			'<span class="chip who" data-tone="' + tone + '" title="' + esc(label) + '"><span class="avatar" aria-hidden="true">' + esc(initials(c.name)) + '</span>' +
+			'<span class="chip who" data-tone="' + tone + '" data-tip="' + esc(label) + '"><span class="avatar" aria-hidden="true">' + esc(initials(c.name)) + '</span>' +
 			'<span class="who-word"><span class="who-head">' + esc(head) + '</span>' + (tail ? '<span class="who-tail">' + esc(tail) + '</span>' : '') + '</span></span>'
+		);
+	}
+
+	/** "Saved in SolidWorks 2026": a file whose version in Armory was saved in a newer SolidWorks
+	 *  than its project uses (the newerRelease card says what can be done about it). */
+	function yearChip(r) {
+		if (!r || !r.newerThanPin || !r.savedRelease) return '';
+		var hit = findRow(r.fileId);
+		var pin = hit && hit.project.pinnedRelease;
+		return (
+			'<span class="chip lamp amber year-tag" data-tip="' +
+			esc('Saved in SolidWorks ' + r.savedRelease + '.' + (pin ? ' ' + hit.project.name + ' uses SolidWorks ' + pin + ', which can open it only to look.' : '')) + '">' +
+			esc('Saved in SolidWorks ' + r.savedRelease) + '</span>'
 		);
 	}
 
@@ -366,7 +402,9 @@
 	}
 
 	/** A key with a glyph and its word; the word hides in a narrow window (`tight`), and
-	 *  stays for screen readers and in the tooltip. */
+	 *  stays for screen readers and in the tooltip (o.tip, every key has one). A key that is
+	 *  off is aria-disabled, never disabled, so the mouse still reaches it and its tip says
+	 *  why it is off; a press on it does nothing. */
 	function key(o) {
 		var busy = o.key && busyKey(o.key);
 		return (
@@ -376,11 +414,233 @@
 			(o.path != null ? ' data-path="' + esc(o.path) + '"' : '') +
 			(o.fileId ? ' data-file-id="' + esc(o.fileId) + '"' : '') +
 			(o.extra || '') +
-			(o.title ? ' title="' + esc(o.title) + '"' : '') +
+			(o.tip ? ' data-tip="' + esc(o.tip) + '"' : '') +
 			(o.label ? ' aria-label="' + esc(o.label) + '"' : '') +
-			(o.disabled ? ' disabled' : '') +
+			(o.disabled ? offAttrs(busy) : '') +
 			'>' + (busy ? spinHtml() : '') + (o.glyph ? icon(o.glyph) : '') + '<span class="key-word">' + esc(o.word) + '</span></button>'
 		);
+	}
+
+	/** A control that is off: aria-disabled (busyAttrs already says so while it is busy), and
+	 *  data-off, so the end of an action never turns it back on. */
+	function offAttrs(busy) {
+		return (busy ? '' : ' aria-disabled="true"') + ' data-off="true"';
+	}
+
+	/* ------------------------------------------------------------- Tooltips' words */
+
+	/*
+	 * WHAT EVERY CONTROL DOES, in one plain sentence (0.3.3, N1: "a tooltip description should
+	 * describe in style and clarity what that button does"). One table for the whole window:
+	 * a control's tip is TIPS[its tip id](what it is about), drawn into its data-tip and shown
+	 * by the tooltip card below (Tooltips). A key that is off says why it is off. The words
+	 * follow the copy rule (no jargon) and name the file, folder or person the control is about.
+	 */
+	var TIPS = {
+		// The header.
+		vault: function (c) { return 'Open your Armory folder, ' + c.root + ', in File Explorer.'; },
+		feedback: 'Tell the IDEA team what got in your way, an idea you have, or something you like.',
+		settings: 'Change where your files are kept, how Armory starts, and its colors.',
+		// Connect.
+		connect: 'Open your browser to sign in with your school Google account. You only do this once.',
+		connectAgain: 'Open your browser and try signing in again.',
+		browserAgain: 'Open the sign-in page in your browser again, if you closed it.',
+		cancelConnect: 'Stop signing in. You can connect this computer later.',
+		// The folder belongs to someone else.
+		takeFolder: function (c) { return 'Make this Armory folder yours. Armory checks first that nothing of ' + c.owner + ' is waiting in it, and nothing of theirs changes.'; },
+		ownFolder: function (c) { return 'Keep your files in a new folder of your own: ' + c.path + '.'; },
+		chooseFolder: 'Pick a different folder on this computer for your Armory files.',
+		signOutTaken: 'Sign out, so the person this folder belongs to can sign in.',
+		// A shared computer's picker.
+		pickTile: function (c) {
+			if (c.current) return 'Keep using Armory as ' + c.name + '.';
+			if (c.needsSignIn) return 'Continue as ' + c.name + '. Your sign-in here ended, so your browser opens to sign in again.';
+			return c.pins ? 'Continue as ' + c.name + '. You type your PIN next.' : 'Continue as ' + c.name + '.';
+		},
+		addStudent: 'Add yourself to this computer. You sign in with your school Google account once, then pick your name each time.',
+		forgotPin: 'Sign in with your school Google account instead, then choose a new PIN.',
+		pickerBack: 'Go back to the list of students.',
+		addAgain: 'Open your browser and try adding yourself again.',
+		addCancel: 'Stop adding a student and go back to the list.',
+		signInCancel: 'Stop signing in and go back to the list of students.',
+		signInGo: function (c) { return 'Open your browser to sign in as ' + c.name + ' with your school Google account.'; },
+		useOwnFolder: function (c) { return 'Work in a folder of your own, ' + c.path + ', until ' + c.first + ' finishes the work waiting in the shared one.'; },
+		waitFor: function (c) { return 'Go back to the list and use Armory once ' + c.first + ' is done.'; },
+		// Home: status and this computer.
+		pause: 'Stop uploading and downloading for now. Your work stays safe on this computer.',
+		resume: 'Start uploading and downloading again.',
+		switchAccount: 'Sign out and let the next person sign in to this same Armory folder.',
+		signOut: 'Sign out of Armory on this computer. Your files stay in the Armory folder.',
+		switchStudent: 'Show the list of students, so the next one can pick their name.',
+		lastOk: 'Hide this answer to your last action on several files.',
+		// The check-out question.
+		promptCheckOut: function (c) { return 'Check out ' + c.name + ', then open it again here so you can save changes to it.'; },
+		promptLater: 'Keep looking without checking it out. Armory asks again the next time you open it.',
+		promptOk: 'Close this message.',
+		// Notices.
+		noticeAction: function (c) {
+			switch (c.command) {
+				case 'dismissNotice':
+					return 'Close this card.';
+				case 'checkIn':
+					return 'Check in the files this card is about, to share your changes.';
+				case 'checkOut':
+					return 'Check out the files this card is about, so you can change them.';
+				case 'undoCheckOut':
+					return 'Put the files this card is about back as they were before you checked them out. Your changes are kept as your own copies.';
+				case 'launchFile':
+					return 'Open ' + c.name + ' in its program.';
+				case 'showInFolder':
+					return 'Show ' + c.name + ' in File Explorer.';
+				case 'openFile':
+					return 'Open the file\'s page: its history and who has it checked out.';
+				case 'keepLocal':
+					return 'Keep this file on this computer only, as it is now. It isn\'t shared with the team until it can be saved in the team\'s SolidWorks year.';
+				case 'saveDown':
+					return 'Save this file in the team\'s SolidWorks year now, so it can be shared.';
+			}
+			return c.label + '.';
+		},
+		showList: function (c) { return 'Show the ' + c.what + ' this card is about.'; },
+		hideList: 'Hide the list.',
+		seeFile: 'Open this file\'s page: its history and who has it checked out.',
+		renameShared: function (c) { return 'Give ' + c.name + ' a name of its own, so Armory can add it.'; },
+		// Rows.
+		fileRow: function (c) { return 'Open the page of ' + c.name + ': its history and who has it checked out.'; },
+		folderRow: function (c) { return 'Open the folder ' + c.name + '.'; },
+		localRow: function (c) { return 'Show ' + c.name + ' in File Explorer. It isn\'t in Armory yet.'; },
+		namesake: function (c) { return 'See the ' + c.name + ' in ' + c.where + ', the file that already has this name.'; },
+		pick: function (c) { return 'Select ' + c.name + '. Shift-click selects every file from the last one you picked.'; },
+		open: function (c) {
+			var where = c.cad ? ' in SolidWorks' : ' in its program';
+			if (c.state === 'mine') return 'Open ' + c.name + where + ' to work on it.';
+			if (c.state === 'other') return 'Open ' + c.name + where + ' to look. ' + c.holder + ' has it checked out, so you can\'t save changes.';
+			if (c.state === 'myOtherComputer') return 'Open ' + c.name + where + ' to look. Check it in on ' + c.device + ' first to change it here.';
+			return 'Open ' + c.name + where + ' to look. Check it out first to save changes.';
+		},
+		checkOutFile: function (c) { return 'Check out ' + c.name + ' so you can save changes to it. Nobody else can until you check it in.'; },
+		checkInFile: function (c) { return 'Check in ' + c.name + ' to share your changes with the team.'; },
+		forceFile: function (c) { return 'Check ' + c.name + ' in for ' + c.holder + '. Anything they hadn\'t checked in is kept as their own copy.'; },
+		// My files.
+		mineIn: function (c) { return c.count ? 'Check in all ' + plural(c.count, 'file', 'files') + ' you have checked out, in every project.' : 'Nothing here is checked out by you.'; },
+		mineUndo: function (c) {
+			return c.count ? 'Put all ' + plural(c.count, 'file', 'files') + ' back as they were before you checked them out. Your changes are kept as your own copies.' : 'Nothing here is checked out by you.';
+		},
+		emptyVault: function (c) { return 'Open ' + c.root + ' in File Explorer.'; },
+		// Team files.
+		tab: function (c) {
+			if (c.archived) return c.name + ' is archived. Its files stay on this computer just as they are.';
+			return 'Show the files in ' + c.name + '.' + (c.newer ? ' ' + plural(c.newer, 'of its files was', 'of its files were') + ' saved in a newer SolidWorks than the ' + c.year + ' it uses.' : '');
+		},
+		crumb: function (c) { return 'Go back to ' + c.name + '.'; },
+		newFolder: function (c) { return 'Make a new folder in ' + c.name + '. Everyone on the team sees it.'; },
+		addFiles: function (c) { return 'Copy files from this computer into ' + c.name + ' and add them to Armory.'; },
+		renameFolder: function (c) { return 'Rename ' + c.name + ' for everyone on the team. Its files keep their history.'; },
+		deleteFolder: function (c) { return 'Delete ' + c.name + ' and its files for everyone on the team. The history of every file is kept.'; },
+		folderOut: function (c) {
+			if (!c.files) return 'This folder has no files to check out.';
+			return c.count ? 'Check out the ' + plural(c.count, 'file', 'files') + ' nobody has checked out in ' + c.name + c.inside + '. Armory asks first.' : 'Every file here is checked out already.';
+		},
+		folderIn: function (c) { return c.count ? 'Check in the ' + plural(c.count, 'file', 'files') + ' you have checked out in ' + c.name + c.inside + '.' : 'Nothing here is checked out by you.'; },
+		folderForce: function (c) {
+			return c.count ? 'Check in the ' + plural(c.count, 'file', 'files') + ' other people have checked out in ' + c.name + c.inside + '. Their changes are kept as their own copies. Armory asks first.' : 'Nobody else has a file here checked out.';
+		},
+		selectAll: function (c) {
+			if (!c.count) return 'This folder has no files to select.';
+			return c.all ? 'Clear the selection.' : 'Select all ' + plural(c.count, 'file', 'files') + ' in this folder. The folders in it are left out.';
+		},
+		// The selection bar.
+		selOut: function (c) { return c.count ? 'Check out the ' + plural(c.count, 'selected file', 'selected files') + ' nobody has checked out, so you can change them.' : 'None of the selected files can be checked out: each one is checked out already.'; },
+		selIn: function (c) { return c.count ? 'Check in the ' + plural(c.count, 'selected file', 'selected files') + ' you have checked out, to share your changes.' : 'None of the selected files is checked out by you.'; },
+		selUndo: function (c) {
+			return c.count ? 'Put the ' + plural(c.count, 'selected file', 'selected files') + ' you have checked out back as they were. Your changes are kept as your own copies.' : 'None of the selected files is checked out by you.';
+		},
+		selForce: function (c) { return c.count ? 'Check in the ' + plural(c.count, 'selected file', 'selected files') + ' other people have checked out. Their changes are kept as their own copies.' : 'Nobody else has a selected file checked out.'; },
+		selEvery: function (c) { return 'Select all ' + plural(c.count, 'file', 'files') + ' in this folder.'; },
+		selClear: 'Clear the selection (Esc).',
+		// File detail.
+		back: 'Go back to Home, to the list you came from.',
+		detailOpen: function (c) { return TIPS.open(c); },
+		detailOut: function (c) { return 'Check out ' + c.name + ' so you can save changes to it. Nobody else can until you check it in.'; },
+		detailOutOpen: function (c) { return 'Check out ' + c.name + ' and open it' + (c.cad ? ' in SolidWorks' : '') + ', ready to change.'; },
+		detailIn: function (c) { return 'Check in ' + c.name + ' to share your changes with the team.'; },
+		detailUndo: function (c) { return 'Put ' + c.name + ' back to the version from before you checked it out. Your changes are kept as your own copy.'; },
+		detailForce: function (c) { return 'Check ' + c.name + ' in for ' + c.holder + '. Anything they hadn\'t checked in is kept as their own copy.'; },
+		showInFolder: function (c) { return 'Show ' + c.name + ' in File Explorer.'; },
+		putBack: function (c) { return 'Put this copy back on this computer, checked out to you. Check it in afterward to share it with the team.'; },
+		// Settings.
+		done: 'Close Settings (Esc).',
+		changeRoot: 'Choose another folder on this computer for your Armory files.',
+		startSwitch: function (c) { return c.on ? 'On: Armory starts by itself when you sign in to Windows. Click to turn it off.' : 'Off: Armory waits until you start it. Click to start it by itself when you sign in to Windows.'; },
+		themeSystem: 'Light or dark, the way Windows is set.',
+		themeIdea: 'The dark IDEA colors.',
+		themeSpaceWhite: 'The light Space White colors.',
+		turnOnBadges: 'Show Armory\'s status on file icons in File Explorer. Windows asks for an administrator\'s password once.',
+		sharedSwitch: function (c) {
+			if (c.off) return 'Only a mentor can turn this off while other students use this computer.';
+			return c.on ? 'On: several students take turns here. Click to go back to one student on this computer.' : 'Off: one student uses Armory here. Click when several students take turns on this computer.';
+		},
+		pinsSwitch: function (c) {
+			if (c.off) return 'Only a mentor can change this, for this computer.';
+			return c.on ? 'On: each student types their PIN to switch. Click to switch with one click.' : 'Off: picking a name switches at once. Click to ask for a PIN.';
+		},
+		removeStudent: function (c) { return 'Remove ' + c.name + ' from this computer. No files are deleted.'; },
+		report: 'Tell the IDEA team what went wrong. A short record of what Armory was doing goes with your words.',
+		sendFeedback: 'Send your ideas or comments to the IDEA team.',
+		yourFeedback: 'See the feedback you sent from this account, and where each note is with the IDEA team.',
+		incidents: 'Open the folder where Armory keeps its problem reports, to hand them over by hand.',
+		// The small dialog.
+		cancel: 'Close without doing anything (Esc).',
+		ask: function (c) {
+			switch (c.kind) {
+				case 'report':
+					return 'Send your report to the IDEA team.';
+				case 'checkOutAll':
+					return 'Check out these ' + plural(c.count, 'file', 'files') + '. Nobody else can save them until you check them in.';
+				case 'undoMine':
+					return 'Undo ' + plural(c.count, 'check out', 'check outs') + '. Your changes are kept as your own copies.';
+				case 'renameFile':
+					return 'Rename the file to the name you typed.';
+				case 'newFolder':
+					return 'Make the folder with the name you typed.';
+				case 'renameFolder':
+					return 'Rename the folder for everyone on the team.';
+				case 'deleteFolder':
+					return 'Delete the folder for everyone on the team. The history of its files is kept.';
+				case 'feedback':
+					return c.withoutPicture ? 'Send your note without the picture.' : 'Send your note to the IDEA team.';
+				case 'sharedOn':
+					return 'Set this computer up for several students.';
+				case 'sharedOff':
+					return 'Go back to one student on this computer. No files change.';
+				case 'removeProfile':
+					return 'Remove this student from this computer. No files are deleted.';
+			}
+			return c.count === 1 ? 'Check the file in for the person who has it. Their changes are kept as their own copy.' : 'Check these files in for the people who have them. Their changes are kept as their own copies.';
+		},
+		askForce: function (c) {
+			return 'Check in the files other people have checked out here, then ' + (c.kind === 'deleteFolder' ? 'delete the folder' : 'rename it') + '. Their changes are kept as their own copies.';
+		},
+		kind: function (c) {
+			return { bug: 'Something in Armory broke or did the wrong thing.', idea: 'Something you would like Armory to do.', praise: 'Something you like about Armory.', other: 'Anything else you want to tell the IDEA team.' }[c.kind] || '';
+		},
+		addShot: 'Add a picture of only this window. Email addresses and file pictures are hidden, and you see it before it goes.',
+		removeShot: 'Send your note without this picture.',
+		mineLink: 'See the feedback you sent, and where each note is.',
+		mineBack: 'Go back to your note. Your words are kept.',
+		mineDone: 'Close this list (Esc).'
+	};
+
+	/** A control's tip: TIPS[id] for what it is about. */
+	function tipText(id, c) {
+		var t = TIPS[id];
+		return typeof t === 'function' ? t(c || {}) : t || '';
+	}
+
+	/** The data-tip attribute for a control's markup. */
+	function tipAttr(id, c) {
+		var t = tipText(id, c);
+		return t ? ' data-tip="' + esc(t) + '"' : '';
 	}
 
 	/* ------------------------------------------------------- View lookups */
@@ -514,37 +774,84 @@
 		return fallback === 'spaceWhite' ? 'spaceWhite' : 'idea';
 	}
 
+	/** The theme the view (or a theme just picked) asks for. A theme just picked holds until a
+	 *  view carries it, so an older view never flips it back. */
+	function wearTheme(v) {
+		if (ui.themeWanted && v.settings && v.settings.theme === ui.themeWanted) ui.themeWanted = null;
+		setTheme(ui.themeWanted ? effectiveOf(ui.themeWanted, v.effectiveTheme) : v.effectiveTheme === 'spaceWhite' ? 'spaceWhite' : 'idea');
+	}
+
+	var themingTimer = 0;
+
+	/** Wears a theme in one frame (N7): nothing eases from one theme's colors to the other's
+	 *  (data-theming turns every transition off), so no frame shows the two mixed. */
+	function setTheme(theme) {
+		var root = document.documentElement;
+		if (root.getAttribute('data-theme') === theme) return;
+		root.setAttribute('data-theming', 'true');
+		root.setAttribute('data-theme', theme);
+		clearTimeout(themingTimer);
+		requestAnimationFrame(function () {
+			themingTimer = setTimeout(function () {
+				root.removeAttribute('data-theming');
+			}, 0);
+		});
+	}
+
+	/** A theme was just picked: the next frame paints it, and any view that arrives before that
+	 *  waits until it has (a whole Home drawn first would hold the new colors back). */
+	function paintThemeFirst() {
+		ui.themePaint = true;
+		var done = false;
+		function release() {
+			if (done) return;
+			done = true;
+			clearTimeout(late);
+			ui.themePaint = false;
+			var held = ui.heldView;
+			ui.heldView = null;
+			if (held) onHost(held);
+		}
+		requestAnimationFrame(function () {
+			setTimeout(release, 0);
+		});
+		// A window that is hidden or minimized paints no frame; a view never waits long for one.
+		var late = setTimeout(release, 250);
+	}
+
 	function render() {
 		var v = ui.view;
 		if (!v) return;
-		// A theme just picked holds until a view carries it, so an older view never flips it back.
-		if (ui.themeWanted && v.settings && v.settings.theme === ui.themeWanted) ui.themeWanted = null;
-		document.documentElement.setAttribute('data-theme', ui.themeWanted ? effectiveOf(ui.themeWanted, v.effectiveTheme) : v.effectiveTheme === 'spaceWhite' ? 'spaceWhite' : 'idea');
+		wearTheme(v);
 		var screen = picking(v) ? 'picker' : v.connection === 'signedIn' ? ui.screen : 'connect';
 		// The picker forgets the page's place: the next student starts on their own Home.
 		if (screen === 'picker') leaveForPicker();
 		var focus = activeKey();
-		// In a wide window Home's lists scroll inside the recessed column, and a new view
-		// must not throw the student back to the top of them.
-		var keepRecess = document.body.getAttribute('data-screen') === 'home' && screen === 'home' ? recessTop() : null;
+		var was = document.body.getAttribute('data-screen');
+		// Home and File detail are drawn in place when they stay on screen: only what changed
+		// changes, so focus, scroll places, pictures and unchanged rows stay put (X-full-render).
+		var inPlace = !ui.freshDraw && was === screen && (screen === 'home' || screen === 'detail') && !!main.firstElementChild;
+		// Another file's detail is drawn anew: nothing of the last file's page (its picture) stays.
+		ui.freshDraw = false;
+		// A Home drawn anew keeps the recessed column where it was scrolled to.
+		var keepRecess = !inPlace && was === 'home' && screen === 'home' ? recessTop() : null;
 		ui.pin = [focus, ui.returnKey];
 		lists = {};
-		lastActivity = null;
 		document.body.setAttribute('data-screen', screen);
-		headerKeys.innerHTML = screen === 'connect' || screen === 'picker' ? '' : headerHtml(v);
-		if (screen === 'picker') main.innerHTML = pickerHtml(v);
-		else if (screen === 'connect') main.innerHTML = connectHtml(v);
-		else if (screen === 'detail') main.innerHTML = detailHtml(v);
-		else main.innerHTML = homeHtml(v);
+		drawInto(headerKeys, 'header', screen === 'connect' || screen === 'picker' ? '' : headerHtml(v), true);
+		var html = screen === 'picker' ? pickerHtml(v) : screen === 'connect' ? connectHtml(v) : screen === 'detail' ? detailHtml(v) : homeHtml(v);
+		drawInto(main, 'main', html, inPlace);
+		lastActivity = screen === 'home' ? activityInner(v.activity) : null;
 		// Long lists first draw where they were, so the page is its full height before
 		// anything is measured, and a kept scroll position is never cut short.
 		mountLists(true);
 		if (keepRecess !== null) setRecessTop(keepRecess);
 		applyBars(main);
-		logToEnd(main);
+		syncLogs(v.activity);
+		paintLatest(v.activity, screen);
 		if (sheet.open) {
 			if (screen === 'connect' || screen === 'picker') sheet.close();
-			else sheet.innerHTML = settingsHtml(v);
+			else drawSheet(v);
 		}
 		if (ask.open && (screen === 'connect' || screen === 'picker')) ask.close();
 		document.title = screen === 'detail' && ui.detail ? ui.detail.name + ' · Armory' : 'Armory';
@@ -553,6 +860,100 @@
 		if (screen === 'picker') focusPicker();
 		paintDrag();
 		updateCues();
+		tipAfterRender();
+	}
+
+	/** Draws a region from its markup: in place (morph) when it stays, from scratch otherwise;
+	 *  not at all when the markup is the same as what it holds. */
+	function drawInto(root, name, html, inPlace) {
+		if (inPlace && drawn[name] === html) return;
+		if (inPlace) morphInto(root, html);
+		else root.innerHTML = html;
+		drawn[name] = html;
+	}
+
+	/** The Settings sheet, drawn in place while it is open. */
+	function drawSheet(v) {
+		drawInto(sheet, 'sheet', settingsHtml(v), true);
+	}
+
+	/* ---- Drawing in place ---- */
+
+	/*
+	 * The new markup is parsed into a template and laid over what is on the page: an element
+	 * with the same key (data-key, id or data-part) and tag stays, and only its changed
+	 * attributes and words are set; any other element stays when the one in its place has the
+	 * same tag. A long list's rows are never walked here (mountList keeps each row whose words
+	 * did not change), nor the running lines (syncLog adds new ones only), nor the tooltip card.
+	 * A few attributes belong to the page, not the markup, and stay: widths set through CSSOM
+	 * (style), a picture that arrived (data-thumb) and files held over the list (data-drag).
+	 */
+	var LIVE = { style: true, 'data-thumb': true, 'data-drag': true };
+
+	function morphInto(root, html) {
+		var tpl = document.createElement('template');
+		tpl.innerHTML = html;
+		morphChildren(root, tpl.content);
+	}
+
+	function keyOfNode(n) {
+		if (n.nodeType !== 1) return null;
+		var k = n.getAttribute('data-key') || n.id || n.getAttribute('data-part');
+		return k ? n.tagName + '#' + k : null;
+	}
+
+	function morphChildren(from, to) {
+		var keyed = {};
+		var wanted = {};
+		for (var c = from.firstElementChild; c; c = c.nextElementSibling) {
+			var k = keyOfNode(c);
+			if (k) keyed[k] = c;
+		}
+		for (var d = to.firstElementChild; d; d = d.nextElementSibling) {
+			var kd = keyOfNode(d);
+			if (kd) wanted[kd] = true;
+		}
+		var a = from.firstChild;
+		var b = to.firstChild;
+		while (b) {
+			var nextB = b.nextSibling;
+			// What goes anyway goes now, so the next one in line can be matched.
+			while (a && (a === tipEl ? false : keyOfNode(a) && !wanted[keyOfNode(a)])) {
+				var dead = a;
+				a = a.nextSibling;
+				from.removeChild(dead);
+			}
+			if (a === tipEl) a = a.nextSibling;
+			var kb = keyOfNode(b);
+			var match = null;
+			if (kb) match = keyed[kb] || null;
+			else if (a && !keyOfNode(a) && a.nodeType === b.nodeType && (a.nodeType !== 1 || a.tagName === b.tagName)) match = a;
+			if (match) {
+				if (kb) delete keyed[kb];
+				if (match === a) a = a.nextSibling;
+				else from.insertBefore(match, a);
+				if (match.nodeType === 1) morphNode(match, b);
+				else if (match.nodeValue !== b.nodeValue) match.nodeValue = b.nodeValue;
+			} else from.insertBefore(b, a);
+			b = nextB;
+		}
+		while (a) {
+			var n = a.nextSibling;
+			if (a !== tipEl) from.removeChild(a);
+			a = n;
+		}
+	}
+
+	function morphNode(from, to) {
+		var want = to.attributes;
+		for (var i = 0; i < want.length; i++) if (from.getAttribute(want[i].name) !== want[i].value) from.setAttribute(want[i].name, want[i].value);
+		var have = from.attributes;
+		for (var j = have.length - 1; j >= 0; j--) {
+			var name = have[j].name;
+			if (!to.hasAttribute(name) && !LIVE[name] && !(name === 'aria-describedby' && from === tips.on)) from.removeAttribute(name);
+		}
+		if ((from.classList && from.classList.contains('vlist')) || from.id === 'act-log') return;
+		morphChildren(from, to);
 	}
 
 	/** The header's keys. In a narrow window they keep only their icons; the words stay
@@ -560,15 +961,15 @@
 	 *  there once the computer is signed in, on every screen but Connect. */
 	function headerHtml(v) {
 		return (
-			'<button class="key hdr-key" type="button" data-action="openVault" data-key="hdr-vault" title="Open ' + esc(v.vaultRoot) + ' in File Explorer">' +
+			'<button class="key hdr-key" type="button" data-action="openVault" data-key="hdr-vault"' + tipAttr('vault', { root: v.vaultRoot }) + '>' +
 			icon('folder') +
 			'<span class="key-word">Open Armory folder</span></button>' +
 			(v.connection === 'signedIn'
-				? '<button class="key hdr-key" type="button" data-action="askFeedback" data-key="feedback" aria-haspopup="dialog" title="Send feedback to the IDEA team">' +
+				? '<button class="key hdr-key" type="button" data-action="askFeedback" data-key="feedback" aria-haspopup="dialog"' + tipAttr('feedback') + '>' +
 					icon('feedback') +
 					'<span class="key-word">Send feedback</span></button>'
 				: '') +
-			'<button class="key hdr-key" type="button" data-action="openSettings" data-key="hdr-settings" aria-haspopup="dialog" title="Settings">' +
+			'<button class="key hdr-key" type="button" data-action="openSettings" data-key="hdr-settings" aria-haspopup="dialog"' + tipAttr('settings') + '>' +
 			icon('settings') +
 			'<span class="key-word">Settings</span></button>'
 		);
@@ -604,10 +1005,10 @@
 		else if (failed) html += lcdPlate('bad', "Sign-in didn't finish", v.connect.message || 'Check that you\'re online, then try again.', false);
 		html += '<div class="connect-actions">';
 		if (waiting) {
-			html += '<button class="key" type="button" data-action="connect" data-key="cn-reopen">Open the browser again</button>';
-			html += '<button class="key" type="button" data-action="cancelConnect" data-key="cn-cancel">Cancel</button>';
+			html += '<button class="key" type="button" data-action="connect" data-key="cn-reopen"' + tipAttr('browserAgain') + '>Open the browser again</button>';
+			html += '<button class="key" type="button" data-action="cancelConnect" data-key="cn-cancel"' + tipAttr('cancelConnect') + '>Cancel</button>';
 		} else if (!finishing) {
-			html += '<button class="key primary" type="button" data-action="connect" data-key="cn-connect">' + (failed ? 'Try again' : 'Connect this computer') + '</button>';
+			html += '<button class="key primary" type="button" data-action="connect" data-key="cn-connect"' + tipAttr(failed ? 'connectAgain' : 'connect') + '>' + (failed ? 'Try again' : 'Connect this computer') + '</button>';
 		}
 		html += '</div>';
 		html += '</div></div>';
@@ -674,11 +1075,11 @@
 		if (me) html += '<div><dt class="label">You\'re signed in as</dt><dd class="mono-plate">' + esc(me) + '</dd></div>';
 		html += '</dl>';
 		html += '<div class="connect-actions">';
-		html += '<button class="key primary" type="button" data-action="takeOverFolder" data-key="cn-take">Use this folder</button>';
-		html += '<button class="key" type="button" data-action="useFolder" data-path="' + esc(mine) + '" data-key="cn-own">Use <span class="key-path">' + esc(mine) + '</span></button>';
-		html += '<button class="key" type="button" data-action="chooseVaultRoot" data-key="cn-choose">' + icon('folder') + '<span>Choose another folder</span></button>';
+		html += '<button class="key primary" type="button" data-action="takeOverFolder" data-key="cn-take"' + tipAttr('takeFolder', { owner: ownerName ? ownerName + '\'s' : 'the owner\'s' }) + '>Use this folder</button>';
+		html += '<button class="key" type="button" data-action="useFolder" data-path="' + esc(mine) + '" data-key="cn-own"' + tipAttr('ownFolder', { path: mine }) + '>Use <span class="key-path">' + esc(mine) + '</span></button>';
+		html += '<button class="key" type="button" data-action="chooseVaultRoot" data-key="cn-choose"' + tipAttr('chooseFolder') + '>' + icon('folder') + '<span>Choose another folder</span></button>';
 		html += '</div>';
-		html += '<p class="connect-foot">Not sure? Ask your teacher. Not you? <button class="textlink" type="button" data-action="signOut" data-key="cn-signout">Sign out</button></p>';
+		html += '<p class="connect-foot">Not sure? Ask your teacher. Not you? <button class="textlink" type="button" data-action="signOut" data-key="cn-signout"' + tipAttr('signOutTaken') + '>Sign out</button></p>';
 		html += '</div></div>';
 		return html;
 	}
@@ -777,7 +1178,8 @@
 	function pickerKey(o) {
 		return (
 			'<button class="key' + (o.primary ? ' primary' : '') + '" type="button" data-action="' + o.action + '" data-key="' + esc(o.key) + '"' +
-			(o.profileId ? ' data-profile-id="' + esc(o.profileId) + '"' : '') + (o.choice ? ' data-choice="' + esc(o.choice) + '"' : '') + busyAttrs(o.key) + '>' +
+			(o.profileId ? ' data-profile-id="' + esc(o.profileId) + '"' : '') + (o.choice ? ' data-choice="' + esc(o.choice) + '"' : '') + busyAttrs(o.key) +
+			(o.tip ? ' data-tip="' + esc(o.tip) + '"' : '') + '>' +
 			(o.glyph ? icon(o.glyph) : '') + '<span>' + o.html + '</span></button>'
 		);
 	}
@@ -798,11 +1200,11 @@
 			var k = 'pf-' + p.id;
 			html +=
 				'<li><button class="pad profile-tile" type="button" data-action="pickProfile" data-profile-id="' + esc(p.id) + '" data-key="' + esc(k) + '"' +
-				(p.current ? ' aria-current="true"' : '') + busyAttrs(k) + '>' +
+				(p.current ? ' aria-current="true"' : '') + busyAttrs(k) + tipAttr('pickTile', { name: p.name, current: p.current, needsSignIn: p.needsSignIn, pins: pr.pinsRequired }) + '>' +
 				faceHtml(p, 'tile-face') + '<span class="tile-name">' + esc(p.name) + '</span><span class="tile-line">' + esc(glue(tileLine(p))) + '</span></button></li>';
 		});
 		html +=
-			'<li><button class="pad profile-tile add-tile" type="button" data-action="addProfile" data-key="pf-add"' + busyAttrs('pf-add') + '>' +
+			'<li><button class="pad profile-tile add-tile" type="button" data-action="addProfile" data-key="pf-add"' + busyAttrs('pf-add') + tipAttr('addStudent') + '>' +
 			'<span class="avatar face tile-face add-face" aria-hidden="true">' + icon('person-add') + '</span>' +
 			'<span class="tile-name">Add a student</span><span class="tile-line">Sign in once with Google</span></button></li>';
 		html += '</ul>';
@@ -832,8 +1234,8 @@
 			'<div class="pin-box"><label class="field-label label" for="pin-input">PIN</label>' + pinField('pin-input', waiting, 'pin-help pin-error') +
 			'<p class="field-error" id="pin-error" aria-live="polite">' + esc(glue(message)) + '</p></div>';
 		html += '<div class="connect-actions">';
-		html += pickerKey({ action: 'forgotPin', key: 'pin-forgot', profileId: s.profileId, primary: waiting, html: 'Forgot your PIN?' });
-		html += pickerKey({ action: 'cancelPicker', key: 'pin-back', glyph: 'chev-left', html: 'Back' });
+		html += pickerKey({ action: 'forgotPin', key: 'pin-forgot', profileId: s.profileId, primary: waiting, html: 'Forgot your PIN?', tip: tipText('forgotPin') });
+		html += pickerKey({ action: 'cancelPicker', key: 'pin-back', glyph: 'chev-left', html: 'Back', tip: tipText('pickerBack') });
 		html += '</div>';
 		return html;
 	}
@@ -850,7 +1252,7 @@
 		html +=
 			'<p class="field-error pin-error" id="pin-error" aria-live="polite">' +
 			esc(pickerUi.mismatch ? 'Those PINs don\'t match. Type your new PIN again.' : s.message || '') + '</p>';
-		html += '<div class="connect-actions">' + pickerKey({ action: 'cancelPicker', key: 'newpin-back', glyph: 'chev-left', html: 'Back' }) + '</div>';
+		html += '<div class="connect-actions">' + pickerKey({ action: 'cancelPicker', key: 'newpin-back', glyph: 'chev-left', html: 'Back', tip: tipText('pickerBack') }) + '</div>';
 		return html;
 	}
 
@@ -870,11 +1272,11 @@
 		else html += lcdPlate('look', 'Waiting for Google', 'Finish signing in in your browser. This window updates by itself.', true);
 		html += '<div class="connect-actions">';
 		if (failed) {
-			html += pickerKey({ action: 'addProfile', key: 'add-retry', primary: true, html: 'Try again' });
-			html += pickerKey({ action: 'cancelPicker', key: 'add-back', glyph: 'chev-left', html: 'Back' });
+			html += pickerKey({ action: 'addProfile', key: 'add-retry', primary: true, html: 'Try again', tip: tipText('addAgain') });
+			html += pickerKey({ action: 'cancelPicker', key: 'add-back', glyph: 'chev-left', html: 'Back', tip: tipText('pickerBack') });
 		} else {
-			html += pickerKey({ action: 'addProfile', key: 'add-reopen', html: 'Open the browser again' });
-			html += pickerKey({ action: 'cancelPicker', key: 'add-cancel', html: 'Cancel' });
+			html += pickerKey({ action: 'addProfile', key: 'add-reopen', html: 'Open the browser again', tip: tipText('browserAgain') });
+			html += pickerKey({ action: 'cancelPicker', key: 'add-cancel', html: 'Cancel', tip: tipText('addCancel') });
 		}
 		return html + '</div>';
 	}
@@ -890,11 +1292,11 @@
 		html += '<p class="connect-where">' + NOT_YOU + '</p>';
 		html += '<div class="connect-actions">';
 		if (waiting) {
-			html += pickerKey({ action: 'forgotPin', key: 'si-reopen', profileId: s.profileId, html: 'Open the browser again' });
-			html += pickerKey({ action: 'cancelPicker', key: 'si-cancel', html: 'Cancel' });
+			html += pickerKey({ action: 'forgotPin', key: 'si-reopen', profileId: s.profileId, html: 'Open the browser again', tip: tipText('browserAgain') });
+			html += pickerKey({ action: 'cancelPicker', key: 'si-cancel', html: 'Cancel', tip: tipText('signInCancel') });
 		} else {
-			html += pickerKey({ action: 'forgotPin', key: 'si-go', profileId: s.profileId, primary: true, html: failed ? 'Try again' : 'Sign in with Google' });
-			html += pickerKey({ action: 'cancelPicker', key: 'si-back', glyph: 'chev-left', html: 'Back' });
+			html += pickerKey({ action: 'forgotPin', key: 'si-go', profileId: s.profileId, primary: true, html: failed ? 'Try again' : 'Sign in with Google', tip: tipText('signInGo', { name: p ? p.name : 'yourself' }) });
+			html += pickerKey({ action: 'cancelPicker', key: 'si-back', glyph: 'chev-left', html: 'Back', tip: tipText('pickerBack') });
 		}
 		return html + '</div>';
 	}
@@ -912,8 +1314,8 @@
 			'It stays ' + esc(first) + '\'s until ' + esc(first) + ' finishes it here. Wait for ' + esc(first) + ', or work in a folder of your own for now.</p>';
 		html += '<div class="connect-actions">';
 		if (s.ownFolder)
-			html += pickerKey({ action: 'chooseFolder', key: 'fb-own', profileId: s.profileId, choice: 'own', primary: true, html: 'Use <span class="key-path">' + esc(s.ownFolder) + '</span>' });
-		html += pickerKey({ action: 'chooseFolder', key: 'fb-wait', profileId: s.profileId, choice: 'wait', html: 'Wait for ' + esc(first) });
+			html += pickerKey({ action: 'chooseFolder', key: 'fb-own', profileId: s.profileId, choice: 'own', primary: true, html: 'Use <span class="key-path">' + esc(s.ownFolder) + '</span>', tip: tipText('useOwnFolder', { path: s.ownFolder, first: first }) });
+		html += pickerKey({ action: 'chooseFolder', key: 'fb-wait', profileId: s.profileId, choice: 'wait', html: 'Wait for ' + esc(first), tip: tipText('waitFor', { first: first }) });
 		html += '</div>';
 		if (s.ownFolder)
 			html +=
@@ -1078,7 +1480,7 @@
 		html += '<div class="setting-line"><p class="setting-name" id="set-shared-name">This computer is shared by several students</p>';
 		html +=
 			'<button class="switch" type="button" data-action="sharedComputer" data-key="set-shared" aria-pressed="' + on + '" aria-labelledby="set-shared-name set-shared-word"' +
-			(on && pr && !pr.canTurnOff ? ' disabled' : '') + busyAttrs('set-shared') + '>' +
+			(on && pr && !pr.canTurnOff ? offAttrs(busyKey('set-shared')) : '') + busyAttrs('set-shared') + tipAttr('sharedSwitch', { on: on, off: !!(on && pr && !pr.canTurnOff) }) + '>' +
 			'<span class="ts-glyph" aria-hidden="true"></span><span class="ts-word" id="set-shared-word">' + (on ? 'On' : 'Off') + '</span></button></div>';
 		if (!on) {
 			html +=
@@ -1093,7 +1495,7 @@
 		html += '<div class="setting-line"><p class="setting-name" id="set-pins-name">Ask for a PIN when switching students</p>';
 		html +=
 			'<button class="switch" type="button" data-action="pinsRequired" data-key="set-pins" aria-pressed="' + !!pr.pinsRequired + '" aria-labelledby="set-pins-name set-pins-word"' +
-			(pr.canChangePins ? '' : ' disabled') + busyAttrs('set-pins') + '>' +
+			(pr.canChangePins ? '' : offAttrs(busyKey('set-pins'))) + busyAttrs('set-pins') + tipAttr('pinsSwitch', { on: !!pr.pinsRequired, off: !pr.canChangePins }) + '>' +
 			'<span class="ts-glyph" aria-hidden="true"></span><span class="ts-word" id="set-pins-word">' + (pr.pinsRequired ? 'On' : 'Off') + '</span></button></div>';
 		html +=
 			'<p class="setting-help">' +
@@ -1115,7 +1517,7 @@
 				'<span class="student-words"><span class="student-name">' + esc(p.name) + '</span><span class="student-line">' + esc(glue(p.email + ' · ' + line)) + '</span></span>' +
 				(p.canRemove
 					? '<button class="key" type="button" data-action="askRemoveProfile" data-profile-id="' + esc(p.id) + '" data-key="set-remove-' + esc(p.id) + '" aria-haspopup="dialog" aria-label="Remove ' + esc(p.name) + '"' +
-						busyAttrs('set-remove-' + p.id) + '>Remove</button>'
+						busyAttrs('set-remove-' + p.id) + tipAttr('removeStudent', { name: p.name }) + '>Remove</button>'
 					: '') +
 				'</li>';
 		});
@@ -1131,13 +1533,13 @@
 		var now = profileOf(v, pr.currentId);
 		var a = v.account;
 		return (
-			'<section class="group top account-group" aria-labelledby="acct-label">' +
+			'<section class="group top account-group" aria-labelledby="acct-label" data-part="account">' +
 			'<h2 class="section-label" id="acct-label">This computer</h2>' +
 			'<div class="panel acct-panel">' +
 			ringHtml(v, a ? a.deviceName : 'this computer') +
 			'<dl class="acct"><div><dt class="label">Using Armory</dt><dd class="acct-email">' + esc(now ? now.name : a ? a.email : '') + '</dd></div></dl>' +
 			(pr.note ? '<p class="acct-note">' + esc(glue(pr.note)) + '</p>' : '') +
-			'<button class="textlink acct-signout" type="button" data-action="showPicker" data-key="switch-student">' + icon('person') + '<span>Switch student</span></button>' +
+			'<button class="textlink acct-signout" type="button" data-action="showPicker" data-key="switch-student"' + tipAttr('switchStudent') + '>' + icon('person') + '<span>Switch student</span></button>' +
 			'</div></section>'
 		);
 	}
@@ -1184,8 +1586,8 @@
 			'<p class="ask-words" id="ask-words">' + esc(glue(body)) + '</p>' +
 			field +
 			'<div class="ask-keys">' +
-			'<button class="key' + (danger ? ' danger' : ' primary') + '" type="button" data-action="askOk" data-key="ask-ok">' + esc(ok) + '</button>' +
-			'<button class="key" type="button" data-action="askCancel" data-key="ask-cancel"' + (danger ? ' data-ask-first="true"' : '') + '>Cancel</button>' +
+			'<button class="key' + (danger ? ' danger' : ' primary') + '" type="button" data-action="askOk" data-key="ask-ok"' + tipAttr('ask', { kind: kind }) + '>' + esc(ok) + '</button>' +
+			'<button class="key" type="button" data-action="askCancel" data-key="ask-cancel"' + (danger ? ' data-ask-first="true"' : '') + tipAttr('cancel') + '>Cancel</button>' +
 			'</div></div>'
 		);
 	}
@@ -1292,22 +1694,81 @@
 		var k = '';
 		if (v.sync.state === 'paused')
 			k =
-				'<button class="key primary status-key" type="button" data-action="resume" data-key="sync-toggle" title="Start uploading and downloading files again">' +
+				'<button class="key primary status-key" type="button" data-action="resume" data-key="sync-toggle"' + tipAttr('resume') + '>' +
 				icon('play') + '<span class="key-word">Resume</span></button>';
 		else if (v.sync.state !== 'offline')
 			k =
-				'<button class="key status-key" type="button" data-action="pause" data-key="sync-toggle" title="Stop uploading and downloading files for now">' +
+				'<button class="key status-key" type="button" data-action="pause" data-key="sync-toggle"' + tipAttr('pause') + '>' +
 				icon('pause') + '<span class="key-word">Pause</span></button>';
 		return (
-			'<section class="group top status-group' + (k ? '' : ' no-key') + '" aria-labelledby="status-label">' +
+			'<section class="group top status-group' + (k ? '' : ' no-key') + '" aria-labelledby="status-label" data-part="status">' +
 			'<h2 class="section-label" id="status-label">Status</h2>' +
 			'<div class="display" data-tone="' + tone + '">' +
 			'<p class="screen lcd" role="status"><span>' + esc(readout) + '</span></p>' +
 			'<p class="sync-line" id="sync-line">' + esc(glue(line)) + '</p>' +
 			(detail ? '<p class="sync-detail">' + esc(glue(detail)) + '</p>' : '') +
+			latestHtml(v.activity) +
 			'</div>' +
 			k +
+			lastActionHtml() +
 			'</section>'
+		);
+	}
+
+	/** The newest running line, always in sight (N8): under the status line in a wide window
+	 *  (the side column never scrolls), in the strip under the header in a narrow one. */
+	function newestLine(a) {
+		var log = (a && a.log) || [];
+		return log.length ? log[log.length - 1] : null;
+	}
+
+	function latestInner(l) {
+		return (
+			icon('clock') + '<span class="latest-words"><span class="latest-line">' + esc(glue(l.line)) + '</span> ' +
+			'<time class="latest-at" datetime="' + esc(l.at) + '">' + esc(clockTime(l.at)) + '</time></span>'
+		);
+	}
+
+	function latestHtml(a) {
+		var l = newestLine(a);
+		return '<p class="sync-latest" id="sync-latest"' + (l ? ' data-tip="' + esc(l.line) + '"' : ' hidden') + '>' + (l ? latestInner(l) : '') + '</p>';
+	}
+
+	var latestStrip = document.getElementById('latest-strip');
+
+	/** The newest line in the narrow window's strip (the wide window's is in the status). */
+	function paintLatest(a, screen) {
+		var l = screen === 'home' || (!screen && document.body.getAttribute('data-screen') === 'home') ? newestLine(a) : null;
+		var html = l ? latestInner(l) : '';
+		if (latestStrip._html !== html) {
+			latestStrip.innerHTML = html;
+			latestStrip._html = html;
+		}
+		latestStrip.hidden = !l;
+		var inStatus = document.getElementById('sync-latest');
+		if (inStatus) {
+			var mine = l || newestLine(a);
+			var inner = mine ? latestInner(mine) : '';
+			if (inStatus._html !== inner) {
+				inStatus.innerHTML = inner;
+				inStatus._html = inner;
+			}
+			inStatus.hidden = !mine;
+			if (mine) inStatus.setAttribute('data-tip', mine.line);
+		}
+	}
+
+	/** The last answer to an action on many files stays readable until OK (N9): the line at
+	 *  the window's foot fades after a few seconds, and this one does not. */
+	function lastActionHtml() {
+		var l = ui.lastAction;
+		if (!l) return '';
+		return (
+			'<div class="last-action panel" data-tone="' + (l.ok ? 'ok' : 'look') + '" id="last-action">' +
+			'<p class="last-head"><span class="label">Last action</span><time class="last-at" datetime="' + esc(l.at) + '">' + esc(clockTime(l.at)) + '</time></p>' +
+			'<p class="last-words">' + esc(glue(l.message)) + '</p>' +
+			'<button class="textlink last-ok" type="button" data-action="lastOk" data-key="last-ok"' + tipAttr('lastOk') + '>OK</button>' +
+			'</div>'
 		);
 	}
 
@@ -1356,14 +1817,14 @@
 		if (v.profiles) return sharedAccountHtml(v);
 		var a = v.account;
 		return (
-			'<section class="group top account-group" aria-labelledby="acct-label">' +
+			'<section class="group top account-group" aria-labelledby="acct-label" data-part="account">' +
 			'<h2 class="section-label" id="acct-label">This computer</h2>' +
 			'<div class="panel acct-panel">' +
 			ringHtml(v, a ? a.deviceName : 'this computer') +
 			(a ? '<dl class="acct"><div><dt class="label">Signed in as</dt><dd class="acct-email">' + esc(a.email) + '</dd></div></dl>' : '') +
 			// Switch account: the next student signs in now, on the same Armory folder.
-			(a ? '<button class="textlink acct-signout" type="button" data-action="switchAccount" data-key="switch-account">' + icon('person') + '<span>Switch account</span></button>' : '') +
-			'<button class="textlink acct-signout" type="button" data-action="signOut" data-key="signout">' + icon('signout') + '<span>Sign out of Armory</span></button>' +
+			(a ? '<button class="textlink acct-signout" type="button" data-action="switchAccount" data-key="switch-account"' + tipAttr('switchAccount') + '>' + icon('person') + '<span>Switch account</span></button>' : '') +
+			'<button class="textlink acct-signout" type="button" data-action="signOut" data-key="signout"' + tipAttr('signOut') + '>' + icon('signout') + '<span>Sign out of Armory</span></button>' +
 			'</div></section>'
 		);
 	}
@@ -1388,11 +1849,11 @@
 			? 'SolidWorks opened it read-only. Check it out, then close it in SolidWorks and open it again here to save changes.'
 			: 'You can look, but you can\'t save changes.';
 		var keys = free
-			? key({ action: 'promptCheckOut', key: 'prompt-checkout', cls: 'primary', glyph: 'checkout', word: 'Check out and reopen', path: p.path, title: 'Check out ' + p.name + ', then open it again here' }) +
-			  key({ action: 'promptLater', key: 'prompt-later', word: 'Not now' })
-			: key({ action: 'promptLater', key: 'prompt-later', word: 'OK' });
+			? key({ action: 'promptCheckOut', key: 'prompt-checkout', cls: 'primary', glyph: 'checkout', word: 'Check out and reopen', path: p.path, tip: tipText('promptCheckOut', { name: p.name }) }) +
+			  key({ action: 'promptLater', key: 'prompt-later', word: 'Not now', tip: tipText('promptLater') })
+			: key({ action: 'promptLater', key: 'prompt-later', word: 'OK', tip: tipText('promptOk') });
 		return (
-			'<section class="prompt-card panel" data-tone="' + (free ? 'ok' : 'look') + '" aria-labelledby="prompt-title">' +
+			'<section class="prompt-card panel" data-tone="' + (free ? 'ok' : 'look') + '" aria-labelledby="prompt-title" data-part="prompt">' +
 			'<span class="attn-glyph">' + icon(free ? 'checkout' : 'person') + '</span>' +
 			'<div class="attn-body">' +
 			'<h2 class="attn-title" id="prompt-title">' + title + '</h2>' +
@@ -1425,7 +1886,7 @@
 	 *  patch it in place. */
 	function activityHtml(a) {
 		return (
-			'<section class="group top activity-group" id="activity-group" aria-labelledby="act-label"' + (hasActivity(a) ? '' : ' hidden') + '>' +
+			'<section class="group top activity-group" id="activity-group" aria-labelledby="act-label" data-part="activity"' + (hasActivity(a) ? '' : ' hidden') + '>' +
 			'<h2 class="section-label" id="act-label">Right now</h2>' +
 			'<div class="panel act-panel" id="act-panel">' + activityInner(a) + '</div>' +
 			'</section>'
@@ -1450,7 +1911,7 @@
 		if (d.bytesTotal > 0) meta = metaLine([bytes(d.bytesTotal - d.bytesDone) + ' left', d.bytesPerSecond > 0 ? bytes(d.bytesPerSecond) + '/s' : '', timeLeft(d.secondsLeft)]);
 		else meta = d.line || '';
 		return (
-			'<div class="act-dir" data-direction="' + name + '" title="' + esc(d.line || '') + '">' +
+			'<div class="act-dir" data-direction="' + name + '"' + (d.line ? ' data-tip="' + esc(d.line) + '"' : '') + '>' +
 			'<p class="act-head label">' + icon(w.glyph) + '<span class="act-word">' + esc(w.word) + '</span></p>' +
 			'<p class="act-count">' + esc(glue(num(d.filesDone) + ' of ' + plural(d.filesTotal, 'file', 'files'))) + '</p>' +
 			track(pct, w.word + ' ' + num(d.filesDone) + ' of ' + num(d.filesTotal)) +
@@ -1461,6 +1922,12 @@
 
 	function activityInner(a) {
 		if (!hasActivity(a)) return '';
+		// The directions, files and waiting count (redrawn in place as they change), then the
+		// running lines' box (lines added by syncLog, never redrawn).
+		return '<div class="act-body" id="act-body">' + activityBody(a) + '</div>' + logShell(a.log);
+	}
+
+	function activityBody(a) {
 		var html = '';
 		var dirs = directionHtml('upload', a.upload) + directionHtml('download', a.download) + directionHtml('move', a.move);
 		if (dirs) html += '<div class="act-dirs">' + dirs + '</div>';
@@ -1472,7 +1939,7 @@
 				html +=
 					'<li class="act-file" data-direction="' + esc(f.direction) + '">' +
 					icon(w.glyph, 'act-glyph') +
-					'<span class="act-name" title="' + esc(f.path) + '">' + esc(f.name) + '</span>' +
+					'<span class="act-name" data-tip="' + esc(f.path) + '">' + esc(f.name) + '</span>' +
 					'<span class="act-bytes">' + esc(f.bytesTotal > 0 ? bytes(f.bytesDone) + ' of ' + bytes(f.bytesTotal) : w.word) + '</span>' +
 					track(pct, w.word + ' ' + f.name) +
 					'</li>';
@@ -1480,32 +1947,80 @@
 			html += '</ul>';
 		}
 		if (a.waiting) html += '<p class="act-wait">' + icon('clock') + '<span>' + esc(glue(a.waiting.line)) + '</span></p>';
-		html += logHtml(a.log);
 		return html;
 	}
 
-	/** What Armory did in the last few minutes, a line each, the newest at the foot (kept in
-	 *  view), so a long check out or download shows it is working, not stuck. */
-	function logHtml(lines) {
+	/** What Armory did in the last few minutes, a line each, the newest at the foot, so a long
+	 *  check out or download shows it is working, not stuck. The box is drawn once; its lines
+	 *  are added by syncLog. */
+	function logShell(lines) {
 		if (!lines || !lines.length) return '';
-		var html = '<div class="act-log-wrap"><p class="act-head label">' + icon('note') + '<span class="act-word">What Armory is doing</span></p>';
-		html += '<ol class="act-log" id="act-log" tabindex="0" aria-label="What Armory did just now">';
-		lines.forEach(function (l) {
-			html += '<li><time class="act-log-at" datetime="' + esc(l.at) + '">' + esc(clockTime(l.at)) + '</time><span class="act-log-line">' + esc(glue(l.line)) + '</span></li>';
+		return (
+			'<div class="act-log-wrap"><p class="act-head label">' + icon('note') + '<span class="act-word">What Armory is doing</span></p>' +
+			'<ol class="act-log" id="act-log" tabindex="0" aria-label="What Armory did just now"></ol></div>'
+		);
+	}
+
+	/** One running line's markup, and the key it is known by. */
+	function logLineHtml(l) {
+		return '<time class="act-log-at" datetime="' + esc(l.at) + '">' + esc(clockTime(l.at)) + '</time><span class="act-log-line">' + esc(glue(l.line)) + '</span>';
+	}
+
+	/** The running lines' box takes new lines at its foot and lets old ones go at its top, and
+	 *  never redraws the rest (N8): a student reading an older line keeps their place, and the
+	 *  box follows the newest only when it was already at its foot. */
+	function syncLog(ol, lines) {
+		var atEnd = !ol.firstElementChild || ol.scrollTop + ol.clientHeight >= ol.scrollHeight - 4;
+		var seen = {};
+		var keys = lines.map(function (l) {
+			var k = l.at + '|' + l.line;
+			seen[k] = (seen[k] || 0) + 1;
+			return k + '|' + seen[k];
 		});
-		return html + '</ol></div>';
+		var want = {};
+		keys.forEach(function (k) {
+			want[k] = true;
+		});
+		// Where the student is reading, to keep it there as lines leave the top.
+		var anchor = null;
+		var offset = 0;
+		if (!atEnd)
+			for (var c = ol.firstElementChild; c; c = c.nextElementSibling)
+				if (want[c.getAttribute('data-line')] && c.offsetTop + c.offsetHeight > ol.scrollTop) {
+					anchor = c;
+					offset = c.offsetTop - ol.scrollTop;
+					break;
+				}
+		var have = {};
+		Array.prototype.slice.call(ol.children).forEach(function (li) {
+			var k = li.getAttribute('data-line');
+			if (want[k]) have[k] = li;
+			else ol.removeChild(li);
+		});
+		var next = ol.firstElementChild;
+		keys.forEach(function (k, i) {
+			if (have[k]) {
+				if (have[k] === next) next = next.nextElementSibling;
+				return;
+			}
+			var li = document.createElement('li');
+			li.setAttribute('data-line', k);
+			li.innerHTML = logLineHtml(lines[i]);
+			ol.insertBefore(li, next);
+		});
+		if (atEnd) ol.scrollTop = ol.scrollHeight;
+		else if (anchor && anchor.isConnected) ol.scrollTop = anchor.offsetTop - offset;
+	}
+
+	function syncLogs(a) {
+		var ol = document.getElementById('act-log');
+		if (ol) syncLog(ol, (a && a.log) || []);
 	}
 
 	/** "3:41:05 PM" for a line's time. */
 	function clockTime(iso) {
 		var d = new Date(iso);
 		return isNaN(d.getTime()) ? '' : d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' });
-	}
-
-	/** The running lines stay at their newest. */
-	function logToEnd(root) {
-		var log = (root || document).querySelector('#act-log');
-		if (log) log.scrollTop = log.scrollHeight;
 	}
 
 	/** Progress widths go in through CSSOM: the page's CSP refuses inline styles. */
@@ -1516,20 +2031,23 @@
 
 	var lastActivity = null;
 
-	/** A host 'activity' message: the panel and the status line change, nothing else. */
+	/** A host 'activity' message: the panel, the status line and the newest running line
+	 *  change, in place, and nothing else. */
 	function patchActivity(a) {
 		if (!ui.view) return;
 		ui.view.activity = a;
+		// What is on the page is no longer what the last markup said: the next view draws Home again.
+		drawn.main = null;
 		var group = document.getElementById('activity-group');
 		if (group) {
 			var panel = document.getElementById('act-panel');
 			var html = activityInner(a);
 			if (lastActivity !== html) {
-				panel.innerHTML = html;
+				morphInto(panel, html);
 				applyBars(panel);
-				logToEnd(panel);
 			}
 			lastActivity = html;
+			syncLogs(a);
 			group.hidden = !hasActivity(a);
 		}
 		var line = document.getElementById('sync-line');
@@ -1537,6 +2055,7 @@
 			var text = glue((a && a.line) || ui.view.sync.line);
 			if (line.textContent !== text) line.textContent = text;
 		}
+		paintLatest(a, null);
 		updateCues();
 	}
 
@@ -1561,7 +2080,7 @@
 		if (!items.length) return '';
 		var tone = noticesTone(items);
 		var words = tone === 'bad' ? plural(items.length, 'thing', 'things') + ' to fix' : tone === 'look' ? plural(items.length, 'thing', 'things') + ' to look at' : plural(items.length, 'update', 'updates');
-		var html = '<section class="group top needs-group" aria-labelledby="needs-label">';
+		var html = '<section class="group top needs-group" aria-labelledby="needs-label" data-part="notices">';
 		html += '<h2 class="needs-strip lcd" id="needs-label" data-tone="' + tone + '">' + icon(tone === 'bad' ? 'cant' : tone === 'ok' ? 'check' : 'note', 'lcd-icon') + '<span>' + esc(words) + '</span></h2>';
 		html += '<ul class="attn-list">';
 		items.forEach(function (n, i) {
@@ -1582,15 +2101,18 @@
 		var a = n.action;
 		var expandKey = function (word) {
 			return (
-				'<button class="key" type="button" data-action="expand" data-notice="' + esc(n.key) + '" data-key="nt-expand-' + esc(n.key) + '" aria-expanded="' + open + '" aria-controls="' + id + '-items">' +
+				'<button class="key" type="button" data-action="expand" data-notice="' + esc(n.key) + '" data-key="nt-expand-' + esc(n.key) + '" aria-expanded="' + open + '" aria-controls="' + id + '-items"' +
+				(open ? tipAttr('hideList') : tipAttr('showList', { what: plural(items.length, 'file', 'files') })) + '>' +
 				icon(open ? 'chev-down' : 'chev-right') + '<span>' + esc(word) + '</span></button>'
 			);
 		};
 		if (a && a.command !== 'expand')
-			keys += '<button class="key" type="button" data-action="notice" data-notice="' + esc(n.key) + '" data-key="nt-act-' + esc(n.key) + '" aria-describedby="' + id + '-t">' + esc(a.label) + '</button>';
+			keys +=
+				'<button class="key" type="button" data-action="notice" data-notice="' + esc(n.key) + '" data-key="nt-act-' + esc(n.key) + '" aria-describedby="' + id + '-t"' +
+				tipAttr('noticeAction', { command: a.command, label: a.label, name: leaf((a.paths || [])[0] || (items[0] || {}).path || '') }) + '>' + esc(a.label) + '</button>';
 		if (hasItems) keys += expandKey(open ? (a && a.command === 'expand' ? 'Hide them' : 'Hide the files') : a && a.command === 'expand' ? a.label : 'Show the ' + plural(items.length, 'file', 'files'));
 		else if (items.length === 1 && items[0].fileId && (!a || a.command === 'expand'))
-			keys += '<button class="key" type="button" data-action="openFile" data-file-id="' + esc(items[0].fileId) + '" data-key="nt-file-' + esc(n.key) + '" aria-describedby="' + id + '-t">' + icon('chev-right') + '<span>See the file</span></button>';
+			keys += '<button class="key" type="button" data-action="openFile" data-file-id="' + esc(items[0].fileId) + '" data-key="nt-file-' + esc(n.key) + '" aria-describedby="' + id + '-t"' + tipAttr('seeFile') + '>' + icon('chev-right') + '<span>See the file</span></button>';
 		var list = '';
 		if (open) {
 			list += '<div class="notice-well list-well" id="' + id + '-items" data-scroll-own="true">' + registerList({
@@ -1640,13 +2162,13 @@
 		var extra =
 			x.noticeKind === 'nameShared' && !it.fileId
 				? '<button class="key row-key" type="button" data-rove="rename" data-action="askRenameFile" data-path="' + esc(it.path) + '" data-key="rename-' + esc(k) + '"' +
-				  ' aria-label="Rename ' + esc(it.name) + '" title="Give ' + esc(it.name) + ' a name of its own">' + icon('rename') + '<span class="key-word">Rename</span></button>'
+				  ' aria-label="Rename ' + esc(it.name) + '"' + tipAttr('renameShared', { name: it.name }) + '>' + icon('rename') + '<span class="key-word">Rename</span></button>'
 				: null;
 		var hit = it.fileId
-			? { action: 'openFile', fileId: it.fileId }
+			? { action: 'openFile', fileId: it.fileId, tip: tipText('fileRow', { name: it.name }) }
 			: other
-				? { action: 'openFile', fileId: other.row.fileId, hint: 'See the ' + other.row.name + ' in ' + whereIs(other.row.path).replace(/\u00a0/g, ' ') }
-				: { action: 'showInFolder', path: it.path, hint: 'Show in folder' };
+				? { action: 'openFile', fileId: other.row.fileId, tip: tipText('namesake', { name: other.row.name, where: whereIs(other.row.path).replace(/\u00a0/g, ' ') }) }
+				: { action: 'showInFolder', path: it.path, tip: tipText('localRow', { name: it.name }) };
 		return rowHtml({
 			i: i,
 			vkey: k,
@@ -1670,7 +2192,8 @@
 	 * a folder, or a folder-out glyph for a file that has no page yet.
 	 */
 	function rowHtml(o) {
-		var t = o.active ? '0' : '-1';
+		// Every row is drawn out of the Tab order; mountList puts the list's one row back in it.
+		var t = '-1';
 		var hit = o.hit;
 		var html =
 			'<li class="row vrow' + (o.cls ? ' ' + o.cls : '') + '" data-vkey="' + esc(o.vkey) + '" data-i="' + o.i + '"><div class="row-main' + (o.select !== undefined ? ' has-select' : '') + (o.extra ? ' has-extra' : '') + (o.thumb ? ' has-thumb' : '') + '">' +
@@ -1678,10 +2201,10 @@
 			(hit.fileId ? ' data-file-id="' + esc(hit.fileId) + '"' : '') +
 			(hit.path != null ? ' data-path="' + esc(hit.path) + '"' : '') +
 			(hit.folder != null ? ' data-folder="' + esc(hit.folder) + '"' : '') +
-			' data-key="row-' + esc(o.k) + '" aria-labelledby="n-' + esc(o.k) + '"' + (hit.hint ? ' title="' + esc(hit.hint) + '"' : '') + '></button>';
+			' data-key="row-' + esc(o.k) + '" aria-labelledby="n-' + esc(o.k) + '"' + (hit.tip ? ' data-tip="' + esc(hit.tip) + '"' : '') + '></button>';
 		if (o.select !== undefined) html += o.select ? o.select.replace('data-rove="sel"', 'data-rove="sel" tabindex="' + t + '"') : '<span class="sel-slot" aria-hidden="true"></span>';
 		html +=
-			(o.thumb ? '<span class="row-icon thumb-slot">' + icon(o.glyph || kindOf(o.name), 'thumb-glyph') + thumbImg(o.thumb) + '</span>' : icon(o.glyph || kindOf(o.name), 'row-icon')) +
+			(o.thumb ? '<span class="row-icon thumb-slot">' + icon(o.glyph || kindOf(o.name), 'thumb-glyph') + (thumbMissing(o.thumb) ? '' : thumbImg(o.thumb)) + '</span>' : icon(o.glyph || kindOf(o.name), 'row-icon')) +
 			'<span class="row-body">' +
 			'<span class="row-name" id="n-' + esc(o.k) + '">' + nameHtml(o.name, o.glyph === 'folder') + '</span>' +
 			'<span class="row-line">' + (o.line || '') + '</span>' +
@@ -1710,6 +2233,27 @@
 		);
 	}
 
+	/** Windows had no picture for this address a moment ago: not asked for again for a minute. */
+	function thumbMissing(url) {
+		var at = thumbsMissing[url];
+		return !!at && Date.now() - at < 60000;
+	}
+
+	/** A row drawn again wears a picture that arrived before at once; one that replaces a row
+	 *  with the same picture takes over its image, so nothing blinks back to the glyph. */
+	function keepThumbs(node, old) {
+		var imgs = node.querySelectorAll('.thumb-slot img.thumb');
+		for (var i = 0; i < imgs.length; i++) {
+			var img = imgs[i];
+			var src = img.getAttribute('src');
+			var was = old && old.querySelector('.thumb-slot[data-thumb="on"] img.thumb');
+			if (was && was.getAttribute('src') === src) {
+				img.parentNode.replaceChild(was, img);
+				was.parentNode.setAttribute('data-thumb', 'on');
+			} else if (thumbsLoaded[src]) img.parentNode.setAttribute('data-thumb', 'on');
+		}
+	}
+
 	// eager: File detail's one picture, in a box that stays hidden until it arrives (a lazy
 	// image in a hidden box is never asked for).
 	function thumbImg(url, eager) {
@@ -1734,41 +2278,47 @@
 	function fileLine(r) {
 		var meta = r.updatedBy ? metaLine(['Checked in by ' + r.updatedBy, r.updatedAt ? agoWhole(r.updatedAt) : '']) : '';
 		var first;
-		if (r.fileId) first = pendingHtml(r) + checkoutMark(checkoutOf(r)) + statusChip(r.status, r.changed);
+		if (r.fileId) first = pendingHtml(r) + checkoutMark(checkoutOf(r)) + statusChip(r.status, r.changed) + yearChip(r);
 		else if (r.status === 'notInArmory') first = statusChip(r.status, false);
 		else first = '<span class="row-avail">' + esc(r.status === 'uploading' ? 'New, uploading now' : 'New, not uploaded yet') + '</span>';
 		return first + kindChip(r.name) + (meta ? '<span class="row-meta">' + esc(meta) + '</span>' : '');
 	}
 
-	function openKey(path, name, k) {
+	function openKey(path, name, k, c) {
 		return (
 			'<button class="key row-key" type="button" data-rove="open" data-action="launch" data-path="' + esc(path) + '" data-key="open-' + esc(k) + '"' + busyAttrs('open-' + k) +
-			' aria-label="Open ' + esc(name) + '" title="Open ' + esc(name) + ' to look at it">' + busyGlyph('open-' + k, 'open') + '<span class="key-word">Open</span></button>'
+			' aria-label="Open ' + esc(name) + '"' + tipAttr('open', openTipOf(name, c)) + '>' + busyGlyph('open-' + k, 'open') + '<span class="key-word">Open</span></button>'
 		);
+	}
+
+	/** What Open says: SolidWorks for a part, assembly or drawing; to look, unless it is mine. */
+	function openTipOf(name, c) {
+		c = c || AVAILABLE;
+		return { name: name, cad: kindOf(name) !== 'file', state: c.state, holder: firstName(c.name || 'Someone'), device: c.device || 'your other computer' };
 	}
 
 	/** A file row's one state key, beside Open: Check out while nobody has it, Check in
 	 *  while I have it here, and for a mentor or CAD lead, Force check in while someone else
 	 *  has it. Anyone else's view of someone else's file has none: its line says who has it. */
 	function stateKey(r, k) {
-		if (!r.fileId) return '';
+		if (!r.fileId || r.status === 'noVersion') return '';
 		var c = checkoutOf(r);
 		var sk = 'state-' + k;
 		if (c.state === 'available')
 			return (
 				'<button class="key row-key state-key" type="button" data-rove="state" data-action="checkOut" data-path="' + esc(r.path) + '" data-key="' + esc(sk) + '"' + busyAttrs(sk) +
-				' aria-label="Check out ' + esc(r.name) + '" title="Check out ' + esc(r.name) + ' to make changes">' + busyGlyph(sk, 'checkout') + '<span class="key-word">Check out</span></button>'
+				' aria-label="Check out ' + esc(r.name) + '"' + tipAttr('checkOutFile', { name: r.name }) + '>' + busyGlyph(sk, 'checkout') + '<span class="key-word">Check out</span></button>'
 			);
 		if (c.state === 'mine')
 			return (
 				'<button class="key row-key state-key" type="button" data-rove="state" data-action="checkIn" data-path="' + esc(r.path) + '" data-key="' + esc(sk) + '"' + busyAttrs(sk) +
-				' aria-label="Check in ' + esc(r.name) + '" title="Check in ' + esc(r.name) + ' to share your changes">' + busyGlyph(sk, 'checkin') + '<span class="key-word">Check in</span></button>'
+				' aria-label="Check in ' + esc(r.name) + '"' + tipAttr('checkInFile', { name: r.name }) + '>' + busyGlyph(sk, 'checkin') + '<span class="key-word">Check in</span></button>'
 			);
 		var found = findRow(r.fileId);
 		if ((c.state === 'other' || c.state === 'myOtherComputer') && found && found.project.canTakeBack)
 			return (
 				'<button class="key row-key state-key" type="button" data-rove="state" data-action="askTakeBack" data-file-id="' + esc(r.fileId) + '" data-key="' + esc(sk) + '"' + busyAttrs(sk) +
-				' aria-label="Force check in ' + esc(r.name) + '" title="Force check in ' + esc(r.name) + ' (' + esc(c.label || '') + ')">' + busyGlyph(sk, 'takeback') + '<span class="key-word">Force check in</span></button>'
+				' aria-label="Force check in ' + esc(r.name) + '"' + tipAttr('forceFile', { name: r.name, holder: c.name || 'the person who has it' }) + '>' + busyGlyph(sk, 'takeback') + '<span class="key-word">Force check in</span></button>'
 			);
 		return '';
 	}
@@ -1783,13 +2333,13 @@
 	 */
 	function myFilesHtml(v) {
 		var files = v.myFiles || [];
-		var html = '<section class="group top" aria-labelledby="mine-label">';
+		var html = '<section class="group top" aria-labelledby="mine-label" data-part="mine">';
 		html += '<h2 class="section-label" id="mine-label"><span>My files</span>' + (files.length ? count(files.length, 'file', 'files') : '') + '</h2>';
 		if (!files.length) {
 			html += '<div class="empty-tile">' + icon('asm', 'empty-glyph') + '<div class="empty-words">';
 			html += '<p>Nothing checked out. Files you check out show up here, each with its Check in.</p>';
 			html += '<p class="empty-where">Your team\'s files are in <span class="mono-plate">' + esc(v.vaultRoot) + '</span></p>';
-			html += '<button class="key" type="button" data-action="openVault" data-key="empty-vault">' + icon('folder') + '<span>Open Armory folder</span></button>';
+			html += '<button class="key" type="button" data-action="openVault" data-key="empty-vault"' + tipAttr('emptyVault', { root: v.vaultRoot }) + '>' + icon('folder') + '<span>Open Armory folder</span></button>';
 			html += '</div></div>';
 			return html + '</section>';
 		}
@@ -1799,8 +2349,8 @@
 		}).length;
 		if (files.length > 1) {
 			html += '<div class="folder-keys mine-keys" role="group" aria-label="All my files">';
-			html += key({ action: 'mineCheckIn', key: 'mk-in', cls: 'tool keep-word', glyph: 'checkin', word: 'Check in all', title: 'Check in all ' + plural(mineIn, 'file', 'files') + ' you have checked out', disabled: !mineIn });
-			html += key({ action: 'askUndoMine', key: 'mk-undo', cls: 'tool keep-word', glyph: 'undo', word: 'Undo all', title: 'Undo all ' + plural(mineIn, 'check out', 'check outs') + ', keeping your changes as your own copies', disabled: !mineIn });
+			html += key({ action: 'mineCheckIn', key: 'mk-in', cls: 'tool keep-word', glyph: 'checkin', word: mineIn ? 'Check in my ' + plural(mineIn, 'file', 'files') : 'Check in my files', tip: tipText('mineIn', { count: mineIn }), disabled: !mineIn });
+			html += key({ action: 'askUndoMine', key: 'mk-undo', cls: 'tool keep-word', glyph: 'undo', word: mineIn ? 'Undo my ' + plural(mineIn, 'check out', 'check outs') : 'Undo my check outs', tip: tipText('mineUndo', { count: mineIn }), disabled: !mineIn });
 			html += '</div>';
 		}
 		// A long list scrolls in a box of its own, so Team files (and its keys) stay right
@@ -1847,16 +2397,16 @@
 		if (checkoutOf(f).state === 'mine')
 			extra +=
 				'<button class="key row-key state-key" type="button" data-rove="in" data-action="checkIn" data-path="' + esc(f.path) + '" data-key="in-' + esc(k) + '"' + busyAttrs('in-' + k) +
-				' aria-label="Check in ' + esc(f.name) + '" title="Check in ' + esc(f.name) + ' to share your changes">' + busyGlyph('in-' + k, 'checkin') + '<span class="key-word">Check in</span></button>';
-		extra += openKey(f.path, f.name, k);
+				' aria-label="Check in ' + esc(f.name) + '"' + tipAttr('checkInFile', { name: f.name }) + '>' + busyGlyph('in-' + k, 'checkin') + '<span class="key-word">Check in</span></button>';
+		extra += openKey(f.path, f.name, k, checkoutOf(f));
 		return rowHtml({
 			i: i,
 			vkey: k,
 			active: active,
-			hit: f.fileId ? { action: 'openFile', fileId: f.fileId } : { action: 'showInFolder', path: f.path, hint: 'Show in folder' },
+			hit: f.fileId ? { action: 'openFile', fileId: f.fileId, tip: tipText('fileRow', { name: f.name }) } : { action: 'showInFolder', path: f.path, tip: tipText('localRow', { name: f.name }) },
 			k: k,
 			name: f.name,
-			line: pendingHtml(f) + checkoutMark(checkoutOf(f)) + statusChip(f.status, r.changed) + kindChip(f.name) + '<span class="row-meta">' + esc(whereIs(f.path)) + '</span>',
+			line: pendingHtml(f) + checkoutMark(checkoutOf(f)) + statusChip(f.status, r.changed) + kindChip(f.name) + '<span class="row-meta">' + esc(f.note || whereIs(f.path)) + '</span>',
 			extra: extra,
 			thumb: thumbAddress(found ? found.row : f),
 			go: f.fileId ? 'chev-right' : 'folder-go'
@@ -1871,7 +2421,7 @@
 	 *  File Explorer drop into the open folder. */
 	function browserHtml(v) {
 		var projects = v.projects || [];
-		var html = '<section class="group top browser-group" aria-labelledby="proj-label">';
+		var html = '<section class="group top browser-group" aria-labelledby="proj-label" data-part="browser">';
 		html += '<h2 class="section-label" id="proj-label">Team files</h2>';
 		var place = browserPlace();
 		if (!place) {
@@ -1884,7 +2434,8 @@
 			var pi = ui.index.projects[p.id];
 			html +=
 				'<button class="pad project-pad" type="button" role="tab" id="tab-' + esc(p.id) + '" aria-selected="' + on + '" aria-controls="project-panel"' +
-				' data-action="project" data-project="' + esc(p.id) + '" data-key="tab-' + esc(p.id) + '">' +
+				' data-action="project" data-project="' + esc(p.id) + '" data-key="tab-' + esc(p.id) + '"' +
+				tipAttr('tab', { name: p.name, archived: p.archived, newer: p.newerThanPinCount || 0, year: p.pinnedRelease }) + '>' +
 				'<span class="pad-name">' + esc(p.name) + '</span><span class="pad-sub">' + esc(p.archived ? 'Archived' : plural(pi.under[''] || 0, 'file', 'files')) + '</span></button>';
 		});
 		html += '</div>';
@@ -1915,7 +2466,7 @@
 		var items = browserItems(pi, folder);
 		if (!items.length) html += '<p class="group-help browser-empty">This folder is empty. Add files, or drag them here from File Explorer.</p>';
 		else
-			html += registerList({
+			html += listHeadHtml(pi, folder) + registerList({
 				id: 'vl-browser',
 				label: 'In ' + crumbWords(p, folder),
 				items: items,
@@ -1946,41 +2497,44 @@
 			html += '<li>' + (i ? '<span class="crumb-sep" aria-hidden="true">\u203a</span>' : '');
 			html += last
 				? '<span class="crumb-here" aria-current="location">' + icon('folder') + '<span>' + esc(s.name) + '</span></span>'
-				: '<button class="textlink crumb" type="button" data-action="folder" data-folder="' + esc(s.path) + '" data-key="crumb-' + esc(s.path) + '">' + esc(s.name) + '</button>';
+				: '<button class="textlink crumb" type="button" data-action="folder" data-folder="' + esc(s.path) + '" data-key="crumb-' + esc(s.path) + '"' + tipAttr('crumb', { name: s.name }) + '>' + esc(s.name) + '</button>';
 			html += '</li>';
 		});
 		return html + '</ol></nav>';
 	}
 
 	/** The open folder's keys. The project's own top folder can't be renamed or deleted
-	 *  here (project names are changed on ideabosco.com). Check out all and Check in all
-	 *  take the folders inside too, and Check out all asks first, with the count. */
+	 *  here (project names are changed on ideabosco.com). Check out this folder and Check in
+	 *  this folder take the folders inside too, and Check out asks first, with the count. */
 	function folderKeysHtml(p, pi, folder) {
 		var rows = rowsUnder(pi, folder);
-		var canOut = rows.some(function (r) {
-			return r.fileId && checkoutOf(r).state === 'available';
-		});
-		var canIn = rows.some(function (r) {
-			return checkoutOf(r).state === 'mine';
-		});
-		var held = rows.filter(function (r) {
+		var inArmory = 0;
+		var canOut = 0;
+		var canIn = 0;
+		var held = 0;
+		rows.forEach(function (r) {
 			var st = checkoutOf(r).state;
-			return r.fileId && (st === 'other' || st === 'myOtherComputer');
+			if (r.fileId) inArmory++;
+			if (r.fileId && st === 'available') canOut++;
+			if (st === 'mine') canIn++;
+			if (r.fileId && (st === 'other' || st === 'myOtherComputer')) held++;
 		});
 		var name = folder ? folder.split('/').pop() : p.name;
 		var inside = (pi.children[folder] || []).length ? ' and the folders in it' : '';
 		var html = '<div class="folder-keys" role="group" aria-label="' + esc('Folder ' + name) + '">';
-		html += key({ action: 'askNewFolder', key: 'fk-new', cls: 'tool', glyph: 'newfolder', word: 'New folder', title: 'Make a folder in ' + name });
-		html += key({ action: 'addFiles', key: 'fk-add', cls: 'tool', glyph: 'addfile', word: 'Add files', title: 'Copy files from this computer into ' + name });
+		html += key({ action: 'askNewFolder', key: 'fk-new', cls: 'tool', glyph: 'newfolder', word: 'New folder', tip: tipText('newFolder', { name: name }) });
+		html += key({ action: 'addFiles', key: 'fk-add', cls: 'tool', glyph: 'addfile', word: 'Add files', tip: tipText('addFiles', { name: name }) });
 		if (folder) {
-			html += key({ action: 'askRenameFolder', key: 'fk-rename', cls: 'tool', glyph: 'rename', word: 'Rename folder', title: 'Rename ' + name });
-			html += key({ action: 'askDeleteFolder', key: 'fk-delete', cls: 'tool', glyph: 'trash', word: 'Delete folder', title: 'Delete ' + name });
+			html += key({ action: 'askRenameFolder', key: 'fk-rename', cls: 'tool', glyph: 'rename', word: 'Rename folder', tip: tipText('renameFolder', { name: name }) });
+			html += key({ action: 'askDeleteFolder', key: 'fk-delete', cls: 'tool', glyph: 'trash', word: 'Delete folder', tip: tipText('deleteFolder', { name: name }) });
 		}
-		html += key({ action: 'askCheckOutAll', key: 'fk-out', cls: 'tool keep-word', glyph: 'checkout', word: 'Check out all', title: 'Check out every file in ' + name + inside, disabled: !canOut });
-		html += key({ action: 'folderCheckIn', key: 'fk-in', cls: 'tool keep-word', glyph: 'checkin', word: 'Check in all', title: 'Check in every file you have checked out in ' + name + inside, disabled: !canIn });
+		// The whole folder, with the folders in it (N9: the key says "this folder"; how many is
+		// in its tip and in the question Check out asks first).
+		html += key({ action: 'askCheckOutAll', key: 'fk-out', cls: 'tool keep-word', glyph: 'checkout', word: 'Check out this folder', tip: tipText('folderOut', { count: canOut, files: inArmory, name: name, inside: inside }), disabled: !canOut });
+		html += key({ action: 'folderCheckIn', key: 'fk-in', cls: 'tool keep-word', glyph: 'checkin', word: 'Check in this folder', tip: tipText('folderIn', { count: canIn, name: name, inside: inside }), disabled: !canIn });
 		// A mentor or CAD lead can check in, for everyone, every file someone else has here.
 		if (p.canTakeBack)
-			html += key({ action: 'askForceAll', key: 'fk-force', cls: 'tool keep-word', glyph: 'takeback', word: 'Force check in all', title: 'Force check in every file someone else has checked out in ' + name + inside, disabled: !held.length });
+			html += key({ action: 'askForceAll', key: 'fk-force', cls: 'tool keep-word', glyph: 'takeback', word: 'Force check in this folder', tip: tipText('folderForce', { count: held, name: name, inside: inside }), disabled: !held });
 		return html + '</div>';
 	}
 
@@ -2009,7 +2563,7 @@
 				cls: 'folder-item',
 				active: active,
 				select: null,
-				hit: { action: 'folder', folder: x.path },
+				hit: { action: 'folder', folder: x.path, tip: tipText('folderRow', { name: x.name }) },
 				k: fk,
 				name: x.name,
 				glyph: 'folder',
@@ -2022,7 +2576,8 @@
 		var picked = !!ui.selected[r.path];
 		// The pick key always draws its box, empty or ticked, so it reads as a checkbox.
 		var selectKey = r.fileId
-			? '<button class="key sel-key" type="button" role="checkbox" data-rove="sel" aria-checked="' + picked + '" data-action="select" data-path="' + esc(r.path) + '" data-key="sel-' + esc(k) + '" aria-label="Select ' + esc(r.name) + '">' +
+			? '<button class="key sel-key" type="button" role="checkbox" data-rove="sel" aria-checked="' + picked + '" data-action="select" data-path="' + esc(r.path) + '" data-key="sel-' + esc(k) + '" aria-label="Select ' + esc(r.name) + '"' +
+			  tipAttr('pick', { name: r.name }) + '>' +
 			  '<span class="sel-box" aria-hidden="true">' + icon('check') + '</span></button>'
 			: null;
 		return rowHtml({
@@ -2030,12 +2585,13 @@
 			vkey: k,
 			active: active,
 			select: selectKey,
-			hit: r.fileId ? { action: 'openFile', fileId: r.fileId } : { action: 'showInFolder', path: r.path, hint: 'Show in folder' },
+			hit: r.fileId ? { action: 'openFile', fileId: r.fileId, tip: tipText('fileRow', { name: r.name }) } : { action: 'showInFolder', path: r.path, tip: tipText('localRow', { name: r.name }) },
 			k: k,
 			name: r.name,
 			line: fileLine(r),
-			// The state key first, so Open keeps one column down the list.
-			extra: stateKey(r, k) + openKey(r.path, r.name, k),
+			// The state key first, so Open keeps one column down the list. A file that isn't on this
+			// computer (not here yet, or no first version) has nothing to open.
+			extra: stateKey(r, k) + (r.status === 'notOnThisComputer' || r.status === 'noVersion' ? '' : openKey(r.path, r.name, k, checkoutOf(r))),
 			thumb: thumbAddress(r),
 			go: r.fileId ? 'chev-right' : 'folder-go'
 		});
@@ -2057,25 +2613,61 @@
 	function selectionBarHtml(v) {
 		var picked = pickedRows();
 		if (!picked.length) return '';
-		var any = function (state) {
-			return picked.some(function (h) {
-				return checkoutOf(h.row).state === state;
-			});
-		};
 		var lead = picked.some(function (h) {
 			return h.project.canTakeBack;
 		});
 		// One wrapping row: the count, what fits the selected files, then Clear. A narrow
 		// window puts Clear beside the count and the file keys on the lines under them.
-		var html = '<div class="sel-bar panel" role="region" aria-label="Selected files">';
+		var html = '<div class="sel-bar panel" role="region" aria-label="Selected files" data-part="sel">';
 		html += '<p class="sel-count" role="status"><span class="avatar" data-tone="ok" aria-hidden="true">' + icon('check') + '</span>' + esc(num(picked.length) + ' selected') + '</p>';
-		html += key({ action: 'selCheckOut', key: 'sel-out', cls: 'tool', glyph: 'checkout', word: 'Check out', disabled: !any('available') });
-		html += key({ action: 'selCheckIn', key: 'sel-in', cls: 'tool', glyph: 'checkin', word: 'Check in', disabled: !any('mine') });
-		html += key({ action: 'selUndo', key: 'sel-undo', cls: 'tool', glyph: 'undo', word: 'Undo check out', disabled: !any('mine') });
-		if (lead) html += key({ action: 'askTakeBackPicked', key: 'sel-take', cls: 'tool', glyph: 'takeback', word: 'Force check in', disabled: !any('other') && !any('myOtherComputer') });
-		html += key({ action: 'selClear', key: 'sel-clear', cls: 'tool sel-clear', word: 'Clear' });
+		var out = picked.filter(function (h) { return checkoutOf(h.row).state === 'available'; }).length;
+		var mine = picked.filter(function (h) { return checkoutOf(h.row).state === 'mine'; }).length;
+		var held = picked.filter(function (h) { var st = checkoutOf(h.row).state; return st === 'other' || st === 'myOtherComputer'; }).length;
+		html += key({ action: 'selCheckOut', key: 'sel-out', cls: 'tool', glyph: 'checkout', word: 'Check out', tip: tipText('selOut', { count: out }), disabled: !out });
+		html += key({ action: 'selCheckIn', key: 'sel-in', cls: 'tool', glyph: 'checkin', word: 'Check in', tip: tipText('selIn', { count: mine }), disabled: !mine });
+		html += key({ action: 'selUndo', key: 'sel-undo', cls: 'tool', glyph: 'undo', word: 'Undo check out', tip: tipText('selUndo', { count: mine }), disabled: !mine });
+		if (lead) html += key({ action: 'askTakeBackPicked', key: 'sel-take', cls: 'tool', glyph: 'takeback', word: 'Force check in', tip: tipText('selForce', { count: held }), disabled: !held });
+		// Every file of the folder, once some are picked (N9: picking 5,000 needed click, End, Shift-click).
+		var every = folderFiles().length;
+		if (every > picked.length) html += key({ action: 'selectAll', key: 'sel-every', cls: 'tool', glyph: 'check', word: 'Select all ' + num(every), tip: tipText('selEvery', { count: every }) });
+		html += key({ action: 'selClear', key: 'sel-clear', cls: 'tool sel-clear', word: 'Clear', tip: tipText('selClear') });
 		html += '<span class="sel-break" aria-hidden="true"></span>';
 		return html + '</div>';
+	}
+
+	/** The open folder's files that can be picked (in Armory, directly in the folder). */
+	function folderFiles() {
+		var place = browserPlace();
+		if (!place || place.project.archived) return [];
+		return (place.pi.folders[place.folder].files || [])
+			.filter(function (r) {
+				return r.fileId;
+			})
+			.map(function (r) {
+				return r.path;
+			});
+	}
+
+	/** The list's head: one box that picks every file of the folder (or lets go of them all),
+	 *  over the rows' own boxes, with how many files that is. */
+	function listHeadHtml(pi, folder) {
+		var files = (pi.folders[folder].files || []).filter(function (r) {
+			return r.fileId;
+		});
+		if (!files.length) return '';
+		var picked = files.filter(function (r) {
+			return ui.selected[r.path];
+		}).length;
+		var state = !picked ? 'false' : picked === files.length ? 'true' : 'mixed';
+		return (
+			'<div class="list-head">' +
+			'<button class="key sel-key sel-all" type="button" role="checkbox" aria-checked="' + state + '" data-action="selectAll" data-key="sel-all" aria-labelledby="sel-all-word"' +
+			tipAttr('selectAll', { count: files.length, all: state === 'true' }) + '>' +
+			'<span class="sel-box" aria-hidden="true">' + icon(state === 'mixed' ? 'dash' : 'check') + '</span></button>' +
+			'<span class="list-head-word" id="sel-all-word">Select all in this folder</span>' +
+			'<span class="list-head-count">' + esc(plural(files.length, 'file', 'files')) + '</span>' +
+			'</div>'
+		);
 	}
 
 	function setPicked(path, on) {
@@ -2122,6 +2714,9 @@
 		out.changed = found.row.changed;
 		out.releaseNotChecked = found.row.releaseNotChecked;
 		out.canTakeBack = d.canTakeBack || found.project.canTakeBack;
+		if (found.row.savedRelease != null) out.savedRelease = found.row.savedRelease;
+		out.newerThanPin = !!found.row.newerThanPin;
+		out.pinnedRelease = found.project.pinnedRelease || null;
 		return out;
 	}
 
@@ -2160,18 +2755,19 @@
 		var c = d.checkout || { state: 'available' };
 		var here = d.status !== 'notOnThisComputer';
 		var html = '<div class="detail-act">';
-		if (here) html += key({ action: 'launch', key: 'd-open', cls: 'primary side-key', glyph: 'open', word: 'Open', path: d.path, title: 'Open ' + d.name + ' in its program' });
+		var about = { name: d.name, cad: kindOf(d.name) !== 'file', holder: c.name || 'the person who has it' };
+		if (here) html += key({ action: 'launch', key: 'd-open', cls: 'primary side-key', glyph: 'open', word: 'Open', path: d.path, tip: tipText('detailOpen', openTipOf(d.name, c)) });
 		var keys = '';
 		if (c.state === 'available' && d.fileId) {
-			keys += key({ action: 'checkOut', key: 'd-checkout', cls: 'tool', glyph: 'checkout', word: 'Check out', path: d.path });
-			if (here) keys += key({ action: 'checkOutOpen', key: 'd-checkout-open', cls: 'tool', glyph: 'open', word: 'Check out and open', path: d.path });
+			keys += key({ action: 'checkOut', key: 'd-checkout', cls: 'tool', glyph: 'checkout', word: 'Check out', path: d.path, tip: tipText('detailOut', about) });
+			if (here) keys += key({ action: 'checkOutOpen', key: 'd-checkout-open', cls: 'tool', glyph: 'open', word: 'Check out and open', path: d.path, tip: tipText('detailOutOpen', about) });
 		} else if (c.state === 'mine') {
-			keys += key({ action: 'checkIn', key: 'd-checkin', cls: 'tool', glyph: 'checkin', word: 'Check in', path: d.path });
-			keys += key({ action: 'undoCheckOut', key: 'd-undo', cls: 'tool', glyph: 'undo', word: 'Undo check out', path: d.path });
+			keys += key({ action: 'checkIn', key: 'd-checkin', cls: 'tool', glyph: 'checkin', word: 'Check in', path: d.path, tip: tipText('detailIn', about) });
+			keys += key({ action: 'undoCheckOut', key: 'd-undo', cls: 'tool', glyph: 'undo', word: 'Undo check out', path: d.path, tip: tipText('detailUndo', about) });
 		}
-		if ((c.state === 'other' || c.state === 'myOtherComputer') && d.canTakeBack) keys += key({ action: 'askTakeBack', key: 'd-takeback', cls: 'tool', glyph: 'takeback', word: 'Force check in', fileId: d.fileId });
+		if ((c.state === 'other' || c.state === 'myOtherComputer') && d.canTakeBack) keys += key({ action: 'askTakeBack', key: 'd-takeback', cls: 'tool', glyph: 'takeback', word: 'Force check in', fileId: d.fileId, tip: tipText('detailForce', about) });
 		if (keys) html += '<div class="detail-keys">' + keys + '</div>';
-		html += '<button class="textlink" type="button" data-action="showInFolder" data-path="' + esc(d.path) + '" data-key="show-in-folder">' + icon('folder') + '<span>Show in folder</span></button>';
+		html += '<button class="textlink" type="button" data-action="showInFolder" data-path="' + esc(d.path) + '" data-key="show-in-folder"' + tipAttr('showInFolder', about) + '>' + icon('folder') + '<span>Show in folder</span></button>';
 		return html + '</div>';
 	}
 
@@ -2184,17 +2780,24 @@
 			'h1',
 			d.name,
 			' id="detail-title" tabindex="-1" data-key="detail-title"',
-			'<button class="key back-key" type="button" data-action="back" data-key="back" aria-label="Back to Home" title="Back to Home">' + icon('chev-left') + '</button>'
+			'<button class="key back-key" type="button" data-action="back" data-key="back" aria-label="Back to Home"' + tipAttr('back') + '>' + icon('chev-left') + '</button>'
 		);
 		html +=
 			'<p class="title-sub">' + kindChip(d.name) + '<span class="meta-text">' + esc(whereIs(d.path)) + '</span>' +
 			// The one place a release that couldn't be checked shows: a small tag, never a notice.
-			(d.releaseNotChecked ? chip('SolidWorks year not checked', 'look', 'year-tag') : '') + '</p>';
+			(d.releaseNotChecked ? chip('SolidWorks year not checked', 'look', 'year-tag') : '') +
+			// The SolidWorks year it was saved in, when Armory knows it (amber when newer than the project's).
+			(d.savedRelease && !(d.releaseNotChecked && !d.newerThanPin)
+				? d.newerThanPin
+					? '<span class="chip lamp amber year-tag" data-tip="' + esc('Saved in SolidWorks ' + d.savedRelease + '.' + (d.pinnedRelease ? ' ' + d.project + ' uses SolidWorks ' + d.pinnedRelease + '.' : '')) + '">' + esc('Saved in SolidWorks ' + d.savedRelease) + '</span>'
+					: '<span class="chip kind year-tag" data-tip="' + esc('Its version in Armory was saved in SolidWorks ' + d.savedRelease + '.') + '">' + esc('SolidWorks ' + d.savedRelease) + '</span>'
+				: '') +
+			'</p>';
 		html += '<div class="detail-grid">';
 
 		html += '<div class="detail-side">';
 		var detailThumb = thumbAddress(findRow(d.fileId) ? findRow(d.fileId).row : d);
-		if (detailThumb) html += '<div class="detail-thumb">' + thumbImg(detailThumb, true) + '</div>';
+		if (detailThumb && !thumbMissing(detailThumb)) html += '<div class="detail-thumb"' + (thumbsLoaded[detailThumb] ? ' data-thumb="on"' : '') + '>' + thumbImg(detailThumb, true) + '</div>';
 		html += '<section class="display" data-tone="' + w.tone + '" aria-labelledby="holder-line">';
 		html += '<p class="screen lcd"><span>' + esc(w.readout) + '</span></p>';
 		html += '<h2 class="holder-line" id="holder-line">' + esc(glue(w.line)) + '</h2>';
@@ -2210,7 +2813,7 @@
 		else {
 			html += '<ol class="history-list list-well">';
 			d.history.forEach(function (e) {
-				html += historyEntry(e, me);
+				html += historyEntry(e, me, d.fileId);
 			});
 			html += '</ol>';
 		}
@@ -2248,7 +2851,7 @@
 	 *  row; a routine one (HistoryEntryView.routine: saved while checked out, an earlier
 	 *  save) is the ordinary record of work and keeps the neutral tone. A removal says so.
 	 *  The size is in the tooltip, not the line. */
-	function historyEntry(e, me) {
+	function historyEntry(e, me, fileId) {
 		// A save made while checked out is kept as a copy too, but it is the ordinary thing
 		// (each save is backed up until the check in), so it reads like any other save. The
 		// engine says which kept copies are routine; the page never guesses from the note.
@@ -2256,7 +2859,7 @@
 		var copy = e.kind === 'keptCopy' && !saved;
 		var removed = e.kind === 'removed';
 		var routine = saved || (e.kind === 'version' && /^(Checked in|Saved|Added to Armory)$/.test(e.note));
-		var when = '<time datetime="' + esc(e.at) + '" title="' + esc(fullTime(e.at)) + '">' + esc(agoWhole(e.at)) + '</time>';
+		var when = '<time datetime="' + esc(e.at) + '" data-tip="' + esc(fullTime(e.at)) + '">' + esc(agoWhole(e.at)) + '</time>';
 		var mine = copy && me && (e.author.toLowerCase() === me.toLowerCase() || firstName(e.author).toLowerCase() === firstName(me).toLowerCase());
 		var chips = '';
 		if (e.isCurrent) chips += chip('Current', 'ok');
@@ -2264,10 +2867,22 @@
 		if (removed) chips += chip('Removed', 'off');
 		if (e.releaseNotChecked) chips += chip('Year not checked', 'look');
 		return (
-			'<li class="hist"' + (mine ? ' data-mine="true"' : '') + (copy ? ' data-copy="true"' : '') + (removed ? ' data-removed="true"' : '') + (e.bytes ? ' title="' + esc(bytes(e.bytes)) + '"' : '') + '>' +
+			'<li class="hist"' + (mine ? ' data-mine="true"' : '') + (copy ? ' data-copy="true"' : '') + (removed ? ' data-removed="true"' : '') + (e.bytes ? ' data-tip="' + esc(bytes(e.bytes)) + '"' : '') + '>' +
 			'<div class="hist-top"><span class="hist-title">' + (routine ? esc(e.author) + ' · ' + when : esc(e.note)) + '</span>' +
 			(chips ? '<span class="hist-chips">' + chips + '</span>' : '') + '</div>' +
-			'<div class="hist-meta">' + (routine ? esc(e.note) : esc(e.author) + ' · ' + when) + '</div></li>'
+			'<div class="hist-meta">' + (routine ? esc(e.note) : esc(e.author) + ' · ' + when) + '</div>' +
+			// A kept copy can be put back on this computer, checked out to the student (0.3.3, N4);
+			// Armory refuses someone else's copy in one sentence.
+			(e.kind === 'keptCopy' && fileId ? putBackKey(fileId, e) : '') +
+			'</li>'
+		);
+	}
+
+	function putBackKey(fileId, e) {
+		var k = 'put-back-' + e.id;
+		return (
+			'<div class="hist-act"><button class="key tool" type="button" data-action="putBack" data-file-id="' + esc(fileId) + '" data-version="' + esc(e.id) + '" data-key="' + esc(k) + '"' +
+			busyAttrs(k) + tipAttr('putBack') + '>' + busyGlyph(k, 'undo') + '<span class="key-word">Put back on this computer</span></button></div>'
 		);
 	}
 
@@ -2276,16 +2891,16 @@
 	function settingsHtml(v) {
 		var s = v.settings;
 		var themes = [
-			['system', 'Match Windows', 'Follows Windows'],
-			['idea', 'IDEA', 'Dark'],
-			['spaceWhite', 'Space White', 'Light']
+			['system', 'Match Windows', 'Follows Windows', 'themeSystem'],
+			['idea', 'IDEA', 'Dark', 'themeIdea'],
+			['spaceWhite', 'Space White', 'Light', 'themeSpaceWhite']
 		];
-		var html = titleBar('h2', 'Settings', ' id="settings-title"', null, '<button class="key" type="button" data-action="closeSettings" data-key="set-done">Done</button>');
+		var html = titleBar('h2', 'Settings', ' id="settings-title"', null, '<button class="key" type="button" data-action="closeSettings" data-key="set-done"' + tipAttr('done') + '>Done</button>');
 
 		html += '<section class="setting" aria-labelledby="set-root-label">';
 		html += '<h3 class="section-label" id="set-root-label">Where your files are kept</h3>';
 		html += '<div class="setting-row"><p class="path-plate" id="set-root-value">' + icon('folder') + '<span>' + esc(s.vaultRoot) + '</span></p>';
-		if (!s.sharedComputer) html += '<button class="key" type="button" data-action="chooseVaultRoot" data-key="set-root" aria-describedby="set-root-label set-root-value">Change</button>';
+		if (!s.sharedComputer) html += '<button class="key" type="button" data-action="chooseVaultRoot" data-key="set-root" aria-describedby="set-root-label set-root-value"' + tipAttr('changeRoot') + '>Change</button>';
 		html += '</div>';
 		html += s.sharedComputer
 			? '<p class="setting-help">The students on this computer take turns in this folder. Armory hands it to the next student once nothing of the last one\'s waits in it.</p>'
@@ -2295,7 +2910,7 @@
 		html += '<section class="setting" aria-labelledby="set-start-label">';
 		html += '<h3 class="section-label" id="set-start-label">Start Armory when I sign in</h3>';
 		html +=
-			'<button class="switch" type="button" data-action="toggleStart" data-key="set-start" aria-pressed="' + !!s.startAtSignIn + '" aria-labelledby="set-start-label set-start-word">' +
+			'<button class="switch" type="button" data-action="toggleStart" data-key="set-start" aria-pressed="' + !!s.startAtSignIn + '" aria-labelledby="set-start-label set-start-word"' + tipAttr('startSwitch', { on: !!s.startAtSignIn }) + '>' +
 			'<span class="ts-glyph" aria-hidden="true"></span><span class="ts-word" id="set-start-word">' + (s.startAtSignIn ? 'On' : 'Off') + '</span></button>';
 		html += '<p class="setting-help">When this is on, Armory opens by itself when you sign in to Windows, so your work always reaches the team.</p>';
 		html += '</section>';
@@ -2305,7 +2920,7 @@
 		html += '<div class="segmented" role="group" aria-labelledby="set-theme-label">';
 		themes.forEach(function (t) {
 			html +=
-				'<button class="pad seg" type="button" data-action="theme" data-value="' + t[0] + '" data-key="set-theme-' + t[0] + '" aria-pressed="' + ((ui.themeWanted || s.theme) === t[0]) + '">' +
+				'<button class="pad seg" type="button" data-action="theme" data-value="' + t[0] + '" data-key="set-theme-' + t[0] + '" aria-pressed="' + ((ui.themeWanted || s.theme) === t[0]) + '"' + tipAttr(t[3]) + '>' +
 				'<span class="swatch" data-swatch="' + t[0] + '" aria-hidden="true"></span>' +
 				'<span class="seg-words"><span class="seg-name">' + esc(t[1]) + '</span><span class="seg-sub">' + esc(t[2]) + '</span></span></button>';
 		});
@@ -2319,25 +2934,40 @@
 			html += '<h3 class="section-label" id="set-badges-label">Status on file icons</h3>';
 			html += '<div class="setting-row"><p class="setting-state" id="set-badges-value">' + icon(b.state === 'on' ? 'check' : 'note') + '<span>' + esc(b.line) + '</span></p>';
 			if (b.state === 'off' || b.state === 'broken')
-				html += '<button class="key" type="button" data-action="turnOnBadges" data-key="set-badges" aria-describedby="set-badges-label set-badges-value">Turn on</button>';
+				html += '<button class="key" type="button" data-action="turnOnBadges" data-key="set-badges" aria-describedby="set-badges-label set-badges-value"' + tipAttr('turnOnBadges') + '>Turn on</button>';
 			html += '</div>';
 			html += '<p class="setting-help">Badges on your files in File Explorer show at a glance which ones you have checked out, which someone else has, and which need you.</p>';
 			html += '</section>';
 		}
+		html += settingsSolidWorksHtml(v);
 		html += sharedSettingsHtml(v);
 
 		// Something wrong: a person's own report, and the folder of saved reports to hand over by hand.
 		html += '<section class="setting" aria-labelledby="set-report-label">';
 		html += '<h3 class="section-label" id="set-report-label">Something not working?</h3>';
 		html += '<div class="setting-row">';
-		html += '<button class="key" type="button" data-action="askReport" data-key="set-report" aria-haspopup="dialog">Report a problem</button>';
-		html += '<button class="key" type="button" data-action="askFeedback" data-key="set-feedback" aria-haspopup="dialog">Send feedback</button>';
+		html += '<button class="key" type="button" data-action="askReport" data-key="set-report" aria-haspopup="dialog"' + tipAttr('report') + '>Report a problem</button>';
+		html += '<button class="key" type="button" data-action="askFeedback" data-key="set-feedback" aria-haspopup="dialog"' + tipAttr('sendFeedback') + '>Send feedback</button>';
 		html += '<span class="set-mine" id="set-mine-slot">' + mineKeyHtml() + '</span>';
-		html += '<button class="textlink" type="button" data-action="openIncidents" data-key="set-incidents">' + icon('folder') + '<span>Open incidents folder</span></button>';
+		html += '<button class="textlink" type="button" data-action="openIncidents" data-key="set-incidents"' + tipAttr('incidents') + '>' + icon('folder') + '<span>Open incidents folder</span></button>';
 		html += '</div>';
 		html += '<p class="setting-help">Armory keeps a short record of what it was doing when something goes wrong: file names, never what is in your files. A report sends your words with it. Feedback sends your words, and a picture of this window if you add one, with Armory\'s version and what it was doing.</p>';
 		html += '</section>';
 		return html;
+	}
+
+	/** The SolidWorks link's line (0.3.3, impl/b3-solidworks-link: view.solidWorks, its state,
+	 *  line and detail): what it found running here. Nothing until the host sends it. */
+	function settingsSolidWorksHtml(v) {
+		var sw = v.solidWorks || (v.settings && v.settings.solidWorks) || null;
+		if (!sw || !sw.line) return '';
+		return (
+			'<section class="setting" aria-labelledby="set-sw-label">' +
+			'<h3 class="section-label" id="set-sw-label">SolidWorks</h3>' +
+			'<p class="setting-state" id="set-sw-value">' + icon(sw.state === 'attached' ? 'check' : 'note') + '<span>' + esc(sw.line) + '</span></p>' +
+			(sw.detail ? '<p class="setting-help">' + esc(sw.detail) + '</p>' : '') +
+			'</section>'
+		);
 	}
 
 	function openSettings() {
@@ -2353,7 +2983,8 @@
 		}
 		// "Your feedback" shows in the sheet once the host says the website has it.
 		readMyFeedback();
-		sheet.innerHTML = settingsHtml(ui.view);
+		hideTip();
+		drawSheet(ui.view);
 		if (!sheet.open) sheet.showModal();
 		// The sheet itself takes focus, so a screen reader reads its name; Tab then
 		// reaches each setting in order.
@@ -2375,6 +3006,7 @@
 	 * student is typing stay put. Its name field is the inset field recipe at 44px.
 	 */
 	function openAsk(kind, ctx, returnKey) {
+		hideTip();
 		ui.ask = { kind: kind, ctx: ctx, returnKey: returnKey || null };
 		ask.innerHTML = askHtml(kind, ctx);
 		if (!ask.open) ask.showModal();
@@ -2414,7 +3046,7 @@
 			field = areaHtml('What happened?');
 			ok = 'Send';
 		} else if (kind === 'checkOutAll') {
-			title = 'Check out all';
+			title = 'Check out this folder';
 			var them = c.count === 1 ? 'it' : 'them';
 			body =
 				'Check out ' + plural(c.count, 'file', 'files') + ' in ' + c.name + (c.inside ? ' and its folders' : '') + '? ' +
@@ -2423,7 +3055,7 @@
 			ok = 'Check out ' + plural(c.count, 'file', 'files');
 			cancelFirst = true;
 		} else if (kind === 'undoMine') {
-			title = 'Undo all';
+			title = 'Undo my check outs';
 			body =
 				'Undo all ' + plural(c.count, 'check out', 'check outs') + '? Each file goes back to the version from before you checked it out, and anyone can check it out. ' +
 				'Changes you saved are kept as your own copies in each file\'s history, so nothing is lost.';
@@ -2455,7 +3087,7 @@
 			danger = true;
 			if (c.held && c.canTakeBack) force = 'Force check in ' + plural(c.held, 'file', 'files') + ' and delete';
 		} else {
-			title = c.count === 1 ? 'Force check in' : 'Force check in all';
+			title = c.count === 1 ? 'Force check in' : 'Force check in ' + plural(c.count, 'file', 'files');
 			body =
 				'Force check in ' + c.what + '? ' + c.holders + (c.people === 1 ? ' has ' : ' have ') + (c.count === 1 ? 'it' : 'them') + ' checked out now. ' +
 				'Any changes ' + c.who + ' hasn\'t checked in are kept as ' + c.whose + ' own copy in ' + (c.count === 1 ? 'the file\'s history' : 'each file\'s history') +
@@ -2470,9 +3102,9 @@
 			extra +
 			field +
 			'<div class="ask-keys">' +
-			'<button class="key' + (danger ? ' danger' : cancelFirst ? '' : ' primary') + '" type="button" data-action="askOk" data-key="ask-ok">' + esc(glue(ok)) + '</button>' +
-			(force ? '<button class="key danger" type="button" data-action="askForce" data-key="ask-force">' + esc(glue(force)) + '</button>' : '') +
-			'<button class="key" type="button" data-action="askCancel" data-key="ask-cancel"' + (field || !(danger || cancelFirst) ? '' : ' data-ask-first="true"') + '>Cancel</button>' +
+			'<button class="key' + (danger ? ' danger' : cancelFirst ? '' : ' primary') + '" type="button" data-action="askOk" data-key="ask-ok"' + tipAttr('ask', { kind: kind, count: c.count }) + '>' + esc(glue(ok)) + '</button>' +
+			(force ? '<button class="key danger" type="button" data-action="askForce" data-key="ask-force"' + tipAttr('askForce', { kind: kind }) + '>' + esc(glue(force)) + '</button>' : '') +
+			'<button class="key" type="button" data-action="askCancel" data-key="ask-cancel"' + (field || !(danger || cancelFirst) ? '' : ' data-ask-first="true"') + tipAttr('cancel') + '>Cancel</button>' +
 			'</div></div>'
 		);
 	}
@@ -2487,7 +3119,7 @@
 		var html = '<div class="segmented report-kinds" role="group" aria-label="What kind of report">';
 		kinds.forEach(function (k) {
 			html +=
-				'<button class="pad seg seg-plain" type="button" data-action="reportKind" data-value="' + k[0] + '" data-key="ask-kind-' + k[0] + '" aria-pressed="' + (picked === k[0]) + '">' +
+				'<button class="pad seg seg-plain" type="button" data-action="reportKind" data-value="' + k[0] + '" data-key="ask-kind-' + k[0] + '" aria-pressed="' + (picked === k[0]) + '"' + tipAttr('kind', { kind: k[0] }) + '>' +
 				'<span class="seg-words"><span class="seg-name">' + esc(k[1]) + '</span><span class="seg-sub">' + esc(k[2]) + '</span></span></button>';
 		});
 		return html + '</div>';
@@ -2675,7 +3307,13 @@
 			people[checkoutOf(h.row).name || 'someone'] = true;
 		});
 		var names = Object.keys(people);
-		var holders = names.length <= 2 ? names.join(' and ') : names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1];
+		// Two names, three, or two and how many more: never every holder in one sentence.
+		var holders =
+			names.length <= 2
+				? names.join(' and ')
+				: names.length === 3
+					? names[0] + ', ' + names[1] + ' and ' + names[2]
+					: firstName(names[0]) + ', ' + firstName(names[1]) + ' and ' + plural(names.length - 2, 'other', 'others');
 		openAsk(
 			'takeBack',
 			{
@@ -2764,7 +3402,7 @@
 		var n = ui.myFeedback.state === 'shown' ? ui.myFeedback.notes.length : null;
 		return (
 			'<button class="key" type="button" data-action="openMyFeedback" data-key="set-mine" aria-haspopup="dialog"' +
-			(n != null ? ' aria-label="Your feedback, ' + esc(plural(n, 'note', 'notes')) + '"' : '') + '>' +
+			(n != null ? ' aria-label="Your feedback, ' + esc(plural(n, 'note', 'notes')) + '"' : '') + tipAttr('yourFeedback') + '>' +
 			'Your feedback' + (n != null ? ' (' + esc(num(n)) + ')' : '') + '</button>'
 		);
 	}
@@ -2785,7 +3423,7 @@
 		var html = '<div class="segmented feedback-kinds" role="group" aria-label="What kind of feedback">';
 		FEEDBACK_KINDS.forEach(function (k) {
 			html +=
-				'<button class="pad seg seg-plain" type="button" data-action="reportKind" data-value="' + k[0] + '" data-key="ask-kind-' + k[0] + '" aria-pressed="' + (c.kind === k[0]) + '">' +
+				'<button class="pad seg seg-plain" type="button" data-action="reportKind" data-value="' + k[0] + '" data-key="ask-kind-' + k[0] + '" aria-pressed="' + (c.kind === k[0]) + '"' + tipAttr('kind', { kind: k[0] }) + '>' +
 				'<span class="seg-words"><span class="seg-name">' + esc(k[1]) + '</span><span class="seg-sub">' + esc(k[2]) + '</span></span></button>';
 		});
 		html += '</div>';
@@ -2806,14 +3444,14 @@
 			'<p class="field-error" id="ask-error" aria-live="polite"></p>' +
 			'<div class="ask-keys">' +
 			'<span class="ask-mine" id="ask-mine-slot">' + mineLinkHtml() + '</span>' +
-			'<button class="key primary" type="button" data-action="askOk" data-key="ask-ok">Send</button>' +
-			'<button class="key" type="button" data-action="askCancel" data-key="ask-cancel">Cancel</button>' +
+			'<button class="key primary" type="button" data-action="askOk" data-key="ask-ok"' + tipAttr('ask', { kind: 'feedback' }) + '>Send</button>' +
+			'<button class="key" type="button" data-action="askCancel" data-key="ask-cancel"' + tipAttr('cancel') + '>Cancel</button>' +
 			'</div></div>'
 		);
 	}
 
 	function mineLinkHtml() {
-		return mineOffered() ? '<button class="textlink" type="button" data-action="openMyFeedback" data-key="ask-mine">Your feedback</button>' : '';
+		return mineOffered() ? '<button class="textlink" type="button" data-action="openMyFeedback" data-key="ask-mine"' + tipAttr('mineLink') + '>Your feedback</button>' : '';
 	}
 
 	/** The picture part: the key that takes one, or the picture itself as it would be sent. */
@@ -2827,14 +3465,14 @@
 				esc('This is the picture that will be sent: ' + num(s.width) + ' by ' + num(s.height) + ' pixels, ' + bytes(s.bytes) + '. Email addresses and file pictures are hidden.' +
 					(s.scaled ? ' It was made smaller to fit 2 MB.' : '')) +
 				'</figcaption></figure>' +
-				'<button class="key" type="button" data-action="removeShot" data-key="ask-shot-remove">Remove picture</button>'
+				'<button class="key" type="button" data-action="removeShot" data-key="ask-shot-remove"' + tipAttr('removeShot') + '>Remove picture</button>'
 			);
 		// The website can't take pictures yet (it said so, or it has no Your feedback either,
 		// which came with them): nothing to offer. Offline, the host's answer says so instead.
 		var m = ui.myFeedback;
 		if (m && (m.state === 'missing' || (m.state === 'shown' && !m.pictures))) return '';
 		return (
-			'<button class="key" type="button" data-action="addShot" data-key="ask-shot" aria-describedby="ask-shot-help">Add a picture of this window</button>' +
+			'<button class="key" type="button" data-action="addShot" data-key="ask-shot" aria-describedby="ask-shot-help"' + tipAttr('addShot') + '>Add a picture of this window</button>' +
 			'<p class="setting-help" id="ask-shot-help">Only Armory\'s window is in it, with email addresses and file pictures hidden. You see it before it goes.</p>'
 		);
 	}
@@ -2847,7 +3485,11 @@
 	/** Send, or "Send without the picture" once the host offered it and no picture is on. */
 	function paintSendKey() {
 		var ok = ask.querySelector('[data-key="ask-ok"]');
-		if (ok && ui.ask && !ok.querySelector('.spin')) ok.textContent = ui.ask.withoutPicture && !ui.ask.shot ? 'Send without the picture' : 'Send';
+		if (ok && ui.ask && !ok.querySelector('.spin')) {
+			var without = ui.ask.withoutPicture && !ui.ask.shot;
+			ok.textContent = without ? 'Send without the picture' : 'Send';
+			ok.setAttribute('data-tip', tipText('ask', { kind: 'feedback', withoutPicture: without }));
+		}
 	}
 
 	/** Near the limit, how much of it is used. */
@@ -3023,8 +3665,8 @@
 			'<div class="mine-list" id="mine-list" aria-live="polite">' + mineListHtml() + '</div>' +
 			'<p class="setting-help mine-foot" id="ask-words">The IDEA team reads every note. There are no replies in Armory: the status shows where yours is.</p>' +
 			'<div class="ask-keys">' +
-			(c.draft ? '<button class="key" type="button" data-action="myFeedbackBack" data-key="mine-back">Back to your note</button>' : '') +
-			'<button class="key primary" type="button" data-action="askCancel" data-key="mine-done" data-ask-first="true">Done</button>' +
+			(c.draft ? '<button class="key" type="button" data-action="myFeedbackBack" data-key="mine-back"' + tipAttr('mineBack') + '>Back to your note</button>' : '') +
+			'<button class="key primary" type="button" data-action="askCancel" data-key="mine-done" data-ask-first="true"' + tipAttr('mineDone') + '>Done</button>' +
 			'</div></div>'
 		);
 	}
@@ -3038,7 +3680,7 @@
 			'<ul class="mine-notes">' +
 			m.notes
 				.map(function (n) {
-					var when = '<time datetime="' + esc(n.createdAt) + '" title="' + esc(fullTime(n.createdAt)) + '">' + esc(agoWhole(n.createdAt)) + '</time>';
+					var when = '<time datetime="' + esc(n.createdAt) + '" data-tip="' + esc(fullTime(n.createdAt)) + '">' + esc(agoWhole(n.createdAt)) + '</time>';
 					var facts = [n.deviceName ? 'from ' + esc(n.deviceName) : '', n.area ? 'about ' + esc(n.area) : '', n.hasScreenshot ? 'with a picture' : ''];
 					return (
 						'<li class="mine-note">' +
@@ -3057,8 +3699,7 @@
 	/** The host's answer to readMyFeedback. */
 	function myFeedbackRead(m) {
 		ui.myFeedback = { state: m.state, pictures: !!m.pictures, message: m.message || null, notes: m.notes || [] };
-		var slot = document.getElementById('set-mine-slot');
-		if (slot && sheet.open) slot.innerHTML = mineKeyHtml();
+		if (sheet.open) drawSheet(ui.view);
 		if (ui.ask && ui.ask.kind === 'myFeedback') {
 			var list = ask.querySelector('#mine-list');
 			if (list) list.innerHTML = mineListHtml();
@@ -3121,21 +3762,69 @@
 		return (busyKey(dataKey) ? spinHtml() : '') + icon(glyph);
 	}
 
-	/** What a row says while an action on it is under way: the words, and the request. */
+	/** What a row says while an action on it is under way: the words, and the request. Only
+	 *  the files the action really touches say so (N9: Check in on a folder of 5,000 touches the
+	 *  ones checked out here, not every row under it, and other people's rows keep saying who
+	 *  has them). */
 	function pendingOf(r) {
+		if (!r || !r.fileId) return null;
 		for (var id in ui.pending) {
 			var p = ui.pending[id];
-			if (!p.row) continue;
-			if (r.fileId && p.fileIds.indexOf(r.fileId) >= 0) return { id: id, words: p.row };
-			for (var i = 0; i < p.paths.length; i++) if (r.path === p.paths[i] || String(r.path).indexOf(p.paths[i] + '/') === 0) return { id: id, words: p.row };
+			if (p.row && p.ids[r.fileId]) return { id: id, words: p.row };
 		}
 		return null;
+	}
+
+	/** The files an action touches, by id: what Check out can take (nobody has them), what
+	 *  Check in and Undo can take (checked out here), or the files it names. */
+	function affectedOf(type, f) {
+		if (type === 'takeBack' || type === 'putBackKeptCopy') return f.fileId ? [f.fileId] : [];
+		if (type === 'takeBackAll') return (f.fileIds || []).slice();
+		var want = type === 'checkOut' ? 'available' : type === 'checkIn' || type === 'undoCheckOut' ? 'mine' : null;
+		if (!want || !ui.index) return [];
+		var paths = f.paths || [];
+		var exact = [];
+		var folders = [];
+		paths.forEach(function (path) {
+			if (ui.index.byPath[path]) exact.push(path);
+			else folders.push(path + '/');
+		});
+		var ids = [];
+		var seen = {};
+		var take = function (r) {
+			if (r && r.fileId && !seen[r.fileId] && checkoutOf(r).state === want) {
+				seen[r.fileId] = true;
+				ids.push(r.fileId);
+			}
+		};
+		exact.forEach(function (path) {
+			take(ui.index.byPath[path].row);
+		});
+		if (folders.length) {
+			Object.keys(ui.index.byPath).forEach(function (path) {
+				for (var i = 0; i < folders.length; i++)
+					if (path.indexOf(folders[i]) === 0) {
+						take(ui.index.byPath[path].row);
+						break;
+					}
+			});
+			// My files in a project the index does not list (archived) still count.
+			if (want === 'mine')
+				(ui.view.myFiles || []).forEach(function (m) {
+					for (var i = 0; i < folders.length; i++)
+						if (String(m.path).indexOf(folders[i]) === 0) {
+							take(m);
+							break;
+						}
+				});
+		}
+		return ids;
 	}
 
 	/** The working label a row shows ahead of who has it (the style hides who has it while
 	 *  the label is there). */
 	function pendingHtml(r) {
-		var p = pendingOf(r);
+		var p = ui.pending && Object.keys(ui.pending).length ? pendingOf(r) : null;
 		return p ? '<span class="row-avail row-pending" data-req="' + esc(p.id) + '">' + spinHtml() + esc(p.words) + '</span>' : '';
 	}
 
@@ -3151,14 +3840,12 @@
 				if (!el.querySelector('.spin')) el.insertAdjacentHTML('afterbegin', spinHtml());
 			});
 		if (!p.row || !ui.index) return;
-		Object.keys(ui.index.byPath).forEach(function (path) {
-			var r = ui.index.byPath[path].row;
-			var mine = pendingOf(r);
-			if (!r.fileId || !mine || mine.id !== id) return;
-			[r.fileId, 'mine:' + r.fileId].forEach(function (vkey) {
-				var line = document.querySelector('li[data-vkey="' + String(vkey).replace(/["\\]/g, '') + '"] .row-line');
-				if (line && !line.querySelector('.row-pending')) line.insertAdjacentHTML('afterbegin', pendingHtml(r));
-			});
+		// The rows drawn now that the action touches; rows drawn later say so as they are drawn.
+		Array.prototype.forEach.call(document.querySelectorAll('li[data-vkey]'), function (li) {
+			var fileId = String(li.getAttribute('data-vkey')).replace(/^mine:/, '');
+			if (!p.ids[fileId]) return;
+			var line = li.querySelector('.row-line');
+			if (line && !line.querySelector('.row-pending')) line.insertAdjacentHTML('afterbegin', '<span class="row-avail row-pending" data-req="' + esc(id) + '">' + spinHtml() + esc(p.row) + '</span>');
 		});
 	}
 
@@ -3171,7 +3858,8 @@
 				return;
 			}
 			el.removeAttribute('aria-busy');
-			el.removeAttribute('aria-disabled');
+			// A key that was off before it was pressed stays off until the next view says otherwise.
+			if (el.getAttribute('data-off') !== 'true') el.removeAttribute('aria-disabled');
 			el.removeAttribute('data-req');
 			var spin = el.querySelector('.spin');
 			if (spin) spin.parentNode.removeChild(spin);
@@ -3197,17 +3885,33 @@
 		return n ? plural(n, 'file', 'files') : paths.length === 1 ? leaf(paths[0]) : plural(paths.length, 'file', 'files');
 	}
 
-	/** The working line for an action, and what its rows say meanwhile. */
-	function workingOf(type, f) {
+	/** "Bracket.SLDPRT", or "1,401 files": the files an action touches, in words. */
+	function touchedWords(ids, paths) {
+		if (ids.length === 1) {
+			var hit = findRow(ids[0]);
+			if (hit) return hit.row.name;
+		}
+		return ids.length ? plural(ids.length, 'file', 'files') : filesWords(paths);
+	}
+
+	/** The working line for an action, and what its rows say meanwhile. ids: the files it touches. */
+	function workingOf(type, f, ids) {
 		var paths = f.paths || (f.path ? [f.path] : []);
 		var row = findRow(f.fileId);
+		ids = ids || [];
 		switch (type) {
 			case 'checkOut':
-				return { line: (f.open ? 'Checking out and opening ' : 'Checking out ') + filesWords(paths) + '...', row: 'Checking out...' };
+				return { line: (f.open ? 'Checking out and opening ' : 'Checking out ') + touchedWords(ids, paths) + '...', row: 'Checking out...' };
 			case 'checkIn':
-				return { line: 'Checking in ' + filesWords(paths) + '...', row: 'Checking in...' };
+				return { line: 'Checking in ' + touchedWords(ids, paths) + '...', row: 'Checking in...' };
 			case 'undoCheckOut':
-				return { line: 'Undoing the check out of ' + filesWords(paths) + '...', row: 'Undoing the check out...' };
+				return { line: 'Undoing the check out of ' + touchedWords(ids, paths) + '...', row: 'Undoing the check out...' };
+			case 'putBackKeptCopy':
+				return { line: 'Putting your copy of ' + (row ? row.row.name : 'the file') + ' back...', row: 'Putting your copy back...' };
+			case 'keepLocal':
+				return { line: 'Keeping ' + filesWords(paths) + ' on this computer only...', row: null };
+			case 'saveDown':
+				return { line: 'Saving ' + filesWords(paths) + ' in the team\'s SolidWorks year...', row: null };
 			case 'launchFile':
 				return { line: 'Opening ' + leaf(f.path) + '...', row: null };
 			case 'takeBack':
@@ -3245,15 +3949,23 @@
 	/** Sends an action and shows at once that it is under way; its actionResult comes back
 	 *  to the quiet line at the foot. how: { key: the control pressed, words: a line of its own }. */
 	function act(type, fields, how) {
+		// The files it touches, counted before it goes (the answer changes them).
+		var touched = affectedOf(type, fields || {});
 		var id = bridge.send(type, fields);
 		if (!id) return id;
 		how = how || {};
-		var w = workingOf(type, fields || {});
+		var w = workingOf(type, fields || {}, touched);
+		var ids = {};
+		touched.forEach(function (fileId) {
+			ids[fileId] = true;
+		});
 		ui.pending[id] = {
 			type: type,
 			key: how.key || null,
-			paths: (fields && (fields.paths || (fields.path ? [fields.path] : []))) || [],
-			fileIds: fields && fields.fileId ? [fields.fileId] : (fields && fields.fileIds) || [],
+			ids: ids,
+			count: touched.length,
+			// An action on many files: its answer is kept as the Last action, until OK.
+			bulk: touched.length > 1 || type === 'takeBackAll' || type === 'addFiles' || type === 'dropFiles',
 			row: w.row
 		};
 		showWorking(how.words || w.line);
@@ -3310,14 +4022,14 @@
 				bridge.send('dismissNotice', { key: n.key });
 				break;
 			case 'checkOut':
-				act('checkOut', { paths: paths, open: false });
+				act('checkOut', { paths: paths, open: false }, { key: 'nt-act-' + n.key });
 				break;
 			case 'checkIn':
 			case 'undoCheckOut':
-				act(a.command, { paths: paths });
+				act(a.command, { paths: paths }, { key: 'nt-act-' + n.key });
 				break;
 			case 'launchFile':
-				if (paths[0]) act('launchFile', { path: paths[0] });
+				if (paths[0]) act('launchFile', { path: paths[0] }, { key: 'nt-act-' + n.key });
 				break;
 			case 'showInFolder':
 				if (paths[0]) bridge.send('showInFolder', { path: paths[0] });
@@ -3328,6 +4040,8 @@
 				})[0];
 				if (first) openFile(first.fileId, 'nt-act-' + n.key);
 				break;
+			default:
+				if (bridge.ACTIONS.indexOf(a.command) >= 0) act(a.command, { paths: paths }, { key: 'nt-act-' + n.key });
 		}
 	}
 
@@ -3347,8 +4061,11 @@
 	 * between, so neither focus nor Back ever lands on nothing.
 	 */
 	var lists = {};
+	var listGen = 0;
 
 	function registerList(def) {
+		// A new generation of the list's items: each drawn row is checked against it once.
+		def.gen = ++listGen;
 		def.active = clamp(ui.active[def.id] || 0, 0, Math.max(0, def.items.length - 1));
 		lists[def.id] = def;
 		return '<ul class="vlist' + (def.cls ? ' ' + def.cls : '') + '" id="' + def.id + '" aria-label="' + esc(def.label) + '" data-total="' + def.items.length + '"></ul>';
@@ -3426,7 +4143,8 @@
 				return x - y;
 			});
 
-		// Reuse the rows already drawn; parse the new ones in one go.
+		// Reuse the rows already drawn whose words are the same (a row that changed is drawn
+		// again, keeping its picture); parse the new ones in one go.
 		var have = {};
 		for (var c = ul.firstElementChild; c; c = c.nextElementSibling) if (c.hasAttribute('data-vkey')) have[c.getAttribute('data-vkey')] = c;
 		var nodes = [];
@@ -3434,11 +4152,19 @@
 		idx.forEach(function (i) {
 			var x = list.items[i];
 			var k = list.key(x);
-			if (have[k] && have[k].getAttribute('data-i') === String(i)) nodes.push(have[k]);
-			else {
-				nodes.push(null);
-				fresh.push({ at: nodes.length - 1, html: list.row(x, i, i === list.active) });
+			var old = have[k];
+			if (old && old._gen === list.gen && old.getAttribute('data-i') === String(i)) {
+				nodes.push(old);
+				return;
 			}
+			var html = list.row(x, i, false);
+			if (old && old._html === html) {
+				old._gen = list.gen;
+				nodes.push(old);
+				return;
+			}
+			nodes.push(null);
+			fresh.push({ at: nodes.length - 1, html: html, old: old || null });
 		});
 		if (fresh.length) {
 			var tpl = document.createElement('template');
@@ -3451,7 +4177,11 @@
 			var arr = [];
 			for (var m = 0; m < made.length; m++) arr.push(made[m]);
 			fresh.forEach(function (f, j) {
-				nodes[f.at] = arr[j];
+				var node = arr[j];
+				node._html = f.html;
+				node._gen = list.gen;
+				keepThumbs(node, f.old);
+				nodes[f.at] = node;
 			});
 		}
 		// Spacers between runs, and above and below.
@@ -3475,6 +4205,20 @@
 			if (node === ref) ref = ref.nextSibling;
 			else ul.insertBefore(node, ref);
 		});
+		markActive(ul, list);
+	}
+
+	/** The list's one row in the Tab order (every row is drawn out of it). */
+	function markActive(ul, list) {
+		var on = ul.querySelectorAll('[data-rove][tabindex="0"]');
+		for (var i = 0; i < on.length; i++) {
+			var li = on[i].closest('li[data-i]');
+			if (!li || li.getAttribute('data-i') !== String(list.active)) on[i].setAttribute('tabindex', '-1');
+		}
+		var row = ul.querySelector('li[data-i="' + list.active + '"]');
+		if (!row) return;
+		var ctl = row.querySelectorAll('[data-rove]');
+		for (var j = 0; j < ctl.length; j++) ctl[j].setAttribute('tabindex', '0');
 	}
 
 	function spacer(px) {
@@ -3513,8 +4257,9 @@
 		var ur = ul.getBoundingClientRect();
 		var top = ur.top + to * list.h;
 		var bottom = top + list.h;
-		var bar = document.querySelector('.sel-bar');
-		var shade = bar && sc.contains(bar) ? bar.getBoundingClientRect().height + 8 : 8;
+		// The pinned folder keys, or the selection bar, cover the top of the column: a row is
+		// in sight only below them (X-sticky-focus).
+		var shade = pinnedDepth(sc) + 8;
 		if (top < sr.top + shade) sc.scrollTop -= sr.top + shade - top;
 		else if (bottom > sr.bottom - 8) sc.scrollTop += bottom - (sr.bottom - 8);
 		ui.pin = [];
@@ -3570,8 +4315,39 @@
 
 	function updateCues() {
 		var r = recessEl();
-		setCue(document.getElementById('recess-cue'), r && getComputedStyle(r).overflowY !== 'visible' ? below(r) : null);
+		var own = r && getComputedStyle(r).overflowY !== 'visible';
+		setCue(document.getElementById('recess-cue'), own ? below(r) : null);
 		setCue(windowCue, below(scroller));
+		setPinned(own ? r : scroller);
+	}
+
+	/** How far down from a scroller's top its pinned parts reach (the folder's keys, or the
+	 *  selection bar, stuck at its top), in pixels; 0 when none is stuck there. */
+	function pinnedDepth(sc) {
+		var top = sc.getBoundingClientRect().top;
+		var depth = 0;
+		var parts = sc.querySelectorAll('.sel-bar, .browser-head');
+		for (var i = 0; i < parts.length; i++) {
+			var cs = getComputedStyle(parts[i]);
+			if (cs.position !== 'sticky') continue;
+			var r = parts[i].getBoundingClientRect();
+			// Stuck: at the scroller's top, not lower down in its own place.
+			if (r.top <= top + Math.abs(parseFloat(cs.top) || 0) + 1) depth = Math.max(depth, r.bottom - top);
+		}
+		return Math.max(0, depth);
+	}
+
+	/** Focus and scrollIntoView keep clear of the pinned parts (scroll-padding in app.css). */
+	function setPinned(sc) {
+		if (!sc) return;
+		var head = sc.querySelector('.sel-bar') || sc.querySelector('.browser-head');
+		var px = 0;
+		if (head && getComputedStyle(head).position === 'sticky') px = Math.max(0, head.offsetHeight + (parseFloat(getComputedStyle(head).top) || 0)) + 8;
+		var value = px + 'px';
+		if (sc._pinned !== value) {
+			sc._pinned = value;
+			sc.style.setProperty('--pinned', value);
+		}
 	}
 
 	var framed = false;
@@ -3634,6 +4410,7 @@
 			ui.homeRecess = recessTop();
 		}
 		ui.returnKey = fromKey || null;
+		ui.freshDraw = ui.screen === 'detail' && !!ui.detail && ui.detail.fileId !== fileId;
 		ui.screen = 'detail';
 		ui.detail = partialDetail(fileId);
 		ui.waitingForDetail = true;
@@ -3723,6 +4500,163 @@
 		bridge.sendWithFiles('dropFiles', { projectId: place.project.id, folder: place.folder }, files);
 	});
 
+	/* ------------------------------------------------------------ Tooltips */
+
+	/*
+	 * Every control says what it does (0.3.3, N1). Hold the mouse on a control for about three
+	 * quarters of a second, or reach it with Tab, and one small card says it in a sentence: under
+	 * the control, or over it near the window's foot, always inside the window, at most 280px
+	 * wide. One card (#tip) for the whole window, in the theme's own colors; inside an open dialog
+	 * it moves into the dialog, so it shows above the dialog's scrim. It goes on a click, any key,
+	 * a scroll, when its control is drawn again or leaves, and on Escape (which then does nothing
+	 * else). A key that is off says why: it is aria-disabled, never disabled, so the mouse still
+	 * reaches it. While the card shows, its control is described by it (aria-describedby).
+	 */
+	var TIP_HOVER = 750;
+	var TIP_FOCUS = 300;
+	var tipEl = document.getElementById('tip');
+	var tips = { on: null, timer: 0, shown: false, quiet: null, x: null };
+
+	/** The control (or tagged words) a node belongs to, when it has something to say. */
+	function tipTarget(node) {
+		var el = node && node.nodeType === 1 ? node : node ? node.parentElement : null;
+		el = el && el.closest ? el.closest('[data-tip]') : null;
+		return el && el.getAttribute('data-tip') ? el : null;
+	}
+
+	function scheduleTip(el, wait, x) {
+		hideTip();
+		tips.on = el;
+		tips.x = x == null ? null : x;
+		tips.timer = setTimeout(function () {
+			showTip(el);
+		}, wait);
+	}
+
+	function showTip(el) {
+		tips.timer = 0;
+		if (tips.on !== el || !el.isConnected || ui.shooting) return;
+		var words = el.getAttribute('data-tip');
+		if (!words) return;
+		// Under a modal dialog the page is inert and drawn below the dialog: the card goes into it.
+		var home = el.closest('dialog[open]') || document.body;
+		if (tipEl.parentNode !== home) home.appendChild(tipEl);
+		tipEl.textContent = words;
+		tipEl.hidden = false;
+		tipEl.removeAttribute('data-on');
+		placeTip(el);
+		describedBy(el, true);
+		tips.shown = true;
+		requestAnimationFrame(function () {
+			if (tips.shown && tips.on === el) tipEl.setAttribute('data-on', 'true');
+		});
+	}
+
+	/** Under its control, or over it when there is no room below; inside the window either way. */
+	function placeTip(el) {
+		var r = el.getBoundingClientRect();
+		tipEl.style.left = '0px';
+		tipEl.style.top = '0px';
+		var t = tipEl.getBoundingClientRect();
+		var edge = 8;
+		var gap = 8;
+		// A wide target (a whole row) points from where the mouse is; anything else from its middle.
+		var x = tips.x != null && r.width > 320 ? tips.x : r.left + r.width / 2;
+		var left = clamp(x - t.width / 2, edge, Math.max(edge, innerWidth - edge - t.width));
+		var below = r.bottom + gap;
+		var top = below + t.height <= innerHeight - edge ? below : r.top - gap - t.height;
+		top = clamp(top, edge, Math.max(edge, innerHeight - edge - t.height));
+		tipEl.style.left = Math.round(left) + 'px';
+		tipEl.style.top = Math.round(top) + 'px';
+		tipEl.setAttribute('data-place', top < r.top ? 'above' : 'below');
+	}
+
+	/** The control is described by the card while it shows (its own describedby ids kept). */
+	function describedBy(el, on) {
+		var ids = (el.getAttribute('aria-describedby') || '').split(/\s+/).filter(function (id) {
+			return id && id !== 'tip';
+		});
+		if (on) ids.push('tip');
+		if (ids.length) el.setAttribute('aria-describedby', ids.join(' '));
+		else el.removeAttribute('aria-describedby');
+	}
+
+	function hideTip() {
+		clearTimeout(tips.timer);
+		tips.timer = 0;
+		if (tips.on) describedBy(tips.on, false);
+		tips.on = null;
+		if (!tips.shown) return;
+		tips.shown = false;
+		tipEl.hidden = true;
+		tipEl.removeAttribute('data-on');
+	}
+
+	/** After a redraw: a card whose control is gone goes with it; one still there moves with it. */
+	function tipAfterRender() {
+		var el = tips.on;
+		if (!el) return;
+		if (!el.isConnected || !el.getAttribute('data-tip')) return hideTip();
+		if (!tips.shown) return;
+		if (tipEl.textContent !== el.getAttribute('data-tip')) tipEl.textContent = el.getAttribute('data-tip');
+		placeTip(el);
+		describedBy(el, true);
+	}
+
+	document.addEventListener('pointerover', function (e) {
+		if (e.pointerType === 'touch') return;
+		var t = tipTarget(e.target);
+		if (t !== tips.quiet) tips.quiet = null;
+		if (!t || t === tips.on || t === tips.quiet) return;
+		scheduleTip(t, TIP_HOVER, e.clientX);
+	});
+	document.addEventListener('pointerout', function (e) {
+		var to = tipTarget(e.relatedTarget);
+		if (tips.quiet && to !== tips.quiet) tips.quiet = null;
+		if (tips.on && to !== tips.on) hideTip();
+	});
+	// A click answers the question the card would: the card goes, and stays away from that
+	// control until the mouse leaves it.
+	document.addEventListener(
+		'pointerdown',
+		function (e) {
+			hideTip();
+			tips.quiet = tipTarget(e.target);
+		},
+		true
+	);
+	document.addEventListener('focusin', function (e) {
+		var t = tipTarget(e.target);
+		if (!t || t !== e.target || t === tips.on) return;
+		var visible = false;
+		try {
+			visible = t.matches(':focus-visible');
+		} catch (err) {
+			visible = false;
+		}
+		if (visible) scheduleTip(t, TIP_FOCUS, null);
+	});
+	document.addEventListener('focusout', function (e) {
+		if (tips.on && e.target === tips.on) hideTip();
+	});
+	document.addEventListener(
+		'keydown',
+		function (e) {
+			if (!tips.on) return;
+			var shown = tips.shown;
+			hideTip();
+			// Escape closes the card, and only the card.
+			if (e.key === 'Escape' && shown) {
+				e.preventDefault();
+				e.stopImmediatePropagation();
+			}
+		},
+		true
+	);
+	document.addEventListener('scroll', hideTip, { capture: true, passive: true });
+	document.addEventListener('wheel', hideTip, { capture: true, passive: true });
+	window.addEventListener('blur', hideTip);
+
 	/* ------------------------------------------------------------ Events */
 
 	document.addEventListener('click', function (e) {
@@ -3730,8 +4664,9 @@
 		// A chip in a row sits above the row's key so it keeps the arrow cursor (a tag is
 		// never a button); a click on it is still a click on the row.
 		if (!el && e.target.closest && e.target.closest('.row .chip')) el = e.target.closest('.row-main').querySelector('.row-hit');
-		// Disabled, or busy with an action the host has not answered yet: a second press does nothing.
-		if (!el || el.disabled || el.getAttribute('aria-busy') === 'true') return;
+		// Off (disabled, or aria-disabled so its tip can say why), or busy with an action the host
+		// has not answered yet: a press does nothing.
+		if (!el || el.disabled || el.getAttribute('aria-busy') === 'true' || el.getAttribute('aria-disabled') === 'true') return;
 		var action = el.getAttribute('data-action');
 		var path = el.getAttribute('data-path');
 		var from = el.getAttribute('data-key');
@@ -3763,6 +4698,9 @@
 				break;
 			case 'askTakeBack':
 				askTakeBack([findRow(el.getAttribute('data-file-id'))], from);
+				break;
+			case 'putBack':
+				act('putBackKeptCopy', { fileId: el.getAttribute('data-file-id'), versionId: el.getAttribute('data-version') }, { key: from });
 				break;
 			case 'promptCheckOut':
 				// Check out and reopen: the host checks it out, then opens it again here once
@@ -3801,6 +4739,19 @@
 					}),
 					from
 				);
+				break;
+			case 'selectAll':
+				var all = folderFiles();
+				var every = all.length > 0 && all.every(function (p) {
+					return ui.selected[p];
+				});
+				// The head's box lets go of them all again; the selection bar's key only adds.
+				if (every && from === 'sel-all') clearPicked();
+				else
+					all.forEach(function (p) {
+						setPicked(p, true);
+					});
+				render();
 				break;
 			case 'selClear':
 				clearPicked();
@@ -3914,6 +4865,12 @@
 			case 'closeSettings':
 				sheet.close();
 				break;
+			case 'lastOk':
+				ui.lastAction = null;
+				render();
+				var stay = document.querySelector('[data-key="sync-toggle"]') || document.querySelector('[data-key="hdr-settings"]');
+				if (stay) stay.focus({ preventScroll: true });
+				break;
 			case 'toggleStart':
 				saveSettings({ startAtSignIn: !ui.view.settings.startAtSignIn });
 				break;
@@ -3922,7 +4879,10 @@
 				// a view still carrying the old theme flipped it back for a moment).
 				var picked = el.getAttribute('data-value');
 				ui.themeWanted = picked;
-				document.documentElement.setAttribute('data-theme', effectiveOf(picked, ui.view.effectiveTheme));
+				// The new colors paint in the next frame, all at once; a view that arrives
+				// before that waits for it (N7).
+				paintThemeFirst();
+				setTheme(effectiveOf(picked, ui.view.effectiveTheme));
 				Array.prototype.forEach.call(document.querySelectorAll('[data-action="theme"]'), function (b) {
 					b.setAttribute('aria-pressed', String(b.getAttribute('data-value') === picked));
 				});
@@ -4037,7 +4997,9 @@
 		'load',
 		function (e) {
 			var img = e.target;
-			if (img && img.classList && img.classList.contains('thumb') && img.parentNode) img.parentNode.setAttribute('data-thumb', 'on');
+			if (!img || !img.classList || !img.classList.contains('thumb')) return;
+			thumbsLoaded[img.getAttribute('src')] = true;
+			if (img.parentNode) img.parentNode.setAttribute('data-thumb', 'on');
 		},
 		true
 	);
@@ -4045,7 +5007,9 @@
 		'error',
 		function (e) {
 			var img = e.target;
-			if (img && img.classList && img.classList.contains('thumb') && img.parentNode) img.parentNode.removeChild(img);
+			if (!img || !img.classList || !img.classList.contains('thumb')) return;
+			thumbsMissing[img.getAttribute('src')] = Date.now();
+			if (img.parentNode) img.parentNode.removeChild(img);
 		},
 		true
 	);
@@ -4228,10 +5192,41 @@
 		goFolder(hit ? hit.folder.path : parts.slice(1).join('/'), null);
 	}
 
+	/** A view as JSON without its settings and theme, and as JSON of only them. */
+	function viewKeys(v) {
+		var rest = {};
+		for (var k in v) if (k !== 'settings' && k !== 'effectiveTheme') rest[k] = v[k];
+		return { rest: JSON.stringify(rest), set: JSON.stringify([v.settings, v.effectiveTheme]) };
+	}
+
+	/** A view that differs only in its settings: the theme and Settings change, in place, and
+	 *  nothing else is drawn (N7: each theme pick drew all of Home two or three times). */
+	function settingsOnly(v, setKey) {
+		ui.viewSet = setKey;
+		ui.view.settings = v.settings;
+		ui.view.effectiveTheme = v.effectiveTheme;
+		wearTheme(ui.view);
+		if (sheet.open) drawSheet(ui.view);
+		// The header and Home say nothing of the settings but the folder, which the rest carries.
+	}
+
 	function onHost(message) {
 		// While the host takes a picture of the window, nothing redraws it.
 		if (holdForShot(message)) return;
 		if (message.type === 'view') {
+			// A theme was just picked: it paints first, and the newest view follows it.
+			if (ui.themePaint) {
+				ui.heldView = message;
+				return;
+			}
+			var keys = viewKeys(message.view);
+			if (ui.view && keys.rest === ui.viewRest) {
+				// The same view, or one whose settings alone changed: Home is not drawn again.
+				if (keys.set !== ui.viewSet) settingsOnly(message.view, keys.set);
+				return;
+			}
+			ui.viewRest = keys.rest;
+			ui.viewSet = keys.set;
 			var wasSignedIn = ui.view && ui.view.connection === 'signedIn';
 			ui.view = message.view;
 			if (!ui.view.activity) ui.view.activity = { line: null, upload: null, download: null, move: null, waiting: null, active: [] };
@@ -4266,8 +5261,13 @@
 		} else if (message.type === 'activity') {
 			patchActivity(message.activity);
 		} else if (message.type === 'actionResult') {
+			var answered = ui.pending[message.requestId];
 			delete ui.pending[message.requestId];
 			endWorking(message.requestId);
+			if (answered && answered.bulk && message.message) {
+				ui.lastAction = { ok: !!message.ok, message: message.message, at: new Date(bridge.now()).toISOString() };
+				render();
+			}
 			// Send feedback answers in its own dialog, which stays open until then.
 			if (ui.ask && ui.ask.sending && ui.ask.sending === message.requestId) feedbackAnswered(message);
 			else showResult(!!message.ok, message.message);

@@ -1,3 +1,5 @@
+using Armory.Agent.Engine.View;
+
 namespace Armory.Agent.Tests;
 
 // Host rules that need no window, so they run on every host.
@@ -174,5 +176,50 @@ public sealed class HostPiecesTests
     private sealed class Unprintable : Exception
     {
         public override string ToString() => throw new InvalidOperationException("no words");
+    }
+
+    // 0.3.3, N1: every control says what it does on hover. The tray's items (each of the words an
+    // item can show) and the WebView2-missing button each have one plain sentence, with none of
+    // the words a student never reads (check-ui's copy rule) and no em dash.
+    [Fact]
+    public void Every_tray_item_and_the_webview2_button_say_what_they_do()
+    {
+        var jargon = new System.Text.RegularExpressions.Regex(@"\b(lock(s|ed|ing)?|unlock|conflict(s|ed|ing)?|sync(s|ed|ing)?|journal|side[ -]version|intents?|RPC|hash(es)?|vault)\b",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        var tips = HostTips.TrayItems.Select(item => HostTips.Tray(item, @"C:\IDEA\Armory")).Append(HostTips.GetWebView2).ToList();
+        Assert.Equal(9, tips.Count);
+        Assert.All(tips, tip =>
+        {
+            Assert.False(string.IsNullOrWhiteSpace(tip));
+            Assert.EndsWith(".", tip);
+            Assert.DoesNotContain('\u2014', tip);
+            Assert.False(jargon.IsMatch(tip), tip);
+        });
+        Assert.Equal(tips.Count, tips.Distinct().Count());
+        Assert.Equal(@"Open C:\IDEA\Armory in File Explorer.", HostTips.Tray(HostTips.OpenFolder, @"C:\IDEA\Armory"));
+        Assert.Equal(string.Empty, HostTips.Tray("Using Armory: Jordan Reyes", @"C:\IDEA\Armory"));
+    }
+
+    // 0.3.3, N7: an identical view goes to the page once; a different one, any other message, and
+    // the first view after the page loads again (or says ready) always go.
+    [Fact]
+    public void An_identical_view_is_posted_once()
+    {
+        var synced = BridgeMessages.ViewMessage(ShellViews.View(ShellViews.Row("Robot 2027/Drivetrain/Plate.SLDPRT")));
+        var themed = synced.Replace("\"theme\":\"system\"", "\"theme\":\"idea\"", StringComparison.Ordinal);
+        Assert.NotEqual(synced, themed);
+        Assert.True(LastViewPosted.IsView(synced));
+        var posted = new LastViewPosted();
+        Assert.True(posted.Take(synced));
+        Assert.False(posted.Take(synced));
+        Assert.False(posted.Take(new string(synced.AsSpan())));
+        Assert.True(posted.Take(themed));
+        Assert.False(posted.Take(themed));
+        var result = BridgeMessages.ActionResultMessage("r1", true, "Checked in Plate.SLDPRT.");
+        Assert.False(LastViewPosted.IsView(result));
+        Assert.True(posted.Take(result));
+        Assert.True(posted.Take(result));
+        posted.Forget();
+        Assert.True(posted.Take(themed));
     }
 }

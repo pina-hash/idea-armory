@@ -885,3 +885,101 @@ BBOX states=34 comparisons=84 differing=0 missing=0 elements=32990
 CHECK-UI pages=168 controls=5152 under44=0 network=0 grids=0 rowGrids=0 plantedGridLayersFound=3/3 rowDecoration=0 chipsLikeButtons=0 overflow=0 hairlines=4574 hairlineMin=3.07 hairlineUnder3=0 tabStops=1852 focusMissed=0 ringMin=4.69 ringFailures=0 jargon=0 offline=0 plantedOfflineFound=5/5 flows=40 flowFailures=0 logo=4 logoFailures=0 plantedLogoFound=1/1 bridgeTypes=23/23 bridgeFailures=0 plantedDefectsCaught=8/8 shapes=34 shapeFailures=0 plantedShapesFound=2/2 emDash=0 files=16
 CHECK-UI PASS
 ```
+
+## 0.3.3 pass: every control says what it does, and only what changed is drawn
+
+Feedback N1, N7, N8, N9 and N15, and the review's X-full-render, X-pending-count and
+X-sticky-focus, with the page's half of the 0.3.3 host work. docs/agent/BRIDGE.md
+("Tooltips", "Drawing", "Thumbnails") has the behavior; this is what changed and how it is
+held.
+
+### What changed
+
+- **Tooltips (N1).** One card for the whole window (`#tip`, `role="tooltip"`), in each theme's
+  own tokens (`--tip-top`, `--tip-bot`, `--tip-ink`, `--tip-edge`, `--tip-hi`, `--tip-drop`),
+  after 750 ms of hover or 300 ms after Tab, under its control or over it near the foot,
+  inside the window, at most 280px wide, gone on leave, press, key, scroll, redraw and
+  Escape, still under reduced motion. Every control's sentence comes from one table
+  (`TIPS` in app.js) and names what it is about ("Check in the 3 files you have checked out
+  in Gearbox and the folders in it."). A key that is off is `aria-disabled` with its reason
+  ("Nothing here is checked out by you"), never `disabled`, so the mouse reaches it. The tray
+  menu's items and the "Get WebView2" key have tooltips of their own (`HostTips`).
+- **One draw per change (N7, X-full-render).** The host posts no view twice; the page draws
+  nothing for a view it has, only the theme and Settings for a view whose settings alone
+  changed, and lays every other view over what is on the page (keyed by `data-key`, `id` or
+  `data-part`) instead of replacing Home. Rows are kept by file, and a row's picture stays
+  (the host serves pictures with a year's `max-age`, `immutable`). A theme picked paints in
+  the next frame with transitions off, and a view that arrives meanwhile waits for it.
+- **The newest running line in sight (N8).** Under the status line in a wide window, in a
+  slim strip under the header in a narrow one. The running lines' box only adds at its foot
+  and drops at its top; it follows the newest line only when it was at its foot.
+- **Many files (N9, X-pending-count, X-sticky-focus).** Only the files an action can change
+  say "Checking in..."; the working line counts them. My files' key says how many ("Check in
+  my 1,401 files"), the folder's keys say "this folder" with the count in their tooltip and
+  question. The list's head has "Select all in this folder" (checked, mixed or empty), and
+  the selection bar "Select all 5,000" once some are picked. Force check in names two people
+  and how many others ("Alex, Maria and 17 others"). The answer to an action on many files
+  stays as Last action until OK. Focus reached with Tab is never under the pinned keys
+  (`scroll-padding-top` from their height).
+- **The rest of the 0.3.3 list.** Put back on this computer on a kept copy; the chips
+  "Checks in when closed" and "No first version" (no Open or state key on the latter);
+  "Saved in SolidWorks 2026" on rows and File detail, with the year on File detail; the
+  `newerRelease` card; Settings' SolidWorks row drawn when the view carries one
+  (`settingsSolidWorksHtml(v)`); demo states `checkingOut`, `forcingIn`, `forceManyConfirm`,
+  `checkInWaits` and `newerRelease`.
+- **Thumbnails that never hold the window (N15).** 5 s to answer, a stuck handler left
+  behind after 20 s (written to agent.log and counted), at most 64 waiting (the newest), one
+  picture for two asks, no picture asked again after 60 s, the key read before the picture
+  is made. Six tests with a stand-in handler, all in tests/GUARDS.txt.
+- **Words.** Dialog titles and keys say what they do ("Check out this folder", "Check in
+  this folder", "Force check in this folder"); no em dash, no jargon, American spelling.
+
+### Checker changes (none loosen a rule)
+
+- check-ui's page sweep requires a tooltip on every visible key, link, tab, checkbox and
+  switch (`tips`, `tipsMissing`), and holds every tooltip to the copy rule; two planted
+  controls (one with no tooltip, one with a jargon tooltip) must be caught
+  (`plantedDefectsCaught` 10/10).
+- New flows at both sizes: tooltip by mouse (not before about 750 ms, describes its control,
+  goes on leave and on a click, a key that is off says why and does nothing, inside the
+  Settings sheet above its scrim) and by keyboard (Tab, Escape closes the card only); the
+  running lines in `checkingOut` and `forcingIn` (`#act-log` has every line, the newest in
+  sight in the status or the strip); keys in sight at open (bounding boxes); Select all in
+  this folder; focus stays clear of the pinned keys; Force check in names a few; Checks in
+  when closed and No first version; Saved in a newer SolidWorks.
+- The stand-in WebView2 host: only touched rows say they are working, the working line and
+  the question agree on the count, Last action stays until OK, Put back sends
+  `putBackKeptCopy {fileId, versionId}`, and every page-to-host type is still sent (44/44).
+- A new Drawing block: an identical view changes nothing in `#main` or the header, a
+  settings-only view changes only the theme, a theme pick with 1,401 files and a 4x slower
+  CPU paints within 250 ms with no change to `#main` and the waiting view follows, ten
+  near-identical views of 1,401 files stay under 3 s with their rows kept, and the running
+  lines are added and dropped without redrawing the rest. The thumbnail block checks that
+  drawing Home again keeps every picture and asks for none.
+
+### Not done
+
+- Settings' SolidWorks row and a notice's `keepLocal` and `saveDown` keys are drawn from a
+  field and commands (`view.solidWorks`, `keepLocal`, `saveDown`) that the bridge lists in
+  this base do not have yet; the page draws them when they come and shows nothing until
+  then.
+- A picture is kept for a year under its address, which carries the file's last check in
+  and whether it has changes: a file saved again while it already has changes keeps the
+  picture of its first change until it is checked in. The view carries nothing finer.
+- Not run on Windows here: the tray tooltips, the WebView2 key's tooltip and the shell
+  thumbnails' STA threads are covered by tests and reading, not by a look at a real window.
+- The screens in docs/agent/screens were not drawn again.
+
+### Proof
+
+```
+node tools/agent-ui/bbox-diff.mjs
+node tools/agent-ui/check-ui.mjs
+```
+
+```
+BBOX planted control (home-synced-1280x800, one length in Space White): differing=211 (must be above 0)
+BBOX states=65 comparisons=148 differing=0 missing=0 elements=65649
+CHECK-UI pages=296 controls=10904 under44=0 network=0 grids=0 rowGrids=0 plantedGridLayersFound=3/3 rowDecoration=0 chipsLikeButtons=0 overflow=0 hairlines=9248 hairlineMin=3.07 hairlineUnder3=0 tabStops=3524 focusMissed=0 ringMin=4.69 ringFailures=0 jargon=0 offline=0 plantedOfflineFound=5/5 flows=86 flowFailures=0 logo=4 logoFailures=0 plantedLogoFound=1/1 bridgeTypes=44/44 bridgeFailures=0 tips=10720 tipsMissing=0 drawing=5 drawMs=1734 plantedDefectsCaught=10/10 shapes=66 shapeFailures=0 plantedShapesFound=2/2 emDash=0 files=18
+CHECK-UI PASS
+```

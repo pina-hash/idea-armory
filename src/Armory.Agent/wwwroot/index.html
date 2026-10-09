@@ -25,6 +25,7 @@
 				<!-- A folder with an arrow out of it: this row opens its folder, not a page. -->
 				<symbol id="i-folder-go" viewBox="0 0 16 16"><path d="M1.75 4.25a1 1 0 0 1 1-1h3.5l1.5 1.5h5.5a1 1 0 0 1 1 1v2M7.5 12.75H2.75a1 1 0 0 1-1-1v-7.5M10 11.5h4.5M12.5 9.25l2 2.25-2 2.25" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></symbol>
 				<symbol id="i-chev-left" viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" /></symbol>
+				<symbol id="i-dash" viewBox="0 0 16 16"><path d="M4 8h8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" /></symbol>
 				<symbol id="i-check" viewBox="0 0 16 16"><path d="m3.5 8.5 3 3 6-7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></symbol>
 				<symbol id="i-pause" viewBox="0 0 16 16"><path d="M5.5 3.5v9M10.5 3.5v9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" /></symbol>
 				<symbol id="i-play" viewBox="0 0 16 16"><path d="M5 3.5v9l7-4.5z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" /></symbol>
@@ -79,6 +80,10 @@
 				</div>
 				<div class="header-keys" id="header-keys"></div>
 			</header>
+			<!-- The newest running line in a narrow window, always in sight under the header (the
+			     wide window shows it under the status). app.js fills it; the running lines in
+			     Right now say the same to a screen reader. -->
+			<div class="latest-strip" id="latest-strip" aria-hidden="true" hidden></div>
 			<div class="scroller" id="scroller">
 				<main id="main" class="screen-root"></main>
 			</div>
@@ -90,6 +95,9 @@
 			     taking focus or a click. app.js fills it and lets it fade. -->
 			<div class="result-line" id="result" role="status" aria-live="polite" data-on="false"><span class="result-chip"><span class="spin" aria-hidden="true"></span><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-check" /></svg><span class="result-word" id="result-word"></span></span></div>
 		</div>
+		<!-- What the control under the mouse (or reached with Tab) does: one card for the whole
+		     window, filled and placed by app.js (Tooltips); hidden until a control asks. -->
+		<div class="tip" id="tip" role="tooltip" hidden></div>
 		<dialog id="settings" class="housing" tabindex="-1" aria-labelledby="settings-title"></dialog>
 		<!-- New folder, Rename folder, Delete folder and Take back ask here. Filled once when
 		     it opens and never redrawn by a host update, so typed words stay put. -->

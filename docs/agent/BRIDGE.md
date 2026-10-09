@@ -39,20 +39,25 @@ uses a demo transport that answers from `wwwroot/demo/states.js`. See "The demo"
   computer has checked out, in every project, an archived one too), and Team files:
   project tabs, then the open project's card with where you are (Project › Folder ›
   Subfolder), the folder's keys (New folder, Add files, Rename folder, Delete folder,
-  Check out all, Check in all, and for a mentor or CAD lead Force check in all), and its
-  folder rows and file rows. A file row's state key is Check out, Check in, or for a
-  mentor or CAD lead on a file someone else has, Force check in. Files dragged from
+  Check out this folder, Check in this folder, and for a mentor or CAD lead Force check in
+  this folder; 0.3.3: each says "this folder", and its tooltip and its question say how many
+  files), the list's head ("Select all in this folder", a box that is checked, mixed or
+  empty, and how many files), and its folder rows and file rows. My files' key says how
+  many it checks in ("Check in my 1,401 files"). A file row's state key is Check out,
+  Check in, or for a mentor or CAD lead on a file someone else has, Force check in. Files dragged from
   File Explorer drop into the open folder. How many files wait to upload is said once,
   by Right now (`activity.waiting`), never as a tag on each row.
 - **File detail**: the file's display (its state and who has it), Open as the primary
   key, then Check out, Check out and open, Check in, Undo check out or Force check in as its
   state allows, Show in folder as a quiet link, Checked out (the person and computer,
-  or "Available. Check it out to make changes."), and the history. Left for the page (0.3.3,
-  the host's half is in): a history entry of kind `keptCopy` gets Put back on this computer
-  (`putBackKeptCopy`; the host refuses another person's copy in one sentence, so the key may
-  show on every kept copy until the view says which are yours), and the status
-  `checkingInWhenClosed` gets its chip ("Checks in when closed", tone look) in the page's
-  status words; until then such a row shows no chip (`MyFileView.note` carries the words).
+  or "Available. Check it out to make changes."), and the history. A history entry of kind
+  `keptCopy` has Put back on this computer (0.3.3, `putBackKeptCopy`; the host refuses
+  another person's copy in one sentence, so the key shows on every kept copy until the view
+  says which are yours). The year its version in Armory was saved in shows by its place when
+  Armory knows it: "SolidWorks 2025", or "Saved in SolidWorks 2026" (amber) when that is
+  newer than its project's year, as on its row. The status `checkingInWhenClosed` is the chip
+  "Checks in when closed" (tone look) on every row and here, with `MyFileView.note` in My
+  files.
 - **Settings** is a sheet over Home with exactly the folder (and Change), Start Armory
   when I sign in, the theme, and Shared computer (0.3.3: "This computer is shared by
   several students", off by default; on a shared computer also who is using Armory now,
@@ -96,9 +101,9 @@ page's own crumbs are: "Added 4,987 of 5,000 files to Robot 2027 › CopyDesignT
 
 | `type` | fields | when |
 |---|---|---|
-| `view` | `view: AgentView` | on `ready` and whenever anything changes (at most every 500 ms during a pass); the page redraws from it |
+| `view` | `view: AgentView` | on `ready` and whenever anything changes (at most every 500 ms during a pass); the page redraws from it. 0.3.3 (N7): the host never posts a view that is the same as the last one it posted (`LastViewPosted`; a new page load, or `ready`, forgets it), and the page draws nothing for one; a view whose `settings` or `effectiveTheme` alone changed redraws only the theme and Settings (see "Drawing" below) |
 | `fileDetail` | `detail: FileDetailView` | the answer to `openFile` |
-| `activity` | `activity: ActivityView` | while files move, at most 4 a second; the page patches only Right now and the status line, so focus, scroll and typing never move |
+| `activity` | `activity: ActivityView` | while files move, at most 4 a second; the page patches only Right now and the status line, so focus, scroll and typing never move. 0.3.3 (N8): the running lines (`log`) only grow at the foot and lose their oldest at the top, and the newest one is always in sight (see "Drawing" below) |
 | `actionResult` | `requestId`, `ok`, `message`, `offer` | once for each action (see Page to host); the page shows `message` in a quiet line at the window's foot, never an alert and never a focus change. `offer` is null, except `"withoutPicture"` after a `sendFeedback` with a picture that couldn't go (0.3.3; Send feedback shows that answer in its own dialog) | 0.3.3: also with `requestId: "shell"` for answers to File Explorer's right-click or a notification.
 | `windowShot` | `requestId`, `ok`, `id`, `url`, `width`, `height`, `bytes`, `scaled`, `message` | the answer to `captureWindow` (0.3.3): a picture of this window (`WindowShotView`, its fields flat in the message); `url` serves exactly the bytes that would be sent; not `ok`: `message` says why, in one sentence |
 | `myFeedback` | `requestId`, `state`, `pictures`, `message`, `notes` | the answer to `readMyFeedback` (0.3.3): Your feedback (`FeedbackListView`, its fields flat in the message) |
@@ -342,9 +347,11 @@ future version), but you can't change them here, and drawings won't open. Someon
 SolidWorks 2026 can fix them: check it out, open it, click Save, and check it in."; with no
 link, tone `look`, who can look and who can fix them. The card has "Show them" (`expand`)
 for more than one file, no key for one. A page that does not know the kind yet shows it as
-any other card. `savedRelease`, `newerThanPin` and `newerThanPinCount` are for a tag on the
-row and File detail ("SolidWorks 2026") and a count on the project; the window's page does
-not show them yet.
+any other card. `savedRelease` and `newerThanPin` are a tag on the row and File detail (0.3.3:
+"Saved in SolidWorks 2026", amber, its tooltip "Saved in SolidWorks 2026. Robot 2027 uses
+SolidWorks 2025, which can open it only to look."; File detail also shows a year that is not
+newer, "SolidWorks 2025", as a plain tag). `newerThanPinCount` is not shown: the card counts
+the files.
 
 The SolidWorks link's card (0.3.3, kind `solidWorks`; docs/agent/SOLIDWORKS.md section 3 has
 every sentence) holds one item per open document that needs something before or around a
@@ -386,13 +393,11 @@ answers it with exactly one `actionResult` carrying the same id and a plain sent
 Plate.SLDPRT.", "Close Plate.SLDPRT in SolidWorks first."). The actions are
 `launchFile`, `checkOut`, `checkIn`, `undoCheckOut`, `takeBack`, `takeBackAll`, `createFolder`,
 `renameFolder`, `deleteFolder`, `renameFile`, `addFiles`, `dropFiles`, `reportProblem`,
-`sendFeedback`, `takeOverFolder`, `putBackKeptCopy` and `turnOnBadges`. An **ask** (0.3.3, `ASKS` in bridge.js) carries a `requestId`
-too and is answered by a message of its own, never `actionResult`: `captureWindow` by `windowShot`,
-`readMyFeedback` by `myFeedback`.
-`sendFeedback`, `takeOverFolder`, and (0.3.3) `pickProfile`, `enterPin`, `setPin`,
-`addProfile`, `forgotPin`, `chooseFolder`, `removeProfile`, `setSharedComputer` and
-`setPinsRequired`.
-`sendFeedback`, `takeOverFolder`, `keepLocal` and `saveDown`.
+`sendFeedback`, `takeOverFolder`, and (0.3.3) `putBackKeptCopy`, `turnOnBadges`, `pickProfile`,
+`enterPin`, `setPin`, `addProfile`, `forgotPin`, `chooseFolder`, `removeProfile`,
+`setSharedComputer`, `setPinsRequired`, `keepLocal` and `saveDown` (`ACTIONS` in bridge.js). An
+**ask** (0.3.3, `ASKS` in bridge.js) carries a `requestId` too and is answered by a message of its
+own, never `actionResult`: `captureWindow` by `windowShot`, `readMyFeedback` by `myFeedback`.
 
 The page shows an action is under way from the moment it is sent until its
 `actionResult` arrives (v0.2.1): the pressed key gets `aria-busy="true"` and
@@ -402,6 +407,14 @@ Bracket.SLDPRT...", "Checking in 3 files...", "Opening Bracket.SLDPRT...") with 
 spinner (`data-working="true"` on `#result`); and the rows the action touches say so
 ("Checking out...") in place of who has them. The answer with the same `requestId`
 replaces all of it. The spinner holds still under `prefers-reduced-motion`.
+
+0.3.3 (N9): only the files the action can change say so: Check out marks the files nobody
+has, Check in and Undo check out the files checked out here, Force check in the files it
+names; a file that was already checked in stays as it was. The working line counts those
+files ("Checking in 1,401 files..."). The answer to an action on more than one file also
+stays under the status as **Last action** (the sentence and its time, with OK), since the
+line at the foot fades after a few seconds; OK puts it away, and the next such answer
+replaces it.
 
 | `type` | fields | sent by | effect |
 |---|---|---|---|
@@ -439,6 +452,17 @@ replaces all of it. The spinner holds still under `prefers-reduced-motion`.
 | `openIncidents` | | Open incidents folder (Settings) | opens `%LOCALAPPDATA%\IDEA Armory\incidents` in File Explorer, so the files can be handed over by hand |
 | `turnOnBadges` | `requestId` | Turn on, in Settings' "Status on file icons" row (only for `off` and `broken`); Settings closes so the answer shows at the window's foot | 0.3.3: the host runs `<app>\badges\IDEA-Armory-Badges-Setup.exe /SILENT /SUPPRESSMSGBOXES /NORESTART` with the `runas` verb (Windows asks for an administrator's password), waits for it, checks the badges again (a new `view`) and answers with the new Settings line ("Armory's status shows on file icons after you sign out of Windows and back in."), or "Nothing changed. This one step needs an administrator's password." for a canceled prompt (error 1223), "The badges setup stopped before it finished, so nothing changed." for an exit code other than 0, and "The badges setup isn't in Armory's folder on this computer. Ask an administrator to run IDEA-Armory-Badges-Setup." when the file is missing |
 | `putBackKeptCopy` | `fileId`, `versionId`, `requestId` | Put back on this computer, on a File detail history entry of kind `keptCopy` (0.3.3, feedback N4) | `versionId` is the entry's `id`. The host's `PutBackKeptCopyAsync` (docs/agent/ENGINE.md, "Put back on this computer"): only the signed-in person's own kept copy; the file is checked out first when it is checked out to nobody; any save on disk the server doesn't have is kept first, and an open file is refused; the copy is put in place and stays checked out, shared only at check in. Answers "Put your copy of Plate.SLDPRT back on this computer. It's checked out to you: look at it in SolidWorks, then check it in to share it.", or why not ("That copy of Plate.SLDPRT is Maria Lopez's. Only your own kept copies can be put back here.", "Close Plate.SLDPRT in SolidWorks first, then put your copy back.") |
+| `showPicker` | | Switch student (Home's account card on a shared computer) | 0.3.3: the picker shows |
+| `cancelPicker` | | Back, Cancel, Escape on any picker step but the tiles | back to the tiles; a browser sign-in under way stops, and a student being added is not kept |
+| `pickProfile` | `profileId`, `requestId` | a student's tile | the PIN step; straight in when PINs are off; the browser sign-in first when their sign-in here ended or they have no PIN yet |
+| `enterPin` | `profileId`, `pin`, `requestId` | the fourth digit typed | right: the switch; wrong: the step says how many tries are left, then a wait (30 s doubling to 15 min, never a lockout) |
+| `setPin` | `profileId`, `pin`, `requestId` | the fourth digit of the second field, when both match | a new student's PIN (they are kept now), or a new one after Forgot your PIN; a PIN too easy to guess is refused in one sentence |
+| `addProfile` | `requestId` | Add a student, Try again, Open the browser again | the browser sign-in, once, into a profile of its own; again while one waits stops that one and starts a new one |
+| `forgotPin` | `profileId`, `requestId` | Forgot your PIN?, Sign in with Google, Open the browser again | the browser sign-in as that same student; another account changes nothing |
+| `chooseFolder` | `profileId`, `choice`, `requestId` | Wait for Alex, Use C:\IDEA\Armory-jordan | `choice` is `wait` (back to the tiles) or `own` (a folder of their own until their work there is done) |
+| `removeProfile` | `profileId`, `requestId` | Remove (Settings), after the small dialog asks | forgets that student's sign-in and PIN here (ending the sign-in on the server when it can); never deletes a file |
+| `setSharedComputer` | `on`, `pin`, `requestId` | the Shared computer switch, after the small dialog asks | on: the student signed in now becomes the first profile with the PIN given (`pin` is "" when nobody is signed in); off: only the student in use stays signed in |
+| `setPinsRequired` | `on`, `requestId` | Ask for a PIN when switching students | a mentor in use only; who and when are kept and shown (`pinsNote`) |
 
 ## Send feedback's picture of the window (0.3.3)
 
@@ -481,17 +505,6 @@ offers it too, and Back to your note returns with the words kept. The list shows
 status, the first lines of its words, what was tried, and when, from which computer, about what,
 with a picture. **There are no replies in Armory**: the site keeps none, and the list's foot says
 "The IDEA team reads every note. There are no replies in Armory: the status shows where yours is."
-| `showPicker` | | Switch student (Home's account card on a shared computer) | 0.3.3: the picker shows |
-| `cancelPicker` | | Back, Cancel, Escape on any picker step but the tiles | back to the tiles; a browser sign-in under way stops, and a student being added is not kept |
-| `pickProfile` | `profileId`, `requestId` | a student's tile | the PIN step; straight in when PINs are off; the browser sign-in first when their sign-in here ended or they have no PIN yet |
-| `enterPin` | `profileId`, `pin`, `requestId` | the fourth digit typed | right: the switch; wrong: the step says how many tries are left, then a wait (30 s doubling to 15 min, never a lockout) |
-| `setPin` | `profileId`, `pin`, `requestId` | the fourth digit of the second field, when both match | a new student's PIN (they are kept now), or a new one after Forgot your PIN; a PIN too easy to guess is refused in one sentence |
-| `addProfile` | `requestId` | Add a student, Try again, Open the browser again | the browser sign-in, once, into a profile of its own; again while one waits stops that one and starts a new one |
-| `forgotPin` | `profileId`, `requestId` | Forgot your PIN?, Sign in with Google, Open the browser again | the browser sign-in as that same student; another account changes nothing |
-| `chooseFolder` | `profileId`, `choice`, `requestId` | Wait for Alex, Use C:\IDEA\Armory-jordan | `choice` is `wait` (back to the tiles) or `own` (a folder of their own until their work there is done) |
-| `removeProfile` | `profileId`, `requestId` | Remove (Settings), after the small dialog asks | forgets that student's sign-in and PIN here (ending the sign-in on the server when it can); never deletes a file |
-| `setSharedComputer` | `on`, `pin`, `requestId` | the Shared computer switch, after the small dialog asks | on: the student signed in now becomes the first profile with the PIN given (`pin` is "" when nobody is signed in); off: only the student in use stays signed in |
-| `setPinsRequired` | `on`, `requestId` | Ask for a PIN when switching students | a mentor in use only; who and when are kept and shown (`pinsNote`) |
 
 ## Several students on one computer (0.3.3)
 
@@ -559,6 +572,19 @@ by path, size and time written. The demo and the check pages are not on `armory.
 ask for nothing (tools/agent-ui/check-ui.mjs serves the page there from a request route to
 check it).
 
+0.3.3 (N15): a thumbnail handler is someone else's code, so the window never waits on one for
+long. A picture not made within 5 seconds is answered 404 (the glyph stays); a handler stuck on
+one file for 20 seconds is left behind on its thread, a new thread makes the next pictures, and
+the file is written to agent.log and counted (the flight recorder's `thumbnailStuck`); after 3
+stuck threads no picture is made until Armory starts again. At most 64 pictures wait, the
+newest (the rows in view): an older one is answered 404 at once. Two asks for one file share
+one picture. The key (path, size, time written) is read before the picture is made, so a
+picture is never kept under bytes it wasn't made from; a file with no picture is asked again
+after 60 seconds. A picture is served with `Cache-Control: private, max-age=31536000,
+immutable` (its address carries the version), and the page keeps a picture that arrived, and
+the glyph of one that never will, when it draws the row again: a row scrolled away and back,
+or redrawn by a view, never asks twice.
+
 ## The demo
 
 Outside WebView2, `?state=<name>` picks a demo state (`demo/states.js`), `theme=idea`,
@@ -579,12 +605,69 @@ drawn, and the demo holds every answer, so the working state stays in view); `re
 The demo transport answers every page-to-host type the way the engine would (a check
 out changes the rows and answers with an `actionResult`, a rename adds the file and
 shortens its notice; `captureWindow` gets a small drawing of a window, the app's being the
-window itself, and `readMyFeedback` three sample notes); `openVault`, `showInFolder`, `addFiles` and `dropFiles` only log,
-since a browser has no File Explorer to open.
-shortens its notice); `openVault`, `showInFolder`, `addFiles` and `dropFiles` only log,
-since a browser has no File Explorer to open. The shared computer's states are
+window itself, `readMyFeedback` three sample notes, and `putBackKeptCopy` puts the copy back
+checked out); `openVault`, `showInFolder`, `addFiles` and `dropFiles` only log, since a browser
+has no File Explorer to open. 0.3.3's states for the window's own pieces are `checkingOut` (a
+check out of a folder under way, its running lines and its rows), `forcingIn` (a force check
+in under way), `forceManyConfirm` (Force check in of files 19 people have), `checkInWaits`
+(files that check in when closed, in the COTS folder) and `newerRelease` (files saved in a
+newer SolidWorks year, its card, rows and File detail). The shared computer's states are
 `pickerChoose`, `pickerWaiting`, `pickerPin`, `pickerPinWrong`, `pickerPinWait`,
 `pickerAdding`, `pickerNewPin`, `pickerFolderBusy`, `pickerSwitching`,
 `pickerSignInAgain`, `pickerFirst`, `pickerPinsOff`, `sharedHome`, `sharedOwnFolder`,
 `sharedSettings` and `sharedSettingsMentor`; in them every student's PIN is 2580, a
 browser sign-in finishes by itself after 3 seconds, and Add a student adds Sam Patel.
+
+## Tooltips (0.3.3)
+
+Every control says what it does in one plain sentence (feedback N1): every key, link, tab,
+checkbox and switch, in every screen and dialog, has a `data-tip`, filled from one table in
+app.js (`TIPS`, with the file's or folder's name and counts put in). Hold the mouse on a
+control for 750 ms, or reach it with Tab (300 ms), and one card (`#tip`, `role="tooltip"`)
+shows the sentence under the control, or over it near the window's foot, always inside the
+window, at most 280px wide, in the theme's own colors. While it shows, the control is
+described by it (`aria-describedby="tip"`, the control's own ids kept). It goes when the mouse
+leaves or presses, on any key, a scroll, when its control is drawn again or goes, and on
+Escape (which then does nothing else: a dialog stays open). Inside an open dialog the card
+moves into the dialog, above its scrim. It fades in over 120 ms, at once under
+`prefers-reduced-motion`. A key that is off says why ("Nothing here is checked out by you"):
+it is `aria-disabled="true"`, never `disabled`, so the mouse still reaches it, and a press does
+nothing. Tagged words that are cut short (who has a file, the newest running line) show the
+whole of themselves the same way. tools/agent-ui/check-ui.mjs fails a page with a visible
+control that has no tooltip, or a tooltip with a word the page's words may not use.
+
+The host's own controls say it too: every tray menu item has a `ToolTipText` (`HostTips`,
+`ShowItemToolTips`), and the window's "Get WebView2" key, shown when WebView2 is missing,
+has a `ToolTip`.
+
+## Drawing (0.3.3)
+
+The page draws from the newest view, and only what changed (feedback N7, X-full-render):
+
+- **Only what changed.** Home, File detail, the header and the Settings sheet are laid over
+  what is on the page: an element with the same key (`data-key`, `id` or `data-part`) and tag
+  stays and only its changed attributes and words are set; a region whose markup is the same
+  is not touched. Long lists keep each row whose words did not change (rows are known by their
+  file), so focus, scroll places, typing and pictures stay. Another file's File detail is drawn
+  anew.
+- **The same view twice** draws nothing. A view whose settings alone changed (a theme picked,
+  Start Armory when I sign in) changes the theme and Settings in place; Home is not drawn.
+- **A theme picked** is worn in the next frame, all at once: every transition is off for that
+  frame (`data-theming`), so no frame shows the two themes' colors mixed. A view that arrives
+  before the frame is painted waits for it (at most 250 ms, for a window that is hidden), and
+  only the newest one is drawn.
+- **The running lines** (`#act-log`, Right now) take new lines at their foot and let old ones go
+  at their top, and nothing else in them is drawn again: a student reading an older line keeps
+  their place, and the box follows the newest line only when it was already at its foot. The
+  newest line is always in sight: under the status line in a wide window (the left column),
+  and in a slim strip under the header in a narrow one (`#latest-strip`).
+- **Focus never hides.** The pinned keys at the top of the scrolling column (the selection bar,
+  the folder's place) set `scroll-padding-top`, so a control reached with Tab is scrolled into
+  view below them, never under them.
+
+tools/agent-ui/check-ui.mjs checks each of these with a stand-in WebView2 host: a view the page
+already has changes nothing in `#main` or the header, a view whose settings alone changed
+changes only the theme, a theme picked with 1,401 files on screen and a CPU four times slower
+paints within one frame (and the view that arrived meanwhile follows), ten near-identical
+views of those files are drawn within a time limit and keep their rows, and the running lines
+are added and let go without redrawing the rest.

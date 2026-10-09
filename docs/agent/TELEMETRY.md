@@ -43,6 +43,7 @@ ring unless an incident is saved.
 | `readOnlyBroken` | the engine (`ApplyReadOnly`) | a file the read-only rule had made read-only, found writable again (and made read-only) |
 | `repairedCheckout` | the engine (`AdoptMyLocks`, cfb37e2) | a lock this computer holds that had no record here, now shown as checked out by you |
 | `note` `checkInWaits` | the engine (`ReadBeforeReleaseAsync`, 0.3.3) | a check in, an undo or an add's automatic check in that starts to wait, once: detail "<path>: open" (open in SolidWorks; checked in once closed) or "<path>: unreadable" (the file could not be read; checked in once it can be) |
+| `note` `thumbnailStuck` | the window's thumbnails (`ShellThumbnails`, 0.3.3) | a Windows thumbnail handler that gave no answer on one file for 20 seconds: detail is the file's name. Its thread is left behind and a new one makes the next pictures (after 3, none until Armory starts again); agent.log gets the same line (docs/agent/BRIDGE.md, "Thumbnails") |
 
 **Never collected:** file contents, tokens (access, refresh, the anon key), signed storage
 URLs, request or response bodies, passwords, and other people's email addresses (every

@@ -21,6 +21,7 @@ internal sealed partial class TrayApp : ApplicationContext
     private readonly ContextMenuStrip menu;
     private readonly ToolStripMenuItem pauseItem;
     private readonly ToolStripMenuItem accountItem;
+    private readonly ToolStripMenuItem vaultItem;
     // A shared computer (docs/agent/PROFILES.md): "Using Armory: Jordan Reyes", never a button.
     private readonly ToolStripMenuItem usingItem;
     private readonly Control marshal;
@@ -42,13 +43,15 @@ internal sealed partial class TrayApp : ApplicationContext
         foreach (var state in new[] { SyncStates.Synced, SyncStates.Syncing, SyncStates.Paused, SyncStates.Offline, SyncStates.Attention })
             trayIcons[state] = LoadIcon("tray-" + state + ".ico", SystemInformation.SmallIconSize);
 
-        menu = new ContextMenuStrip();
+        // Every item says what it does on hover (N1); the words are in HostTips.
+        menu = new ContextMenuStrip { ShowItemToolTips = true };
         usingItem = new ToolStripMenuItem("") { Enabled = false, Visible = false };
-        var openItem = new ToolStripMenuItem("Open Armory", null, (_, _) => OpenWindow()) { Font = new Font(menu.Font, FontStyle.Bold) };
-        var vaultItem = new ToolStripMenuItem("Open Armory folder", null, (_, _) => OpenVault());
-        pauseItem = new ToolStripMenuItem("Pause", null, (_, _) => TogglePause());
-        accountItem = new ToolStripMenuItem("Connect this computer", null, (_, _) => ConnectOrSignOut());
-        var quitItem = new ToolStripMenuItem("Quit", null, (_, _) => Quit());
+        var openItem = new ToolStripMenuItem(HostTips.OpenArmory, null, (_, _) => OpenWindow()) { Font = new Font(menu.Font, FontStyle.Bold) };
+        vaultItem = new ToolStripMenuItem(HostTips.OpenFolder, null, (_, _) => OpenVault());
+        pauseItem = new ToolStripMenuItem(HostTips.Pause, null, (_, _) => TogglePause());
+        accountItem = new ToolStripMenuItem(HostTips.Connect, null, (_, _) => ConnectOrSignOut());
+        var quitItem = new ToolStripMenuItem(HostTips.Quit, null, (_, _) => Quit());
+        foreach (var item in new[] { openItem, vaultItem, pauseItem, accountItem, quitItem }) item.ToolTipText = HostTips.Tray(item.Text ?? "", host.VaultFolder);
         menu.Items.AddRange([usingItem, openItem, vaultItem, pauseItem, accountItem, quitItem]);
         menu.Opening += (_, _) => UpdateMenu(host.View);
 
@@ -131,12 +134,13 @@ internal sealed partial class TrayApp : ApplicationContext
         if (quitting) return;
         signedIn = view.Connection is Connections.SignedIn or Connections.VaultOwnedByOther;
         var paused = host.IsPaused;
-        pauseItem.Text = paused ? "Resume" : "Pause";
+        pauseItem.Text = paused ? HostTips.Resume : HostTips.Pause;
         // A shared computer: Switch student instead of Sign out (decision F7).
         var inUse = view.Profiles?.Profiles.FirstOrDefault(p => p.Current);
         usingItem.Visible = view.Profiles is not null;
         usingItem.Text = inUse is null ? "Nobody is using Armory yet" : "Using Armory: " + inUse.Name;
-        accountItem.Text = view.Profiles is not null ? "Switch student" : signedIn ? "Sign out" : "Connect this computer";
+        accountItem.Text = view.Profiles is not null ? HostTips.SwitchStudent : signedIn ? HostTips.SignOut : HostTips.Connect;
+        foreach (var item in new[] { vaultItem, pauseItem, accountItem }) item.ToolTipText = HostTips.Tray(item.Text ?? "", host.VaultFolder);
         var line = string.IsNullOrWhiteSpace(view.Sync.Line) ? "IDEA Armory" : view.Sync.Line.Trim();
         if (inUse is not null) line = inUse.Name.Split(' ')[0] + ": " + line;
         notify.Text = line.Length <= TooltipLimit ? line : line[..(TooltipLimit - 3)] + "...";
