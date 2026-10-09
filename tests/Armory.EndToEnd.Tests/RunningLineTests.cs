@@ -83,4 +83,27 @@ public sealed class RunningLineTests(Xunit.Abstractions.ITestOutputHelper output
         Assert.Null(t.A.Engine.ActivityNow.Download);
         Assert.Null(t.A.Engine.ActivityNow.Line);
     }
+
+    // The silent stretches say what they are (0.3.3, feedback N8): a click's pass whose read of
+    // the server is slow says it is asking, and a folder moved says where its files went. A quick
+    // step says nothing.
+    [PostgresFact]
+    public async Task A_slow_step_and_a_folder_move_say_what_they_are()
+    {
+        await using var t = await TeamAsync();
+        for (var i = 0; i < 3; i++) t.A.Write($"Robot 2027/Frame/Part-{i}.SLDPRT", "part " + i);
+        await t.A.SyncTimesAsync(2);
+        var seen = new ConcurrentQueue<ActivityView>();
+        t.A.Activities += seen.Enqueue;
+        t.A.Network.RpcDelay = rpc => rpc.EndsWith("/armory_my_projects", StringComparison.Ordinal) ? TimeSpan.FromSeconds(1) : TimeSpan.Zero;
+        var answer = await t.A.Engine.RenameFolderAsync(t.Project, "Frame", "Chassis");
+        Assert.True(answer.Ok, answer.Message);
+        Assert.Contains(seen, a => a.Log.Any(l => l.Line == "Asking Armory what changed"));
+        Assert.Contains(t.A.Engine.ActivityNow.Log, l => l.Line == "Moved 3 files to Chassis");
+        // Quick: nothing said about looking or asking.
+        t.A.Network.RpcDelay = null;
+        var before = t.A.Engine.ActivityNow.Log.Count(l => l.Line.StartsWith("Looking over", StringComparison.Ordinal) || l.Line == "Asking Armory what changed");
+        await t.A.SyncAsync();
+        Assert.Equal(before, t.A.Engine.ActivityNow.Log.Count(l => l.Line.StartsWith("Looking over", StringComparison.Ordinal) || l.Line == "Asking Armory what changed"));
+    }
 }

@@ -469,9 +469,10 @@ Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.ForceCheckInTests|A_deadlock_is_sent
 Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.ForceCheckInTests|A_lost_answer_is_answered_again_from_the_receipt_with_the_same_operation_id
 Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.ForceCheckInTests|A_stop_before_the_call_is_finished_by_the_next_pass_and_a_stop_after_it_never_ends_a_new_check_out
 Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.ForceCheckInTests|The_holders_unsaved_work_is_kept_as_their_own_copy
-# 0.3.3 feedback N8: a count of its own for a check out and a Force check in, live while it works
+# 0.3.3 feedback N8: a count of its own for a check out and a Force check in, live while it works; slow steps and folder moves say what they are
 Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.RunningLineTests|Force_check_in_running_lines_arrive_while_locks_break
 Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.RunningLineTests|A_check_out_of_1400_files_shows_a_count
+Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.RunningLineTests|A_slow_step_and_a_folder_move_say_what_they_are
 Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.FeedbackTests|A_note_goes_with_its_picture_a_refused_picture_is_left_out_on_request_and_the_hours_limit_holds
 Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.FeedbackTests|A_site_before_0235_takes_the_note_without_the_new_fields
 Armory.Client.Tests|Armory.Client.Tests.ServerCallsClientTests|Each_screenshot_refusal_keeps_the_note_and_offers_it_without_the_picture
