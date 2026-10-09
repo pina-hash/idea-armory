@@ -201,7 +201,7 @@ public sealed partial class SyncEngine
                     KnowLock(result.FileId, null);
                     if (st.Request != CheckoutRequest.None) releaseResults[st] = ReleaseOutcome.Released;
                     LetGoDone(st);
-                    activity.Done(ActivityTracker.CheckIn, st.Path);
+                    Released(st);
                     activity.Drop(st.Path);
                     MarkDirty();
                 }
@@ -400,7 +400,7 @@ public sealed partial class SyncEngine
                     tally.Reread.Add(id);
                 }
                 ForgetForceCheckIn(record);
-                activity.Log($"Force checked in {tally.Broken.Count:N0} of {Count(tally.Total, "file", "files")}");
+                ForcedSoFar(tally);
             }
             pending = again;
         }

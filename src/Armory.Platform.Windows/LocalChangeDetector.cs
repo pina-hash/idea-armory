@@ -267,6 +267,30 @@ public sealed class LocalChangeDetector : IDisposable
         };
     }
 
+    // Armory just put these bytes at path itself (a download), through private staging, with the
+    // hash it checked as they streamed: the next scan takes that hash for this very file (its NTFS
+    // id, size and last-write time as they are now) instead of reading it again (0.3.3, feedback
+    // N3: the scan after a 542 MB slice of a download read all of it once more). The staged copy
+    // was complete and closed before the rename, so no write came between those bytes and the
+    // last-write time kept here: the entry is not racy. A write after it moves the last-write
+    // time, and the scan reads the file again. False when the file could not be read for it.
+    public bool Seed(VaultPath path, string hash)
+    {
+        if (!paths.TryResolve(path, out var file, out _)) return false;
+        try
+        {
+            using var handle = new FileStream(WindowsPaths.Extended(file!), FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            if (!NativeMethods.GetFileInformationByHandle(handle.SafeFileHandle, out var info)) return false;
+            var size = ((long)info.SizeHigh << 32) | info.SizeLow;
+            var write = DateTime.FromFileTimeUtc(((long)info.WriteTime.dwHighDateTime << 32) | (uint)info.WriteTime.dwLowDateTime);
+            var readOnly = (info.Attributes & NativeMethods.FileAttributeReadOnly) != 0;
+            cache[path] = new(path, NativeMethods.FileId(info), size, write, hash, new DateTimeOffset(write) + RacyWindow, readOnly);
+            fileMapDirty = true;
+            return true;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return false; }
+    }
+
     // The agent moved a folder itself (IVaultFileSystem.MoveFolder): carry the cached ids and
     // hashes along, so the next scan neither reports the move as a student's nor re-hashes, and
     // write the moved map at once, so a restart does not report it either.

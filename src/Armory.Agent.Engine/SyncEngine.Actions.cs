@@ -50,7 +50,9 @@ public sealed partial class SyncEngine
             case SyncActionKind.SaveSideVersion:
                 return await PreserveAsync(st, project, path, input.LocalHash!, action.ReleaseNotChecked, input.SavedRelease, remote, action.Why, ct);
             case SyncActionKind.MoveLocalToRecovery:
-                // Removed by the team: it goes aside once it is closed, never while open.
+                // Removed by the team: it goes aside once it is closed, never while open (and,
+                // for a carried unit, once a scan in progress is taken in).
+                await AfterScanAsync(ct);
                 if (IsOpenNow(path)) { st.RemovedWaiting = true; return false; }
                 var moved = fs.MoveToRecovery(path, input.LocalHash!);
                 if (!moved.Succeeded)
@@ -106,7 +108,7 @@ public sealed partial class SyncEngine
         var current = remote.Current!;
         // Recheck right before writing: the plan was made a moment ago.
         if (IsOpenNow(path)) { st.NewerWaiting = true; st.NewerAuthor = current.Author; return false; }
-        if (FolderMovedAway(path)) return false;
+        if (FolderMovedAway(path, st)) return false;
         // The read-only rule is set on the staged copy, so the new bytes are never writable here
         // unless this computer has the file checked out.
         var ownership = DesiredOwnership(st, OwnershipOf(remote.Lock), IsOpenNow(path));
@@ -118,9 +120,11 @@ public sealed partial class SyncEngine
         {
             await deps.Blobs.DownloadAsync(project.Id, current.Hash, current.Bytes, staging, ct, transfer);
             staging.Position = 0;
+            // A carried download is put in place only once a scan in progress is taken in.
+            await AfterScanAsync(ct);
             Checkpoint("before-replace", ct);
             if (IsOpenNow(path)) { st.NewerWaiting = true; st.NewerAuthor = current.Author; return false; }
-            if (FolderMovedAway(path)) return false;
+            if (FolderMovedAway(path, st)) return false;
             var outcome = fs.Replace(path, input.LocalHash, staging, readOnly);
             if (!outcome.Succeeded)
             {
@@ -128,6 +132,9 @@ public sealed partial class SyncEngine
                     outcome.Problem ?? "Replace refused");
                 return false;
             }
+            // The platform keeps the hash of bytes Armory wrote itself: the next scan doesn't read
+            // them again (0.3.3: a scan after a 542 MB slice read every file of it once more).
+            fs.Wrote(path, current.Hash);
             arrived = true;
         }
         finally
@@ -146,6 +153,7 @@ public sealed partial class SyncEngine
         st.AppliedOwnership = null;
         Complete(st, current.Hash);
         downloaded++;
+        runDownloaded++;
         lastActivity = deps.Clock.GetUtcNow();
         MarkDirty();
         Checkpoint("after-download", ct);
@@ -157,8 +165,11 @@ public sealed partial class SyncEngine
     // would make the old folder again, and the next pass would take the files in it for files
     // moved back, for the whole team); the next pass sees the move and downloads the file where
     // its folder is now. A folder that was never here (new for the team) is made as before.
-    private bool FolderMovedAway(VaultPath path)
+    private bool FolderMovedAway(VaultPath path, FileState? st = null)
     {
+        // A download in the transfer queue asks about the folder it was planned into: a pass that
+        // began since may have scanned the student's move of it already.
+        if (st is not null && plannedFolders.TryGetValue(st, out var planned)) return planned is not null && !fs.FolderExists(planned);
         var folder = Parent(path.Value);
         for (var f = folder; f is not null; f = Parent(f))
             if (localFolders.Contains(f)) return !fs.FolderExists(f);
@@ -195,7 +206,7 @@ public sealed partial class SyncEngine
     {
         // Already durable on the server (as this file's current version, or as a side version
         // the server or this engine already acknowledged): the obligation is met.
-        if (st.Preserved == hash || remote?.Current?.Hash == hash || st.Sides.Any(s => s.Hash == hash))
+        if (AlreadyKept(st, hash, remote))
         {
             st.Preserved = hash;
             st.BreakNotice = false;
@@ -514,6 +525,7 @@ public sealed partial class SyncEngine
                     st.SetBase(new(answer.VersionId.ToString(), f.Hash, state.Email!));
                     st.Preserved = null;
                     uploaded++;
+                    runUploaded++;
                 }
                 else
                 {
@@ -582,6 +594,7 @@ public sealed partial class SyncEngine
         st.Sides.Add(new(versionId, hash, reason, deps.Clock.GetUtcNow()));
         if (st.Sides.Count > SidesKept) st.Sides.RemoveRange(0, st.Sides.Count - SidesKept);
         sideVersions++;
+        runKept++;
     }
 
     private async Task UploadBlobAsync(Inflight f, IProgress<long> progress, CancellationToken ct)
@@ -622,6 +635,8 @@ public sealed partial class SyncEngine
         var sent = false;
         foreach (var st in state.Files.Values.Where(f => f.Inflight is not null).ToArray())
         {
+            // A carried unit's write is in flight now, not left by a stop.
+            if (Fenced(st)) continue;
             var project = state.Projects.GetValueOrDefault(st.ProjectId);
             if (project is null || !project.Usable) continue;
             if (st.Inflight!.Kind is "release" or "tombstone") { st.Inflight = null; MarkDirty(); continue; }
@@ -639,7 +654,7 @@ public sealed partial class SyncEngine
     {
         foreach (var st in state.Files.Values.Where(f => (f.Entries.Count > 0 || f.Drafts.Count > 0) && f.Inflight is null && f.LocalMoveTo is null).ToArray())
         {
-            if (!VaultPath.TryCreate(st.Path, out var path, out _, options.VaultRoot)) continue;
+            if (Fenced(st) || !VaultPath.TryCreate(st.Path, out var path, out _, options.VaultRoot)) continue;
             var project = state.Projects.GetValueOrDefault(st.ProjectId);
             if (project is null || !project.Usable || (project.Archived && !MineToFinish(st)) || HeldByWork(st.Path) || heldProjects.Contains(project.Id)) continue;
             local.TryGetValue(st.Path, out var current);
@@ -694,8 +709,8 @@ public sealed partial class SyncEngine
     private bool ApplyRemoteMoves()
     {
         var any = false;
-        var moving = state.Files.Values.Where(f => f.FileId is not null && f.LocalMoveTo is null &&
-            remoteById.TryGetValue(f.FileId.Value, out var remote) && !string.Equals(remote.Path.Value, f.Path, StringComparison.Ordinal)).ToArray();
+        var moving = state.Files.Values.Where(f => f.FileId is not null && f.LocalMoveTo is null && !Fenced(f) &&
+            remoteById.TryGetValue(f.FileId.Value, out var remote) && !string.Equals(remote.Path.Value, f.Path, StringComparison.Ordinal) && !Fenced(remote.Path.Value)).ToArray();
         if (moving.Length == 0) return false;
         // The pass's moves are one operation, shown as moving to the folder they all go to.
         BeginMoving(moving.Count(f => local.ContainsKey(f.Path)), CommonFolder(moving.Select(f => remoteById[f.FileId!.Value].Path.Value)));
@@ -794,7 +809,7 @@ public sealed partial class SyncEngine
         var platform = (scan.Renames ?? []).ToDictionary(r => r.From.Value, r => r.To.Value, StringComparer.OrdinalIgnoreCase);
         foreach (var st in state.Files.Values.ToArray())
         {
-            if (st.FileId is null || st.BaseHash is null || st.LocalMoveTo is not null || st.Inflight is not null || local.ContainsKey(st.Path)) continue;
+            if (st.FileId is null || st.BaseHash is null || st.LocalMoveTo is not null || st.Inflight is not null || local.ContainsKey(st.Path) || Fenced(st)) continue;
             if (state.Moves.Any(m => m.FileId == st.FileId)) continue;
             var project = state.Projects.GetValueOrDefault(st.ProjectId);
             if (project is null || !project.Usable || project.Archived || HeldByWork(st.Path) || heldProjects.Contains(project.Id)) continue;
@@ -969,7 +984,8 @@ public sealed partial class SyncEngine
             // Where the file is on disk (in a folder waiting to go back, too: the rule holds there).
             // A file the scan could not read is left as it is: its read-only bit is the last one
             // read, not the disk's (feedback N4), and a later pass that can read it applies the rule.
-            if (st.FileId is not { } id || !TryLocal(st.Path, out var file) || file.Unread) continue;
+            // A carried unit's file gets its bit with its bytes, and the rule from a later pass.
+            if (st.FileId is not { } id || Fenced(st) || !TryLocal(st.Path, out var file) || file.Unread) continue;
             // Archived (decision D8): its files are left as they are.
             if (state.Projects.GetValueOrDefault(st.ProjectId) is { Archived: true }) continue;
             LockOwnership ownership;

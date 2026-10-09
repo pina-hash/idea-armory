@@ -62,29 +62,36 @@ public sealed partial class SyncEngine
             if (online != true) return Offline("Files can be checked out once this computer is back online.");
             return new(false, paths.Count == 1 && !IsFolder(paths[0]) ? $"{NameOf(paths[0])} isn't in Armory yet." : "There are no files there to check out.");
         }
+        // Several files: their own count from the click to the answer ("Checking out 500 of 1,400
+        // files", 0.3.3, feedback N8), each one done as its lock is taken.
+        if (targets.Count > 1) foreach (var (st, _) in targets) activity.Expect(ActivityTracker.CheckOut, st.Path, 0);
         Working(targets.Count == 1 ? $"Checking out {targets[0].Path.Name}" : $"Checking out {Count(targets.Count, "file", "files")}");
         await FlushAsync(); // the requests are durable before any server call
         var wasOnline = true;
         // Only these files move in this pass; the loop moves everything else. Asked again after
         // one pass with the lock free (a download, or a kept copy put back).
-        await JoinActionPassAsync(PassScope.Of(targets.Select(t => t.State)), cancellationToken,
-            again: () => targets.Any(t => checkOutResults.GetValueOrDefault(t.State) == CheckOutOutcome.Waiting),
-            after: () =>
-            {
-                wasOnline = online == true;
-                foreach (var (st, _) in targets)
+        try
+        {
+            await JoinActionPassAsync(PassScope.Of(targets.Select(t => t.State)), cancellationToken,
+                again: () => targets.Any(t => checkOutResults.GetValueOrDefault(t.State) == CheckOutOutcome.Waiting),
+                after: () =>
                 {
-                    if (st.CheckOut is null) continue;
-                    // A check out that could not finish is not left to happen later by surprise.
-                    st.CheckOut = null;
-                    MarkDirty();
-                    if (!checkOutResults.ContainsKey(st)) checkOutResults[st] = CheckOutOutcome.Waiting;
-                }
-            });
+                    wasOnline = online == true;
+                    foreach (var (st, _) in targets)
+                    {
+                        if (st.CheckOut is null) continue;
+                        // A check out that could not finish is not left to happen later by surprise.
+                        st.CheckOut = null;
+                        MarkDirty();
+                        if (!checkOutResults.ContainsKey(st)) checkOutResults[st] = CheckOutOutcome.Waiting;
+                    }
+                });
+        }
+        finally { foreach (var (st, _) in targets) activity.Drop(st.Path, ActivityTracker.CheckOut); }
         // A lock taken before the connection dropped is a check out all the same.
         if (!wasOnline && !targets.Any(t => checkOutResults.GetValueOrDefault(t.State) is CheckOutOutcome.Done or CheckOutOutcome.AlreadyMine))
-            return Offline("Files can be checked out once this computer is back online.");
-        return await CheckOutAnswerAsync(targets, open, wasOnline);
+            return Said(Offline("Files can be checked out once this computer is back online."), targets.Count > 1);
+        return Said(await CheckOutAnswerAsync(targets, open, wasOnline), targets.Count > 1);
     }
 
     private async Task<ActionResult> CheckOutAnswerAsync(List<(FileState State, VaultPath Path)> targets, bool open, bool wasOnline)
@@ -207,7 +214,7 @@ public sealed partial class SyncEngine
         Working(targets.Count == 1 ? $"Checking in {targets[0].Path.Name}" : $"Checking in {Count(targets.Count, "file", "files")}");
         await FlushAsync(); // the requests are durable before any server call
         await JoinActionPassAsync(PassScope.Of(targets.Select(t => t.State)), cancellationToken);
-        return ReleaseAnswer(targets, undo: false, [], kept: false);
+        return Said(ReleaseAnswer(targets, undo: false, [], kept: false), targets.Count > 1);
     }
 
     // Undo check out: never while the file is open. Bytes not checked in are kept as a kept
@@ -235,12 +242,16 @@ public sealed partial class SyncEngine
             st.Request = CheckoutRequest.Undo;
             st.CheckOut = null;
             releaseResults.Remove(st);
+            // Several: their own count to the answer ("Undoing 3 of 10 check outs"), each one
+            // done as its lock goes.
+            if (closed.Count > 1) activity.Expect(ActivityTracker.Undo, st.Path, 0);
         }
         await FlushAsync(); // the requests are durable before any server call
-        await JoinActionPassAsync(PassScope.Of(closed.Select(t => t.State)), cancellationToken);
+        try { await JoinActionPassAsync(PassScope.Of(closed.Select(t => t.State)), cancellationToken); }
+        finally { foreach (var (st, _) in closed) activity.Drop(st.Path, ActivityTracker.Undo); }
         // Bytes not checked in were kept as a kept copy; the answer says so.
         var kept = closed.SelectMany(t => t.State.Sides).Any(s => s.Reason == UndoReason && !keptBefore.Contains(s.VersionId));
-        return ReleaseAnswer(closed, undo: true, open.Select(o => o.Path).ToList(), kept);
+        return Said(ReleaseAnswer(closed, undo: true, open.Select(o => o.Path).ToList(), kept), targets.Count > 1);
     }
 
     // "Checked in" is said only of a file whose lock went after a read of it just now matched the
@@ -377,14 +388,28 @@ public sealed partial class SyncEngine
         }
         if (targets.Count == 0)
             return new(false, notAllowed > 0 && notOut + mine + notThere == 0 ? "Only a mentor or CAD lead can force a check in." : "None of those files is checked out by someone else now.");
+        // Their own count, live while the locks break ("Force checking in 120 of 300 files"; until
+        // 0.3.3 the window heard nothing until the pass after the last call).
+        if (targets.Count > 1) foreach (var t in targets) activity.Expect(ActivityTracker.TakeBack, t.Id.ToString(), 0);
         Working($"Force checking in {Count(targets.Count, "file", "files")}");
         var tally = new TakeBackTally(targets.Count);
-        var rest = BreakBatchAvailable ? await BreakLocksInBatchesAsync(targets, tally, cancellationToken) : targets;
-        if (rest.Count > 0 && !tally.Offline) await BreakLocksOneByOneAsync(rest, tally, cancellationToken);
-        foreach (var id in tally.Broken) KnowLock(id, null);
-        // One pass for every file, never one per file (and shared with any other click).
-        if (tally.Broken.Count + tally.Reread.Count > 0) await JoinActionPassAsync(PassScope.FilesOf(tally.Broken.Concat(tally.Reread)), cancellationToken);
-        return new(tally.Broken.Count > 0, tally.Sentence(notOut, notAllowed, mine));
+        try
+        {
+            var rest = BreakBatchAvailable ? await BreakLocksInBatchesAsync(targets, tally, cancellationToken) : targets;
+            if (rest.Count > 0 && !tally.Offline) await BreakLocksOneByOneAsync(rest, tally, cancellationToken);
+            foreach (var id in tally.Broken) KnowLock(id, null);
+            // One pass for every file, never one per file (and shared with any other click).
+            if (tally.Broken.Count + tally.Reread.Count > 0) await JoinActionPassAsync(PassScope.FilesOf(tally.Broken.Concat(tally.Reread)), cancellationToken);
+        }
+        finally { foreach (var t in targets) activity.Drop(t.Id.ToString(), ActivityTracker.TakeBack); }
+        return Said(new(tally.Broken.Count > 0, tally.Sentence(notOut, notAllowed, mine)), many: ids.Count > 1);
+    }
+
+    // The files a Force check in of many ended so far, counted and said in the window at once.
+    private void ForcedSoFar(TakeBackTally tally)
+    {
+        foreach (var id in tally.Broken) activity.Done(ActivityTracker.TakeBack, id.ToString());
+        Line($"Force checked in {tally.Broken.Count:N0} of {Count(tally.Total, "file", "files")}");
     }
 
     // A site without armory_break_locks: each lock alone, with the same id as one file's Force
@@ -418,7 +443,7 @@ public sealed partial class SyncEngine
                         break;
                 }
             }
-            activity.Log($"Force checked in {tally.Broken.Count:N0} of {Count(tally.Total, "file", "files")}");
+            ForcedSoFar(tally);
             if (tally.Offline) { online = false; break; }
         }
     }
@@ -485,7 +510,8 @@ public sealed partial class SyncEngine
         foreach (var (id, asked) in openWhenHere.ToArray())
         {
             if (deps.Clock.GetUtcNow() - asked > OpenWhenHereFor || !remoteById.TryGetValue(id, out var remote) || remote.File.Deleted) { openWhenHere.Remove(id); continue; }
-            if (!TryLocal(remote.Path.Value, out var here)) continue;
+            // Still on its way (a carried unit): opened by the pass that sees it land.
+            if (Fenced(remote.Path.Value) || !TryLocal(remote.Path.Value, out var here)) continue;
             openWhenHere.Remove(id);
             if (IsOpenNow(here.Path)) continue;
             var path = here.Path;
@@ -616,6 +642,8 @@ public sealed partial class SyncEngine
         releasesWaiting.Clear();
         foreach (var st in state.Files.Values.ToArray())
         {
+            // A carried unit's file is finished by a pass that saw its unit end.
+            if (Fenced(st)) continue;
             try
             {
                 // An asked-for check out keeps whatever lock this computer holds (KeepCheckedOut);
@@ -666,9 +694,21 @@ public sealed partial class SyncEngine
         // A copy that changed since the scan is asked about on its own.
         bool OpenNow(VaultPath path) => askedPaths.Contains(path.Value) ? OpenIn(answer, path) : IsOpenNow(path);
         List<(FileState State, VaultPath Path)> writable = [];
+        // The copies a check out must read (the others' hash is the scan's), counted while it
+        // reads them ("Read 600 of 1,400 files", 0.3.3: a big check out was silent here).
+        var unchanged = new HashSet<FileState>(ReferenceEqualityComparer.Instance);
+        var toRead = 0;
+        foreach (var st in checkOuts)
+        {
+            if (st.Inflight is not null || st.FileId is not { } fid || !remoteById.TryGetValue(fid, out var r) || r.File.Deleted || r.File.Current is null ||
+                OwnershipOf(r.File.Lock) != LockOwnership.Free || !TryLocal(st.Path, out var here)) continue;
+            if (here is { Unread: false } && fs.UnchangedSinceScan(here)) unchanged.Add(st);
+            else toRead++;
+        }
+        var reading = new Tally(this, toRead, done => $"Read {done:N0} of {Count(toRead, "file", "files")}");
         await RunConcurrentlyAsync(checkOuts, async (st, token) =>
         {
-            try { await FinishCheckOutAsync(st, token, OpenNow, writable, toLock); }
+            try { await FinishCheckOutAsync(st, token, OpenNow, writable, toLock, unchanged, reading); }
             catch (ArmoryOfflineException) { online = false; }
             catch (Exception error) when (error is ArmoryClientException or IOException or UnauthorizedAccessException)
             { FileProblem(st.Path, error); }
@@ -690,7 +730,7 @@ public sealed partial class SyncEngine
             var (st, flight) = release;
             try
             {
-                if (await SendReleaseAsync(st, flight, token)) activity.Done(ActivityTracker.CheckIn, st.Path);
+                if (await SendReleaseAsync(st, flight, token)) Released(st);
             }
             catch (ArmoryOfflineException) { online = false; }
             catch (Exception error) when (error is ArmoryClientException or IOException or UnauthorizedAccessException)
@@ -758,12 +798,14 @@ public sealed partial class SyncEngine
         var refused = SetAttributes(toRead.Select(c => (c.State, c.RecordPath)), LockOwnership.Free);
         if (refused.Count > 0) toRead = [.. toRead.Where(c => !refused.Contains(c.State))];
         var ready = new Inflight?[toRead.Count];
+        var reading = new Tally(this, toRead.Count, done => $"Read {done:N0} of {Count(toRead.Count, "file", "files")}");
         await RunConcurrentlyAsync([.. toRead.Select((check, i) => (Check: check, Index: i))], async (item, token) =>
         {
             try { ready[item.Index] = await ReadyToReleaseAsync(item.Check, token); }
             catch (Exception error) when (error is ArmoryClientException or IOException or UnauthorizedAccessException)
             { FileProblem(item.Check.State.Path, error); }
             catch (Exception error) when (StopSaving(error)) { throw; }
+            reading.One();
         }, notStarted: null, ct);
         // In path order, as the scan listed them.
         for (var i = 0; i < toRead.Count; i++) if (ready[i] is { } flight) releases.Add((toRead[i].State, flight));
@@ -868,6 +910,13 @@ public sealed partial class SyncEngine
         return flight;
     }
 
+    // A lock let go: done in the lane of the check in or the undo that asked for it.
+    private void Released(FileState st)
+    {
+        activity.Done(ActivityTracker.CheckIn, st.Path);
+        activity.Done(ActivityTracker.Undo, st.Path);
+    }
+
     // Sent once its in-flight record is on disk (FinishRequestsAsync saved them together).
     // True once the lock is let go.
     private async Task<bool> SendReleaseAsync(FileState st, Inflight flight, CancellationToken ct)
@@ -887,9 +936,10 @@ public sealed partial class SyncEngine
     // openNow: whether a file is open (the pass's fresh answer, or asked on its own), asked only
     // where the step depends on it. writable: the files this computer holds already, made
     // writable together afterwards. toLock: the files to take in one batch (FinishRequestsAsync);
-    // null takes this one's lock now.
+    // null takes this one's lock now. unchanged: the copies the platform said are still exactly
+    // the ones the scan hashed; reading counts the others as they are read.
     private async Task FinishCheckOutAsync(FileState st, CancellationToken ct, Func<VaultPath, bool> openNow, List<(FileState State, VaultPath Path)> writable,
-        List<(FileState State, VaultPath Path)>? toLock = null)
+        List<(FileState State, VaultPath Path)>? toLock, IReadOnlySet<FileState> unchanged, Tally reading)
     {
         if (st.Inflight is not null) return; // the resumed lock answers on the next pass
         if (!VaultPath.TryCreate(st.Path, out var path, out _, options.VaultRoot) || st.FileId is not { } id ||
@@ -915,7 +965,7 @@ public sealed partial class SyncEngine
         // check out read and hashed every one of them again).
         var disk = TryLocal(st.Path, out var here) ? here.Path : path;
         string? hash;
-        if (here is { Unread: false } && fs.UnchangedSinceScan(here)) hash = here.Hash;
+        if (here is not null && unchanged.Contains(st)) hash = here.Hash;
         else
         {
             try
@@ -925,6 +975,7 @@ public sealed partial class SyncEngine
             }
             catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException) { hash = null; }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException) { Answer(st, CheckOutOutcome.CantRead); return; }
+            finally { if (here is not null) reading.One(); }
         }
         // Whether it is open decides only for a copy that is not the shared version.
         var step = CheckoutRules.NextCheckOutStep(st.Base, hash, RevisionOf(remote.File), isOpen: false);
@@ -956,12 +1007,15 @@ public sealed partial class SyncEngine
         }
     }
 
-    // The final answer for one asked-for check out: the request is done with.
+    // The final answer for one asked-for check out: the request is done with (and counted in the
+    // check out's lane, or out of it).
     private void Answer(FileState st, CheckOutOutcome outcome)
     {
         checkOutResults[st] = outcome;
         st.CheckOut = null;
         MarkDirty();
+        if (outcome is CheckOutOutcome.Done or CheckOutOutcome.AlreadyMine) activity.Done(ActivityTracker.CheckOut, st.Path);
+        else activity.Drop(st.Path, ActivityTracker.CheckOut);
     }
 
     // Nothing is waiting to let go of this file's lock any more.

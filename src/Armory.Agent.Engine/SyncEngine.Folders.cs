@@ -97,9 +97,16 @@ public sealed partial class SyncEngine
     // refuses the move (something inside is open, the target exists, a path would be too long).
     private bool MoveFolderDurably(MovingFolder move)
     {
+        // A file the loop carried is still on its way into it: the folder moves once it landed.
+        if (CarriedUnder(move.From))
+        {
+            deps.Log?.Invoke($"move folder {move.From} to {move.To}: waits for files on their way into it");
+            return false;
+        }
         state.MovingFolders.Add(move);
         SaveNow();
-        BeginMoving(local.Keys.Count(k => Inside(k, move.From)), move.To);
+        var files = local.Keys.Count(k => Inside(k, move.From));
+        BeginMoving(files, move.To);
         try
         {
             var outcome = fs.MoveFolder(move.From, move.To);
@@ -114,6 +121,8 @@ public sealed partial class SyncEngine
             state.MovingFolders.Remove(move);
             FinishFolderMove(move, moveLocal: true);
             SaveNow();
+            // "Moved 120 files to Chassis" (0.3.3, feedback N8: a folder move said nothing once done).
+            if (files > 0) Line($"Moved {Count(files, "file", "files")} to {Leaf(move.To)}");
             return true;
         }
         finally { EndMoving(); }
@@ -771,7 +780,7 @@ public sealed partial class SyncEngine
             if (online != true) break;
             if (!missingFolders.Contains(folder)) continue; // went with a folder above it
             if (missingFolders.Any(m => !Same(m, folder) && Inside(folder, m))) continue;
-            if (state.AbsentFolders.GetValueOrDefault(folder) < 2 || HeldByWork(folder)) continue;
+            if (state.AbsentFolders.GetValueOrDefault(folder) < 2 || HeldByWork(folder) || FencedUnder(folder)) continue;
             var ps = ProjectOfFolder(folder);
             if (ps is null || ps.Archived) continue;
             var tracked = state.Files.Values.Where(f => Inside(f.Path, folder) && f.FileId is { } id && f.BaseHash is not null &&
@@ -820,7 +829,8 @@ public sealed partial class SyncEngine
     private bool TryMoveRemoteFolder(string from, string to, bool everyFile)
     {
         var source = localFolders.FirstOrDefault(f => Same(f, from));
-        if (source is null || HeldByWork(source) || HeldByWork(to)) return false;
+        // A carried unit still writing in it: the folder moves on a pass after that unit ends.
+        if (source is null || HeldByWork(source) || HeldByWork(to) || FencedUnder(source)) return false;
         var ps = ProjectOfFolder(source);
         if (ps is null || ProjectOfFolder(to)?.Id != ps.Id || Same(source, ps.Folder)) return false;
         var moving = 0;
@@ -860,6 +870,9 @@ public sealed partial class SyncEngine
     {
         var from = ps.Folder;
         var to = ps.Name;
+        // Files the loop carried are still on their way into it: the next read of the server
+        // moves it, once they have landed.
+        if (CarriedUnder(from)) return;
         if (state.Projects.Values.Any(p => !ReferenceEquals(p, ps) && p.Usable && Same(p.Folder, to)))
         {
             Notice(NoticeKinds.ProjectRenaming, null, from, $"Another project still uses the folder {to}. Armory renames {from} as soon as it can.", $"{from} is now {to} on ideabosco.com");
@@ -916,7 +929,7 @@ public sealed partial class SyncEngine
         foreach (var folder in state.KnownFolders.OrderByDescending(f => f.Length).ToArray())
         {
             var ps = ProjectOfFolder(folder);
-            if (ps is null || ps.Archived || heldProjects.Contains(ps.Id) || HeldByWork(folder) || missingFolders.Contains(folder)) continue;
+            if (ps is null || ps.Archived || heldProjects.Contains(ps.Id) || HeldByWork(folder) || missingFolders.Contains(folder) || FencedUnder(folder)) continue;
             if (Same(folder, ps.Folder)) { state.KnownFolders.Remove(folder); continue; }
             if (busy.Contains(folder) || !fs.DeleteEmptyFolder(folder)) continue;
             ForgetFolder(folder);
@@ -1082,6 +1095,8 @@ public sealed partial class SyncEngine
             if (!FolderOnDisk(from) && !remoteByPath.Keys.Any(k => Inside(k, from))) return new(false, $"{name} isn't there any more.");
             if (!caseOnly && (FolderOnDisk(to) || local.ContainsKey(to) || local.Keys.Any(k => Inside(k, to)) || remoteByPath.ContainsKey(to) || remoteByPath.Keys.Any(k => Inside(k, to)) || Exists(target)))
                 return new(false, $"Something named {newName} is already in {Where(parent)}.");
+            // The files on their way into it from the loop's transfers land first.
+            await AwaitCarriedAsync(entry => entry.Unit.Any(p => Inside(p.Key, from)));
             if (HeldByWork(from)) return new(false, $"Armory is still working on {name}. Try again in a moment.");
             if (state.Files.Values.Any(f => Inside(f.Path, from) && (f.Inflight is not null || f.LocalMoveTo is not null)))
                 return new(false, $"Armory is still sending files in {name}. Try again in a moment.");
@@ -1164,7 +1179,10 @@ public sealed partial class SyncEngine
     public async Task<ActionResult> DeleteFolderAsync(Guid projectId, string folder, CancellationToken cancellationToken = default)
     {
         if (!engineThread.IsCurrent) return await engineThread.InvokeAsync(() => DeleteFolderAsync(projectId, folder, cancellationToken));
-        if (!string.IsNullOrEmpty(folder)) Working($"Deleting the folder {Leaf(folder)}");
+        // "Deleting Gearbox (120 files)", with the team's files in it as last read.
+        var inside = !string.IsNullOrEmpty(folder) && ProjectFor(projectId) is { } shown
+            ? remoteById.Values.Count(r => !r.File.Deleted && Inside(r.Path.Value, Join(shown.Folder, folder))) : 0;
+        if (!string.IsNullOrEmpty(folder)) Working(inside > 0 ? $"Deleting {Leaf(folder)} ({Count(inside, "file", "files")})" : $"Deleting the folder {Leaf(folder)}");
         await EnterActionAsync(cancellationToken);
         try
         {
@@ -1176,6 +1194,8 @@ public sealed partial class SyncEngine
             var path = Join(ps.Folder, folder);
             var name = Leaf(path);
             if (!FolderOnDisk(path) && !remoteByPath.Keys.Any(k => Inside(k, path))) return new(false, $"{name} isn't there any more.");
+            // The files on their way into it from the loop's transfers land first.
+            await AwaitCarriedAsync(entry => entry.Unit.Any(p => Inside(p.Key, path)));
             if (HeldByWork(path)) return new(false, $"Armory is still working on {name}. Try again in a moment.");
             var notInArmory = local.Keys.Count(k => Inside(k, path) && (!state.Files.TryGetValue(k, out var s) || s.FileId is null));
             if (notInArmory > 0)
@@ -1209,7 +1229,7 @@ public sealed partial class SyncEngine
             // Kept copies first where needed, then recovery, then the empty folder (two passes at most).
             await PassLockedAsync(cancellationToken, PassScope.Under(path));
             if (local.Keys.Any(k => Inside(k, path))) await PassLockedAsync(cancellationToken, PassScope.Under(path));
-            return answer;
+            return Said(answer, many: true);
         }
         finally { LeaveAction(); }
     }
@@ -1266,14 +1286,9 @@ public sealed partial class SyncEngine
             if (HeldByWork(target) || heldProjects.Contains(ps.Id)) return new(false, $"Armory is still working on {Leaf(target)}. Try again in a moment.");
             List<string> copied = [];
             int already = 0, leftOut = 0;
-            void Copy(string source, string destination)
-            {
-                if (!VaultPath.TryCreate(destination, out var to, out _, options.VaultRoot)) { leftOut++; return; }
-                var outcome = fs.CopyIn(source, to);
-                if (outcome.Succeeded) { copied.Add(to.Value); return; }
-                if (outcome.Problem?.StartsWith("Something named", StringComparison.Ordinal) == true) already++;
-                else { leftOut++; deps.Log?.Invoke($"add {source}: {outcome.Problem}"); }
-            }
+            // Every file to copy first, so the running lines can count them ("Copying 300 of
+            // 1,000 files into Intake", 0.3.3: a big add said nothing while it copied).
+            List<(string Source, string Destination)> toCopy = [];
             foreach (var source in sources)
             {
                 if (Directory.Exists(source))
@@ -1282,9 +1297,23 @@ public sealed partial class SyncEngine
                     IEnumerable<string> files;
                     try { files = Directory.EnumerateFiles(source, "*", new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = FileAttributes.ReparsePoint, IgnoreInaccessible = true }).ToList(); }
                     catch (Exception error) when (error is IOException or UnauthorizedAccessException) { leftOut++; deps.Log?.Invoke($"add {source}: {error.Message}"); continue; }
-                    foreach (var file in files) Copy(file, top + "/" + Path.GetRelativePath(source, file).Replace('\\', '/'));
+                    foreach (var file in files) toCopy.Add((file, top + "/" + Path.GetRelativePath(source, file).Replace('\\', '/')));
                 }
-                else Copy(source, target + "/" + Path.GetFileName(source));
+                else toCopy.Add((source, target + "/" + Path.GetFileName(source)));
+            }
+            var copying = new Tally(this, toCopy.Count, done => $"Copying {done:N0} of {Count(toCopy.Count, "file", "files")} into {Leaf(target)}");
+            foreach (var (source, destination) in toCopy)
+            {
+                Copy(source, destination);
+                copying.One();
+            }
+            void Copy(string source, string destination)
+            {
+                if (!VaultPath.TryCreate(destination, out var to, out _, options.VaultRoot)) { leftOut++; return; }
+                var outcome = fs.CopyIn(source, to);
+                if (outcome.Succeeded) { copied.Add(to.Value); return; }
+                if (outcome.Problem?.StartsWith("Something named", StringComparison.Ordinal) == true) already++;
+                else { leftOut++; deps.Log?.Invoke($"add {source}: {outcome.Problem}"); }
             }
             if (copied.Count > 0)
             {
@@ -1296,7 +1325,7 @@ public sealed partial class SyncEngine
             var message = copied.Count > 0 ? $"Copied {Count(copied.Count, "file", "files")} into {where}." : $"Nothing was copied into {where}.";
             if (already > 0) message += $" {Count(already, "file was", "files were")} already there and {(already == 1 ? "was" : "were")} left as {(already == 1 ? "it is" : "they are")}.";
             if (leftOut > 0) message += $" {Count(leftOut, "file", "files")} couldn't be copied.";
-            return new(copied.Count > 0, message);
+            return Said(new(copied.Count > 0, message), many: toCopy.Count > 1);
         }
         finally { LeaveAction(); }
     }

@@ -67,6 +67,7 @@ public static class FlightJson
             case FlightKind.PassYield:
                 o["reason"] = e.Name;
                 o["unitsLeft"] = e.Count;
+                o["carried"] = e.Count2;
                 o["ms"] = e.Ms;
                 break;
             case FlightKind.Rpc:

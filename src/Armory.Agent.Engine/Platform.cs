@@ -93,6 +93,12 @@ public interface IVaultFileSystem
     // bytes appear read-only from their first moment (the bit is set on the staged copy before
     // it is renamed into place). A destination that was read-only stays read-only either way.
     ReplaceOutcome Replace(VaultPath path, string? expectedHash, Stream content, bool readOnly = false);
+    // Armory itself just put bytes with this hash at path (a download, through private staging,
+    // its SHA-256 checked as it streamed): the platform may keep the hash for the file now there,
+    // so the next scan takes it instead of reading the file again, for as long as the file is
+    // still exactly that file (0.3.3, feedback N3: the scan after a 542 MB slice of a download
+    // read all of it once more).
+    void Wrote(VaultPath path, string hash) { }
     // Moves a file whose bytes are already preserved out of the vault tree, into the
     // agent's recovery folder. Never deletes. Refuses an open or changed file.
     ReplaceOutcome MoveToRecovery(VaultPath path, string expectedHash);

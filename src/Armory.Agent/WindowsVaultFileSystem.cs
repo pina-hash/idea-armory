@@ -217,6 +217,13 @@ public sealed class WindowsVaultFileSystem : IVaultFileSystem, IDisposable
         }
     }
 
+    // A download Armory just put in place: the next scan takes its hash instead of reading it
+    // again (LocalChangeDetector.Seed).
+    public void Wrote(VaultPath path, string hash)
+    {
+        lock (gate) changes.Seed(path, hash);
+    }
+
     public ReplaceOutcome MoveToRecovery(VaultPath path, string expectedHash)
     {
         lock (gate)

@@ -39,8 +39,9 @@ public sealed partial class SyncEngine
         var moving = Activity(files, pending);
         var sync = paused ? new SyncView(SyncStates.Paused, "Paused. Nothing uploads or downloads until you resume.", null, pending)
             : online == false ? new SyncView(SyncStates.Offline, "You're offline. Your work is safe on this computer.", pending > 0 ? null : LastChecked(), pending)
-            // While files move, the status line is the activity's line ("Downloading 412 of 1,280 files, ...").
-            : syncing ? new SyncView(SyncStates.Syncing, moving.Line ?? "Checking for changes.", null, pending)
+            // While files move, the status line is the activity's line ("Downloading 412 of 1,280 files, ..."),
+            // between the passes of a long download too (continuing: never "saved" between two slices).
+            : syncing || continuing ? new SyncView(SyncStates.Syncing, moving.Line ?? "Checking for changes.", null, pending)
             : notices.Any(n => n.Tone != NoticeTones.Info) ? new SyncView(SyncStates.Attention, "Everything else is saved. A few files need you.", LastChecked(), pending)
             : pending > 0 ? new SyncView(SyncStates.Syncing, "Uploading your saves.", null, pending)
             : new SyncView(SyncStates.Synced, "Everything is saved to Armory.", LastChecked(), 0);

@@ -104,7 +104,8 @@ def describe(event):
         return (f"pass end ({event.get('pass')}) {ok(event)} after {ms(event.get('ms'))}: {event.get('downloaded', 0)} down, "
                 f"{event.get('uploaded', 0)} up, {event.get('keptCopies', 0)} kept copies, {event.get('refused', 0)} refused")
     if kind == "passYield":
-        return f"pass gave way ({event.get('reason')}) after {ms(event.get('ms'))}, {event.get('unitsLeft')} units left"
+        carried = f", {event['carried']} carried on" if event.get("carried") else ""
+        return f"pass gave way ({event.get('reason')}) after {ms(event.get('ms'))}, {event.get('unitsLeft')} units left{carried}"
     if kind == "rpc":
         error = f" {event['error']}" if event.get("error") else ""
         return f"rpc {event.get('name')} {ms(event.get('ms'))} {event.get('status')} {ok(event)}{error}"

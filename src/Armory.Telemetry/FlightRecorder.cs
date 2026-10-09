@@ -95,8 +95,10 @@ public sealed class FlightRecorder
     public void PassEnd(string kind, bool failed, long ms, int downloaded, int uploaded, int keptCopies, int refused)
         => Write(FlightKind.PassEnd, kind, null, null, !failed, ms: ms, count: downloaded, count2: uploaded, count3: keptCopies, count4: refused);
 
-    // A loop pass gave way (its time slice was up, or a window action waited) with units left.
-    public void PassYield(string reason, int unitsLeft, long ms) => Write(FlightKind.PassYield, reason, null, null, true, ms: ms, count: unitsLeft);
+    // A loop pass gave way (its time slice was up, a window action waited, or Armory was paused)
+    // with units left, and carried the units still in flight on to the passes after it (0.3.3).
+    public void PassYield(string reason, int unitsLeft, long ms, int carried = 0)
+        => Write(FlightKind.PassYield, reason, null, null, true, ms: ms, count: unitsLeft, count2: carried);
 
     // One server call: its name, how long, and its answer (an HTTP status, or 0 with an error
     // code such as "offline"). Never a token or a body.
