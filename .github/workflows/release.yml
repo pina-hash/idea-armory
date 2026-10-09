@@ -2,11 +2,13 @@ name: Agent release
 # A pushed tag v<version> (pushed by a person; nothing here creates a tag) builds and packages
 # the agent exactly as agent.yml does, checks that the tag is v<Version of src/Armory.Agent>,
 # runs the same install, launch and uninstall cycles, and then publishes a GitHub Release with
-# both installers, their .sha256 files, and the SHA-256 values in the notes.
+# both installers, the optional badges setup, their .sha256 files, and the SHA-256 values in
+# the notes.
 # A tag can also arrive by publishing a release in GitHub's web page or with the API (the
 # chat's container cannot push tags). Then the release already exists, and this job attaches
-# the assets to it. Before publishing, an upgrade from the published v0.1.0 must keep the
-# vault, the settings and the sign-in (tools/test-agent-install.ps1 -Kind Upgrade).
+# the assets to it. Before publishing, upgrades from the published v0.1.0 and v0.3.2 must keep
+# the vault, the settings and the sign-in (tools/test-agent-install.ps1 -Kind Upgrade), and the
+# badges setup must install, register and uninstall cleanly (-Kind Badges).
 on:
   push:
     tags: ['v*']
@@ -20,7 +22,7 @@ concurrency:
 jobs:
   release:
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     defaults:
       run:
         shell: pwsh
@@ -35,7 +37,7 @@ jobs:
           if ($env:GITHUB_REF_NAME -cne "v$version") { throw "The tag $env:GITHUB_REF_NAME does not match the agent version $version. Push the tag v$version instead." }
           Write-Host "The tag $env:GITHUB_REF_NAME matches the agent version $version."
 
-      - name: Build, test, publish and package
+      - name: Build, native parts, test, publish and package
         id: package
         uses: ./.github/actions/package-agent
 
@@ -52,7 +54,17 @@ jobs:
         run: ./tools/test-agent-install.ps1 -Kind Setup
 
       - name: Upgrade from the published v0.1.0 (flash drive and setup.exe)
-        run: ./tools/test-agent-install.ps1 -Kind Upgrade
+        run: ./tools/test-agent-install.ps1 -Kind Upgrade -From 0.1.0
+
+      - name: Upgrade from the published v0.3.2 (flash drive and setup.exe)
+        run: ./tools/test-agent-install.ps1 -Kind Upgrade -From 0.3.2
+
+      - name: Install over itself with SolidWorks open (the link's test fake)
+        run: ./tools/test-agent-install.ps1 -Kind SolidWorks
+
+      # Last: it installs for the whole computer (the runner's steps run as an administrator).
+      - name: The optional badges setup (status on file icons), for the whole computer
+        run: ./tools/test-agent-install.ps1 -Kind Badges
 
       - name: Upload the evidence
         if: always()
@@ -71,13 +83,17 @@ jobs:
           USB_SHA256: ${{ steps.package.outputs.usb-sha256 }}
           SETUP_EXE: ${{ steps.package.outputs.setup-exe }}
           SETUP_SHA256: ${{ steps.package.outputs.setup-sha256 }}
+          BADGES_EXE: ${{ steps.package.outputs.badges-exe }}
+          BADGES_SHA256: ${{ steps.package.outputs.badges-sha256 }}
         run: |
           $tag = $env:GITHUB_REF_NAME
-          foreach ($file in @($env:USB_ZIP, "$env:USB_ZIP.sha256", $env:SETUP_EXE, "$env:SETUP_EXE.sha256")) {
+          $assets = @($env:USB_ZIP, "$env:USB_ZIP.sha256", $env:SETUP_EXE, "$env:SETUP_EXE.sha256", $env:BADGES_EXE, "$env:BADGES_EXE.sha256")
+          foreach ($file in $assets) {
             if (-not $file -or -not (Test-Path -LiteralPath $file)) { throw "Missing release asset $file" }
           }
           $zipName = Split-Path -Leaf $env:USB_ZIP
           $exeName = Split-Path -Leaf $env:SETUP_EXE
+          $badgesName = Split-Path -Leaf $env:BADGES_EXE
           $notes = @(
             "IDEA Armory $tag, the Windows agent for the team and class CAD vault.",
             '',
@@ -87,16 +103,19 @@ jobs:
             '',
             'Both install for one Windows account and never ask for an administrator password. Uninstall never deletes the vault folder (C:\IDEA\Armory) or any file in it. There is no self-update yet; see docs/agent/INSTALL.md.',
             '',
+            '## Optional: Armory''s status on file icons',
+            "- **$badgesName**: optional. It shows Armory's status on file icons in File Explorer for every Windows account on a computer, and it needs an administrator once per computer (Windows asks for the password). Armory works the same without it. Both installers already carry it: the flash drive's ``Show Armory status on file icons.cmd`` and setup.exe's last page run it, and IT can run it silently with ``/VERYSILENT /SUPPRESSMSGBOXES /NORESTART``. It has its own entry in Settings > Apps.",
+            '',
             '## SHA-256',
             "- ``$zipName``: ``$env:USB_SHA256``",
             "- ``$exeName``: ``$env:SETUP_SHA256``",
+            "- ``$badgesName``: ``$env:BADGES_SHA256``",
             '',
-            "Built from $env:GITHUB_SHA. Before publishing, both assets were installed, launched and uninstalled on windows-latest, the vault's proof files kept their bytes through each uninstall, and installing each over the published v0.1.0 kept the vault, the settings and the sign-in.")
+            "Built from $env:GITHUB_SHA. Before publishing, both installers were installed, launched and uninstalled on windows-latest, the vault's proof files kept their bytes through each uninstall, installing each over the published v0.1.0 and v0.3.2 kept the vault, the settings and the sign-in, and the badges setup installed, registered all four badges and uninstalled cleanly.")
           $notes -join "`n" | Set-Content -LiteralPath release-notes.md -Encoding utf8
           # Notes for this version alone (docs/agent/release-notes/<tag>.md), when there are any, go first.
           $versionNotes = "docs/agent/release-notes/$tag.md"
           if (Test-Path -LiteralPath $versionNotes) { (@(Get-Content -LiteralPath $versionNotes -Encoding utf8) + @('') + $notes) -join "`n" | Set-Content -LiteralPath release-notes.md -Encoding utf8 }
-          $assets = @($env:USB_ZIP, "$env:USB_ZIP.sha256", $env:SETUP_EXE, "$env:SETUP_EXE.sha256")
           gh release view $tag *> $null
           if ($LASTEXITCODE -eq 0) {
             gh release upload $tag @assets --clobber
