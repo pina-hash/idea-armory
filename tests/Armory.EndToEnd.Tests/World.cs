@@ -165,6 +165,8 @@ internal sealed class Computer : IAsyncDisposable
     }
     public string Name { get; }
     public LatencyHandler Network { get; }
+    // This computer's network as the agent's other parts use it (its latency and Offline switch).
+    public HttpClient Http => http;
     public PortableVaultFileSystem Disk { get; }
     public MemoryJournalStore Journal { get; } = new();
     public MemorySnapshotStore Snapshots { get; } = new();
