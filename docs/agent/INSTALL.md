@@ -17,7 +17,8 @@ laptops run Windows 10 or 11 with SolidWorks 2026. Installing needs no internet.
 | Per-account data, written by the app | `%LOCALAPPDATA%\IDEA Armory\`: `settings.json`, `logs\agent.log`, `secrets\` (this computer's sign-in, protected with Windows DPAPI), `WebView2\` |
 | The vault, created and synced by the app | `C:\IDEA\Armory\` (or `vaultRoot` in settings.json), with one folder per project and the agent's hidden `.armory\` folder (journal, saved copies, sync state) |
 
-Nothing goes under `Program Files`, `HKLM` or another account's profile. The app needs no
+Nothing goes under `Program Files`, `HKLM` or another account's profile (the optional
+badges step below is the one exception, and it is separate). The app needs no
 .NET install. Its window needs the Microsoft Edge WebView2 Runtime, which Windows 11
 includes and nearly every Windows 10 computer already has. Both installers check
 `pv` under `HKLM\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}`
@@ -130,6 +131,27 @@ The install is per Windows account, so:
   refuses to sync a vault bound to another Armory account and shows "this vault belongs to
   someone else" instead; that person can choose a different vault folder in Settings.
 - Uninstalling for one account never touches another account's install or the shared vault.
+
+## Optional: Armory's status on file icons (one administrator step)
+
+Armory's right-click items in File Explorer need nothing: the app writes them itself under
+`HKCU\Software\Classes` (`AllFilesystemObjects\shell\IDEAArmory`, `IDEAArmory.Menu`,
+`Directory\Background\shell\IDEAArmory`, `IDEAArmory.BackgroundMenu`) when it starts, and each
+item runs `ArmoryShell.exe` from the app folder. The badges on file icons are optional and need
+an administrator once per computer, because Windows reads icon overlay handlers only from `HKLM`:
+
+- `IDEA-Armory-Badges-Setup-v<version>.exe` (`installer/IdeaArmoryBadges.iss`) installs
+  `ArmoryBadges.dll` into `C:\Program Files\IDEA Armory Badges\<version>\` and registers its four
+  handlers for every account on the computer. Silent, for IT:
+  `IDEA-Armory-Badges-Setup-v<version>.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART`. Each person
+  sees the badges after signing out of Windows and back in; Explorer is never restarted.
+- On the flash drive, `Show Armory status on file icons.cmd` runs the same setup as an
+  administrator (`Setup.ps1 -Mode Badges`) and ends on PASS or FAIL like the other three files.
+- It has its own Apps entry, "IDEA Armory badges (status on file icons)". Uninstalling Armory for
+  one account never removes it; without Armory running for a person, nothing shows for them.
+
+docs/agent/EXPLORER.md has the details: the four badges, what Settings says about them, and
+`tools/check-overlays.ps1`, which shows on any computer which badges Windows really shows.
 
 ## Artifact names
 
