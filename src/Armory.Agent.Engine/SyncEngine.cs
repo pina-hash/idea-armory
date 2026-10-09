@@ -487,7 +487,10 @@ public sealed partial class SyncEngine : IAsyncDisposable
             KeepCheckedOut();
             AdoptMyLocks();
             // A write a crash left in flight is sent again; the projects it wrote to are read again.
-            if (await ResumeInflightAsync(ct) && online == true) online = await RefreshStaleAsync(ct);
+            var resumed = await ResumeInflightAsync(ct);
+            // A force check in a stop interrupted: finished only while nothing changed since.
+            if (online == true && state.ForceCheckIns.Count > 0 && await ResumeForceCheckInsAsync(ct)) resumed = true;
+            if (resumed && online == true) online = await RefreshStaleAsync(ct);
             // A folder renamed or removed here: one server call each, after any file write a
             // crash left in flight (which lands in the folder as it was). Only the projects a
             // folder call changed are read again.

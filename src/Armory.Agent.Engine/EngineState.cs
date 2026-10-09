@@ -85,6 +85,11 @@ internal sealed class EngineState
     public List<MovingFolder> MovingFolders { get; set; } = [];
     // Bulk adds (an unzip, a paste, a Pack and Go, Add files): one import summary each.
     public List<ImportRecord> Imports { get; set; } = [];
+    // Force check in of many files (armory_break_locks, v0.3.1): one record per call, saved before
+    // it is sent and dropped once its answer is applied. A stop in between leaves it here, and the
+    // next online pass sends it again with the same id only while every file still has the very
+    // check out it named (SyncEngine.Batches.cs, ResumeForceCheckInsAsync).
+    public List<PendingForceCheckIn> ForceCheckIns { get; set; } = [];
 
     internal bool IsMine(Guid device) => device == DeviceId || FormerDevices.Contains(device);
 
@@ -202,6 +207,7 @@ internal sealed class EngineState
         state.RemoteFolderRenames ??= [];
         state.MovingFolders ??= [];
         state.Imports ??= [];
+        state.ForceCheckIns ??= [];
         state.Migrate();
         return state;
     }
@@ -542,6 +548,12 @@ internal sealed record Inflight(string Kind, Guid Operation, string? EntryId = n
 // A rename sent through armory_move_file: requested with MoveAsync, or an Explorer rename the
 // engine detected (Local), whose bytes already sit at To.
 internal sealed record PendingMove(Guid Operation, Guid FileId, string From, string To, bool Local = false);
+
+// One armory_break_locks call of a Force check in (EngineState.ForceCheckIns): its operation id,
+// the device it was sent as, and each file with the check out it was asked to end (the holder's
+// device and when they checked it out), in id order.
+internal sealed record PendingForceCheckIn(Guid Operation, Guid Device, ForcedCheckOut[] Files);
+internal sealed record ForcedCheckOut(Guid FileId, Guid HolderDevice, DateTimeOffset AcquiredAt);
 
 // A folder change (vault-relative folders), durable before its server call. Rename and delete
 // operations keep the paths they had when they happened and are sent in order, the server read
