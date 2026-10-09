@@ -1278,7 +1278,10 @@ const CONTRACT = {
 	chooseVaultRoot: [],
 	reportProblem: ['kind', 'body', ...ACT],
 	openIncidents: [],
-	sendFeedback: ['kind', 'body', ...ACT]
+	sendFeedback: ['kind', 'body', ...ACT],
+	// 0.3.3: File detail's Put back on this computer on a kept copy (the host's half is in;
+	// the page's key is still to come, so this reports "never sent" until it is there).
+	putBackKeptCopy: ['fileId', 'versionId', ...ACT]
 };
 tally.bridgeFailures = 0;
 tally.bridgeTypes = 0;
