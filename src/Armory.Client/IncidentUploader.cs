@@ -85,6 +85,19 @@ public sealed class IncidentUploader
     // The waits this uploader keeps (give the same one to a FeedbackSender).
     public SubmitLimiter Limiter => limiter;
 
+    // A computer shared by several students (docs/agent/PROFILES.md, F13): the address of the
+    // student in use now. A saved note or incident another student wrote waits here until its
+    // writer is the one in use, so their words only ever go under their own account; one written
+    // while nobody was signed in carries no one's words and goes with whoever is in use. Null:
+    // everything goes (one student per computer, as before).
+    public Func<string?>? WriterInUse { get; init; }
+
+    private bool WrittenByTheOneInUse(JsonObject incident)
+    {
+        if (WriterInUse is null || Text(incident, "email") is not { Length: > 0 } writer) return true;
+        return WriterInUse() is { } inUse && string.Equals(writer.Trim(), inUse.Trim(), StringComparison.OrdinalIgnoreCase);
+    }
+
     // True while this RPC is not asked: the site lacks it (for 6 hours after a 404 PGRST202), or
     // this account reached its limit (until the PT429's retry_after_seconds have passed).
     public bool IsWaiting(string rpc) => limiter.IsWaiting(rpc);
@@ -103,6 +116,7 @@ public sealed class IncidentUploader
             foreach (var file in pending)
             {
                 if (!TryRead(file, out var incident)) continue;
+                if (!WrittenByTheOneInUse(incident)) continue;
                 if (IsWaiting(NeedsFeedback(incident) ? ArmoryApi.SubmitFeedbackRpc : ArmoryApi.SubmitIncidentRpc)) continue;
                 nextAttempt = now + Every;
                 return await SendAsync(file, incident, feedbackOnly: false, ct);
@@ -124,6 +138,7 @@ public sealed class IncidentUploader
             // Held (0.3.1 said "couldn't send" for feedback that had gone).
             if (feedbackSent.Contains(file)) return UploadOutcome.Sent;
             if (!TryRead(file, out var incident)) return UploadOutcome.Held;
+            if (!WrittenByTheOneInUse(incident)) return UploadOutcome.Waiting;
             if (!NeedsFeedback(incident)) return UploadOutcome.Sent;
             if (IsWaiting(ArmoryApi.SubmitFeedbackRpc)) return IsRateLimitWait(ArmoryApi.SubmitFeedbackRpc) ? UploadOutcome.RateLimited : UploadOutcome.NotLive;
             return await SendAsync(file, incident, feedbackOnly: true, ct);
