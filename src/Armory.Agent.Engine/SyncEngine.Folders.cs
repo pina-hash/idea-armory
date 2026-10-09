@@ -1083,7 +1083,7 @@ public sealed partial class SyncEngine
             if (HeldByWork(from)) return new(false, $"Armory is still working on {name}. Try again in a moment.");
             if (state.Files.Values.Any(f => Inside(f.Path, from) && (f.Inflight is not null || f.LocalMoveTo is not null)))
                 return new(false, $"Armory is still sending files in {name}. Try again in a moment.");
-            if (OpenUnder(from) is { } open) return new(false, $"Close {open} in SolidWorks first.");
+            if (await OpenUnderAsync(from, cancellationToken) is { } open) return new(false, $"Close {open} in SolidWorks first.");
             var holders = HeldUnder(from, ps);
             if (holders.Count > 0) return new(false, $"{name} can't be renamed now: {HoldersWords(holders, "its files").Text}.");
             if (!caseOnly && RekeyCollides(from, to)) return new(false, $"{newName} still has files in Armory. Try again in a moment.");
@@ -1179,7 +1179,7 @@ public sealed partial class SyncEngine
                 return new(false, $"{name} has {Count(notInArmory, "file that isn't", "files that aren't")} in Armory. Move or delete {(notInArmory == 1 ? "it" : "them")} first, then delete the folder.");
             if (state.Files.Values.Any(f => Inside(f.Path, path) && (f.Inflight is not null || f.LocalMoveTo is not null)))
                 return new(false, $"Armory is still sending files in {name}. Try again in a moment.");
-            if (OpenUnder(path) is { } open) return new(false, $"Close {open} in SolidWorks first.");
+            if (await OpenUnderAsync(path, cancellationToken) is { } open) return new(false, $"Close {open} in SolidWorks first.");
             var holders = HeldUnder(path, ps);
             if (holders.Count > 0) return new(false, $"{name} can't be deleted now: {HoldersWords(holders, "its files").Text}.");
             if (online != true) return Offline("Folders can be deleted once this computer is back online.");
@@ -1452,6 +1452,16 @@ public sealed partial class SyncEngine
         var inside = local.Values.Where(f => Inside(f.Path.Value, folder)).Select(f => f.Path).ToList();
         var open = inside.Count == 0 ? null : fs.OpenAmong(inside);
         foreach (var path in inside) if (open!.Contains(path.Value)) return path.Name;
+        return null;
+    }
+
+    // The same for a window action, asked off the engine thread (0.3.3).
+    private async Task<string?> OpenUnderAsync(string folder, CancellationToken ct)
+    {
+        foreach (var document in markerDocuments) if (Inside(document, folder)) return NameOf(document);
+        var inside = local.Values.Where(f => Inside(f.Path.Value, folder)).Select(f => f.Path).ToList();
+        var open = await AskOpenAsync(inside, ct);
+        foreach (var path in inside) if (OpenIn(open, path)) return path.Name;
         return null;
     }
 

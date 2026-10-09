@@ -8,7 +8,15 @@ namespace Armory.Agent.Engine;
 // SolidWorks holds a part it has open; or a problem hid it) and kept what it last read: Hash,
 // Size and ReadOnly are then not the disk's now. Nothing lets a lock go over it or reports its
 // read-only bit from it (feedback N4); the next scan that can read it hashes it again.
-public sealed record LocalFile(VaultPath Path, string Hash, long Size, bool ReadOnly = false, bool Unread = false);
+// Stamp: what the platform knows of the file the scan hashed (its identity, last-write time and
+// when it was hashed), so a later step can ask whether it is still exactly that file
+// (IVaultFileSystem.UnchangedSinceScan) instead of reading it again; null when it can't say.
+public sealed record LocalFile(VaultPath Path, string Hash, long Size, bool ReadOnly = false, bool Unread = false, FileStamp? Stamp = null);
+public sealed record FileStamp(string Id, DateTime LastWriteUtc, DateTimeOffset HashedAt);
+// One open-files question's answer: the files open (their VaultPath.Value), and whether the
+// platform gave up on part of the question at its budget (the files it had not cleared were
+// answered by a quicker check alone, as a single IsOpen past its budget would be).
+public sealed record OpenFilesAnswer(IReadOnlySet<string> Open, bool TimedOut = false);
 // Files excludes the platform's ignore list (Armory.Platform.Windows.VaultIgnore). Markers
 // are the vault-relative paths of "~$<name>" files, which SolidWorks creates beside a
 // document it has open (docs/spike/solidworks-lock-file.md). Problems never imply deletion.
@@ -52,6 +60,9 @@ public interface IVaultFileSystem
 {
     string Root { get; }
     VaultScan Scan();
+    // The same, stopping between files once the token is canceled (the agent quitting, or Windows
+    // ending the session: 0.3.3). The engine runs it off its own thread.
+    VaultScan Scan(CancellationToken cancellationToken) => Scan();
     // Whether an application has the file open right now (Restart Manager on Windows).
     bool IsOpen(VaultPath path);
     // Which of many files are open (their VaultPath.Value), each answered as IsOpen answers it.
@@ -59,6 +70,22 @@ public interface IVaultFileSystem
     // about 28 ms, 40 seconds a pass for 1,500 files (0.3.1's field reports).
     IReadOnlySet<string> OpenAmong(IReadOnlyCollection<VaultPath> paths)
         => paths.Where(IsOpen).Select(p => p.Value).ToHashSet(StringComparer.OrdinalIgnoreCase);
+    // The same question without holding the engine's thread (0.3.3, feedback N6: a 10 second
+    // Restart Manager wait on that thread held every click, File detail and Pause). Answered on
+    // a worker thread within about budget (past it, as OpenAmong past its own); a canceled token
+    // ends it at once. The platform may answer from what it learned a few seconds ago about the
+    // very same file (its identity and last-write time unchanged), unless fresh: a decision to
+    // let a lock go asks the disk now. Every write still asks IsOpen just before it writes.
+    Task<OpenFilesAnswer> OpenAmongAsync(IReadOnlyCollection<VaultPath> paths, TimeSpan budget, CancellationToken cancellationToken, bool fresh = false)
+        => Task.Run(() => new OpenFilesAnswer(OpenAmong(paths)), cancellationToken);
+    // Whether the file at file.Path is still exactly the one the scan hashed (file.Stamp: the
+    // same identity, size and last-write time, hashed outside the window where a write can keep
+    // its time), so its hash can be used without reading it again. False when it can't say.
+    bool UnchangedSinceScan(LocalFile file) => false;
+    // An opaque stamp of a SolidWorks "~$" marker (its identity and last-write time), the same
+    // while the marker is untouched; null when it can't say. A marker found stale is not asked
+    // about again until its stamp changes (0.3.3).
+    string? MarkerStamp(string marker) => null;
     Stream OpenRead(VaultPath path);
     // Writes content at path. expectedHash is the hash the destination must still have, or
     // null when the destination must not exist. Refuses an open or changed destination.
@@ -97,6 +124,20 @@ public interface IVaultFileSystem
     // changed now is retried by the next Scan and reported in its Problems; one file never
     // stops the others.
     void ApplyLockAttributes(IReadOnlyList<(VaultPath Path, LockOwnership Ownership)> attributes);
+    // The same with one durable intent write, the bits changed before it returns, and the paths
+    // whose bit could not be changed now returned (0.3.3): a check in or a check out of many files
+    // writes the manifest once per batch, never once per file, and a lock is still never let go
+    // over a file whose bit could not be set. Each refused path comes with the platform's reason.
+    IReadOnlyList<(VaultPath Path, string Problem)> ApplyLockAttributesNow(IReadOnlyList<(VaultPath Path, LockOwnership Ownership)> attributes)
+    {
+        List<(VaultPath, string)> failed = [];
+        foreach (var (path, ownership) in attributes)
+        {
+            try { ApplyLockAttribute(path, ownership); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { failed.Add((path, error.Message)); }
+        }
+        return failed;
+    }
     void EnsureFolder(string vaultRelativeFolder);
     // Whether the folder is on disk right now (not as the last scan saw it). A download checks it
     // just before writing, so a folder the student moved since the scan is never made again.

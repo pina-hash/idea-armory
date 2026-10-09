@@ -109,7 +109,7 @@ public sealed partial class SyncEngine
         if (FolderMovedAway(path)) return false;
         // The read-only rule is set on the staged copy, so the new bytes are never writable here
         // unless this computer has the file checked out.
-        var ownership = DesiredOwnership(st, OwnershipOf(remote.Lock), path);
+        var ownership = DesiredOwnership(st, OwnershipOf(remote.Lock), IsOpenNow(path));
         var readOnly = CheckoutRules.IsReadOnlyOnDisk(ownership);
         var staging = fs.CreateStaging(out var stagingName);
         var transfer = activity.Start(Directions.Download, st.Path, current.Bytes);
@@ -939,9 +939,10 @@ public sealed partial class SyncEngine
     // this computer is letting go of (a check in, an undo, a closed add, a lock taken only for a
     // move or a removal) is read-only already, before its lock is released. A check in, an undo
     // or an add waiting for its file to close keeps it writable: SolidWorks can go on saving it
-    // until it is closed, and the check in shares what was saved (feedback N4).
-    private LockOwnership DesiredOwnership(FileState st, LockOwnership ownership, VaultPath path)
-        => ownership == LockOwnership.ThisDevice && (st.TransientLock || ((st.Request != CheckoutRequest.None || st.AutoCheckIn) && !IsOpenNow(path)))
+    // until it is closed, and the check in shares what was saved (feedback N4). open: whether the
+    // file is open (asked now before a write; this pass's answer for the read-only rule).
+    private static LockOwnership DesiredOwnership(FileState st, LockOwnership ownership, bool open)
+        => ownership == LockOwnership.ThisDevice && (st.TransientLock || ((st.Request != CheckoutRequest.None || st.AutoCheckIn) && !open))
             ? LockOwnership.Free : ownership; // MUTATION: a checked-in file left writable
 
     // Decision D4: a file the server has is read-only on disk unless this computer has it
@@ -950,15 +951,19 @@ public sealed partial class SyncEngine
     // Files the server does not have (not added yet, refused, drafts) are never touched. What
     // this computer knows of the server includes its own lock changes of this pass (KnowLock),
     // so a check in whose connection dropped right after the lock went is read-only all the same.
-    private void ApplyReadOnly()
+    private async Task ApplyReadOnlyAsync(CancellationToken ct)
     {
         List<(VaultPath Path, LockOwnership Ownership)> batch = [];
         List<FileState> changed = [];
-        // Whether the files waiting to be checked in are open (DesiredOwnership), asked once.
-        List<VaultPath> waiting = [];
+        // Whether the files waiting to be checked in are open (DesiredOwnership): this pass's
+        // answers (the plan's, and the fresh one the check ins were decided on), and one question
+        // for the rest.
+        List<VaultPath> unknown = [];
         foreach (var st in state.Files.Values)
-            if ((st.Request != CheckoutRequest.None || st.AutoCheckIn) && TryLocal(st.Path, out var here)) waiting.Add(here.Path);
-        using (KnowOpen(waiting))
+            if ((st.Request != CheckoutRequest.None || st.AutoCheckIn) && TryLocal(st.Path, out var here) &&
+                !(openAnswers.TryGetValue(here.Path.Value, out var known) && known.Pass == passNumber) && !markerDocuments.Contains(here.Path.Value))
+                unknown.Add(here.Path);
+        var asked = await AskOpenAsync(unknown, ct);
         foreach (var st in state.Files.Values)
         {
             // Where the file is on disk (in a folder waiting to go back, too: the rule holds there).
@@ -978,7 +983,9 @@ public sealed partial class SyncEngine
             // before the rule ran), by the check out last known, and with none known, nobody's.
             else if (st.BaseHash is not null) ownership = st.AppliedOwnership ?? KnownOwnership(st);
             else continue;
-            var desired = DesiredOwnership(st, ownership, file.Path);
+            // Only a file waiting to be let go needs the answer (a failed question asks it alone).
+            var waiting = ownership == LockOwnership.ThisDevice && (st.Request != CheckoutRequest.None || st.AutoCheckIn);
+            var desired = DesiredOwnership(st, ownership, waiting && (asked is null ? IsOpenNow(file.Path) : KnownOpen(file.Path)));
             if (st.AppliedOwnership == desired && file.ReadOnly == CheckoutRules.IsReadOnlyOnDisk(desired)) continue;
             // The rule was applied and the scan finds the file writable all the same: someone (or
             // some program) cleared the bit. It is put back below; the flight recorder keeps it.
@@ -1001,6 +1008,47 @@ public sealed partial class SyncEngine
             Problem(NoticeKinds.CantRead, null, "Armory couldn't set which files can be saved on this computer. It tries again by itself.", error.Message);
         }
         MarkDirty();
+    }
+
+    // Many files' read-only bits at once, each where the file is on disk: one durable manifest
+    // write on Windows, never one per file (0.3.3: 0.3.1's 1,424-file check outs spent about 2.5
+    // seconds per 500 files on them, and its check ins 6 seconds before the first release).
+    // Returns the records whose bit could not be set now: a lock is never let go over a writable
+    // file, and a check out made writable later is retried by the next scan.
+    private HashSet<FileState> SetAttributes(IEnumerable<(FileState State, VaultPath Path)> files, LockOwnership ownership)
+    {
+        var refused = new HashSet<FileState>(ReferenceEqualityComparer.Instance);
+        List<(VaultPath Path, LockOwnership Ownership)> batch = [];
+        List<(FileState State, LocalFile File)> applied = [];
+        foreach (var (st, path) in files)
+        {
+            if (!TryLocal(path.Value, out var file)) continue;
+            batch.Add((file.Path, ownership));
+            applied.Add((st, file));
+        }
+        if (batch.Count == 0) return refused;
+        IReadOnlyList<(VaultPath Path, string Problem)> failed;
+        try { failed = fs.ApplyLockAttributesNow(batch); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            Problem(NoticeKinds.CantRead, null, "Armory couldn't set which files can be saved on this computer. It tries again by itself.", error.Message);
+            foreach (var (st, _) in applied) refused.Add(st);
+            return refused;
+        }
+        var why = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (path, problem) in failed) why[path.Value] = problem;
+        foreach (var (st, file) in applied)
+        {
+            if (why.TryGetValue(file.Path.Value, out var problem))
+            {
+                refused.Add(st);
+                Problem(NoticeKinds.CantRead, file.Path.Value, "Armory couldn't make it read-only or writable yet. Close any program that might be using it. Armory tries again by itself.", problem);
+                continue;
+            }
+            st.AppliedOwnership = ownership;
+            local[file.Path.Value] = file with { ReadOnly = CheckoutRules.IsReadOnlyOnDisk(ownership) };
+        }
+        return refused;
     }
 
     // One file's read-only bit, now (a check out makes it writable; a check in read-only), where
