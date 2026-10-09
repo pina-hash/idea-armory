@@ -24,6 +24,7 @@ public static class FlightJson
         FlightKind.ReadOnlyBroken => "readOnlyBroken",
         FlightKind.RepairedCheckout => "repairedCheckout",
         FlightKind.Note => "note",
+        FlightKind.Refusal => "refusal",
         _ => "unknown",
     };
 
@@ -114,6 +115,11 @@ public static class FlightJson
             case FlightKind.Note:
                 o["name"] = e.Name;
                 if (e.Detail is not null) o["detail"] = e.Detail;
+                break;
+            case FlightKind.Refusal:
+                o["path"] = e.Target;
+                o["refusal"] = e.Name ?? "ended";
+                if (e.Detail is not null) o["namesake"] = e.Detail;
                 break;
         }
         return o;

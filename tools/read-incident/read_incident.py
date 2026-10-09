@@ -132,6 +132,11 @@ def describe(event):
         return f"previous run ended unexpectedly; last log line: {event.get('lastLogLine')}"
     if kind == "note":
         return f"note {event.get('name')}: {event.get('detail', '')}"
+    if kind == "refusal":
+        if event.get("refusal") == "ended":
+            return f"refusal ended {event.get('path')}"
+        namesake = f" (its name is taken by {event['namesake']})" if event.get("namesake") else ""
+        return f"REFUSED {event.get('refusal')} {event.get('path')}{namesake}"
     return json.dumps(event, ensure_ascii=False)
 
 
@@ -151,7 +156,8 @@ def print_incident(name, incident, row, args, out):
     out.write(f"{rule}\n{name}\n{rule}\n")
     out.write(f"Incident   {incident.get('kind')}   {incident.get('createdAt')}   (schema {incident.get('schemaVersion')}, id {incident.get('id')})\n")
     out.write(f"App        {incident.get('appVersion')} on {incident.get('osVersion')}\n")
-    out.write(f"Who        {incident.get('email')} on {incident.get('deviceName')}" + (f", project {incident['projectId']}" if incident.get("projectId") else "") + "\n")
+    machine = f" (machine {incident['machineId']})" if incident.get("machineId") else ""
+    out.write(f"Who        {incident.get('email')} on {incident.get('deviceName')}{machine}" + (f", project {incident['projectId']}" if incident.get("projectId") else "") + "\n")
     if row:
         out.write("Website    " + ", ".join(f"{k}={row[k]}" for k in row if row[k] is not None and k not in ("summary",)) + "\n")
     out.write(f"Summary    {incident.get('summary')}\n")

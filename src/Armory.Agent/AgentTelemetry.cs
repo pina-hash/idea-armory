@@ -69,7 +69,7 @@ internal sealed class AgentTelemetry : IAsyncDisposable
         string os;
         try { os = RuntimeInformation.OSDescription + " (" + RuntimeInformation.OSArchitecture + ")"; }
         catch (Exception error) when (error is not OutOfMemoryException) { os = Environment.OSVersion.VersionString; }
-        return new IncidentHeader(AgentPaths.Version, os, current?.DeviceName ?? Environment.MachineName, current?.Email);
+        return new IncidentHeader(AgentPaths.Version, os, current?.DeviceName ?? Environment.MachineName, current?.Email, MachineId.Current);
     }
 
     // The host is up: who is signed in, the engine's snapshot, and the uploader on its network.
