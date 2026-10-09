@@ -112,6 +112,11 @@ public sealed partial class SyncEngine
             // v0.3 live updates: events that woke the loop, and the channels joined now.
             ["live"] = deps.Live is { } live ? new JsonObject { ["events"] = liveEvents, ["connections"] = live.Connections, ["joined"] = live.Joined.Count } : null,
             ["batchesMissingUntil"] = batchesMissingUntil > DateTimeOffset.MinValue ? FlightJson.Time(batchesMissingUntil) : null,
+            // The SolidWorks year (SyncEngine.Releases.cs): the SolidWorks the link says runs here,
+            // the link's stamps kept, and the content hashes read this start.
+            ["solidWorks"] = solidWorks is { } sw ? $"{sw.Revision.Major}.{sw.Revision.Minor}.{sw.Revision.Hotfix}" + (sw.SaveDownWorks ? "" : " (no save down)") : null,
+            ["releaseStamps"] = state.ReleaseStamps.Count,
+            ["releasesRead"] = releases.Count,
         };
         described["pendingRequests"] = requests;
         described["lastPasses"] = new JsonArray(recentPasses.Select(p => (JsonNode)p.DeepClone()).ToArray());

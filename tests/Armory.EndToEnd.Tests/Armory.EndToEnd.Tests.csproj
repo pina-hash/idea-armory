@@ -18,6 +18,8 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="../GuardTests/DocumentedTestGuard.cs" Link="DocumentedTestGuard.cs" />
+    <!-- Synthetic SolidWorks containers built in code (never a CAD file). -->
+    <Compile Include="../Armory.Core.Tests/SwContainer.cs" Link="SwContainer.cs" />
     <None Include="../GUARDS.txt" Link="GUARDS.txt" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

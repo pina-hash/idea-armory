@@ -45,7 +45,7 @@
 	 * @typedef {'upload' | 'download' | 'move'} Direction
 	 * @typedef {'info' | 'look' | 'bad'} NoticeTone
 	 * @typedef {'import' | 'nameShared' | 'newerWaiting' | 'keptCopy' | 'takenBack' | 'folderPutBack'
-	 *   | 'projectPutBack' | 'projectRenaming' | 'projectDeleted' | 'cantSend' | 'cantRead' | 'checkInPartial'} NoticeKind
+	 *   | 'projectPutBack' | 'projectRenaming' | 'projectDeleted' | 'cantSend' | 'cantRead' | 'checkInPartial' | 'newerRelease'} NoticeKind
 	 * @typedef {'version' | 'keptCopy' | 'removed'} HistoryKind
 	 * @typedef {'system' | 'idea' | 'spaceWhite'} ThemeSetting
 	 * @typedef {'idea' | 'spaceWhite'} EffectiveTheme
@@ -188,6 +188,8 @@
 	 * @property {boolean} releaseNotChecked
 	 * @property {string | null} updatedAt
 	 * @property {string | null} updatedBy
+	 * @property {number | null} savedRelease  the SolidWorks year its version in Armory was saved in, when known
+	 * @property {boolean} newerThanPin  that year is newer than the project's pinnedRelease
 	 */
 
 	/**
@@ -206,6 +208,8 @@
 	 * @property {string} role           student, cad_lead, mentor or instructor
 	 * @property {boolean} canTakeBack   a mentor or CAD lead
 	 * @property {FolderView[]} folders  a flat list, every folder once, empty ones too
+	 * @property {number} pinnedRelease  the SolidWorks year the project uses
+	 * @property {number} newerThanPinCount  its files saved in a newer SolidWorks (the newerRelease notice lists them)
 	 */
 
 	/**
@@ -256,6 +260,8 @@
 	 * @property {boolean} releaseNotChecked
 	 * @property {boolean} canTakeBack
 	 * @property {HistoryEntryView[]} history  newest first
+	 * @property {number | null} savedRelease
+	 * @property {boolean} newerThanPin
 	 */
 
 	/**

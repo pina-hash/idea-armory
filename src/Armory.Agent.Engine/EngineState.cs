@@ -90,6 +90,12 @@ internal sealed class EngineState
     // next online pass sends it again with the same id only while every file still has the very
     // check out it named (SyncEngine.Batches.cs, ResumeForceCheckInsAsync).
     public List<PendingForceCheckIn> ForceCheckIns { get; set; } = [];
+    // What the SolidWorks link recorded right after each save it watched (RecordReleaseStamp), by
+    // the bytes' SHA-256: the year SolidWorks itself read in exactly those bytes. Never sent to
+    // the server (only the resulting saved release is). Each record is immutable (a change
+    // replaces it), so the state document writes it once (StateSerializer). Pruned 30 days after
+    // its bytes reached the server from here, or 90 days after it was recorded if they never did.
+    public Dictionary<string, StampRecord> ReleaseStamps { get; set; } = new(StringComparer.Ordinal);
 
     internal bool IsMine(Guid device) => device == DeviceId || FormerDevices.Contains(device);
 
@@ -208,6 +214,7 @@ internal sealed class EngineState
         state.MovingFolders ??= [];
         state.Imports ??= [];
         state.ForceCheckIns ??= [];
+        state.ReleaseStamps = new(state.ReleaseStamps ?? [], StringComparer.Ordinal);
         state.Migrate();
         return state;
     }
@@ -336,6 +343,8 @@ internal sealed class FileState
     private bool autoCheckIn;
     private bool transientLock;
     private bool purged;
+    private string? releaseHash;
+    private int? releaseYear;
 
     private void Set<T>(ref T field, T value)
     {
@@ -420,6 +429,11 @@ internal sealed class FileState
     // deleted forever). Never planned or sent again; its copy here goes to Armory's recovery
     // folder once closed, then the record is dropped (SyncEngine.Purge.cs).
     public bool Purged { get => purged; set => Set(ref purged, value); }
+    // The SolidWorks year the file reader found in this file's bytes with ReleaseHash, kept so
+    // the same bytes are never read again, even after a restart. Only a year is kept: bytes the
+    // reader could not place are read again after a restart (a newer reader may place them).
+    public string? ReleaseHash { get => releaseHash; set => Set(ref releaseHash, value); }
+    public int? ReleaseYear { get => releaseYear; set => Set(ref releaseYear, value); }
 
     [JsonIgnore] public Revision? Base => BaseId is null ? null : new(BaseId, BaseHash, "");
     public void SetBase(Revision? revision) { BaseId = revision?.Id; BaseHash = revision?.Hash; }
@@ -538,6 +552,9 @@ internal sealed class IdSet : ICollection<string>, IReadOnlyCollection<string>
 internal sealed record RememberedNotice(string Kind, Guid? FileId, string Path, string Title, string Detail, DateTimeOffset At,
     string? ItemDetail = null, string? ReasonKind = null, string? Who = null);
 internal sealed record SideRecord(Guid VersionId, string Hash, string Reason, DateTimeOffset At);
+// A stamp of the SolidWorks link (EngineState.ReleaseStamps) and when its bytes reached the
+// server from this computer (null: not yet).
+internal sealed record StampRecord(ReleaseStamp Stamp, DateTimeOffset? Committed = null);
 
 // One server write that was about to be sent. Re-sent with the same operation id on the
 // next pass if the engine stopped before recording its answer.

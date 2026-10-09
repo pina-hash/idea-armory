@@ -29,7 +29,7 @@ bytes, 665 complete records, zero duplicates, and four actual watcher overflows.
 Phase 0 reports:
 
 - [Installed SolidWorks](../spike/installed-solidworks.md): 2026 SP04.1, listed in both registry views.
-- [Saved release](../spike/saved-release.md): zero existing permitted-scope samples; one blank part generated in SolidWorks; no validated standalone reader.
+- [Saved release](../spike/saved-release.md): zero existing permitted-scope samples; one blank part generated in SolidWorks; no validated standalone reader. (Superseded 2026-10-09: the chunk reader, 158 of 158 public files read.)
 - [Lock file](../spike/solidworks-lock-file.md): one `~$` file appeared on open and disappeared after close.
 - [Defender](../spike/antivirus-replace.md): real-time protection enabled; 100/100 replacements succeeded, no sharing violations/retries.
 

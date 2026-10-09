@@ -23,7 +23,7 @@ var engine = new SyncEngine(new EngineOptions { VaultRoot = @"C:\IDEA\Armory", T
     Snapshots = snapshotStore,        // ISnapshotStore (DurableSnapshotStore + OpenRead)
     State = stateStore,               // IEngineStateStore (FileStateStore)
     Sessions = sessions, Api = api, Blobs = blobs,
-    ReleaseReader = null,             // no standalone saved-release reader exists yet
+    ReleaseReader = new SolidWorksSavedReleaseReader(), // 0.3.3: the SolidWorks year from the file itself (below)
     Log = log.Info,                   // the raw text of each problem, once; the window gets plain words
     Recorder = telemetry.Recorder,    // the flight recorder (docs/agent/TELEMETRY.md); null records nothing
     Live = new RealtimeFeed(sessions),// v0.3 live updates (below); null: the poll alone
@@ -53,6 +53,12 @@ engine.DismissNotice(key);            // a notice card's OK, or one check-out qu
 await engine.DismissNoticeAsync(key); // the same, done once the view (or the next one) leaves it out
 await engine.MoveAsync(from, to);     // a rename through armory_move_file
 await engine.StopAsync();
+
+// The SolidWorks link (0.3.3; "The SolidWorks year" below). Each marshals onto the engine thread.
+engine.RecordReleaseStamp(stamp);     // after a save it watched: Core ReleaseStamp for exactly those bytes
+await engine.RecordReleaseStampAsync(stamp); // the same, true once kept (false: not a SHA-256)
+engine.SolidWorksAttached("34.4.1", saveDownWorks: true); // ISldWorks.RevisionNumber; false once SolidWorks would not save down
+engine.SolidWorksDetached();
 ```
 
 `View` is the window's `AgentView` (docs/agent/BRIDGE.md); `OpenWithoutCheckOut` lists the
@@ -128,7 +134,8 @@ A pass has four phases. A, B and D run one step at a time; C moves files several
    `IVaultFileSystem.OpenAmong`, never once per file: on Windows each question was a Restart
    Manager session of about 28 ms, so planning 1,500 files took 40 seconds every pass and every
    click waited behind it; a batch of check outs and the `~$` markers are asked the same way,
-   and every write still asks again just before it), online state, the break obligation, the saved release, the project's
+   and every write still asks again just before it), online state, the break obligation, the saved release (read only
+   for bytes that changed: see "The SolidWorks year"), the project's
    pin and gate mode, the preserved hash, `CheckoutMode.Explicit` and the student's request
    (`CheckIn` or `Undo` from the file's state; a closed add counts as `CheckIn`). Offline
    plans only add journal intents (never a lock intent for a shared file). Online plans are
@@ -162,6 +169,8 @@ A pass has four phases. A, B and D run one step at a time; C moves files several
    4,900 files", so the status line and the tray never fall back to "Checking for changes."
    while a big import finishes. The read-only rule follows this computer's own lock changes
    without another read (`KnowLock`).
+   The team's SolidWorks versions the server never checked are read from this computer's
+   identical copies (B5, "The SolidWorks year").
    Known folders with nothing left in them are removed (D17).
 7. **The read-only rule** (D4), every pass, offline too, from the ownership this computer
    last knew (its own lock changes of the pass included; offline since the start, the
@@ -603,7 +612,9 @@ several in one card are titled by what they are and, when that is why, who has f
 checked out: "2 folders were put back: Maria Lopez has files in them checked out", each item
 saying its own reason),
 `projectPutBack` (a project folder renamed or removed in Explorer, put back) and
-`projectRenaming` (a project renamed on the site, waiting for a file to close). "SolidWorks year not checked" is never a notice, only a tag on File detail; waiting
+`projectRenaming` (a project renamed on the site, waiting for a file to close) and, since 0.3.3,
+`newerRelease` (the team's version of a file saved in a SolidWorks newer than its project's pin,
+"The SolidWorks year"). "SolidWorks year not checked" is never a notice, only a tag on File detail; waiting
 to upload is activity, never rows. My files are the files this computer has checked out, in
 any project: a lock taken only for an add of a closed file (the pass checks it in) or only
 for a move or a removal is not listed, so a 5,000-file import lists nothing there while its
@@ -624,6 +635,63 @@ checked out", "Kept when the check out was undone", "Changed without a check out
 Alex Kim's own copy", ...; `routine` for saves kept while checked out and earlier saves) and
 `removed`.
 The activity panel's words are in Activity above. No view field carries a season.
+
+## The SolidWorks year (0.3.3)
+
+`SyncEngine.Releases.cs`; the reader and the rule are Core's (docs/core/solidworks-version-gate.md).
+
+- **Two sources, for the exact bytes.** The file reader (`EngineDependencies.ReleaseReader`,
+  `SolidWorksSavedReleaseReader` in the agent; it was `null` until 0.3.3, so every SolidWorks
+  file was "release not checked" and a Warn project took anything, a 2026 part included) and
+  the SolidWorks link's stamp for that content hash (`RecordReleaseStamp`). Core's
+  `SavedReleaseRule.Combine` decides: one known year wins over unknown, two that differ are
+  unknown, and the disagreement is a flight-recorder note ("release disagreement") and a log
+  line, once per hash. The gate (Core) then decides as before: a year newer than the pin is a
+  private draft in both modes, unknown is "release not checked" in Warn and a private draft
+  in Enforce.
+- **Read once per content hash, off the engine thread.** The reader runs on the thread pool
+  (`Task.Run`); the engine thread, which the window only ever waits on, is never busy with it.
+  Answers are kept by hash for the engine's life; a year read for the team's version of a
+  file (B5) is also kept on the file's record (`FileState.ReleaseHash`, `ReleaseYear`), so no
+  later start reads those bytes again. An unknown answer is kept only in memory (a newer reader
+  may place it after an upgrade). Only bytes that changed are read for an upload (a file whose
+  hash equals its base is never read), from the capture's snapshot. A stream that fails is
+  not an unknown year: the path waits for the next pass with a "can't read" notice, never an
+  upload marked "release not checked".
+- **Stamps** (`EngineState.ReleaseStamps`, by SHA-256): kept in the state document, written
+  once each (StateSerializer), never sent to the server (only the resulting year is, through
+  `armory_commit_version_with_release` and `armory_save_side_version_with_release`). A stamp
+  whose hash is not a SHA-256 is refused; a second stamp for the same bytes replaces the first
+  unless their years differ, which makes the year unknown (`SavedReleaseRule.Merge`). When
+  those bytes reach the server from here (a commit, a kept copy, an earlier save), the stamp
+  is marked committed; it is pruned 30 days after that, or 90 days after it was recorded if
+  they never do. A stamp wakes the loop: a file held as unknown may go now.
+- **What runs here.** `SolidWorksAttached(revision, saveDownWorks)` and `SolidWorksDetached()`
+  say which SolidWorks the link sees; Core's `SaveDown.Plan` then says whether this computer
+  saves down to a project's pin. Only the words use it.
+- **Words** (research section 6). A file newer than the pin: "Saved in SolidWorks 2026, and
+  Robot 2027 uses SolidWorks 2025. Open it in SolidWorks 2026 and click Save: Armory saves it
+  as 2025, then it uploads by itself." only where saving down works; otherwise "... It stays
+  on this computer only until it is saved in SolidWorks 2025.", followed, when the link says
+  why, by "Update SolidWorks 2026 to Service Pack 3 or newer so Armory can save it in 2025.",
+  "SolidWorks 2028 can't save files as 2025." or "SolidWorks on this computer couldn't save it
+  in 2025. Ask a CAD lead or a mentor what to do." The bytes never leave this computer: the
+  gate refuses them before any server call, and an earlier save of them is kept as a private
+  draft, never an "earlier save, kept" (`ReleaseTests`).
+- **B5: files uploaded before the reader.** At the end of each online pass (phase D), every
+  SolidWorks file whose current server version has `release_checked` false and whose copy here
+  has the same hash is read, once per hash. A loop pass reads for at most 2 seconds and gives
+  way to a window action; the next pass goes on. A window action's own pass reads none. The view then carries the year on the row and
+  File detail (`savedRelease`, `newerThanPin`), a count per project (`newerThanPinCount`) and one
+  `newerRelease` notice (docs/agent/BRIDGE.md): needing the student (`look`) on a computer that
+  can fix them or that no link describes, news (`info`) on one the link says cannot. The
+  server's rows stay as they are (immutable): the year lives on this computer.
+- **Cost, measured** (`ReleaseTests.A_pass_over_1500_synced_files_reads_nothing_and_is_not_slower`,
+  on this Linux test host with the portable file system, 2026-10-09): over 1,500 synced
+  SolidWorks files a steady pass reads nothing and took 73 ms with the reader and 71 ms without
+  (82 ms after a restart with the reader); the one-time B5 pass that read all 1,500 (and
+  downloaded them) took 2.7 s against 2.4 s for the same first pass without the reader. Real
+  files cost about 0.6 ms each to read (158 public files in 94 ms, docs/spike/saved-release.md).
 
 ## Operation ids (crash safety)
 

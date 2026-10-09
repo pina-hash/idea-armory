@@ -33,7 +33,8 @@ To preserve the tested guarantees, an agent/server adapter must:
 7. Persist BASE only after the corresponding local/remote action is durably complete.
    Retrying after lost acknowledgements may create a side version but must not lose
    bytes. Remote tombstones retain all old versions and blobs forever.
-8. Resolve `ISavedReleaseReader` with the phase 0 spike, provide role permissions from
+8. Resolve `ISavedReleaseReader` with the phase 0 spike (done in 0.3.3:
+   `SolidWorksSavedReleaseReader`, [version gate](solidworks-version-gate.md)), provide role permissions from
    the actual authorization system, and make global names and part allocation atomic
    on the server. Enforce COTS/release-state permissions at that boundary as later lanes
    implement them.

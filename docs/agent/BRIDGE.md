@@ -136,7 +136,8 @@ ActiveTransferView { path: string, name: string, direction: "upload" | "download
 NoticeGroupView {
   key: string,                      // dismissNotice sends it back
   kind: "import" | "nameShared" | "newerWaiting" | "keptCopy" | "takenBack" | "folderPutBack"
-      | "projectPutBack" | "projectRenaming" | "projectDeleted" | "cantSend" | "cantRead" | "checkInPartial",
+      | "projectPutBack" | "projectRenaming" | "projectDeleted" | "cantSend" | "cantRead" | "checkInPartial"
+      | "newerRelease",
   tone: "info" | "look" | "bad",    // the page shows info green, look amber, bad red
   title: string,                    // e.g. "14 files share a name with other files in this project"
   detail: string,
@@ -171,7 +172,9 @@ ProjectView {
   archived: boolean,                // shown as "Archived. It no longer updates." with no keys
   role: string,                     // student, cad_lead, mentor, instructor
   canTakeBack: boolean,             // the server's can_take_back (v0.3: mentor, CAD lead or site admin); a role check before 0233
-  folders: FolderView[]             // flat: every folder once, empty ones too; "" is the project's top
+  folders: FolderView[],            // flat: every folder once, empty ones too; "" is the project's top
+  pinnedRelease: number,            // 0.3.3: the SolidWorks year the project uses (2025)
+  newerThanPinCount: number         // 0.3.3: its files whose row has newerThanPin (the newerRelease notice lists them)
 }
 FolderView { path: string, name: string, fileCount: number, files: FileRowView[] }
   // path is in the project ("Drivetrain/Gearbox"); fileCount is the files directly in it.
@@ -183,7 +186,11 @@ FileRowView {
   checkout: CheckoutView,
   changed: boolean,                 // its bytes here differ from the last check in
   releaseNotChecked: boolean,       // shown only on File detail, as a small tag
-  updatedAt: string | null, updatedBy: string | null
+  updatedAt: string | null, updatedBy: string | null,
+  savedRelease: number | null,      // 0.3.3: the SolidWorks year its version in Armory was saved in, when known:
+                                    // the server checked it, or this computer read its identical copy
+                                    // (a file uploaded "release not checked"); null for other files and unknown years
+  newerThanPin: boolean             // 0.3.3: savedRelease is newer than the project's pinnedRelease
 }
 FileStatus = "synced" | "changed" | "uploading" | "downloading" | "waiting" | "newerWaiting"
            | "keptCopy" | "notInArmory" | "notOnThisComputer"
@@ -193,7 +200,9 @@ FileDetailView {
   fileId: string, name: string, path: string, project: string, folder: string,
   status: FileStatus, checkout: CheckoutView, releaseNotChecked: boolean,
   canTakeBack: boolean,
-  history: HistoryEntryView[]       // newest first
+  history: HistoryEntryView[],      // newest first
+  savedRelease: number | null,      // 0.3.3: as on the file's row
+  newerThanPin: boolean
 }
 HistoryEntryView {
   id: string, kind: "version" | "keptCopy" | "removed",
@@ -211,6 +220,24 @@ HistoryEntryView {
 
 "SolidWorks year not checked" is never a notice: File detail shows it as a small tag
 beside the file's place, and on the history entries it applies to.
+
+A year known to be newer than the project's pin is (0.3.3, B5): the files whose version in
+Armory was saved in a newer SolidWorks are one `newerRelease` card, "3 files in Robot 2027
+were saved in SolidWorks 2026" ("Plate.SLDPRT in Robot 2027 was saved in SolidWorks 2026"
+for one; files of several projects or years are counted together), each item saying "Saved
+in SolidWorks 2026. Robot 2027 uses SolidWorks 2025." The card's detail is what this
+computer can do, from what the SolidWorks link says runs here (docs/agent/ENGINE.md, "The
+SolidWorks year"): on a SolidWorks 2026 computer that saves down, tone `look`, "You can fix
+them here: 1. Check one out in Armory. 2. Open it in SolidWorks 2026. 3. Click Save. Armory
+saves it as SolidWorks 2025 for you. 4. Check it in."; on a SolidWorks 2025 computer, tone
+`info`, "You can open parts and assemblies to look (SolidWorks 2025 SP5 shows them as a
+future version), but you can't change them here, and drawings won't open. Someone with
+SolidWorks 2026 can fix them: check it out, open it, click Save, and check it in."; with no
+link, tone `look`, who can look and who can fix them. The card has "Show them" (`expand`)
+for more than one file, no key for one. A page that does not know the kind yet shows it as
+any other card. `savedRelease`, `newerThanPin` and `newerThanPinCount` are for a tag on the
+row and File detail ("SolidWorks 2026") and a count on the project; the window's page does
+not show them yet.
 
 The check-out question (`prompt`): "Check out Plate-Left.SLDPRT to edit it?", "SolidWorks
 opened it read-only. Check it out, then close it in SolidWorks and open it again here to

@@ -324,8 +324,9 @@ internal sealed class OfflineHandler(HttpMessageHandler inner) : DelegatingHandl
         => Offline ? throw new HttpRequestException("This computer is offline (test).") : base.SendAsync(request, cancellationToken);
 }
 
-// The saved-release reader is a test fake: no standalone reader exists yet
-// (docs/spike/saved-release.md). Content beginning "SW<year>" reads as that release.
+// A stand-in saved-release reader for tests that need a year without building a SolidWorks
+// container: content beginning "SW<year>" reads as that release. ReleaseTests uses the real
+// reader (SolidWorksSavedReleaseReader) on synthetic containers.
 internal sealed class FakeReleaseReader : ISavedReleaseReader
 {
     public async ValueTask<SolidWorksRelease?> ReadAsync(Stream content, CancellationToken cancellationToken = default)

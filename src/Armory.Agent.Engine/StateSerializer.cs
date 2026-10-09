@@ -7,7 +7,8 @@ namespace Armory.Agent.Engine;
 // serializes again only what changed since the last time. File records are kept in blocks of
 // 128: a block's bytes are built again only when one of its records changed (FileState.Changed),
 // came or went (FileTable), and each record's own JSON only when that record changed. The
-// completed ids, which only grow, are written once each, and each import summary (immutable) once.
+// completed ids, which only grow, are written once each, and each import summary and each release
+// stamp (both immutable) once.
 // The rest is small and serialized every time. The result is the document the reflection
 // serializer writes (EngineState.SerializeWhole), with its file records in another order; a unit
 // test holds the two to each other. With 5,000 files the document is megabytes, and the engine
@@ -23,6 +24,7 @@ internal sealed class StateSerializer
     private readonly List<Block> blocks = [];
     private readonly List<byte[]> small = [], smallBefore = [];
     private Dictionary<ImportRecord, byte[]> imports = new(ReferenceEqualityComparer.Instance), importsSpare = new(ReferenceEqualityComparer.Instance);
+    private Dictionary<StampRecord, (string Hash, byte[] Bytes)> stamps = new(ReferenceEqualityComparer.Instance), stampsSpare = new(ReferenceEqualityComparer.Instance);
     private byte[] completed = new byte[1024];
     private int completedLength, completedCount = -1, completedRemovals;
     private bool filesMoved = true, changed;
@@ -76,7 +78,7 @@ internal sealed class StateSerializer
         foreach (var property in document.Properties)
         {
             if (property.Get is null) continue;
-            var special = property.Name is "files" or "completed" or "imports";
+            var special = property.Name is "files" or "completed" or "imports" or "releaseStamps";
             var value = special ? null : property.Get(state);
             if (value is null && !special) continue; // JsonIgnoreCondition.WhenWritingNull
             if (!first) parts.Add(Comma);
@@ -87,6 +89,7 @@ internal sealed class StateSerializer
                 case "files": AddFiles(parts); break;
                 case "completed": AddCompleted(parts, state.Completed); break;
                 case "imports": AddImports(parts, state.Imports); break;
+                case "releaseStamps": AddStamps(parts, state.ReleaseStamps); break;
                 default:
                     var bytes = JsonSerializer.SerializeToUtf8Bytes(value, property.PropertyType, EngineState.Options);
                     small.Add(bytes);
@@ -230,5 +233,30 @@ internal sealed class StateSerializer
         parts.Add(CloseArray);
         if (importsSpare.Count != imports.Count) changed = true;
         (imports, importsSpare) = (importsSpare, imports);
+    }
+
+    // Each stamp record once ("hash":{...}; a record is replaced, never changed in place).
+    private void AddStamps(List<ReadOnlyMemory<byte>> parts, Dictionary<string, StampRecord> records)
+    {
+        stampsSpare.Clear();
+        parts.Add(Open);
+        var first = true;
+        foreach (var (hash, record) in records)
+        {
+            if (!stamps.TryGetValue(record, out var known) || !string.Equals(known.Hash, hash, StringComparison.Ordinal))
+            {
+                var name = JsonSerializer.SerializeToUtf8Bytes(hash, EngineState.Options);
+                var value = JsonSerializer.SerializeToUtf8Bytes(record, EngineState.Options);
+                known = (hash, [.. name, (byte)':', .. value]);
+                changed = true;
+            }
+            stampsSpare[record] = known;
+            if (!first) parts.Add(Comma);
+            first = false;
+            parts.Add(known.Bytes);
+        }
+        parts.Add(Close);
+        if (stampsSpare.Count != stamps.Count) changed = true;
+        (stamps, stampsSpare) = (stampsSpare, stamps);
     }
 }

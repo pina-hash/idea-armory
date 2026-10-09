@@ -215,8 +215,8 @@ public sealed class EngineUnitTests
             [new MyFileView("g", "Robot/Gear.SLDPRT", "Gear.SLDPRT", "Robot", FileStatuses.Changed, null, mine)],
             [new ProjectView("p", "Robot", false, "student", false,
                 [new FolderView("", "Robot", 2, [
-                    new FileRowView("f", "Plate.SLDPRT", "Robot/Plate.SLDPRT", FileStatuses.Synced, other, false, true, null, null),
-                    new FileRowView(null, "Notes.txt", "Robot/Notes.txt", FileStatuses.NotInArmory, available, false, false, null, null)])])],
+                    new FileRowView("f", "Plate.SLDPRT", "Robot/Plate.SLDPRT", FileStatuses.Synced, other, false, true, null, null, 2026, true),
+                    new FileRowView(null, "Notes.txt", "Robot/Notes.txt", FileStatuses.NotInArmory, available, false, false, null, null, null, false)])], 2025, 1)],
             new SettingsView(@"C:\IDEA\Armory", true, "system"), "idea");
         using var json = JsonDocument.Parse(BridgeMessages.ViewMessage(view));
         Assert.Equal("view", json.RootElement.GetProperty("type").GetString());
@@ -224,19 +224,23 @@ public sealed class EngineUnitTests
         Assert.Equal(["connection", "connect", "account", "sync", "activity", "vaultRoot", "notices", "prompt", "myFiles", "projects", "settings", "effectiveTheme"],
             v.EnumerateObject().Select(p => p.Name).ToArray());
         var project = v.GetProperty("projects")[0];
-        foreach (var name in new[] { "id", "name", "archived", "role", "canTakeBack", "folders" })
+        foreach (var name in new[] { "id", "name", "archived", "role", "canTakeBack", "folders", "pinnedRelease", "newerThanPinCount" })
             Assert.True(project.TryGetProperty(name, out _), name);
+        Assert.Equal((2025, 1), (project.GetProperty("pinnedRelease").GetInt32(), project.GetProperty("newerThanPinCount").GetInt32()));
         Assert.False(project.TryGetProperty("season", out _)); // season is shown nowhere
         var folder = project.GetProperty("folders")[0];
         Assert.Equal(2, folder.GetProperty("fileCount").GetInt32());
         var row = folder.GetProperty("files")[0];
         Assert.True(row.GetProperty("releaseNotChecked").GetBoolean());
+        Assert.Equal(2026, row.GetProperty("savedRelease").GetInt32()); // the year this computer read in its identical copy
+        Assert.True(row.GetProperty("newerThanPin").GetBoolean());
         Assert.Equal("synced", row.GetProperty("status").GetString());
         Assert.False(row.GetProperty("changed").GetBoolean());
         Assert.Equal("Checked out by Maria Lopez on LAB-PC-07", row.GetProperty("checkout").GetProperty("label").GetString());
         Assert.Equal("other", row.GetProperty("checkout").GetProperty("state").GetString());
         var local = folder.GetProperty("files")[1];
         Assert.Equal(JsonValueKind.Null, local.GetProperty("fileId").ValueKind);
+        Assert.Equal(JsonValueKind.Null, local.GetProperty("savedRelease").ValueKind);
         Assert.Equal("Available", local.GetProperty("checkout").GetProperty("label").GetString());
         var notice = v.GetProperty("notices")[0];
         foreach (var name in new[] { "key", "kind", "tone", "title", "detail", "count", "action", "items" })
@@ -250,10 +254,11 @@ public sealed class EngineUnitTests
         Assert.Equal(3, v.GetProperty("activity").GetProperty("waiting").GetProperty("count").GetInt32());
         Assert.True(v.GetProperty("settings").GetProperty("startAtSignIn").GetBoolean());
         var detail = new FileDetailView("f", "Plate.SLDPRT", "Robot/Plate.SLDPRT", "Robot", "", FileStatuses.Synced, available, true, false,
-            [new HistoryEntryView("h", HistoryKinds.KeptCopy, "Alex Kim", "2026-10-06T10:00:00.0000000+00:00", 12, "Saved while checked out", false, false, true)]);
+            [new HistoryEntryView("h", HistoryKinds.KeptCopy, "Alex Kim", "2026-10-06T10:00:00.0000000+00:00", 12, "Saved while checked out", false, false, true)], 2025, false);
         using var d = JsonDocument.Parse(BridgeMessages.DetailMessage(detail));
         var dv = d.RootElement.GetProperty("detail");
         Assert.True(dv.GetProperty("releaseNotChecked").GetBoolean()); // the tag lives on the detail
+        Assert.Equal((2025, false), (dv.GetProperty("savedRelease").GetInt32(), dv.GetProperty("newerThanPin").GetBoolean()));
         Assert.Equal("keptCopy", dv.GetProperty("history")[0].GetProperty("kind").GetString());
         Assert.True(dv.GetProperty("history")[0].GetProperty("routine").GetBoolean()); // saved while checked out: the neutral tone
         Assert.False(dv.GetProperty("canTakeBack").GetBoolean());

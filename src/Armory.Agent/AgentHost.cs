@@ -643,8 +643,9 @@ internal sealed class VaultRuntime
                 Sessions = sessions,
                 Api = api,
                 Blobs = blobs,
-                // No standalone saved-release reader exists yet (docs/platform/audit.md).
-                ReleaseReader = null,
+                // The SolidWorks year of every part, assembly and drawing, read from the file itself
+                // (docs/core/solidworks-version-gate.md); the SolidWorks link adds its stamps.
+                ReleaseReader = new Armory.Core.SolidWorksSavedReleaseReader(),
                 // The raw text of a sync problem; the window shows it in plain words.
                 Log = log is null ? null : log.Info,
                 Recorder = recorder,
