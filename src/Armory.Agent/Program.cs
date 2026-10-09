@@ -64,12 +64,18 @@ internal static class Program
         // A run that died without a word (a stack overflow, a native crash, the power) says so
         // in the next one, with the last thing it wrote about a pass, and becomes a crash
         // incident built from the last flight it left.
-        if (log.PreviousRunEndedUnexpectedly() is { } lastWords)
+        var previous = log.PreviousRun();
+        if (previous is { Quitting: false })
         {
-            log.Info("previous run ended unexpectedly; its last line was: " + lastWords);
-            telemetry.PreviousRunEnded(lastWords);
+            log.Info("previous run ended unexpectedly; its last line was: " + previous.LastLine);
+            telemetry.PreviousRunEnded(previous.LastLine);
         }
-        else telemetry.LastFlight.Clear();
+        else
+        {
+            // Ended while quitting (Windows ending the session, or the installer): not a crash.
+            if (previous is { Quitting: true }) log.Info("previous run was stopped while it was quitting; its last line was: " + previous.LastLine);
+            telemetry.LastFlight.Clear();
+        }
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
         {
             log.Crash("unhandled exception", e.ExceptionObject);

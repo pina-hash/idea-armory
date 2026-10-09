@@ -79,17 +79,23 @@ public sealed class WindowsVaultFileSystem : IVaultFileSystem, IDisposable
     // entered. Every scan enumerates everything; hints only make one come sooner. Renames is
     // null on the first scan after a start (no earlier file map); FolderMoves is null when the
     // moves cannot be proven (no folder map in .armory yet, or an unreadable folder id).
-    public VaultScan Scan()
+    public VaultScan Scan() => Scan(CancellationToken.None);
+
+    // Stops between files once the token is canceled (0.3.3: a first scan that re-hashed the
+    // whole vault took 10 to 38 seconds and a quit waited for it).
+    public VaultScan Scan(CancellationToken cancellationToken)
     {
         lock (gate)
         {
             List<string> problems = [.. pendingProblems];
             pendingProblems.Clear();
             RetryReadOnly(problems);
-            var scan = changes.Scan();
+            var scan = changes.Scan(cancellationToken: cancellationToken);
             problems.AddRange(scan.Problems);
             // Unread: carried over from the last scan that could read it (LocalFileState.Unread).
-            var files = scan.Files.Select(f => new LocalFile(f.Path, f.Hash, f.Size, f.ReadOnly, f.Unread)).ToArray();
+            // Stamp: what the scan hashed, so a check out can tell the file is unchanged since.
+            var files = scan.Files.Select(f => new LocalFile(f.Path, f.Hash, f.Size, f.ReadOnly, f.Unread,
+                f.Unread ? null : new FileStamp(f.FileId, f.LastWriteUtc, f.HashedAt))).ToArray();
             return new VaultScan(files, scan.Markers, problems,
                 scan.Renames?.Select(r => new LocalMove(r.Before, r.After)).ToArray(),
                 scan.Folders.Select(f => f.Path).ToArray(),
@@ -104,32 +110,76 @@ public sealed class WindowsVaultFileSystem : IVaultFileSystem, IDisposable
         return openFiles.Inspect(file!).IsOpen;
     }
 
-    // Many files at once, each answered as IsOpen answers it (OpenFileDetector.OpenAmong): the
-    // pass asks this for every file, never one Restart Manager session per file. A path that
-    // cannot be resolved is treated as open, as in IsOpen.
+    // Many files at once, each answered as IsOpen answers it (OpenFileDetector.OpenAmongAsync):
+    // never one Restart Manager session per file, and every file asked now. A path that cannot be
+    // resolved is treated as open, as in IsOpen. The caller's thread waits; the engine asks
+    // OpenAmongAsync instead.
     public IReadOnlySet<string> OpenAmong(IReadOnlyCollection<VaultPath> files)
+        => OpenAmongAsync(files, OpenBudget, CancellationToken.None, fresh: true).GetAwaiter().GetResult().Open;
+
+    // The engine's question (0.3.3, feedback N6): on worker threads, Restart Manager one question
+    // at a time, within budget (past it, the exclusive-open probe answers what Restart Manager had
+    // not cleared, as before), and a file Restart Manager cleared a few seconds ago that is still
+    // the same file is not asked again unless fresh. What gave up and who held files go to the
+    // log, each at most once per 10 minutes.
+    public async Task<OpenFilesAnswer> OpenAmongAsync(IReadOnlyCollection<VaultPath> files, TimeSpan budget, CancellationToken cancellationToken, bool fresh = false)
     {
         ArgumentNullException.ThrowIfNull(files);
         var open = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var byFile = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var path in files)
+        // Resolving checks every folder above each file for a reparse point: off the caller's thread too.
+        await Task.Run(() =>
         {
-            if (paths.TryResolve(path, out var file, out _)) byFile[file!] = path.Value;
-            else open.Add(path.Value);
-        }
-        var found = openFiles.OpenAmong([.. byFile.Keys], OpenBudget, out var diagnostic);
-        foreach (var file in found) open.Add(byFile[file]);
-        if (diagnostic is not null && OpenLog is { } log && clock.GetUtcNow() - lastOpenDiagnostic >= TimeSpan.FromMinutes(10))
+            foreach (var path in files)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (paths.TryResolve(path, out var file, out _)) byFile[file!] = path.Value;
+                else open.Add(path.Value);
+            }
+        }, cancellationToken).ConfigureAwait(false);
+        var answer = await openFiles.OpenAmongAsync([.. byFile.Keys], budget, fresh, cancellationToken).ConfigureAwait(false);
+        foreach (var file in answer.Open) open.Add(byFile[file]);
+        if (OpenLog is { } log)
         {
-            lastOpenDiagnostic = clock.GetUtcNow();
-            log("open files: " + diagnostic);
+            if (answer.Diagnostic is { } diagnostic) Rarely(ref lastOpenDiagnostic, ref diagnosticsHeld, log, "open files: " + diagnostic);
+            if (answer.Holders.Count > 0) Rarely(ref lastHoldersLogged, ref holdersHeld, log, $"open files: held by {string.Join(", ", answer.Holders)}");
         }
-        return open;
+        return new OpenFilesAnswer(open, answer.TimedOut);
     }
 
-    internal static readonly TimeSpan OpenBudget = TimeSpan.FromSeconds(10);
+    // A line at most once per 10 minutes, saying how many like it were held back since.
+    private void Rarely(ref DateTimeOffset last, ref int held, Action<string> log, string line)
+    {
+        lock (logGate)
+        {
+            if (clock.GetUtcNow() - last < TimeSpan.FromMinutes(10)) { held++; return; }
+            last = clock.GetUtcNow();
+            log(held > 0 ? $"{line} ({held:N0} more like it since the last one)" : line);
+            held = 0;
+        }
+    }
+
+    // A pass's own question (OpenAmongAsync takes the engine's, SyncEngine.OpenBudget) and the
+    // synchronous one's: the probe answers past it.
+    internal static readonly TimeSpan OpenBudget = TimeSpan.FromSeconds(2);
     internal Action<string>? OpenLog { get; set; }
-    private DateTimeOffset lastOpenDiagnostic = DateTimeOffset.MinValue;
+    private readonly object logGate = new();
+    private DateTimeOffset lastOpenDiagnostic = DateTimeOffset.MinValue, lastHoldersLogged = DateTimeOffset.MinValue;
+    private int diagnosticsHeld, holdersHeld;
+
+    // The scan's entry is still the file on disk: the same NTFS id, size and last-write time, and
+    // hashed outside the racy window (FileIdentity.StillAsHashed).
+    public bool UnchangedSinceScan(LocalFile file)
+        => file.Stamp is { } stamp && !file.Unread && paths.TryResolve(file.Path, out var full, out _) &&
+           FileIdentity.StillAsHashed(full!, stamp.Id, file.Size, stamp.LastWriteUtc, stamp.HashedAt);
+
+    // A "~$" marker's NTFS id and last-write time: the same while nobody writes it again.
+    public string? MarkerStamp(string marker)
+    {
+        if (!paths.TryResolve(marker, out var full, out _)) return null;
+        try { return FileIdentity.Of(full!) is { } stamp ? stamp.Id + ":" + stamp.LastWriteUtc.Ticks.ToString(CultureInfo.InvariantCulture) : null; }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return null; }
+    }
 
     // Captures and reads share delete as the scan does: a student can rename the file, or a
     // folder above it, while Armory reads it. The open handle still reads the same bytes, and
@@ -165,6 +215,13 @@ public sealed class WindowsVaultFileSystem : IVaultFileSystem, IDisposable
             { pendingProblems.Add($"{path.Value}: the read-only setting could not follow the new bytes: {error.Message}"); }
             return ReplaceOutcome.Done;
         }
+    }
+
+    // A download Armory just put in place: the next scan takes its hash instead of reading it
+    // again (LocalChangeDetector.Seed).
+    public void Wrote(VaultPath path, string hash)
+    {
+        lock (gate) changes.Seed(path, hash);
     }
 
     public ReplaceOutcome MoveToRecovery(VaultPath path, string expectedHash)
@@ -220,6 +277,33 @@ public sealed class WindowsVaultFileSystem : IVaultFileSystem, IDisposable
             policy.Apply(path, ownership);
             readOnlyToRestore.Remove(path);
             attributeRetry.Remove(path);
+        }
+    }
+
+    // One ApplyMany (at most one manifest write) with each refused file returned instead of
+    // retried by the next scan: the engine keeps a lock over a file whose bit it could not set,
+    // and asks again itself (0.3.3).
+    public IReadOnlyList<(VaultPath Path, string Problem)> ApplyLockAttributesNow(IReadOnlyList<(VaultPath Path, LockOwnership Ownership)> attributes)
+    {
+        ArgumentNullException.ThrowIfNull(attributes);
+        lock (gate)
+        {
+            List<(VaultPath, string)> refused = [];
+            List<(VaultPath Path, LockOwnership Ownership)> valid = [];
+            foreach (var item in attributes)
+            {
+                if (!Enum.IsDefined(item.Ownership)) throw new ArgumentOutOfRangeException(nameof(attributes));
+                if (paths.TryResolve(item.Path, out _, out var problem)) valid.Add(item);
+                else refused.Add((item.Path, problem ?? "The path is not valid in this vault."));
+            }
+            var failed = ApplyBatch(valid);
+            foreach (var (path, _) in valid)
+            {
+                readOnlyToRestore.Remove(path);
+                attributeRetry.Remove(path);
+                if (failed.TryGetValue(path, out var why)) refused.Add((path, why));
+            }
+            return refused;
         }
     }
 

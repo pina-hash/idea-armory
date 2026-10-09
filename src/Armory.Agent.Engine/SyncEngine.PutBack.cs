@@ -22,6 +22,7 @@ public sealed partial class SyncEngine
         if (!engineThread.IsCurrent) return await engineThread.InvokeAsync(() => PutBackKeptCopyAsync(fileId, versionId, cancellationToken));
         RemoteHistoryEntry kept;
         string name, path;
+        Working(Volatile.Read(ref publishedRemote).TryGetValue(fileId, out var shown) ? $"Putting your copy of {shown.File.Name} back" : "Putting your copy back");
         await EnterActionAsync(cancellationToken);
         try
         {

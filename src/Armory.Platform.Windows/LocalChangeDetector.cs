@@ -43,11 +43,23 @@ public sealed class LocalChangeDetector : IDisposable
     // last-write time (coarse or lazily updated timestamps), so its hash is not trusted yet.
     public static readonly TimeSpan RacyWindow = TimeSpan.FromSeconds(2);
     internal const string FolderMapName = "folder-ids.json";
+    // The file map (path, NTFS id, size, last-write time, hash) kept across starts, so the first
+    // scan after a start does not hash the whole vault again (0.3.3: 10 to 38 seconds seen).
+    internal const string FileMapName = "file-hashes.json";
+    // Written at most this often while files change, and when the detector is disposed.
+    internal static readonly TimeSpan FileMapEvery = TimeSpan.FromSeconds(60);
     private readonly WindowsPaths paths;
     private readonly FileSystemWatcher watcher;
     private readonly TimeSpan? maximumCacheAge;
     private readonly TimeProvider clock;
     private readonly string folderMapFile;
+    private readonly string fileMapFile;
+    // The last run's file map, used by the first scan of this one only: a hash is taken from it
+    // only for the same file (NTFS id) at the same path, with the same size and last-write time,
+    // hashed outside the racy window, as any later scan reuses its own.
+    private Dictionary<VaultPath, LocalFileState> saved = [];
+    private bool fileMapDirty;
+    private long fileMapWritten;
     private Dictionary<VaultPath, LocalFileState> cache = [];
     private bool cacheKnown;
     private Dictionary<string, LocalFolderState> folderCache = new(StringComparer.Ordinal);
@@ -78,7 +90,9 @@ public sealed class LocalChangeDetector : IDisposable
         this.clock = clock ?? TimeProvider.System;
         Directory.CreateDirectory(paths.Root);
         folderMapFile = Path.Combine(paths.PrivateDirectory(), FolderMapName);
+        fileMapFile = Path.Combine(paths.PrivateDirectory(), FileMapName);
         LoadFolderMap();
+        LoadFileMap();
         watcher = new(paths.Root)
         {
             IncludeSubdirectories = true,
@@ -127,7 +141,8 @@ public sealed class LocalChangeDetector : IDisposable
     // entry this scan could not take in (a name or path the vault refuses, a file that could not
     // be opened). Every other missing file or folder is reported missing, so one long Pack and
     // Go path never stops a deletion elsewhere from showing.
-    public LocalScan Scan(bool fullRescan = false)
+    // A canceled token stops it between files (the agent quitting); what it had read is dropped.
+    public LocalScan Scan(bool fullRescan = false, CancellationToken cancellationToken = default)
     {
         var requested = Interlocked.Exchange(ref fullRescanRequested, 0) != 0;
         var full = fullRescan || requested;
@@ -142,6 +157,7 @@ public sealed class LocalChangeDetector : IDisposable
         var reused = 0;
         foreach (var file in Enumerate(walk, folders))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var relative = Path.GetRelativePath(paths.Root, file);
             if (!VaultPath.TryCreate(relative, out var path, out var problem, paths.Root, paths.MaximumLength))
             {
@@ -164,7 +180,8 @@ public sealed class LocalChangeDetector : IDisposable
                 var readOnly = (info.Attributes & NativeMethods.FileAttributeReadOnly) != 0;
                 // The same file at the same path, or the same file moved here (a rename, or a
                 // folder rename above it), whose hash can be reused when nothing else changed.
-                var atPath = cache.TryGetValue(path, out var cached) && cached.FileId == id ? cached : null;
+                var atPath = cache.TryGetValue(path, out var cached) && cached.FileId == id ? cached
+                    : !cacheKnown && saved.TryGetValue(path, out var kept) && kept.FileId == id ? kept : null;
                 var basis = atPath ?? (oldById.TryGetValue(id, out var moved) ? moved : null);
                 // An entry carried over unread says nothing about the bytes now: a writer can
                 // change them and put the size and time back (feedback N4).
@@ -232,10 +249,13 @@ public sealed class LocalChangeDetector : IDisposable
             }
             renames = RenameOrder(renames);
         }
+        fileMapDirty |= hashes > 0 || reused > 0 || next.Count != cache.Count || !cacheKnown || next.Keys.Any(path => !cache.ContainsKey(path));
         cache = next;
         cacheKnown = true;
+        saved = [];
         folderCache = folders;
         folderCacheKnown = true;
+        if (fileMapDirty && (fileMapWritten == 0 || clock.GetElapsedTime(fileMapWritten) >= FileMapEvery)) SaveFileMap();
         if (walk.Problems.Count > 0) Interlocked.Exchange(ref fullRescanRequested, 1);
         walk.Markers.Sort(StringComparer.OrdinalIgnoreCase);
         return new(cache.Values.OrderBy(f => f.Path).ToArray(), renames, walk.Problems, hashes, full, OverflowCount)
@@ -245,6 +265,30 @@ public sealed class LocalChangeDetector : IDisposable
             Markers = walk.Markers,
             HashesReused = reused,
         };
+    }
+
+    // Armory just put these bytes at path itself (a download), through private staging, with the
+    // hash it checked as they streamed: the next scan takes that hash for this very file (its NTFS
+    // id, size and last-write time as they are now) instead of reading it again (0.3.3, feedback
+    // N3: the scan after a 542 MB slice of a download read all of it once more). The staged copy
+    // was complete and closed before the rename, so no write came between those bytes and the
+    // last-write time kept here: the entry is not racy. A write after it moves the last-write
+    // time, and the scan reads the file again. False when the file could not be read for it.
+    public bool Seed(VaultPath path, string hash)
+    {
+        if (!paths.TryResolve(path, out var file, out _)) return false;
+        try
+        {
+            using var handle = new FileStream(WindowsPaths.Extended(file!), FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            if (!NativeMethods.GetFileInformationByHandle(handle.SafeFileHandle, out var info)) return false;
+            var size = ((long)info.SizeHigh << 32) | info.SizeLow;
+            var write = DateTime.FromFileTimeUtc(((long)info.WriteTime.dwHighDateTime << 32) | (uint)info.WriteTime.dwLowDateTime);
+            var readOnly = (info.Attributes & NativeMethods.FileAttributeReadOnly) != 0;
+            cache[path] = new(path, NativeMethods.FileId(info), size, write, hash, new DateTimeOffset(write) + RacyWindow, readOnly);
+            fileMapDirty = true;
+            return true;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return false; }
     }
 
     // The agent moved a folder itself (IVaultFileSystem.MoveFolder): carry the cached ids and
@@ -268,6 +312,7 @@ public sealed class LocalChangeDetector : IDisposable
             else if (VaultPath.TryCreate(value, out var path, out _, paths.Root, paths.MaximumLength)) files[path] = file with { Path = path };
         }
         cache = files;
+        fileMapDirty = true;
         if (durableFolders is null) return;
         var durable = new Dictionary<string, string?>(StringComparer.Ordinal);
         foreach (var (path, id) in durableFolders) durable[Translate(path, moves)] = id;
@@ -570,6 +615,70 @@ public sealed class LocalChangeDetector : IDisposable
         if (SaveFolderMap(map)) durableFolders = map;
     }
 
+    // The last run's file map: {"version": 1, "files": {"<path>": {"id", "size", "write", "hash",
+    // "hashedAt"}}} with times in ticks. Anything unreadable is no map at all (every file is
+    // hashed, as before 0.3.3); an entry whose path the vault no longer takes is skipped.
+    private void LoadFileMap()
+    {
+        try
+        {
+            if (!File.Exists(fileMapFile)) return;
+            using var document = JsonDocument.Parse(File.ReadAllBytes(fileMapFile));
+            var root = document.RootElement;
+            if (!root.TryGetProperty("version", out var version) || version.GetInt32() != 1 || !root.TryGetProperty("files", out var files)) return;
+            var map = new Dictionary<VaultPath, LocalFileState>();
+            foreach (var entry in files.EnumerateObject())
+            {
+                if (!VaultPath.TryCreate(entry.Name, out var path, out _, paths.Root, paths.MaximumLength) || path.Value != entry.Name) continue;
+                var e = entry.Value;
+                map[path] = new(path, e.GetProperty("id").GetString()!, e.GetProperty("size").GetInt64(),
+                    new DateTime(e.GetProperty("write").GetInt64(), DateTimeKind.Utc), e.GetProperty("hash").GetString()!,
+                    new DateTimeOffset(e.GetProperty("hashedAt").GetInt64(), TimeSpan.Zero));
+            }
+            saved = map;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException
+            or KeyNotFoundException or FormatException or ArgumentException) { saved = []; }
+    }
+
+    // The file map as this scan left it (entries it could not read are left out: they are hashed
+    // again anyway), write-through and then an atomic rename. Not written: the next scan tries
+    // again, and until then a restart hashes more files, never fewer.
+    private void SaveFileMap()
+    {
+        var temp = fileMapFile + ".pending";
+        try
+        {
+            using (var output = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None, 64 * 1024, FileOptions.WriteThrough))
+            {
+                using (var json = new Utf8JsonWriter(output))
+                {
+                    json.WriteStartObject();
+                    json.WriteNumber("version", 1);
+                    json.WriteStartObject("files");
+                    foreach (var file in cache.Values)
+                    {
+                        if (file.Unread) continue;
+                        json.WriteStartObject(file.Path.Value);
+                        json.WriteString("id", file.FileId);
+                        json.WriteNumber("size", file.Size);
+                        json.WriteNumber("write", file.LastWriteUtc.Ticks);
+                        json.WriteString("hash", file.Hash);
+                        json.WriteNumber("hashedAt", file.HashedAt.UtcTicks);
+                        json.WriteEndObject();
+                    }
+                    json.WriteEndObject();
+                    json.WriteEndObject();
+                }
+                output.Flush(true);
+            }
+            NativeMethods.Move(temp, fileMapFile, replace: true);
+            fileMapDirty = false;
+            fileMapWritten = clock.GetTimestamp();
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or Win32Exception) { }
+    }
+
     // Write-through temp file, then an atomic rename. Not written: the next scan tries again,
     // and until then a restart reports more moves, never fewer.
     private bool SaveFolderMap(Dictionary<string, string?> map)
@@ -585,5 +694,9 @@ public sealed class LocalChangeDetector : IDisposable
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or Win32Exception) { return false; }
     }
 
-    public void Dispose() => watcher.Dispose();
+    public void Dispose()
+    {
+        watcher.Dispose();
+        if (fileMapDirty && cacheKnown) SaveFileMap();
+    }
 }

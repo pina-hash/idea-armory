@@ -49,6 +49,9 @@ internal sealed class NetworkLink
 internal sealed class LatencyHandler(LatencyProfile profile, int sitePort, int rpcPort, HttpMessageHandler inner, NetworkLink? link = null) : DelegatingHandler(inner)
 {
     private readonly NetworkLink link = link ?? new NetworkLink();
+    // The profile in force now: a test builds a large vault at loopback speed, then measures its
+    // clicks on the school network (LargeVaultResponsivenessTests).
+    public LatencyProfile Profile { get; set; } = profile;
     private long storageRequests, storageGets, siteRequests, rpcRequests, storageBytes;
 
     public long StorageRequests => Interlocked.Read(ref storageRequests);
@@ -64,6 +67,9 @@ internal sealed class LatencyHandler(LatencyProfile profile, int sitePort, int r
     public Func<string, TimeSpan>? RpcDelay { get; set; }
     // A test's slow file storage on this computer only: extra time for one storage request.
     public Func<HttpRequestMessage, TimeSpan>? StorageDelay { get; set; }
+    // A test watching file storage: told when each storage request starts (true) and when it
+    // ends, answered or not (false), so it can see when no transfer was running at all.
+    public Action<HttpRequestMessage, bool>? StorageWatch { get; set; }
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
@@ -73,23 +79,29 @@ internal sealed class LatencyHandler(LatencyProfile profile, int sitePort, int r
             if (StorageFault?.Invoke(request) is { } refused) return refused;
             Interlocked.Increment(ref storageRequests);
             if (request.Method == HttpMethod.Get) Interlocked.Increment(ref storageGets);
-            var sent = request.Content?.Headers.ContentLength ?? 0;
-            await Task.Delay(profile.StorageRoundTrip + Body(sent) + (StorageDelay?.Invoke(request) ?? TimeSpan.Zero), cancellationToken);
-            var response = await base.SendAsync(request, cancellationToken);
-            var received = request.Method == HttpMethod.Get && response.IsSuccessStatusCode ? response.Content.Headers.ContentLength ?? 0 : 0;
-            if (received > 0) await Task.Delay(Body(received), cancellationToken);
-            Interlocked.Add(ref storageBytes, sent + received);
-            return response;
+            var watch = StorageWatch;
+            watch?.Invoke(request, true);
+            try
+            {
+                var sent = request.Content?.Headers.ContentLength ?? 0;
+                await Task.Delay(Profile.StorageRoundTrip + Body(sent) + (StorageDelay?.Invoke(request) ?? TimeSpan.Zero), cancellationToken);
+                var response = await base.SendAsync(request, cancellationToken);
+                var received = request.Method == HttpMethod.Get && response.IsSuccessStatusCode ? response.Content.Headers.ContentLength ?? 0 : 0;
+                if (received > 0) await Task.Delay(Body(received), cancellationToken);
+                Interlocked.Add(ref storageBytes, sent + received);
+                return response;
+            }
+            finally { watch?.Invoke(request, false); }
         }
         if (uri.Port == sitePort)
         {
             Interlocked.Increment(ref siteRequests);
-            await Task.Delay(profile.SiteRoundTrip, cancellationToken);
+            await Task.Delay(Profile.SiteRoundTrip, cancellationToken);
         }
         else if (uri.Port == rpcPort)
         {
             Interlocked.Increment(ref rpcRequests);
-            await Task.Delay(profile.RpcRoundTrip + (RpcDelay?.Invoke(uri.AbsolutePath) ?? TimeSpan.Zero), cancellationToken);
+            await Task.Delay(Profile.RpcRoundTrip + (RpcDelay?.Invoke(uri.AbsolutePath) ?? TimeSpan.Zero), cancellationToken);
         }
         return await base.SendAsync(request, cancellationToken);
     }
@@ -97,6 +109,7 @@ internal sealed class LatencyHandler(LatencyProfile profile, int sitePort, int r
     // Time for one body: the slower of its own connection and its place on the shared link.
     private TimeSpan Body(long bytes)
     {
+        var profile = Profile;
         if (bytes <= 0 || profile.StorageBytesPerSecond <= 0) return TimeSpan.Zero;
         var own = bytes / profile.StorageBytesPerSecond;
         var shared = profile.LinkBytesPerSecond > 0 ? link.Reserve(bytes, profile.LinkBytesPerSecond) : 0;

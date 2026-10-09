@@ -240,8 +240,11 @@ public sealed class CheckOutTests
 
     // A pass asks whether its files are open once for all of them, never once per file: on
     // Windows each question was a Restart Manager session (about 28 ms), so a quiet pass over
-    // 1,500 files took 40 seconds and every click waited behind it (0.3.1's field reports).
-    // Checking out a folder asks once for its files too. Open files are still found.
+    // 1,500 files took 40 seconds and every click waited behind it (0.3.1's field reports). And
+    // since 0.3.3 only about the files whose plan depends on it (Reconciler.OpenMatters): a quiet
+    // pass over synced files asks about none (0.3.2's question about every file took the 10 second
+    // Restart Manager budget every pass). Checking out a folder asks once for its files, fresh,
+    // before it takes their locks. Open files are still found.
     [PostgresFact]
     public async Task A_pass_and_a_check_out_ask_whether_files_are_open_once_for_all_of_them()
     {
@@ -252,20 +255,21 @@ public sealed class CheckOutTests
         for (var i = 0; i < many; i++) t.A.Write($"{Fonts}/Font{i:000}.ttf", "font " + i);
         await t.A.SyncAsync();
         var disk = t.A.Disk;
-        (int One, int Batch) Asked() => (disk.IsOpenCalls, disk.OpenAmongCalls);
+        (int One, int Batch, int Files) Asked() => (disk.IsOpenCalls, disk.OpenAmongCalls, disk.OpenAmongSizes.Sum());
 
         var before = Asked();
         await t.A.SyncAsync();
         var quiet = Asked();
         Assert.InRange(quiet.One - before.One, 0, 2);
-        Assert.InRange(quiet.Batch - before.Batch, 1, 3);
+        Assert.Equal(0, quiet.Files - before.Files);
 
         t.A.Disk.Open($"{Fonts}/Font007.ttf");
         // The open file is found through the batch: it is the one to open again.
         Assert.Equal($"Checked out {many} files. Close Font007.ttf in SolidWorks and open it again to save changes.", (await t.A.CheckOutAsync(Fonts)).Message);
         var checkedOut = Asked();
         Assert.InRange(checkedOut.One - quiet.One, 0, 4);
-        Assert.InRange(checkedOut.Batch - quiet.Batch, 2, 8);
+        Assert.InRange(checkedOut.Batch - quiet.Batch, 1, 3);
+        Assert.All(disk.OpenAmongSizes.Skip(quiet.Batch), size => Assert.InRange(size, 1, many));
         t.A.Disk.Close($"{Fonts}/Font007.ttf");
         NoViolations(t.A);
     }

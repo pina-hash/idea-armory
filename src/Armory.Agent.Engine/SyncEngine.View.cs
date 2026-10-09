@@ -40,8 +40,9 @@ public sealed partial class SyncEngine
         var moving = Activity(files, pending);
         var sync = paused ? new SyncView(SyncStates.Paused, "Paused. Nothing uploads or downloads until you resume.", null, pending)
             : online == false ? new SyncView(SyncStates.Offline, "You're offline. Your work is safe on this computer.", pending > 0 ? null : LastChecked(), pending)
-            // While files move, the status line is the activity's line ("Downloading 412 of 1,280 files, ...").
-            : syncing ? new SyncView(SyncStates.Syncing, moving.Line ?? "Checking for changes.", null, pending)
+            // While files move, the status line is the activity's line ("Downloading 412 of 1,280 files, ..."),
+            // between the passes of a long download too (continuing: never "saved" between two slices).
+            : syncing || continuing ? new SyncView(SyncStates.Syncing, moving.Line ?? "Checking for changes.", null, pending)
             : notices.Any(n => n.Tone != NoticeTones.Info) ? new SyncView(SyncStates.Attention, AttentionLine(notices, pending), LastChecked(), pending)
             : pending > 0 ? new SyncView(SyncStates.Syncing, "Uploading your saves.", null, pending)
             : new SyncView(SyncStates.Synced, "Everything is saved to Armory.", LastChecked(), 0);
@@ -447,8 +448,9 @@ public sealed partial class SyncEngine
         return mine;
     }
 
-    // The file is open here now (where it is on disk; a file not on disk is not open).
-    private bool OpenHere(FileState st) => TryLocal(st.Path, out var file) && IsOpenNow(file.Path);
+    // The file is open here (where it is on disk; a file not on disk is not open), as the last
+    // question about it answered: a view never asks the platform about a file (0.3.3).
+    private bool OpenHere(FileState st) => TryLocal(st.Path, out var file) && KnownOpen(file.Path);
 
     private IReadOnlyList<ProjectView> Projects()
     {
@@ -633,25 +635,45 @@ public sealed partial class SyncEngine
 
     // ---- File detail ---------------------------------------------------------------------
 
-    // On the engine thread, never behind a pass: the server's files as last published
-    // (publishedRemote), this computer's record and disk as they are between two steps of a pass.
-    public Task<FileDetailView?> GetFileDetailAsync(Guid fileId, CancellationToken cancellationToken = default)
-        => engineThread.InvokeAsync(() => DetailAsync(fileId, cancellationToken));
-
-    private async Task<FileDetailView?> DetailAsync(Guid fileId, CancellationToken cancellationToken)
+    // Never behind a pass (0.3.3: armory_file_history took 10.6 seconds behind a plan): the
+    // server's files as last published (publishedRemote, immutable, read from any thread) and the
+    // file's history are asked at once from the caller's thread; only this computer's part (its
+    // record and disk as they are between two steps of a pass) is read on the engine thread
+    // meanwhile, which a pass gives up every few hundred paths at most.
+    public async Task<FileDetailView?> GetFileDetailAsync(Guid fileId, CancellationToken cancellationToken = default)
     {
-        if (!publishedRemote.TryGetValue(fileId, out var remote)) return null;
-        IReadOnlyList<RemoteHistoryEntry> history;
-        try { history = await deps.Api.FileHistoryAsync(fileId, cancellationToken); }
-        catch (ArmoryClientException) { history = []; }
+        if (!Volatile.Read(ref publishedRemote).TryGetValue(fileId, out var remote)) return null;
+        var history = HistoryAsync(fileId, cancellationToken);
+        var here = await engineThread.InvokeAsync(() => Task.FromResult(DetailHereOf(fileId, remote))).ConfigureAwait(false);
+        return Detail(fileId, remote, here, await history.ConfigureAwait(false));
+    }
+
+    private async Task<IReadOnlyList<RemoteHistoryEntry>> HistoryAsync(Guid fileId, CancellationToken cancellationToken)
+    {
+        try { return await deps.Api.FileHistoryAsync(fileId, cancellationToken).ConfigureAwait(false); }
+        catch (ArmoryClientException) { return []; }
+    }
+
+    // This computer's part of File detail, read on the engine thread.
+    private sealed record DetailHere(string Status, CheckoutView Checkout, int? Year, string ProjectName, int PinnedRelease, bool CanTakeBack, DateTimeOffset[] Revivals);
+
+    private DetailHere DetailHereOf(Guid fileId, (RemoteFile File, ProjectState Project, VaultPath Path) remote)
+    {
         state.Files.TryGetValue(remote.Path.Value, out var st);
         TryLocal(remote.Path.Value, out var file);
+        return new(StatusOf(st, remote.File, file, OwnershipOf(remote.File.Lock)), CheckoutOf(remote.File.Lock), TeamRelease(remote.File, remote.Path, st),
+            remote.Project.Name, remote.Project.PinnedRelease, remote.Project.CanTakeBack, [.. (state.Revivals.GetValueOrDefault(fileId) ?? []).Order()]);
+    }
+
+    // File detail from immutable parts only: any thread builds it.
+    private static FileDetailView Detail(Guid fileId, (RemoteFile File, ProjectState Project, VaultPath Path) remote, DetailHere here, IReadOnlyList<RemoteHistoryEntry> history)
+    {
         var currentId = remote.File.Current?.Id;
         var ordered = history.OrderBy(h => h.CreatedAt).ThenBy(h => h.Id).ToArray();
         // The server drops a revived file's removal from its history (0232 deletes the tombstone
         // row), so a revival is known from the change feed: the first version after it is the
         // file added again.
-        var revivals = new Queue<DateTimeOffset>((state.Revivals.GetValueOrDefault(fileId) ?? []).Order());
+        var revivals = new Queue<DateTimeOffset>(here.Revivals);
         var versionNotes = new Dictionary<Guid, string>();
         var firstVersion = true;
         var afterRemoval = false;
@@ -667,14 +689,13 @@ public sealed partial class SyncEngine
         var entries = ordered.Reverse().Select(h => new HistoryEntryView(h.Id.ToString(),
             h.Kind == "side_version" ? HistoryKinds.KeptCopy : h.Kind == "tombstone" ? HistoryKinds.Removed : HistoryKinds.Version,
             DisplayName(h.Author), h.CreatedAt.ToString("O", CultureInfo.InvariantCulture), h.Bytes,
-            h.Kind == "tombstone" ? $"Removed from {remote.Project.Name}" : versionNotes.GetValueOrDefault(h.Id) ?? KeptCopyNote(h),
+            h.Kind == "tombstone" ? $"Removed from {here.ProjectName}" : versionNotes.GetValueOrDefault(h.Id) ?? KeptCopyNote(h),
             h.ReleaseChecked == false, h.Id == currentId,
             // Saves kept while checked out (and earlier saves) are the ordinary record of work, not news.
             h.Kind == "side_version" && h.Reason is SavedWhileCheckedOutReason or EarlierSaveReason)).ToArray();
-        var year = TeamRelease(remote.File, remote.Path, st);
-        return new FileDetailView(fileId.ToString(), remote.File.Name, remote.Path.Value, remote.Project.Name, remote.File.Folder,
-            StatusOf(st, remote.File, file, OwnershipOf(remote.File.Lock)), CheckoutOf(remote.File.Lock), remote.File.Current?.ReleaseChecked == false,
-            remote.Project.CanTakeBack, entries, year, year > remote.Project.PinnedRelease);
+        return new FileDetailView(fileId.ToString(), remote.File.Name, remote.Path.Value, here.ProjectName, remote.File.Folder,
+            here.Status, here.Checkout, remote.File.Current?.ReleaseChecked == false,
+            here.CanTakeBack, entries, here.Year, here.Year > here.PinnedRelease);
     }
 
     // A kept copy's note, from the reason the server keeps with it.

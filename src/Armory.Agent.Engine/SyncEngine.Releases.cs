@@ -161,7 +161,7 @@ public sealed partial class SyncEngine
         foreach (var (_, project, path, current) in UncheckedTeamVersions())
         {
             ct.ThrowIfCancellationRequested();
-            if (!TryLocal(path.Value, out var file) || file.Hash != current.Hash) continue;
+            if (Fenced(path.Value) || !TryLocal(path.Value, out var file) || file.Hash != current.Hash) continue;
             state.Files.TryGetValue(path.Value, out var st);
             if (releases.ContainsKey(current.Hash) || (st is { ReleaseYear: not null } && st.ReleaseHash == current.Hash)) continue;
             if (loopPass && (actionsWaiting > 0 || deps.Clock.GetElapsedTime(started) >= ReleaseAuditSlice)) return;

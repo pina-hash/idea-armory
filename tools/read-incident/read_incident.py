@@ -104,7 +104,8 @@ def describe(event):
         return (f"pass end ({event.get('pass')}) {ok(event)} after {ms(event.get('ms'))}: {event.get('downloaded', 0)} down, "
                 f"{event.get('uploaded', 0)} up, {event.get('keptCopies', 0)} kept copies, {event.get('refused', 0)} refused")
     if kind == "passYield":
-        return f"pass gave way ({event.get('reason')}) after {ms(event.get('ms'))}, {event.get('unitsLeft')} units left"
+        carried = f", {event['carried']} carried on" if event.get("carried") else ""
+        return f"pass gave way ({event.get('reason')}) after {ms(event.get('ms'))}, {event.get('unitsLeft')} units left{carried}"
     if kind == "rpc":
         error = f" {event['error']}" if event.get("error") else ""
         return f"rpc {event.get('name')} {ms(event.get('ms'))} {event.get('status')} {ok(event)}{error}"
@@ -137,6 +138,11 @@ def describe(event):
             return f"refusal ended {event.get('path')}"
         namesake = f" (its name is taken by {event['namesake']})" if event.get("namesake") else ""
         return f"REFUSED {event.get('refusal')} {event.get('path')}{namesake}"
+    if kind == "openFiles":
+        late = ", gave up at its budget" if event.get("timedOut") else ""
+        return f"open-files question about {event.get('files')} files: {ms(event.get('ms'))}{late}"
+    if kind == "power":
+        return f"the computer {'went to sleep' if event.get('mode') == 'suspend' else 'woke up' if event.get('mode') == 'resume' else event.get('mode')}"
     return json.dumps(event, ensure_ascii=False)
 
 
@@ -178,7 +184,7 @@ def print_incident(name, incident, row, args, out):
         mark = ">>" if trigger_seq is not None and event.get("seq") == trigger_seq else "  "
         out.write(f"{mark}{relative(event, anchor)}  {describe(event)}\n")
 
-    timed = [e for e in events if e.get("kind") in ("rpc", "transfer", "windowAction", "passEnd") and e.get("ms") is not None]
+    timed = [e for e in events if e.get("kind") in ("rpc", "transfer", "windowAction", "passEnd", "openFiles") and e.get("ms") is not None]
     if timed:
         out.write(f"\nSlowest ({min(args.slowest, len(timed))} of {len(timed)} calls, transfers, window actions and passes)\n")
         for event in sorted(timed, key=lambda e: e.get("ms", 0), reverse=True)[: args.slowest]:

@@ -133,8 +133,8 @@ SyncView {
 
 ActivityView {
   line: string | null,              // e.g. "Downloading 412 of 1,280 files, 2.1 GB left, about 3 min"
-  upload: DirectionView | null,
-  download: DirectionView | null,
+  upload: DirectionView | null,     // 0.3.3: or, while nothing uploads, a check in's, an undo's or a Force check in's count
+  download: DirectionView | null,   // 0.3.3: or, while nothing downloads, a check out's count
   move: DirectionView | null,
   waiting: WaitingView | null,
   active: ActiveTransferView[],     // at most 8, each drawn with its own progress track
@@ -148,13 +148,42 @@ DirectionView {
   filesDone: number, filesTotal: number, bytesDone: number, bytesTotal: number,
   bytesPerSecond: number,
   secondsLeft: number | null,       // null until 3 seconds and 2 files have gone by
-  line: string                      // e.g. "Uploading 3 of 9 files, 48 MB left, about 20 sec", "Moving 120 files to Gearbox"
+  line: string                      // e.g. "Uploading 3 of 9 files, 48 MB left, about 20 sec", "Moving 120 files to Gearbox",
+                                    // "Checking out 500 of 1,400 files" (0.3.3)
 }
 WaitingView { count: number, line: string }
   // "3 files are waiting to upload. They upload when this computer is back online."
   // "2 checked-out files have changes. Check them in to share them."
 ActiveTransferView { path: string, name: string, direction: "upload" | "download" | "move", bytesDone: number, bytesTotal: number }
+```
 
+What the activity says, since 0.3.3 (feedback N2, N3 and N8; docs/agent/ENGINE.md "Activity"; the
+records and their fields are unchanged, so the page needs nothing new to show it):
+
+- **A long download or upload is one run.** Between the passes that move it, `sync.state` stays
+  `syncing` and `activity.line` (the status line) keeps its count ("Downloading 1,160 of 1,429
+  files, 701 MB left, about 11 min"); the page never sees "Checking for changes." or "Everything is
+  saved to Armory." in the middle of it, and the tray never flips. The running lines (`log`) say
+  how far it got at most every 10 seconds ("Downloaded 600 of 1,429 files"), then once when it is
+  over ("Finished: 1,429 files downloaded in 7 min.", with "uploaded" and "kept copies saved"
+  when there were some; no time under a minute). Paused, they say how far it got once the files
+  in flight have landed ("Paused: 412 files downloaded so far."); going offline adds it to the
+  offline line ("This computer is offline. Armory keeps trying by itself. 412 files downloaded so
+  far."). "Sync finished: ..." after every slice is gone, and no running line says "sync".
+- **A check out, an undo and a Force check in of several files count, from the click to the
+  answer.** Shown in `download` (a check out: "Checking out 500 of 1,400 files") or `upload` (an
+  undo: "Undoing 3 of 10 check outs"; a Force check in: "Force checking in 120 of 300 files")
+  while nothing moves that way, as a check in's "Checking in 412 of 4,900 files" already was;
+  `activity.line` is the line of whichever count has the most left. A Force check in's lines
+  arrive while its calls are made ("Force checked in 500 of 1,200 files"), never all at once after.
+- **Steps that take a while say so**: "Looking over 1,467 files on this computer", "Asking Armory
+  what changed" (written once the step has taken a second, or 0.3 seconds in a click's own pass),
+  "Read 600 of 1,400 files" (a check out or a check in reading the copies it must), "Copying 300 of
+  1,000 files into Intake" (Add files), "Deleting Gearbox (120 files)", "Moved 120 files to
+  Chassis". The answer of an action of many files (and of a folder's) is the last running line
+  too ("Checked out 1,400 files.").
+
+```
 NoticeGroupView {
   key: string,                      // dismissNotice sends it back
   kind: "import" | "nameShared" | "newerWaiting" | "keptCopy" | "takenBack" | "folderPutBack"

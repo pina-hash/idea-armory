@@ -332,6 +332,96 @@ public sealed class StateAndActivityTests
         Assert.Equal(3, now.Waiting!.Count);
     }
 
+    // 0.3.3 (feedback N3, C-0.3.2-slice-counts): a long download's lane is kept across the passes
+    // that move it. Until 0.3.2 the files a slice did not start were dropped from it, so between
+    // two slices the window had no Downloading direction and said "Checking for changes." Now they
+    // stay expected (and the ones in flight go on), the next pass lets go of only those it no
+    // longer plans, and the end of the run clears the lane.
+    [Fact]
+    public void Carried_downloads_stay_visible_between_continuation_passes()
+    {
+        var clock = new ManualClock();
+        var activity = new ActivityTracker(clock);
+        for (var i = 0; i < 100; i++) activity.Expect(Directions.Download, $"Robot 2027/Part-{i:D3}.SLDPRT", 1000);
+        // The first slice moves 20 files; 6 more are in flight when it ends, carried on.
+        List<ActivityTracker.Transfer> carried = [];
+        for (var i = 0; i < 26; i++)
+        {
+            var transfer = activity.Start(Directions.Download, $"Robot 2027/Part-{i:D3}.SLDPRT", 1000);
+            if (i < 20)
+            {
+                transfer.Report(1000);
+                activity.Finish(transfer);
+            }
+            else carried.Add(transfer);
+            clock.Advance(0.1);
+        }
+        // Between the passes: the lane, its counts and the files in flight, all still there.
+        var between = activity.Snapshot();
+        Assert.Equal("Downloading 20 of 100 files, 78.1 KB left", between.Line);
+        Assert.Equal(between.Line, between.Download!.Line);
+        Assert.Equal(6, between.Active.Count);
+        // The next pass plans 70 of the 74 not started again (4 need nothing now): expected once,
+        // and the 4 leave the totals. A carried file lands meanwhile.
+        var planned = Enumerable.Range(30, 70).Select(i => $"Robot 2027/Part-{i:D3}.SLDPRT").ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var path in planned) activity.Expect(Directions.Download, path, 1000);
+        activity.Prune(Directions.Download, planned);
+        carried[0].Report(1000);
+        activity.Finish(carried[0]);
+        Assert.Equal((21, 96), activity.Count(Directions.Download));
+        Assert.StartsWith("Downloading 21 of 96 files", activity.Snapshot().Line, StringComparison.Ordinal);
+        // The run ends: the lane goes, and with it the line.
+        activity.Reset();
+        Assert.Null(activity.Snapshot().Download);
+        Assert.Null(activity.Snapshot().Line);
+        Assert.Equal((0, 0), activity.Count(Directions.Download));
+    }
+
+    // 0.3.3 (feedback N8: "Checking for changes." for the whole of a 1,400-file check out): a check
+    // out, an undo and a Force check in of several files have their own count from the click to
+    // the answer, shown in the download or upload direction while nothing moves that way. The end
+    // of a pass leaves them; each goes once it is complete, so the next one counts from 0.
+    [Fact]
+    public void A_window_action_has_its_own_count_from_the_click_to_the_answer()
+    {
+        var clock = new ManualClock();
+        var activity = new ActivityTracker(clock);
+        for (var i = 0; i < 1400; i++) activity.Expect(ActivityTracker.CheckOut, $"Robot 2027/Part-{i:D4}.SLDPRT", 0);
+        Assert.Equal("Checking out 0 of 1,400 files", activity.Snapshot().Line);
+        for (var i = 0; i < 500; i++) activity.Done(ActivityTracker.CheckOut, $"Robot 2027/Part-{i:D4}.SLDPRT");
+        var now = activity.Snapshot();
+        Assert.Equal("Checking out 500 of 1,400 files", now.Line);
+        Assert.Equal(now.Line, now.Download!.Line);
+        Assert.Equal((500, 1400), (now.Download.FilesDone, now.Download.FilesTotal));
+        // A pass ends in the middle: the count stays. 100 are someone else's: out of the count.
+        activity.Reset();
+        for (var i = 500; i < 600; i++) activity.Drop($"Robot 2027/Part-{i:D4}.SLDPRT", ActivityTracker.CheckOut);
+        Assert.Equal("Checking out 500 of 1,300 files", activity.Snapshot().Line);
+        // Downloads take the download direction; the line is the one with the most left.
+        activity.Expect(Directions.Download, "Robot 2027/Other.SLDPRT", 1024);
+        now = activity.Snapshot();
+        Assert.StartsWith("Downloading 0 of 1 file", now.Download!.Line, StringComparison.Ordinal);
+        Assert.Equal("Checking out 500 of 1,300 files", now.Line);
+        activity.Drop("Robot 2027/Other.SLDPRT");
+        // Done: the lane goes, and the next check out counts from 0.
+        for (var i = 600; i < 1400; i++) activity.Done(ActivityTracker.CheckOut, $"Robot 2027/Part-{i:D4}.SLDPRT");
+        Assert.Null(activity.Snapshot().Line);
+        activity.Expect(ActivityTracker.CheckOut, "Robot 2027/A.SLDPRT", 0);
+        activity.Expect(ActivityTracker.CheckOut, "Robot 2027/B.SLDPRT", 0);
+        Assert.Equal("Checking out 0 of 2 files", activity.Snapshot().Line);
+
+        // An undo and a Force check in count in the upload direction.
+        var undo = new ActivityTracker(clock);
+        for (var i = 0; i < 10; i++) undo.Expect(ActivityTracker.Undo, $"Robot 2027/Part-{i}.SLDPRT", 0);
+        for (var i = 0; i < 3; i++) undo.Done(ActivityTracker.Undo, $"Robot 2027/Part-{i}.SLDPRT");
+        Assert.Equal("Undoing 3 of 10 check outs", undo.Snapshot().Upload!.Line);
+        var force = new ActivityTracker(clock);
+        for (var i = 0; i < 300; i++) force.Expect(ActivityTracker.TakeBack, $"file-{i}", 0);
+        for (var i = 0; i < 120; i++) force.Done(ActivityTracker.TakeBack, $"file-{i}");
+        Assert.Equal("Force checking in 120 of 300 files", force.Snapshot().Line);
+        Assert.Equal(force.Snapshot().Line, force.Snapshot().Upload!.Line);
+    }
+
     [Fact]
     public void Time_left_waits_for_three_seconds_and_two_files()
     {

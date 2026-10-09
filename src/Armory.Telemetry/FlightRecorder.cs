@@ -19,6 +19,9 @@ public enum FlightKind : byte
     RepairedCheckout,
     Note,
     Refusal,
+    // 0.3.3: one open-files question (feedback N6), and the computer going to sleep or waking.
+    OpenFiles,
+    Power,
 }
 
 // One event, stored in place in the recorder's ring (no allocation per event). Strings are
@@ -93,8 +96,10 @@ public sealed class FlightRecorder
     public void PassEnd(string kind, bool failed, long ms, int downloaded, int uploaded, int keptCopies, int refused)
         => Write(FlightKind.PassEnd, kind, null, null, !failed, ms: ms, count: downloaded, count2: uploaded, count3: keptCopies, count4: refused);
 
-    // A loop pass gave way (its time slice was up, or a window action waited) with units left.
-    public void PassYield(string reason, int unitsLeft, long ms) => Write(FlightKind.PassYield, reason, null, null, true, ms: ms, count: unitsLeft);
+    // A loop pass gave way (its time slice was up, a window action waited, or Armory was paused)
+    // with units left, and carried the units still in flight on to the passes after it (0.3.3).
+    public void PassYield(string reason, int unitsLeft, long ms, int carried = 0)
+        => Write(FlightKind.PassYield, reason, null, null, true, ms: ms, count: unitsLeft, count2: carried);
 
     // One server call: its name, how long, and its answer (an HTTP status, or 0 with an error
     // code such as "offline"). Never a token or a body.
@@ -139,6 +144,13 @@ public sealed class FlightRecorder
     // the path of the file that holds a taken name), or ended (kind null). Recorded only when it
     // changes, never again on every pass while it stands.
     public void Refusal(string path, string? kind, string? namesake) => Write(FlightKind.Refusal, kind, path, namesake, kind is null);
+
+    // One open-files question the engine asked the platform (0.3.3): how long it took, how many
+    // files it named, and whether the platform gave up on part of it at its budget.
+    public void OpenFiles(long ms, int files, bool timedOut) => Write(FlightKind.OpenFiles, null, null, null, !timedOut, ms: ms, count: files);
+
+    // The computer went to sleep ("suspend") or woke ("resume"): a pass that spans it is not slow.
+    public void Power(string mode) => Write(FlightKind.Power, mode, null, null, true);
 
     private void Write(FlightKind kind, string? name, string? target, string? detail, bool ok, int status = 0, long ms = 0, long bytes = 0,
         int count = 0, int count2 = 0, int count3 = 0, int count4 = 0, string? stack = null, bool fatal = false)

@@ -142,6 +142,8 @@ public sealed partial class SyncEngine
     {
         foreach (var st in state.Files.Values.Where(f => f.Purged).ToArray())
         {
+            // A carried unit still writing it: it goes aside on a pass after that unit ends.
+            if (Fenced(st)) continue;
             if (TryLocal(st.Path, out var file) && !LeaveForRecovery(file)) continue;
             state.Files.Remove(st.Path);
             MarkDirty();

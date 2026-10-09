@@ -17,7 +17,10 @@ public sealed class BlobRefusedException(int status, string message) : ArmoryCli
 // One file's transfer did not go through this time (file storage refused it, it took too long,
 // or the bytes were cut off), while the connection itself works. Only that file waits for the
 // next try; a real connection failure is ArmoryOfflineException.
-public sealed class StorageTransferException(string message, Exception? inner = null) : ArmoryClientException(message, inner);
+public class StorageTransferException(string message, Exception? inner = null) : ArmoryClientException(message, inner);
+// No bytes moved for BlobClient.StallAfter, twice: the transfer stalled, and was tried once more
+// with a fresh URL before this was thrown. One file's problem, like any storage trouble.
+public sealed class StorageStalledException(string message, Exception? inner = null) : StorageTransferException(message, inner);
 
 // Contract section 2: ideabosco.com mints a 15-minute URL for one content-addressed object;
 // the bytes go straight between this computer and storage. Each URL request and each transfer
@@ -27,7 +30,15 @@ public sealed class BlobClient(HttpClient siteHttp, HttpClient storageHttp, Uri 
 {
     public const long MaximumPutBytes = 2L * 1024 * 1024 * 1024;
     public const string UrlCall = "blob-url";
+    public static readonly TimeSpan DefaultStallAfter = TimeSpan.FromSeconds(30);
     private int active;
+
+    // A transfer that moves no bytes for this long (or waits this long for storage's answer)
+    // stalled: it is stopped and tried once more with a fresh URL, and a second stall fails that
+    // file alone (StorageStalledException) until its next try (0.3.3, feedback N3: one 31.5 MB
+    // download took 83 seconds while the others took 2 to 5, and the storage client's own
+    // timeout of two hours never bounds a body that stops coming).
+    public TimeSpan StallAfter { get; init; } = DefaultStallAfter;
 
     // Uploads and downloads under way right now (the incident uploader waits for none).
     public int ActiveTransfers => Volatile.Read(ref active);
@@ -122,17 +133,38 @@ public sealed class BlobClient(HttpClient siteHttp, HttpClient storageHttp, Uri 
     private async Task<bool> UploadUnrecordedAsync(Guid project, string hash, long bytes, Func<Stream> open, CancellationToken ct, IProgress<long>? progress)
     {
         if (bytes > MaximumPutBytes) throw new BlobRefusedException(400, "Files larger than 2 GiB cannot be stored in Armory yet.");
+        for (var attempt = 0; ; attempt++)
+        {
+            var started = recorder?.Now() ?? 0;
+            try { return await UploadOnceAsync(project, hash, bytes, open, ct, progress); }
+            catch (StorageStalledException) when (attempt == 0)
+            {
+                // Tried once more, from the start, with a fresh URL.
+                recorder?.Transfer("upload", bytes, recorder.MillisecondsSince(started), false, 0, "stalled");
+            }
+        }
+    }
+
+    private async Task<bool> UploadOnceAsync(Guid project, string hash, long bytes, Func<Stream> open, CancellationToken ct, IProgress<long>? progress)
+    {
         var url = await GetUrlAsync(project, hash, bytes, HttpMethod.Put, ct);
         if (url.Exists) return false;
         await using var source = open();
         progress?.Report(0);
-        using var request = new HttpRequestMessage(HttpMethod.Put, url.Url) { Content = new StreamContent(progress is null ? source : new ProgressStream(source, progress)) };
+        using var stall = new Stall(StallAfter, ct);
+        // Each read of the body by the HTTP stack is bytes moving: the stall clock starts again.
+        using var request = new HttpRequestMessage(HttpMethod.Put, url.Url) { Content = new StreamContent(new ProgressStream(source, new Moving(stall, progress))) };
         request.Content.Headers.ContentLength = bytes;
         foreach (var header in url.Headers)
             if (!request.Headers.TryAddWithoutValidation(header.Key, header.Value)) request.Content.Headers.TryAddWithoutValidation(header.Key, header.Value);
-        using var response = await SendStorageAsync(request, ct);
-        if (!response.IsSuccessStatusCode) throw new StorageTransferException($"File storage refused the upload ({(int)response.StatusCode}).");
-        return true;
+        HttpResponseMessage response;
+        try { response = await SendStorageAsync(request, stall.Token); }
+        catch (OperationCanceledException error) when (stall.Stalled) { throw new StorageStalledException("The upload stalled.", error); }
+        using (response)
+        {
+            if (!response.IsSuccessStatusCode) throw new StorageTransferException($"File storage refused the upload ({(int)response.StatusCode}).");
+            return true;
+        }
     }
 
     // Writes verified bytes to destination. Mismatched bytes throw HashMismatchException
@@ -142,27 +174,55 @@ public sealed class BlobClient(HttpClient siteHttp, HttpClient storageHttp, Uri 
     public Task DownloadAsync(Guid project, string hash, long bytes, Stream destination, CancellationToken ct = default, IProgress<long>? progress = null)
         => TransferAsync("download", bytes, async () => { await DownloadUnrecordedAsync(project, hash, bytes, destination, ct, progress); return true; }, _ => true);
 
+    // A download that stalls (no bytes for StallAfter, or no answer from storage) is tried once
+    // more from the start, with a fresh URL, when the destination can be emptied again.
     private async Task DownloadUnrecordedAsync(Guid project, string hash, long bytes, Stream destination, CancellationToken ct, IProgress<long>? progress)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            var started = recorder?.Now() ?? 0;
+            try
+            {
+                await DownloadOnceAsync(project, hash, bytes, destination, ct, progress);
+                return;
+            }
+            catch (StorageStalledException) when (attempt == 0 && destination.CanSeek)
+            {
+                recorder?.Transfer("download", bytes, recorder.MillisecondsSince(started), false, 0, "stalled");
+                destination.SetLength(0);
+                destination.Position = 0;
+            }
+        }
+    }
+
+    private async Task DownloadOnceAsync(Guid project, string hash, long bytes, Stream destination, CancellationToken ct, IProgress<long>? progress)
     {
         var url = await GetUrlAsync(project, hash, bytes, HttpMethod.Get, ct);
         using var request = new HttpRequestMessage(HttpMethod.Get, url.Url);
         foreach (var header in url.Headers) request.Headers.TryAddWithoutValidation(header.Key, header.Value);
-        using var response = await SendStorageAsync(request, ct, HttpCompletionOption.ResponseHeadersRead);
+        using var stall = new Stall(StallAfter, ct);
+        HttpResponseMessage response;
+        try { response = await SendStorageAsync(request, stall.Token, HttpCompletionOption.ResponseHeadersRead); }
+        catch (OperationCanceledException error) when (stall.Stalled) { throw new StorageStalledException("The download stalled.", error); }
+        using var answered = response;
         if (!response.IsSuccessStatusCode) throw new StorageTransferException($"File storage refused the download ({(int)response.StatusCode}).");
         using var sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         try
         {
-            await using var received = await response.Content.ReadAsStreamAsync(ct);
+            await using var received = await response.Content.ReadAsStreamAsync(stall.Token);
             progress?.Report(0);
             await using var body = progress is null ? received : new ProgressStream(received, progress);
             var buffer = new byte[81920];
             int read;
-            while ((read = await body.ReadAsync(buffer, ct)) > 0)
+            while ((read = await body.ReadAsync(buffer, stall.Token)) > 0)
             {
+                stall.Moved();
                 sha.AppendData(buffer, 0, read);
                 await destination.WriteAsync(buffer.AsMemory(0, read), ct);
+                stall.Moved(); // a slow disk is not a stalled transfer
             }
         }
+        catch (OperationCanceledException error) when (stall.Stalled) { throw new StorageStalledException("The download stalled.", error); }
         catch (HttpRequestException error) { throw new StorageTransferException("The download was cut off.", error); }
         catch (HttpIOException error) { throw new StorageTransferException("The download was cut off.", error); }
         var actual = Convert.ToHexStringLower(sha.GetHashAndReset());
@@ -178,4 +238,43 @@ public sealed class BlobClient(HttpClient siteHttp, HttpClient storageHttp, Uri 
     }
 
     private sealed record Answer(string? Url, Dictionary<string, string>? Headers, string? ExpiresAt, bool Exists);
+
+    // One transfer's stall clock: its token is canceled once no bytes moved for the time given
+    // (or when the caller's token is), and every move starts the clock again.
+    private sealed class Stall : IDisposable
+    {
+        private readonly CancellationTokenSource source;
+        private readonly CancellationToken caller;
+        private readonly TimeSpan after;
+
+        internal Stall(TimeSpan after, CancellationToken caller)
+        {
+            this.after = after;
+            this.caller = caller;
+            source = CancellationTokenSource.CreateLinkedTokenSource(caller);
+            source.CancelAfter(after);
+        }
+
+        internal CancellationToken Token => source.Token;
+        // The clock ran out, not the caller's token.
+        internal bool Stalled => source.IsCancellationRequested && !caller.IsCancellationRequested;
+
+        internal void Moved()
+        {
+            try { source.CancelAfter(after); }
+            catch (ObjectDisposedException) { } // the HTTP stack read the last bytes after the answer
+        }
+
+        public void Dispose() => source.Dispose();
+    }
+
+    // An upload's progress: each report is bytes moving (the stall clock starts again), passed on.
+    private sealed class Moving(Stall stall, IProgress<long>? progress) : IProgress<long>
+    {
+        public void Report(long value)
+        {
+            stall.Moved();
+            progress?.Report(value);
+        }
+    }
 }

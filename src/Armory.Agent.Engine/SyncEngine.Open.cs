@@ -387,13 +387,16 @@ public sealed partial class SyncEngine
     private async Task<ActionResult> ReopenAfterCheckOutAsync(string message, List<(FileState State, VaultPath Path)> mine, CancellationToken ct)
     {
         if (mine.Count == 0) return new(false, message);
-        List<VaultPath> open;
-        using (KnowOpen(mine.Select(m => m.Path))) open = mine.Where(m => IsOpenNow(m.Path)).Select(m => m.Path).ToList();
+        // One question for all of them, off the engine thread (0.3.3).
+        var known = await AskOpenAsync(mine.Select(m => m.Path), ct);
+        var open = mine.Where(m => OpenIn(known, m.Path)).Select(m => m.Path).ToList();
         if (open.Count == 0)
         {
             if (mine.Count == 1)
             {
-                var launched = fs.Launch(mine[0].Path);
+                // Off the engine thread: the platform answers within about a second.
+                var only = mine[0].Path;
+                var launched = await Task.Run(() => fs.Launch(only));
                 if (!launched.Succeeded) message += " " + launched.Problem;
             }
             return new(true, message);

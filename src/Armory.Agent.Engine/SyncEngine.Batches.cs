@@ -78,6 +78,8 @@ public sealed partial class SyncEngine
             }
             Proceed(ct); // an answer that arrives after a crash elsewhere is dropped, its records kept
             Checkpoint("after-lock-batch", ct);
+            // Made writable together once the chunk's answers are in (one manifest write).
+            List<(FileState State, VaultPath Path)> taken = [];
             foreach (var result in answer.Results)
             {
                 if (!flights.TryGetValue(result.FileId, out var f) || !ReferenceEquals(f.State.Inflight, f.Flight)) continue;
@@ -92,11 +94,12 @@ public sealed partial class SyncEngine
                 if (result.Done)
                 {
                     KnowLock(result.FileId, new RemoteLock(state.Email!, device, deps.Sessions.Current?.DeviceName, deps.Clock.GetUtcNow(), null, null, null, null));
-                    SetAttribute(path, st, LockOwnership.ThisDevice);
+                    taken.Add((st, path));
                     Answer(st, CheckOutOutcome.Done);
                 }
                 else Answer(st, CheckOutOutcome.Held); // someone else checked it out first
             }
+            if (taken.Count > 0) SetAttributes(taken, LockOwnership.ThisDevice);
             answered += chunk.Length;
             activity.Log($"Checked out {answered:N0} of {Count(flights.Count, "file", "files")}");
             // A file the answer left out keeps its record: its lock is re-sent alone on the next pass.
@@ -198,7 +201,7 @@ public sealed partial class SyncEngine
                     KnowLock(result.FileId, null);
                     if (st.Request != CheckoutRequest.None) releaseResults[st] = ReleaseOutcome.Released;
                     LetGoDone(st);
-                    activity.Done(ActivityTracker.CheckIn, st.Path);
+                    Released(st);
                     activity.Drop(st.Path);
                     MarkDirty();
                 }
@@ -335,10 +338,13 @@ public sealed partial class SyncEngine
                 CrashAt("before-break-batch");
                 foreach (var id in chunk) projectsWritten.Add(byId[id].Project.Id);
                 BatchResult answer;
+                // A click sends it without the pass gate (0.3.3): a pass meanwhile never sends it too.
+                breaksSending.Add(record.Operation);
                 try { answer = await deps.Api.BreakLocksAsync(chunk, device, record.Operation, ct); }
                 catch (ArmoryOfflineException)
                 {
                     // The record stays: the next online pass finishes this call if nothing changed.
+                    breaksSending.Remove(record.Operation);
                     online = false;
                     tally.Offline = true;
                     return [];
@@ -405,7 +411,7 @@ public sealed partial class SyncEngine
                     tally.Reread.Add(id);
                 }
                 ForgetForceCheckIn(record);
-                activity.Log($"Force checked in {tally.Broken.Count:N0} of {Count(tally.Total, "file", "files")}");
+                ForcedSoFar(tally);
             }
             pending = again;
         }
@@ -414,9 +420,13 @@ public sealed partial class SyncEngine
 
     private void ForgetForceCheckIn(PendingForceCheckIn record)
     {
+        breaksSending.Remove(record.Operation);
         state.ForceCheckIns.Remove(record);
         MarkDirty();
     }
+
+    // The Force check in calls a click is sending right now, which no pass sends again.
+    private readonly HashSet<Guid> breaksSending = [];
 
     // A file a Force check in could not end, in the window's words.
     private static string ForceCheckInRefusalWords(string? code, string? message) => message switch
@@ -437,6 +447,7 @@ public sealed partial class SyncEngine
         var sent = false;
         foreach (var record in state.ForceCheckIns.ToArray())
         {
+            if (breaksSending.Contains(record.Operation)) continue;
             var unchanged = record.Files.Length > 0 && record.Files.All(f => remoteById.TryGetValue(f.FileId, out var r) && !r.File.Deleted &&
                 r.File.Lock is { IsLive: true } held && held.HolderDeviceId == f.HolderDevice && held.AcquiredAt.UtcTicks == f.AcquiredAt.UtcTicks);
             if (!unchanged || !BreakBatchAvailable)

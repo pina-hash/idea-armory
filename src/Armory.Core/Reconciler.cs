@@ -111,6 +111,44 @@ public static class Reconciler
         return Actions(Action(SyncActionKind.None));
     }
 
+    // Whether this input's plan can depend on whether the file is open (0.3.3, feedback N6). False
+    // means Plan(input with IsOpen = true) and Plan(input with IsOpen = false) are the same plan,
+    // so the engine asks the platform nothing about this file before planning it (on Windows the
+    // question over every file took the 10 second Restart Manager budget each pass). Offline
+    // plans never read IsOpen. Online it decides only where Plan would write over or move the
+    // file (a newer version or a removal to bring here), keep bytes and then bring the shared
+    // version back, or remove a missing file. It may say true for a plan that does not differ,
+    // never false for one that does (ReconcilerTests holds every input of the state space to it).
+    public static bool OpenMatters(SyncInput input)
+    {
+        if (!input.IsOnline || !input.Path.IsValid) return false;
+        var localChanged = input.LocalHash != input.Base?.Hash;
+        var remoteChanged = !SameRevision(input.Base, input.Remote);
+        if (input.LocalHash is not null && (localChanged || input.LockWasBroken))
+        {
+            // Bytes already kept, and the team removed the file: it goes aside only once closed.
+            if (input.Remote?.IsTombstone == true && input.PreservedLocalHash == input.LocalHash) return true;
+            // The release gate refuses before anything is written.
+            if (IsSolidWorks(input.Path) && !SolidWorksVersionGate.Decide(input.SavedRelease, input.PinnedRelease, input.ReleaseGate).Allowed) return false;
+            var explicitCheckout = input.Checkout == CheckoutMode.Explicit;
+            // An add (or a re-add) is shared at once, open or not.
+            if (explicitCheckout && ((input.Remote is null && input.Base is not { IsTombstone: false }) ||
+                (input.Remote is { IsTombstone: true } && (input.Base is null || SameRevision(input.Base, input.Remote)))))
+                return false;
+            var mustPreserve = input.LockWasBroken || remoteChanged || input.Remote?.IsTombstone == true ||
+                input.Lock is LockOwnership.MyOtherDevice or LockOwnership.OtherPerson;
+            // Kept, then the shared version brought back (never over an open file).
+            if (mustPreserve) return input.Remote is { IsTombstone: false };
+            if (!explicitCheckout) return false;
+            // Kept, then the shared version put back: changed without a check out, or an undo.
+            return input.Lock == LockOwnership.Free || input.Request == CheckoutRequest.Undo;
+        }
+        // Missing here: the team's version comes back, or an open file is never removed.
+        if (input.LocalHash is null) return input.Remote is { IsTombstone: false };
+        // Unchanged here: only a newer version or a removal to bring here waits for it to close.
+        return input.Remote?.IsTombstone == true || (remoteChanged && input.Remote is not null);
+    }
+
     public static IReadOnlyList<SyncPlan> PlanAll(IEnumerable<SyncInput> inputs)
     {
         var ordered = inputs.OrderBy(i => i.Path).ToArray();

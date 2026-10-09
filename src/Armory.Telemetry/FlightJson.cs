@@ -25,6 +25,8 @@ public static class FlightJson
         FlightKind.RepairedCheckout => "repairedCheckout",
         FlightKind.Note => "note",
         FlightKind.Refusal => "refusal",
+        FlightKind.OpenFiles => "openFiles",
+        FlightKind.Power => "power",
         _ => "unknown",
     };
 
@@ -66,6 +68,7 @@ public static class FlightJson
             case FlightKind.PassYield:
                 o["reason"] = e.Name;
                 o["unitsLeft"] = e.Count;
+                o["carried"] = e.Count2;
                 o["ms"] = e.Ms;
                 break;
             case FlightKind.Rpc:
@@ -120,6 +123,14 @@ public static class FlightJson
                 o["path"] = e.Target;
                 o["refusal"] = e.Name ?? "ended";
                 if (e.Detail is not null) o["namesake"] = e.Detail;
+                break;
+            case FlightKind.OpenFiles:
+                o["ms"] = e.Ms;
+                o["files"] = e.Count;
+                o["timedOut"] = !e.Ok;
+                break;
+            case FlightKind.Power:
+                o["mode"] = e.Name;
                 break;
         }
         return o;

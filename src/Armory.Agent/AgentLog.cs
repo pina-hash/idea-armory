@@ -50,10 +50,20 @@ public sealed class AgentLog
         catch (Exception) { }
     }
 
+    // The line the agent writes when Windows ends the session (TrayApp, 0.3.3): a run that wrote
+    // it, or "quitting", was stopped on purpose, never a crash.
+    internal const string SessionEndingLine = "windows is ending the session";
+
     // How the last run ended, read before this run writes its first line: null when it said
-    // "stopped" (or there is no earlier run), else the last line it wrote about a pass (or its
-    // last line), so the log says where a run that died without a word stopped.
-    public string? PreviousRunEndedUnexpectedly()
+    // "stopped" (or there is no earlier run), or when it was quitting (PreviousRun says so), else
+    // the last line it wrote about a pass (or its last line), so the log says where a run that
+    // died without a word stopped.
+    public string? PreviousRunEndedUnexpectedly() => PreviousRun() is { Quitting: false } end ? end.LastLine : null;
+
+    // The same, with whether the run had begun to quit (it logged "quitting", or that Windows was
+    // ending the session) when it ended without "stopped": Windows ends a process right after the
+    // session ends, whatever it is doing (0.3.3: four such ends were reported as crashes).
+    public RunEnd? PreviousRun()
     {
         string[] lines;
         try
@@ -69,7 +79,7 @@ public sealed class AgentLog
             lines = Encoding.UTF8.GetString(buffer).Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return null; }
-        return UncleanEnd(lines);
+        return EndOf(lines);
     }
 
     // The last lines of agent.log (an incident keeps 300). Already scrubbed when written.
@@ -97,7 +107,10 @@ public sealed class AgentLog
         catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return []; }
     }
 
-    internal static string? UncleanEnd(IReadOnlyList<string> lines)
+    // A crash's last line (null for a run that stopped, or was quitting).
+    internal static string? UncleanEnd(IReadOnlyList<string> lines) => EndOf(lines) is { Quitting: false } end ? end.LastLine : null;
+
+    internal static RunEnd? EndOf(IReadOnlyList<string> lines)
     {
         static string Message(string line) => line.IndexOf(' ') is var space and > 0 ? line[(space + 1)..] : line;
         var start = -1;
@@ -109,14 +122,16 @@ public sealed class AgentLog
         }
         if (start < 0) return null;
         string? lastPass = null, last = null;
+        var quitting = false;
         for (var i = start + 1; i < lines.Count; i++)
         {
             var message = Message(lines[i]);
             if (message == "stopped") return null;
+            if (message == "quitting" || message.StartsWith(SessionEndingLine, StringComparison.Ordinal)) quitting = true;
             last = lines[i];
             if (message.StartsWith("pass: ", StringComparison.Ordinal)) lastPass = lines[i];
         }
-        return lastPass ?? last ?? lines[start];
+        return new(lastPass ?? last ?? lines[start], quitting);
     }
 
     private static string SafeLine(string message)
@@ -151,3 +166,7 @@ public sealed class AgentLog
         if (info.Exists && info.Length > RollAtBytes) File.Move(target, target + ".1", overwrite: true);
     }
 }
+
+// How a run that never wrote "stopped" ended: the last line it wrote about a pass (or its last
+// line), and whether it had begun to quit.
+public sealed record RunEnd(string LastLine, bool Quitting);

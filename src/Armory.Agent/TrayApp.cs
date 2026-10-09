@@ -66,6 +66,8 @@ internal sealed partial class TrayApp : ApplicationContext
         SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
         SystemEvents.SessionEnding += OnSessionEnding;
         SystemEvents.SessionSwitch += OnSessionSwitch;
+        SystemEvents.SessionEnded += OnSessionEnded;
+        SystemEvents.PowerModeChanged += OnPowerModeChanged;
         showWait = ThreadPool.RegisterWaitForSingleObject(instance.ShowSignal, (_, _) => Post(OpenWindow), null, Timeout.Infinite, executeOnlyOnce: false);
         quitWait = ThreadPool.RegisterWaitForSingleObject(instance.QuitSignal, (_, _) => Post(Quit), null, Timeout.Infinite, executeOnlyOnce: false);
 
@@ -111,6 +113,17 @@ internal sealed partial class TrayApp : ApplicationContext
     private void OnSessionSwitch(object? sender, SessionSwitchEventArgs e)
     {
         if (e.Reason == SessionSwitchReason.SessionLock) host.ShowPicker(Armory.Core.PickerTrigger.WindowsLocked);
+    }
+
+    // Windows ends this process as soon as this returns (0.3.3: a quit still under way was cut off
+    // and reported as a crash), so the stop is waited for here, for a few seconds at most.
+    private static readonly TimeSpan SessionEndWait = TimeSpan.FromSeconds(4);
+    private void OnSessionEnded(object? sender, SessionEndedEventArgs e) => host.EndSession(e.Reason.ToString(), SessionEndWait);
+
+    // Sleep and wake: a pass the computer slept through is not a slow pass.
+    private void OnPowerModeChanged(object? sender, PowerModeChangedEventArgs e)
+    {
+        if (e.Mode is PowerModes.Suspend or PowerModes.Resume) host.PowerChanged(e.Mode == PowerModes.Resume);
     }
 
     private void UpdateMenu(AgentView view)
@@ -205,6 +218,8 @@ internal sealed partial class TrayApp : ApplicationContext
             SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
             SystemEvents.SessionEnding -= OnSessionEnding;
             SystemEvents.SessionSwitch -= OnSessionSwitch;
+            SystemEvents.SessionEnded -= OnSessionEnded;
+            SystemEvents.PowerModeChanged -= OnPowerModeChanged;
             showWait.Unregister(null);
             quitWait.Unregister(null);
             host.ViewChanged -= OnViewChanged;

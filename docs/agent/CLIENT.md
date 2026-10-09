@@ -148,6 +148,16 @@ body starts, then the running total, and every call starts at 0, so a retried do
 from 0. Reports arrive on the thread that moves the bytes, as often as every read, so a
 window throttles them itself (`Progress<T>` posts them to its captured context).
 
+**Stalls (0.3.3, feedback N3).** A transfer that moves no bytes for `BlobClient.StallAfter`
+(30 seconds unless the caller sets it), counting the wait for storage's answer, has stalled: it
+is stopped and tried once more from the start with a fresh URL (a download first empties its
+destination, which must be seekable; the bytes so far start again at 0). The stalled attempt is
+one `transfer` flight event that ended `stalled`. A second stall throws
+`StorageStalledException`, a `StorageTransferException`, so the engine treats it as that one
+file's problem until its next try. A slow transfer that keeps moving is never a stall. Until
+0.3.3 nothing bounded a body that stopped coming (the storage client's own timeout is two hours):
+one 31.5 MB download took 83 seconds on DESKTOP-QH30N35 while the others took 2 to 5.
+
 ## 6. Contract v3 calls (idea-app 0233, ARMORY.md "The v0.3 server contract")
 
 Every call a 0.2.x app makes keeps its signature, answers, refusal text and SQLSTATE; these are

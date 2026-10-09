@@ -73,6 +73,26 @@ internal static class NativeMethods
         if (!GetFileInformationByHandle(handle, out var info)) throw new Win32Exception(Marshal.GetLastWin32Error());
         return (info.Attributes & FileAttributeDirectory) != 0 ? null : FileId(info);
     }
+    // The NTFS id, last-write time and size of the file at path, read through a handle opened for
+    // attributes only (it never conflicts with another program's sharing), or null when no file
+    // is there (nothing, or a folder); any other failure throws.
+    internal static (string Id, DateTime LastWriteUtc, long Size)? FileStamp(string path)
+    {
+        using var handle = CreateFileW(WindowsPaths.Extended(path), FileReadAttributes,
+            (uint)(FileShare.Read | FileShare.Write | FileShare.Delete), IntPtr.Zero, OpenExisting,
+            FileFlagBackupSemantics | FileFlagOpenReparsePoint, IntPtr.Zero);
+        if (handle.IsInvalid)
+        {
+            var error = Marshal.GetLastWin32Error();
+            if (error is 2 or 3) return null;
+            throw new Win32Exception(error);
+        }
+        if (!GetFileInformationByHandle(handle, out var info)) throw new Win32Exception(Marshal.GetLastWin32Error());
+        if ((info.Attributes & FileAttributeDirectory) != 0) return null;
+        var written = DateTime.FromFileTimeUtc(((long)info.WriteTime.dwHighDateTime << 32) | (uint)info.WriteTime.dwLowDateTime);
+        return (FileId(info), written, ((long)info.SizeHigh << 32) | info.SizeLow);
+    }
+
     internal static void Move(string source, string destination, bool replace)
     {
         if (!MoveFileExW(source, destination, WriteThrough | (replace ? ReplaceExisting : 0)))

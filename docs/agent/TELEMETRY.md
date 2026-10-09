@@ -29,9 +29,11 @@ ring unless an incident is saved.
 | `passStart` | the engine | pass kind (`loop`, `action`, `whole`) |
 | `passPhase` | the engine | phase (`scan`, `server`, `plan`, `move`, `finish`), ms since the last phase |
 | `passEnd` | the engine | pass kind, ok, ms, downloaded, uploaded, kept copies, refused |
-| `passYield` | the engine | why a loop pass gave way (`slice`: its 8 seconds were up; `action`: a window action waited), units left, ms |
+| `passYield` | the engine | why a loop pass gave way (`slice`: its slice was up; `action`: a window action waited; `pause`, 0.3.3: Armory was paused), units or paths left, ms, and (0.3.3) `carried`: the units still in flight it carried on to the passes after it (docs/agent/ENGINE.md, "The transfer queue") |
+| `openFiles` | the engine (`AskOpenAsync`, 0.3.3) | one open-files question: ms, how many files it asked about, `timedOut` (the platform's budget ran out and the probe alone answered the rest); a question a window action ended for a loop pass is not recorded |
+| `power` | the agent (`SystemEvents.PowerModeChanged`, 0.3.3) | `suspend` or `resume`: the computer went to sleep or woke |
 | `rpc` | `PostgrestClient`, `BlobClient` (`blob-url`) | function name, ms, HTTP status (0 when none), error code (`offline`, `signedOut`, `canceled`, a SQLSTATE or PostgREST code) |
-| `transfer` | `BlobClient` | `upload` or `download`, bytes, ms, ok, status, error |
+| `transfer` | `BlobClient` | `upload` or `download`, bytes, ms, ok, status, error (`stalled`, 0.3.3: no bytes moved for 30 seconds, and it was tried once more with a fresh URL; a second stall ends as `StorageStalledException`) |
 | `windowAction` | `Bridge` | action type, how many files or folders it named, ms from the window's request to its answer (Add files: from when the picker closed), ok |
 | `notice` | the engine | every problem, and the first 200 notices of a pass: kind, path, the raw text the log gets. A stale `~$` marker is recorded once while it stays stale, not on every pass (0.3.3: IDEA-06's 224 markers spent every pass's 200) |
 | `refusal` | the engine (`SetRefusal`, 0.3.3) | a file's refusal started or changed: path, `refusal` (`nameTaken`, `tooLarge`, `gate`, `refused`) and, for a taken name, `namesake` (the path of the file that holds it); or ended (`refusal: "ended"`). Never again while it stands, so a pass that only re-finds the same refusals records none |
@@ -58,13 +60,23 @@ Each rule is a pure function in `GlitchRules` with its own test (`GlitchRuleTest
 
 | Kind | When |
 |---|---|
-| `crash` | an exception nothing handled: the process (`AppDomain.UnhandledException`, saved on the spot before the process ends), the window's thread, the engine's loop or thread; and, at the next start, a run that ended without writing "stopped" in agent.log (e02d811), built from the last flight it left |
+| `crash` | an exception nothing handled: the process (`AppDomain.UnhandledException`, saved on the spot before the process ends), the window's thread, the engine's loop or thread; and, at the next start, a run that ended without writing "stopped" in agent.log (e02d811), built from the last flight it left, unless that run had begun to quit (below) |
 | `slowAction` | a window action whose answer took more than 10 seconds |
-| `slowPass` | a pass that took more than 60 seconds |
+| `slowPass` | a pass that took more than 60 seconds, unless the computer slept or woke during it (a `power` event since its `passStart`: IDEA-06's 52 minute "pass" was the computer asleep) |
 | `repeatedFailure` | the same file failing 3 times with no success of it between (the count starts again after each incident) |
 | `repairedCheckout` | any `repairedCheckout` event |
 | `readOnlyBroken` | any `readOnlyBroken` event |
 | `userReport` | Report a problem (below) |
+
+**A quit cut short is not a crash** (0.3.3). The crash reports of 0.2.1 to 0.3.1 were
+Windows ending the session while a quit waited behind a plan. A run whose log's last lines
+show it had begun to quit (`quitting`, or `windows is ending the session`, written when
+`SystemEvents.SessionEnded` arrives) is not a crash: the next start logs that the previous run
+ended while quitting and files nothing (the site takes only the kinds above). The quit itself
+is quick now: `SyncEngine.StopAsync` cancels the pass at once from any thread, the scan and the
+open-files question stop on that token, the team's goodbye goes while the engine stops, and at
+session end the tray waits up to 4 seconds for the stop, on its own thread, after writing the
+last flight.
 
 **Throttles.** At most one incident per kind per 10 minutes on a computer, counted across
 restarts from the files on disk; a person's own report is never held back. At most 20
@@ -74,7 +86,9 @@ stacks of events other than the trigger.
 
 The rules run on the thread that recorded the event (a switch and a comparison); an incident is
 built and written on a pool thread, never on the engine's. Its engine snapshot is asked of the
-engine thread with a 3-second deadline; a late one is written as late, never waited for.
+engine thread and waited for half a second (`IncidentReporter.SnapshotPatience`, 0.3.3); past
+that the incident takes the window's last view at once, marked `engineBusy` (5 of 15 notes and
+9 of 23 slowAction incidents on 0.3.1 and 0.3.2 had no snapshot at all), never nothing.
 
 ## The incident file
 

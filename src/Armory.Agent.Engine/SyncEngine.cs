@@ -17,10 +17,13 @@ public sealed record EngineOptions
     // finds nothing new is two small server calls, and students asked for no dead zones.
     public TimeSpan ActivePollInterval { get; init; } = TimeSpan.FromSeconds(2);
     public TimeSpan IdlePollInterval { get; init; } = TimeSpan.FromSeconds(10);
-    // A loop pass starts no new transfer after this long moving files (phase C): it finishes the
-    // ones in flight and its phase D, and the loop starts the next pass at once, so the team's
-    // changes are read again at least this often during a long download or upload.
+    // A loop pass starts no new transfer after this long moving files (phase C): the ones in
+    // flight go on in the transfer queue (0.3.3), it runs its phase D, and the loop starts the next
+    // pass at once, so the team's changes are read again at least this often during a long
+    // download or upload. With live updates joined the slice lasts until a live event comes after
+    // PassSlice, and at most LivePassSlice: the team's changes arrive as they happen.
     public TimeSpan PassSlice { get; init; } = TimeSpan.FromSeconds(8);
+    public TimeSpan LivePassSlice { get; init; } = TimeSpan.FromSeconds(60);
     public TimeSpan IdleAfter { get; init; } = TimeSpan.FromMinutes(2);
     public TimeSpan StaleMarkerAfter { get; init; } = TimeSpan.FromMinutes(10);
     // The contract's PUT limit (2 GiB); tests lower it.
@@ -165,8 +168,10 @@ public sealed partial class SyncEngine : IAsyncDisposable
     // status line from it without a whole view.
     public event Action<ActivityView>? ActivityChanged;
     public bool IsPaused => paused;
-    public void Pause() => engineThread.Enqueue(() => { paused = true; RequestPublish(); });
-    public void Resume() => engineThread.Enqueue(() => { paused = false; RequestPublish(); wake.Release(); });
+    // The window shows a pause or a resume at once, mid-pass too (0.3.3), and a pass moving files
+    // starts no more of them.
+    public void Pause() => engineThread.Enqueue(() => { paused = true; QueueChanged(); RequestPublish(now: true); });
+    public void Resume() => engineThread.Enqueue(() => { paused = false; RequestPublish(now: true); wake.Release(); });
     public void Wake() => engineThread.Enqueue(() => wake.Release());
 
     public void Start() => engineThread.Enqueue(() =>
@@ -183,28 +188,39 @@ public sealed partial class SyncEngine : IAsyncDisposable
 
     // Stops the loop (and live updates) and waits for it. A window action or a test's pass may
     // still run afterwards; StopForGoodAsync (SyncEngine.Stopping.cs) is the stop after which
-    // nothing of this engine runs or writes again.
-    public Task StopAsync() => engineThread.InvokeAsync(async () =>
+    // nothing of this engine runs or writes again. The token is canceled at once, from any thread
+    // (CancellationTokenSource is thread safe): a pass stops at its next step (a scan between
+    // files, the open-files question between batches, planning between paths) even while the
+    // engine thread is busy (0.3.3: Windows ended the session and killed Armory while its quit
+    // waited behind a plan).
+    public Task StopAsync()
     {
-        await StopLoopAsync();
-        return true;
-    });
+        try { stopping.Cancel(); }
+        catch (ObjectDisposedException) { return Task.CompletedTask; }
+        catch (AggregateException error) { deps.Log?.Invoke("engine: stopping: " + error.InnerException?.Message); }
+        return engineThread.InvokeAsync(StopLoopAsync);
+    }
 
-    private async Task StopLoopAsync()
+    private async Task<bool> StopLoopAsync()
     {
         await stopping.CancelAsync();
         if (loop is not null) { try { await loop; } catch (OperationCanceledException) { } }
+        // The units the loop carried stop at their next step (their token is the engine's).
+        await StopQueueAsync();
+        if (TakeQueueFatal() is { } fatal) flight?.Exception("engine loop", fatal.SourceException, fatal: true);
         if (deps.Live is { } live) live.Changed -= OnLiveChange;
         if (liveRun is not null) { try { await liveRun; } catch (OperationCanceledException) { } }
         if (linkPump is not null) { try { await linkPump; } catch (OperationCanceledException) { } }
+        return true;
     }
 
     private Task? liveRun;
     // A project's change feed has a new row (Realtime): a reason to read the server again now,
-    // never a change of local state by itself.
+    // never a change of local state by itself. A pass moving files ends its slice for it.
     private void OnLiveChange(Guid project) => engineThread.Enqueue(() =>
     {
         liveEvents++;
+        QueueChanged();
         wake.Release();
     });
     private long liveEvents;
@@ -234,7 +250,8 @@ public sealed partial class SyncEngine : IAsyncDisposable
 
     // The loop (docs/agent/ENGINE.md, "The loop"): a pass, then a short wait (ActivePollInterval
     // or IdlePollInterval) that any wake ends early. A pass cut short (PassSlice, or an action
-    // waiting) leaves files for the next one, which starts at once.
+    // waiting) leaves files for the next one, which starts at once; the last unit it carried
+    // ending wakes it too (SyncEngine.Queue.cs).
     private async Task<bool> LoopAsync(CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
@@ -257,11 +274,17 @@ public sealed partial class SyncEngine : IAsyncDisposable
                 while (wake.CurrentCount > 0) await wake.WaitAsync(0, ct);
                 continue;
             }
-            if (cutShort)
+            if (paused)
             {
-                // Paused with files left: nothing moves until the student resumes.
+                // Paused with files left: nothing more moves until the student resumes. Once the
+                // files in flight have ended (the last one wakes the loop), the running lines say
+                // how far it got.
                 cutShort = false;
-                activity.Reset();
+                if (CarriedCount == 0)
+                {
+                    if (continuing) EndRun(paused: true);
+                    activity.Reset();
+                }
             }
             var idle = online != true || deps.Clock.GetUtcNow() - lastActivity > options.IdleAfter;
             var delay = idle ? options.IdlePollInterval : options.ActivePollInterval;
@@ -277,17 +300,24 @@ public sealed partial class SyncEngine : IAsyncDisposable
     private async Task LoopPassAsync(CancellationToken ct)
     {
         await passGate.WaitAsync(ct);
+        using var questions = CancellationTokenSource.CreateLinkedTokenSource(ct);
         try
         {
             loopPass = true;
+            loopQuestions = questions;
             await PassLockedAsync(ct);
         }
         finally
         {
             loopPass = false;
+            loopQuestions = null;
             passGate.Release();
         }
     }
+
+    // The loop pass's open-files questions, which a window action waiting for the gate ends at
+    // once (0.3.3): the pass gives way instead of waiting out the platform's budget.
+    private CancellationTokenSource? loopQuestions;
 
     // A whole pass, every file in it, as a test or a caller that wants everything done asks for it.
     public Task<SyncReport> SyncOnceAsync(CancellationToken cancellationToken = default) => engineThread.InvokeAsync(async () =>
@@ -307,10 +337,17 @@ public sealed partial class SyncEngine : IAsyncDisposable
     // The files an action's pass moves in phase C (null: every file). Phases A, B and D are whole.
     private PassScope? passScope;
 
-    // A window action takes the pass gate: counted while it waits, so a loop pass gives way.
+    // A window action takes the pass gate: counted while it waits, so a loop pass gives way (its
+    // phase C stops starting files at once, and carries those in flight).
     private async Task EnterActionAsync(CancellationToken ct)
     {
         actionsWaiting++;
+        QueueChanged();
+        if (loopPass && loopQuestions is { IsCancellationRequested: false } questions)
+        {
+            try { questions.Cancel(); }
+            catch (AggregateException error) { deps.Log?.Invoke("engine: giving way: " + error.InnerException?.Message); }
+        }
         try { await WaitGateAsync(ct); }
         finally { actionsWaiting--; }
     }
@@ -340,6 +377,14 @@ public sealed partial class SyncEngine : IAsyncDisposable
                 if (st.FileId is { } id) scope.Files.Add(id);
             }
             return scope;
+        }
+
+        // Another action's files too: one action pass for every click waiting (JoinActionPassAsync).
+        internal void Add(PassScope other)
+        {
+            States.UnionWith(other.States);
+            Files.UnionWith(other.Files);
+            Paths.AddRange(other.Paths);
         }
 
         internal static PassScope Under(params string[] paths)
@@ -385,9 +430,22 @@ public sealed partial class SyncEngine : IAsyncDisposable
         // A stop for good stops every pass at its next step, an action's too (SyncEngine.Stopping.cs).
         using var halt = CancellationTokenSource.CreateLinkedTokenSource(ct, halting.Token);
         ct = halt.Token;
+        // A unit the loop carried failed with what is not one file's: thrown here, once every unit
+        // has stopped. A whole pass first lets every carried unit end, an action's pass the ones
+        // holding its files; the loop's own pass leaves them alone (the fence).
+        await SettleQueueFailureAsync();
+        if (!loopPass)
+        {
+            StopFeeding();
+            await AwaitCarriedAsync(scope is null ? null : entry => scope.Covers(entry.Unit));
+        }
+        RebuildFence();
         var failed = true;
         failing = false;
         passScope = scope;
+        passNumber++;
+        // Open answers older than the pass before are forgotten (the window shows the last ones).
+        if (openAnswers.Count > 0) foreach (var key in openAnswers.Where(a => a.Value.Pass < passNumber - 1).Select(a => a.Key).ToArray()) openAnswers.Remove(key);
         passStarted = deps.Clock.GetTimestamp();
         lastHeartbeat = passStarted;
         passMoving = 0;
@@ -409,21 +467,32 @@ public sealed partial class SyncEngine : IAsyncDisposable
         catch (Exception error) when (StopSaving(error)) { throw; }
         finally
         {
-            LogPass(failed, scope is not null);
+            ScanTakenIn();
+            // The run goes on: the loop's pass left files for the next one or carried some, or
+            // this action came in the middle of the loop's run. A whole pass, a pass offline and
+            // one that failed end it.
+            var continues = !failed && online != false &&
+                (loopPass ? cutShort || CarriedCount > 0 : scope is not null ? continuing || CarriedCount > 0 : CarriedCount > 0);
+            LogPass(failed, scope is not null, continues);
             RecordPass(kind, failed);
             passScope = null;
             inPass = false;
             syncing = false;
-            // A loop pass cut short keeps its counts ("Downloading 412 of 1,280 files"): the next
-            // pass starts at once and goes on from them.
-            if (failed || !(loopPass && cutShort)) activity.Reset();
-            if (failed) await DrainAsync();
+            if (scope is null || failed) continuing = continues;
+            // A failure anywhere stops every unit, carried ones too, before anything more is saved.
+            if (failed || failing) await StopQueueAsync();
+            // A long download keeps its counts across its passes ("Downloading 412 of 1,280
+            // files"); they go when the run ends.
+            if (!continuing && CarriedCount == 0) activity.Reset();
+            if (failed || failing) await DrainAsync();
             else await SettleAsync();
             // Every unit has stopped and every save serialized before the failure is on disk:
             // the engine saves again from its next pass (a test builds a new engine instead).
             failing = false;
             PublishLocked();
             StopActivity();
+            // A carried unit's failure is thrown here, where its pass would have thrown it.
+            TakeQueueFatal()?.Throw();
         }
     }
 
@@ -436,6 +505,9 @@ public sealed partial class SyncEngine : IAsyncDisposable
     private async Task<SyncReport> PassAsync(CancellationToken ct)
     {
         problems.Clear(); notes.Clear();
+        // What carried units noticed since the last pass ended is this pass's.
+        problems.AddRange(heldProblems); notes.AddRange(heldNotes);
+        heldProblems.Clear(); heldNotes.Clear();
         uploaded = downloaded = sideVersions = refused = 0;
         wrote = false;
         state.Remembered.RemoveAll(n => deps.Clock.GetUtcNow() - n.At > TimeSpan.FromMinutes(30));
@@ -465,19 +537,37 @@ public sealed partial class SyncEngine : IAsyncDisposable
             }
         }
 
-        local.Clear(); markerDocuments.Clear(); localFolders.Clear(); createdThisPass.Clear();
         VaultScan scan;
-        try { scan = fs.Scan(); }
+        // Off the engine thread (0.3.3): a click, File detail or Pause never waits for the disk
+        // to be read, and a stop ends it between files. What the last scan found stays in place
+        // (the window keeps showing it) until this one is done. A unit carried from the pass
+        // before writes into the vault only once this scan is taken in (SyncEngine.Queue.cs).
+        ScanStarting();
+        try
+        {
+            using (Step(local.Count > 0 ? $"Looking over {Count(local.Count, "file", "files")} on this computer" : "Looking over the files on this computer"))
+                scan = await Task.Run(() => fs.Scan(ct), ct);
+        }
         catch (IOException error)
         {
+            ScanTakenIn();
             Problem(NoticeKinds.CantRead, null, "Armory can't look through your Armory folder right now. It tries again by itself.", error.Message);
             return Report(true);
         }
+        // Renames a pass that gave way found but never acted on come with this scan's.
+        if (carriedRenames.Count > 0)
+        {
+            scan = scan with { Renames = [.. carriedRenames.Concat(scan.Renames ?? []).GroupBy(r => r.From.Value, StringComparer.OrdinalIgnoreCase).Select(g => g.Last())] };
+            carriedRenames.Clear();
+        }
+        renamesRead = false;
+        local.Clear(); localFolders.Clear(); createdThisPass.Clear();
         scanned = true;
         foreach (var file in scan.Files) local[file.Path.Value] = file;
         folderScan = scan.Folders is not null;
         if (scan.Folders is { } folders) localFolders.UnionWith(folders);
-        ReadMarkers(scan);
+        ScanTakenIn();
+        await ReadMarkersAsync(scan, ct);
         foreach (var problem in scan.Problems) ScanProblem(problem);
         // Folder changes on this disk come before anything is captured: a renamed folder's
         // files keep their records (never captured again as new files at the new path), and a
@@ -491,8 +581,14 @@ public sealed partial class SyncEngine : IAsyncDisposable
         Capture(session, notify: false);
         CrashAt("after-capture");
         Phase("scan");
+        // A loop pass gives way to a window action before it reads the server (0.3.3).
+        if (GiveWay()) return GaveWay(0, scan);
 
-        online = await RefreshAsync(ct);
+        using (Step("Asking Armory what changed")) online = await RefreshAsync(ct, mayGiveWay: true);
+        // The server is read: the downloads the last slice left are this pass's to plan again
+        // (the queue started them itself until now: SyncEngine.Queue.cs, Feed).
+        StopFeeding();
+        if (refreshCut) return GaveWay(0, scan);
         // What was deleted forever leaves this computer (v0.3), before anything is planned.
         DropPurged();
         // The SolidWorks link learns which folders save down, and to what year.
@@ -527,6 +623,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
         if (online == true)
         {
             DetectLocalMoves(scan);
+            renamesRead = true;
             await ExecutePendingMovesAsync(ct);
             await ArchiveSupersededAsync(entries, ct);
             // An add whose first version never got there, its file gone from here: its empty
@@ -539,9 +636,11 @@ public sealed partial class SyncEngine : IAsyncDisposable
 
         lastLoopError = null;
         Phase("server");
+        if (GiveWay()) return GaveWay(0, scan);
         // Phase B: every path planned with Core, grouped into units; phase C: the units.
         var units = await PlanAllAsync(online == true, ct);
         Phase("plan");
+        if (planCut) return GaveWay(planLeft, scan);
         await RunUnitsAsync(units, ct);
         Phase("move");
 
@@ -564,7 +663,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
         // Known folders with nothing left in them go, on every computer (decision D17).
         if (online == true) TidyFolders();
         // The read-only rule holds offline too, from the last ownership this computer knew.
-        ApplyReadOnly();
+        await ApplyReadOnlyAsync(ct);
         // Files opened before they were here open now that they are.
         OpenArrived();
         // Files checked out while open, closed since: open again, ready to save (C5).
@@ -572,6 +671,30 @@ public sealed partial class SyncEngine : IAsyncDisposable
         // Every notice of this pass is known now, so dismissed items that are gone are forgotten.
         if (online == true) PruneDismissed();
         Phase("finish");
+        return Report(true);
+    }
+
+    // A loop pass gives way to a window action waiting for the gate (0.3.3, feedback N6): checked
+    // after the scan, between projects while the server is read, every PlanYieldEvery paths while
+    // planning and after the open-files question. It stops there, moves nothing and finishes
+    // nothing (the action's own pass does both), and the loop starts the next pass at once.
+    // A click whose open-files question was ended for it (loopQuestions) is given way to even if
+    // it stopped waiting meanwhile: the question's answer is gone.
+    private bool GiveWay() => loopPass && (actionsWaiting > 0 || loopQuestions is { IsCancellationRequested: true });
+    private const int PlanYieldEvery = 100;
+    private bool refreshCut, planCut;
+    private int planLeft;
+
+    // Renames the platform proved this scan that no step acted on yet (a pass that gave way before
+    // it read them): the next scan does not report them again, so they are kept for it.
+    private readonly List<LocalMove> carriedRenames = [];
+    private bool renamesRead;
+
+    private SyncReport GaveWay(int pathsLeft, VaultScan scan)
+    {
+        if (!renamesRead && scan.Renames is { Count: > 0 } renames) carriedRenames.AddRange(renames);
+        cutShort = true;
+        flight?.PassYield("action", pathsLeft, (long)deps.Clock.GetElapsedTime(passStarted).TotalMilliseconds);
         return Report(true);
     }
 
@@ -595,24 +718,31 @@ public sealed partial class SyncEngine : IAsyncDisposable
         deps.Log($"pass: still going after {deps.Clock.GetElapsedTime(passStarted).TotalSeconds:F0} s, {downloaded:N0} downloaded, {uploaded:N0} uploaded so far ({PassKind()})");
     }
 
-    private void LogPass(bool failed, bool action)
+    // continues: the run of passes goes on after this one (SyncEngine.Lines.cs).
+    private void LogPass(bool failed, bool action, bool continues)
     {
         var took = deps.Clock.GetElapsedTime(passStarted);
-        // The window's running lines: what a pass that moved anything did, and going offline.
-        List<string> did = [];
-        if (downloaded > 0) did.Add($"{Count(downloaded, "file", "files")} downloaded");
-        if (uploaded > 0) did.Add($"{Count(uploaded, "file", "files")} uploaded");
-        if (sideVersions > 0) did.Add(Count(sideVersions, "kept copy", "kept copies"));
-        if (did.Count > 0) activity.Log("Sync finished: " + string.Join(", ", did) + ".");
+        // The window's running lines: how far a run got while it goes on, one line when it is
+        // over (never one per slice: feedback N2), and going offline (or signed out) with what it
+        // did so far.
         LogNameBlocked();
-        if (online == false && wasOnline)
-            activity.Log(deps.Sessions.Current is null ? "This computer was signed out of Armory. Your work is safe here until you connect it again."
-                : "This computer is offline. Armory keeps trying by itself.");
+        if (failed) ResetRun();
+        else if (online == false)
+        {
+            if (wasOnline)
+                activity.Log((deps.Sessions.Current is null ? "This computer was signed out of Armory. Your work is safe here until you connect it again."
+                    : "This computer is offline. Armory keeps trying by itself.") + (RunMoved ? $" {RunWords()} so far." : ""));
+            ResetRun();
+        }
+        else if (continues) ProgressLines();
+        else EndRun(paused: false);
         if (online == true && !wasOnline && lastOnline != default) activity.Log("Back online.");
         wasOnline = online != false;
         if (deps.Log is null || (!failed && passMoving == 0 && uploaded + downloaded + sideVersions + refused == 0 && took < TimeSpan.FromSeconds(10))) return;
+        var carried = CarriedCount;
         deps.Log($"pass: {(failed ? "failed" : "ended")} after {took.TotalMilliseconds:F0} ms ({(action ? "action" : PassKind())}), {downloaded:N0} downloaded, {uploaded:N0} uploaded, " +
-            $"{sideVersions:N0} kept copies, {refused:N0} refused{(cutShort && loopPass ? ", the rest continues at once" : "")}");
+            $"{sideVersions:N0} kept copies, {refused:N0} refused{(cutShort && loopPass ? ", the rest continues at once" : "")}" +
+            (carried > 0 ? $", {carried:N0} still moving" : ""));
     }
 
     private bool wasOnline = true;
@@ -670,8 +800,11 @@ public sealed partial class SyncEngine : IAsyncDisposable
     // computer wrote there, or a minute went by), its files. Every write emits a change, so a
     // quiet feed means the files as last read are still the files; this computer's own lock
     // changes are known without reading (KnowLock).
-    private async Task<bool> RefreshAsync(CancellationToken ct)
+    // mayGiveWay: the loop pass's first read, which stops between projects when a window action
+    // waits (0.3.3); the projects not read keep what was last read, and the action reads them.
+    private async Task<bool> RefreshAsync(CancellationToken ct, bool mayGiveWay = false)
     {
+        refreshCut = false;
         IReadOnlyList<RemoteProject> projects;
         try { projects = await deps.Api.MyProjectsAsync(ct); }
         catch (ArmoryOfflineException) { return false; }
@@ -734,6 +867,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
                 foreach (var ps in unlisted) await CheckGoneAsync(ps, ct);
                 foreach (var ps in state.Projects.Values.Where(p => p.Usable).ToArray())
                 {
+                    if (mayGiveWay && GiveWay()) { refreshCut = true; break; }
                     // An archived project is not read, unless this computer still has check outs
                     // there to check in (addendum 7); its change cursor stays for when it is restored.
                     if (ps.Archived && !state.Files.Values.Any(f => f.ProjectId == ps.Id && MineToFinish(f))) continue;
@@ -781,12 +915,15 @@ public sealed partial class SyncEngine : IAsyncDisposable
                     read.Add(ps.Id);
                     KnowProject(ps, files);
                 }
-                // Live updates follow the projects read now (never an archived one): each channel
-                // is filtered to its project, and an event only wakes the loop to read again.
-                deps.Live?.SetProjects(read.Where(id => state.Projects.TryGetValue(id, out var p) && p.Usable && !p.Archived));
-                // A project not read now (no longer a member, archived, unusable): nothing of its is known.
-                foreach (var gone in remoteProjects.Keys.Where(id => !read.Contains(id)).ToArray()) ForgetProject(gone);
-                staleProjects.IntersectWith(read);
+                if (!refreshCut)
+                {
+                    // Live updates follow the projects read now (never an archived one): each channel
+                    // is filtered to its project, and an event only wakes the loop to read again.
+                    deps.Live?.SetProjects(read.Where(id => state.Projects.TryGetValue(id, out var p) && p.Usable && !p.Archived));
+                    // A project not read now (no longer a member, archived, unusable): nothing of its is known.
+                    foreach (var gone in remoteProjects.Keys.Where(id => !read.Contains(id)).ToArray()) ForgetProject(gone);
+                    staleProjects.IntersectWith(read);
+                }
                 RememberHolders();
                 MarkDirty();
                 return true;
@@ -906,8 +1043,10 @@ public sealed partial class SyncEngine : IAsyncDisposable
         foreach (var (key, remote) in remoteByPath)
         {
             if (remote.File.Deleted || remote.File.Current is not { } current || !local.TryGetValue(key, out var file) || current.Hash != file.Hash) continue;
+            // A carried unit's file is taken in by a pass that saw it land.
+            if (Fenced(key)) continue;
             state.Files.TryGetValue(key, out var st);
-            if (st is not null && (st.Inflight is not null || (st.FileId is not null && st.FileId != remote.File.Id))) continue;
+            if (st is not null && (st.Inflight is not null || (st.FileId is not null && st.FileId != remote.File.Id) || Fenced(st))) continue;
             if (state.FirstWithFileId(remote.File.Id, except: st) is not null) continue;
             st ??= FileFor(remote.Project, key);
             st.FileId ??= remote.File.Id;
@@ -929,6 +1068,8 @@ public sealed partial class SyncEngine : IAsyncDisposable
             var key = file.Path.Value;
             // SolidWorks is writing it: kept once it says it saved (with the stamp of its bytes).
             if (SavingHeld(key)) continue;
+            // A carried unit is writing it (or wrote it after this scan): never a save.
+            if (Fenced(key) || state.Files.TryGetValue(key, out var carried) && Fenced(carried)) continue;
             if (HeldForCapture(key))
             {
                 // A folder on its way back where it was (a project folder renamed in Explorer, a
@@ -1004,35 +1145,119 @@ public sealed partial class SyncEngine : IAsyncDisposable
 
     // ---- Planning ------------------------------------------------------------------
 
-    private IEnumerable<string> AllPaths()
+    private string[] AllPaths()
         => local.Keys.Concat(state.Files.Keys).Concat(remoteByPath.Keys).Distinct(StringComparer.OrdinalIgnoreCase)
             .Order(StringComparer.OrdinalIgnoreCase).ToArray();
+
+    // The paths phase B plans: every path, or for a window action's pass the paths its scope holds
+    // and the files sharing a name with them in their project (they are one unit), so a click on
+    // one file never plans the whole vault (0.3.3, feedback N6: about 10 seconds a click on a
+    // 1,467-file vault). Phases A and D stay whole.
+    private string[] PathsToPlan()
+    {
+        var all = AllPaths();
+        if (passScope is not { } scope) return all;
+        var units = new HashSet<(string Top, string Name)>();
+        foreach (var key in all) if (InScope(scope, key)) units.Add(UnitOf(key));
+        return all.Where(key => units.Contains(UnitOf(key))).ToArray();
+    }
+
+    // A path the action's scope holds: its record, its server file, or under one of its paths.
+    private bool InScope(PassScope scope, string key)
+    {
+        if (state.Files.TryGetValue(key, out var st) && (scope.States.Contains(st) || (st.FileId is { } id && scope.Files.Contains(id)))) return true;
+        if (remoteByPath.TryGetValue(key, out var remote) && scope.Files.Contains(remote.File.Id)) return true;
+        foreach (var path in scope.Paths) if (Inside(key, path)) return true;
+        return false;
+    }
+
+    // The unit a path plans into: its project's folder (the first segment) and its NameKey.
+    private static (string Top, string Name) UnitOf(string key)
+    {
+        var slash = key.IndexOf('/', StringComparison.Ordinal);
+        return (slash < 0 ? "" : key[..slash].ToUpperInvariant(), NameKey(key[(key.LastIndexOf('/') + 1)..]));
+    }
 
     // One path's Core plan with everything it was made from (phase B), carried out in phase C.
     private sealed record Planned(string Key, VaultPath Path, SyncInput Input, SyncPlan Plan, FileState State, ProjectState Project, RemoteFile? Remote);
 
+    // One path's Core input before the open-files question (IsOpen false), and whether its plan
+    // depends on the answer (Reconciler.OpenMatters, or a closed add's automatic check in).
+    private sealed record Prepared(string Key, VaultPath Path, SyncInput Input, FileState State, ProjectState Project, RemoteFile? Remote, bool OpenMatters);
+
     // Phase B: every path is planned with Core, in path order, and grouped into units: one file
     // each, except that files sharing a name as the server compares names (NameKey) in a project
     // are one unit, in path order, so which of them gets the name never depends on timing.
-    // Offline, the plans only journal Core's intents and nothing is left to run.
+    // Offline, the plans only journal Core's intents and nothing is left to run. The platform is
+    // asked once whether files are open, and only about the files on this disk whose plan depends
+    // on it (0.3.3: asking about every file took the 10 second Restart Manager budget every pass).
+    // Every PlanYieldEvery paths the engine thread does whatever waits for it, and a loop pass
+    // gives way to a window action (planCut).
     private async Task<List<List<Planned>>> PlanAllAsync(bool isOnline, CancellationToken ct)
     {
         movingTo.Clear();
         foreach (var st in state.Files.Values) if (st.LocalMoveTo is { } target) movingTo.Add(target);
-        List<List<Planned>> units = [];
-        var byName = new Dictionary<(Guid Project, string Name), List<Planned>>();
-        using var open = KnowOpen(local.Values.Select(f => f.Path));
-        foreach (var key in AllPaths())
+        planCut = false;
+        List<Prepared> prepared = [];
+        var paths = PathsToPlan();
+        for (var i = 0; i < paths.Length; i++)
         {
             ct.ThrowIfCancellationRequested();
-            Planned? planned;
-            try { planned = await PlanPathAsync(key, isOnline, ct); }
+            if (i > 0 && i % PlanYieldEvery == 0)
+            {
+                await Task.Yield();
+                if (GiveWay())
+                {
+                    planCut = true;
+                    planLeft = paths.Length - i;
+                    return [];
+                }
+            }
+            var key = paths[i];
+            Prepared? one;
+            try { one = await PreparePathAsync(key, isOnline, ct); }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException)
             {
                 FileProblem(key, error);
                 continue;
             }
-            if (planned is null) continue;
+            if (one is not null) prepared.Add(one);
+        }
+        // A file not on this disk is not open (a write asks again just before it writes), and
+        // one with a live ~$ marker is open without asking.
+        IReadOnlySet<string>? open;
+        try { open = await AskOpenAsync(prepared.Where(p => p.OpenMatters && local.ContainsKey(p.Key) && !markerDocuments.Contains(p.Key)).Select(p => p.Path), ct, mayGiveWay: true); }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested && GiveWay()) { open = null; }
+        if (GiveWay())
+        {
+            planCut = true;
+            planLeft = prepared.Count;
+            return [];
+        }
+        List<List<Planned>> units = [];
+        var byName = new Dictionary<(Guid Project, string Name), List<Planned>>();
+        foreach (var one in prepared)
+        {
+            var isOpen = one.OpenMatters ? OpenIn(open, one.Path) : markerDocuments.Contains(one.Key) || LinkHasOpen(one.Key);
+            var input = one.Input with { IsOpen = isOpen, Request = RequestOf(one.State, isOpen) };
+            var plan = Reconciler.Plan(input);
+            if (!isOnline)
+            {
+                JournalOffline(plan, one.State);
+                continue;
+            }
+            // An add (or the re-add of a removed name) whose name another live file of the project
+            // holds is refused here, at the plan, until that file is renamed or removed or this one
+            // is: never a unit, never expected as an upload, never counted as moving, and counted as
+            // refused only when the refusal is new. IDEA-06's 142 copies were planned, expected as
+            // uploads ("Uploading 0 of 142 files") and refused again on every pass.
+            if (plan.Actions is [{ Kind: SyncActionKind.Upload or SyncActionKind.AcquireLockThenUpload }, ..] &&
+                (one.State.FileId is null || one.Remote is { Deleted: true }) && NameHolderElsewhere(one.Project, one.Path) is { } holder)
+            {
+                RefuseName(one.State, holder.Folder, holder.Name);
+                continue;
+            }
+            var planned = new Planned(one.Key, one.Path, input, plan, one.State, one.Project, one.Remote);
             var name = (planned.Project.Id, NameKey(planned.Path.Name));
             if (!byName.TryGetValue(name, out var unit))
             {
@@ -1066,7 +1291,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
     // Paths a file is being renamed to here (an Explorer rename being sent): not planned on their own.
     private readonly HashSet<string> movingTo = new(StringComparer.OrdinalIgnoreCase);
 
-    private async Task<Planned?> PlanPathAsync(string key, bool isOnline, CancellationToken ct)
+    private async Task<Prepared?> PreparePathAsync(string key, bool isOnline, CancellationToken ct)
     {
         if (!VaultPath.TryCreate(key, out var path, out _, options.VaultRoot)) return null;
         var project = ProjectOf(path);
@@ -1076,8 +1301,12 @@ public sealed partial class SyncEngine : IAsyncDisposable
         if (Held(key)) return null;
         // SolidWorks is saving it: decided once it says it saved, with the stamp of its bytes.
         if (SavingHeld(key)) return null;
+        // A carried unit holds it, or a file sharing its name (one unit, never two at once): it
+        // is planned again by a pass that saw that unit end.
+        if (FencedUnit(key)) return null;
         local.TryGetValue(key, out var localFile);
         state.Files.TryGetValue(key, out var st);
+        if (st is not null && Fenced(st)) return null;
         // Deleted forever (v0.3): nothing of it is planned; DropPurged moves its copy aside.
         if (st?.Purged == true) return null;
         // Archived (decision D8): only this computer's own check outs there are finished.
@@ -1130,31 +1359,14 @@ public sealed partial class SyncEngine : IAsyncDisposable
         // version is put back, never shared at a check in nobody asked for.
         if (ownership == LockOwnership.ThisDevice && st.TransientLock) ownership = LockOwnership.Free;
         var localHash = localFile?.Hash;
-        var open = IsOpenNow(path);
         SolidWorksRelease? saved = null;
         if (Reconciler.IsSolidWorks(path) && localHash is not null && (localHash != st.BaseHash || st.BreakNotice))
             saved = await ReadReleaseAsync(st, path, localHash, ct);
-        var input = new SyncInput(path, st.Base, localHash, remoteRevision, ownership, open, isOnline, st.BreakNotice,
+        var input = new SyncInput(path, st.Base, localHash, remoteRevision, ownership, false, isOnline, st.BreakNotice,
             saved, new SolidWorksRelease(project.PinnedRelease), st.Preserved, GateModeFor(project, localHash),
-            CheckoutMode.Explicit, RequestOf(st, open));
-        var plan = Reconciler.Plan(input);
-        if (!isOnline)
-        {
-            JournalOffline(plan, st);
-            return null;
-        }
-        // An add (or the re-add of a removed name) whose name another live file of the project
-        // holds is refused here, at the plan, until that file is renamed or removed or this one
-        // is: never a unit, never expected as an upload, never counted as moving, and counted as
-        // refused only when the refusal is new. IDEA-06's 142 copies were planned, expected as
-        // uploads ("Uploading 0 of 142 files") and refused again on every pass.
-        if (plan.Actions is [{ Kind: SyncActionKind.Upload or SyncActionKind.AcquireLockThenUpload }, ..] &&
-            (st.FileId is null || remote.File is { Deleted: true }) && NameHolderElsewhere(project, path) is { } holder)
-        {
-            RefuseName(st, holder.Folder, holder.Name);
-            return null;
-        }
-        return new Planned(key, path, input, plan, st, project, remote.File);
+            CheckoutMode.Explicit, RequestOf(st, open: false));
+        var matters = isOnline && (Reconciler.OpenMatters(input) || RequestOf(st, open: true) != input.Request);
+        return new Prepared(key, path, input, st, project, remote.File, matters);
     }
 
     // Offline, a plan only records Core's intents (never an upload: the capture is the upload's).
@@ -1166,12 +1378,16 @@ public sealed partial class SyncEngine : IAsyncDisposable
     }
 
     // What the panel will show moving: an upload for bytes sent, a download for bytes received.
+    // A kept copy already kept moves nothing (X-kept-save-every-pass: a checked-out file saved
+    // once read "Uploading 0 of 1 file" on every pass after).
     private void ExpectTransfers(Planned planned)
     {
         foreach (var action in planned.Plan.Actions)
         {
             switch (action.Kind)
             {
+                case SyncActionKind.SaveSideVersion when AlreadyKept(planned):
+                    break;
                 case SyncActionKind.Upload or SyncActionKind.AcquireLockThenUpload or SyncActionKind.SaveSideVersion:
                     activity.Expect(Directions.Upload, planned.Key, local.TryGetValue(planned.Key, out var file) ? file.Size : 0);
                     break;
@@ -1182,6 +1398,19 @@ public sealed partial class SyncEngine : IAsyncDisposable
         }
     }
 
+    // A file whose plan moves anything: a kept copy already kept, a plan that only refuses (the
+    // release gate) and a plan of nothing do not.
+    private bool Moves(Planned planned)
+        => planned.Plan.Actions.Any(a => a.Kind is not (SyncActionKind.None or SyncActionKind.Refuse) && !(a.Kind == SyncActionKind.SaveSideVersion && AlreadyKept(planned)));
+
+    // The bytes of a SaveSideVersion are already durable on the server: PreserveAsync's own test
+    // (this file's current version, a kept copy the server acknowledged, or the preserved hash).
+    private static bool AlreadyKept(Planned planned)
+        => planned.Input.LocalHash is { } hash && AlreadyKept(planned.State, hash, planned.Remote);
+
+    private static bool AlreadyKept(FileState st, string hash, RemoteFile? remote)
+        => st.Preserved == hash || remote?.Current?.Hash == hash || st.Sides.Any(s => s.Hash == hash);
+
     // Phase C: the units, at most TransferConcurrency at once, as interleaved async tasks on the
     // engine thread (state is only touched between awaits, on this thread). A unit runs its
     // files' plans in order, each action in order, so every crash point fires once per file in
@@ -1189,27 +1418,45 @@ public sealed partial class SyncEngine : IAsyncDisposable
     // are planned offline); any failure that is not one file's (a crash, in tests) stops every
     // unit at its next step and is thrown only after all of them stopped, so nothing of this
     // engine writes after it.
-    // An action's pass runs only the units holding its files (passScope); the loop's pass starts
-    // no new unit while an action waits for the gate, nor after PassSlice. Units left are simply
-    // planned again by the next pass (online, nothing of them is journaled). The activity panel
-    // learns here what the pass will move.
+    // An action's pass runs only the units holding its files (passScope). The loop's pass runs its
+    // units in the transfer queue (SyncEngine.Queue.cs): it starts none after its slice, while an
+    // action waits for the gate or while paused, and carries the ones in flight instead of
+    // waiting for them. Units left are planned again by the next pass, which the loop starts at
+    // once (online, nothing of them is journaled), and stay counted in the activity panel. The
+    // panel learns here what the pass will move; files the pass before left for this one and that
+    // it no longer plans leave its totals.
     private async Task RunUnitsAsync(List<List<Planned>> units, CancellationToken ct)
     {
         var run = passScope is { } scope ? units.Where(scope.Covers).ToList() : units;
         foreach (var unit in run) foreach (var planned in unit) ExpectTransfers(planned);
-        // A plan that only refuses (the release gate) moves nothing: it is never counted as moving.
-        LogPassStart(run.Sum(u => u.Count(p => p.Plan.Actions.Any(a => a.Kind is not (SyncActionKind.None or SyncActionKind.Refuse)))), units.Sum(u => u.Count));
+        if (passScope is null)
+        {
+            var planned = run.SelectMany(u => u).Select(p => p.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            activity.Prune(Directions.Download, planned);
+            activity.Prune(Directions.Upload, planned);
+        }
+        var moving = run.Sum(u => u.Count(Moves));
+        LogPassStart(moving, units.Sum(u => u.Count));
+        if (moving > 0 && runStarted == 0) runStarted = deps.Clock.GetTimestamp();
         var started = deps.Clock.GetTimestamp();
-        var next = await RunConcurrentlyAsync(run, RunUnitAsync, notStarted: unit =>
+        if (loopPass)
+        {
+            var (begun, carried) = await RunQueuedAsync(run, ct);
+            if (begun >= run.Count || online != true)
+            {
+                if (carried > 0) flight?.PassYield(paused ? "pause" : actionsWaiting > 0 ? "action" : "slice", 0, (long)deps.Clock.GetElapsedTime(started).TotalMilliseconds, carried);
+                return;
+            }
+            // Left for the next pass, which the loop starts at once.
+            cutShort = true;
+            flight?.PassYield(paused ? "pause" : actionsWaiting > 0 ? "action" : "slice", run.Count - begun, (long)deps.Clock.GetElapsedTime(started).TotalMilliseconds, carried);
+            return;
+        }
+        await RunConcurrentlyAsync(run, RunUnitAsync, notStarted: unit =>
         {
             // Offline: what was not started yet is planned offline, its intents journaled.
             foreach (var planned in unit) JournalOffline(Reconciler.Plan(planned.Input with { IsOnline = false }), planned.State);
-        }, ct, startNoMore: () => loopPass && (actionsWaiting > 0 || deps.Clock.GetElapsedTime(started) >= options.PassSlice));
-        if (next >= run.Count || online != true) return;
-        // Left for the next pass, which the loop starts at once.
-        cutShort = true;
-        flight?.PassYield(actionsWaiting > 0 ? "action" : "slice", run.Count - next, (long)deps.Clock.GetElapsedTime(started).TotalMilliseconds);
-        for (var i = next; i < run.Count; i++) foreach (var planned in run[i]) activity.Drop(planned.Key);
+        }, ct);
     }
 
     // Runs each item (a unit, a check out, a release) at most TransferConcurrency at once, as
@@ -1316,77 +1563,135 @@ public sealed partial class SyncEngine : IAsyncDisposable
     private static CheckoutRequest RequestOf(FileState st, bool open)
         => st.Request != CheckoutRequest.None ? st.Request : st.AutoCheckIn && !open ? CheckoutRequest.CheckIn : CheckoutRequest.None;
 
-    // The engine's "never overwrite an open file" check: the platform's open-file answer,
-    // SolidWorks' ~$ lock file beside the document, or a linked SolidWorks that has it open.
-    // Used for Core's input and again immediately before any write to the file.
-    private bool IsOpenNow(VaultPath path)
-        => (openKnown is { } known && known.Asked.Contains(path.Value) ? known.Open.Contains(path.Value) : fs.IsOpen(path)) || markerDocuments.Contains(path.Value)
-           || (linkOpen.Count > 0 && linkOpen.ContainsKey(path.Value));
+    // The engine's "never overwrite an open file" check, asked of the platform now: the
+    // platform's open-file answer, SolidWorks' ~$ lock file beside the document, or a linked
+    // SolidWorks that has it open. Used immediately before any write to the file, and for one
+    // file's question.
+    private bool IsOpenNow(VaultPath path) => fs.IsOpen(path) || markerDocuments.Contains(path.Value) || LinkHasOpen(path.Value);
 
-    // Open answers asked once for many files (IVaultFileSystem.OpenAmong), which IsOpenNow gives
-    // for those files while the scope lasts: a pass's plan, a batch of check outs. Asking file by
-    // file cost one Restart Manager session each, about 28 ms, so planning 1,500 files took 40
-    // seconds a pass and every click waited behind it (0.3.1's field reports). A scope never
-    // spans a write: each write asks again just before it, as it always did.
-    private sealed record OpenAnswers(HashSet<string> Asked, IReadOnlySet<string> Open);
-    private OpenAnswers? openKnown;
+    // A linked SolidWorks has this document open (SyncEngine.Open.cs), whatever the platform says.
+    private bool LinkHasOpen(string key) => linkOpen.Count > 0 && linkOpen.ContainsKey(key);
 
-    private OpenScope KnowOpen(IEnumerable<VaultPath> paths)
+    // Whether a file is open by one question's answer (AskOpenAsync), or by a ~$ marker. A
+    // question that failed (null) is asked file by file instead.
+    private bool OpenIn(IReadOnlySet<string>? answer, VaultPath path)
+        => answer is null ? IsOpenNow(path) : answer.Contains(path.Value) || markerDocuments.Contains(path.Value) || LinkHasOpen(path.Value);
+
+    // Whether a file was open when it was last asked about (this pass or the one before), or has
+    // a live ~$ marker: what the window shows and the read-only rule read, never a question per
+    // file per view (0.3.3: 20 files added while open cost 20 Restart Manager sessions a view).
+    private bool KnownOpen(VaultPath path)
+        => markerDocuments.Contains(path.Value) || LinkHasOpen(path.Value) || (openAnswers.TryGetValue(path.Value, out var known) && known.Open);
+
+    // The latest open answer for each file asked about, with the pass that asked.
+    private readonly Dictionary<string, (bool Open, long Pass)> openAnswers = new(StringComparer.OrdinalIgnoreCase);
+    private long passNumber;
+    private static readonly IReadOnlySet<string> NoneOpen = new HashSet<string>();
+    // How long the platform may take before it answers what it could not clear by a quicker
+    // check (Windows: the exclusive-open probe instead of Restart Manager); a glance before a
+    // pass that asks again (an undo's "close it first") takes less.
+    public static readonly TimeSpan OpenBudget = TimeSpan.FromSeconds(2);
+    internal static readonly TimeSpan GlanceBudget = TimeSpan.FromMilliseconds(250);
+
+    // Which of many files are open, asked once (IVaultFileSystem.OpenAmongAsync) and off the
+    // engine thread: asking file by file cost one Restart Manager session each (0.3.1), and one
+    // question about every file held the engine thread for its 10 second budget (0.3.2). Fresh:
+    // a lock is let go only on what the disk says now. Each question is one openFiles flight
+    // event. Null when the question failed (each file is then asked on its own).
+    // mayGiveWay: a loop pass's question, which a window action waiting for the gate ends at once
+    // (OperationCanceledException with ct not canceled: the caller gives way).
+    private async Task<IReadOnlySet<string>?> AskOpenAsync(IEnumerable<VaultPath> paths, CancellationToken ct, bool fresh = false, TimeSpan? budget = null,
+        bool mayGiveWay = false)
     {
         var asked = new Dictionary<string, VaultPath>(StringComparer.OrdinalIgnoreCase);
         foreach (var path in paths) asked.TryAdd(path.Value, path);
-        var scope = new OpenScope(this, openKnown);
-        // Nothing to ask: no question at all (each file outside the scope is asked on its own).
-        if (asked.Count == 0) return scope;
-        try { openKnown = new([.. asked.Keys], fs.OpenAmong(asked.Values)); }
-        // Each file is asked on its own instead.
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { deps.Log?.Invoke("open files: " + error.Message); }
-        return scope;
-    }
-
-    private readonly struct OpenScope(SyncEngine engine, OpenAnswers? before) : IDisposable
-    {
-        public void Dispose() => engine.openKnown = before;
+        if (asked.Count == 0) return NoneOpen;
+        var started = flight?.Now() ?? 0;
+        OpenFilesAnswer answer;
+        var token = mayGiveWay && loopPass && loopQuestions is { } questions ? questions.Token : ct;
+        try { answer = await fs.OpenAmongAsync(asked.Values, budget ?? OpenBudget, token, fresh); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            deps.Log?.Invoke("open files: " + error.Message);
+            return null;
+        }
+        flight?.OpenFiles(flight.MillisecondsSince(started), asked.Count, answer.TimedOut);
+        foreach (var key in asked.Keys) openAnswers[key] = (answer.Open.Contains(key), passNumber);
+        return answer.Open;
     }
 
     // SolidWorks' ~$ marker means "open" while the platform corroborates it (the document or
     // the marker itself is held open), and for a while after it first appears. A marker left
     // behind by a crash, never corroborated for StaleMarkerAfter, is stale and ignored. A
-    // marker never takes the lock (decision D3): it raises the quiet check-out question.
-    private void ReadMarkers(VaultScan scan)
+    // marker never takes the lock (decision D3): it raises the quiet check-out question. A stale
+    // marker is remembered by its stamp (IVaultFileSystem.MarkerStamp: its identity and last
+    // write) and not asked about again until that changes (0.3.3: IDEA-06 asked about 224 stale
+    // markers and their documents every pass). A window action's pass asks only about the markers
+    // of the files it works on (and files sharing their names); the others stay as the last pass
+    // found them, and a marker seen for the first time counts as open until the loop asks. Nothing
+    // deletes a marker.
+    private async Task ReadMarkersAsync(VaultScan scan, CancellationToken ct)
     {
         var now = deps.Clock.GetUtcNow();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        List<(string Document, VaultPath Doc, VaultPath? Marker)> markers = [];
+        List<(string Document, VaultPath Doc, VaultPath? Marker, string? Stamp)> markers = [];
         foreach (var marker in scan.Markers)
         {
             if (!LockMarkers.TryGetDocument(marker, out var document) || !VaultPath.TryCreate(document, out var doc, out _, options.VaultRoot)) continue;
-            markers.Add((document, doc, VaultPath.TryCreate(marker, out var markerPath, out _, options.VaultRoot) ? markerPath : null));
+            markers.Add((document, doc, VaultPath.TryCreate(marker, out var markerPath, out _, options.VaultRoot) ? markerPath : null,
+                staleMarkers.ContainsKey(document) ? fs.MarkerStamp(marker) : null));
         }
         // Every document and marker asked at once (a SolidWorks that closed unexpectedly can
-        // leave hundreds of markers behind).
-        var open = markers.Count == 0 ? new HashSet<string>() : fs.OpenAmong([.. markers.SelectMany(m => m.Marker is { } x ? new[] { m.Doc, x } : [m.Doc])]);
-        foreach (var (document, doc, markerPath) in markers)
+        // leave hundreds of markers behind), except the stale ones nobody touched since.
+        bool StillStale((string Document, VaultPath Doc, VaultPath? Marker, string? Stamp) m)
+            => m.Stamp is not null && staleMarkers.TryGetValue(m.Document, out var stamp) && stamp == m.Stamp;
+        var units = passScope is { } scope && markers.Count > 0 ? AllPaths().Where(k => InScope(scope, k)).Select(UnitOf).ToHashSet() : null;
+        bool Asked((string Document, VaultPath Doc, VaultPath? Marker, string? Stamp) m)
+            => !StillStale(m) && (units is null || units.Contains(UnitOf(m.Doc.Value)) || InScope(passScope!, m.Doc.Value));
+        IReadOnlySet<string> open;
+        try { open = await AskOpenAsync(markers.Where(Asked).SelectMany(m => m.Marker is { } x ? new[] { m.Doc, x } : [m.Doc]), ct, mayGiveWay: true) ?? NoneOpen; }
+        // A window action waits: the markers stay as the last pass found them, and the pass gives way.
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested && GiveWay()) { return; }
+        var documents = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var m in markers)
         {
+            var (document, doc, markerPath, _) = m;
             seen.Add(document);
-            if (!markerFirstSeen.ContainsKey(document)) markerFirstSeen[document] = now;
-            var live = open.Contains(doc.Value) || (markerPath is { } m && open.Contains(m.Value));
-            if (live) { markerSince.Remove(document); staleRecorded.Remove(document); markerDocuments.Add(document); continue; }
+            var known = markerFirstSeen.ContainsKey(document);
+            if (!known) markerFirstSeen[document] = now;
+            // Not asked (outside an action's files): as the last pass found it, or open if new.
+            if (!StillStale(m) && !Asked(m))
+            {
+                if (markerDocuments.Contains(document) || !known) documents.Add(document);
+                continue;
+            }
+            var live = !StillStale(m) && (open.Contains(doc.Value) || (markerPath is { } x && open.Contains(x.Value)));
+            if (live) { markerSince.Remove(document); staleMarkers.Remove(document); staleRecorded.Remove(document); documents.Add(document); continue; }
             if (!markerSince.TryGetValue(document, out var since)) markerSince[document] = since = now;
-            if (now - since < options.StaleMarkerAfter) markerDocuments.Add(document);
+            if (now - since < options.StaleMarkerAfter) { documents.Add(document); continue; }
+            // Remembered as it is now: a marker SolidWorks writes again is asked about again.
+            staleMarkers[document] = m.Stamp ?? (markerPath is { } stale ? fs.MarkerStamp(stale.Value) : null);
             // In the flight once per stale marker, not on every pass: IDEA-06's 224 markers spent
             // every pass's notice budget and hid everything else.
-            else Notice(NoticeKinds.CantRead, null, document,
+            Notice(NoticeKinds.CantRead, null, document,
                 $"Armory is treating {doc.Name} as closed. If SolidWorks still has it open, save it there.", StaleMarkerTitle, record: staleRecorded.Add(document));
         }
         foreach (var gone in markerSince.Keys.Where(k => !seen.Contains(k)).ToArray()) markerSince.Remove(gone);
         staleRecorded.RemoveWhere(k => !seen.Contains(k));
         foreach (var gone in markerFirstSeen.Keys.Where(k => !seen.Contains(k)).ToArray()) markerFirstSeen.Remove(gone);
+        foreach (var gone in staleMarkers.Keys.Where(k => !seen.Contains(k)).ToArray()) staleMarkers.Remove(gone);
+        staleRecorded.RemoveWhere(k => !seen.Contains(k));
+        // In one step, so a view built while the question was out still saw the last pass's.
+        markerDocuments.Clear();
+        markerDocuments.UnionWith(documents);
         // A question dismissed for one open is forgotten once that open is over.
         dismissedPrompts.RemoveWhere(key => !PromptStillOpen(key));
     }
 
     internal const string StaleMarkerTitle = "SolidWorks may have closed unexpectedly";
+    // Stale markers by document, with the marker's stamp when they were found stale (null: the
+    // platform can't stamp it, so it is asked about every pass, as before 0.3.3).
+    private readonly Dictionary<string, string?> staleMarkers = new(StringComparer.OrdinalIgnoreCase);
     // The stale markers already in the flight recorder (until they go, or come alive again).
     private readonly HashSet<string> staleRecorded = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, DateTimeOffset> markerSince = new(StringComparer.OrdinalIgnoreCase);
@@ -1457,7 +1762,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
     private void Notice(string kind, Guid? fileId, string path, string detail, string? title = null, string? itemDetail = null, string? reasonKind = null, string? who = null,
         bool record = true)
     {
-        notes.Add(new Note(kind, fileId, path, detail, title, itemDetail, reasonKind, who));
+        (Holding ? heldNotes : notes).Add(new Note(kind, fileId, path, detail, title, itemDetail, reasonKind, who));
         // A 5,000-file import is 5,000 notices: the first few hundred of a pass are plenty.
         if (record && flight is not null && noticesRecorded++ < MaximumNoticesRecorded) flight.Notice(kind, path, detail);
     }
@@ -1466,10 +1771,16 @@ public sealed partial class SyncEngine : IAsyncDisposable
     // sentence as one notice item, and only the log gets the raw text.
     private void Problem(string kind, string? path, string plain, string raw, string? title = null)
     {
-        problems.Add(string.IsNullOrEmpty(path) ? raw : $"{path}: {raw}");
-        notes.Add(new Note(kind, null, path ?? "", plain, title));
+        (Holding ? heldProblems : problems).Add(string.IsNullOrEmpty(path) ? raw : $"{path}: {raw}");
+        (Holding ? heldNotes : notes).Add(new Note(kind, null, path ?? "", plain, title));
         flight?.Notice(kind, path, raw);
     }
+
+    // Notices a carried unit makes between two passes: the next pass's own, which would otherwise
+    // forget them as it starts.
+    private bool Holding => !inPass && queue.Count > 0;
+    private readonly List<Note> heldNotes = [];
+    private readonly List<string> heldProblems = [];
 
     // A failure while planning or carrying out one file's plan, in the window's words: the
     // server's refusals are things Armory can't send, the disk's are things it can't read.
@@ -1532,19 +1843,25 @@ public sealed partial class SyncEngine : IAsyncDisposable
     private long lastViewBuilt;
 
     // Something the window shows changed. With nothing running the view is built now; during a
-    // pass at most every 500 ms (and at its end); during an action, when the action ends.
-    private void RequestPublish()
+    // pass at most every 500 ms (and at its end); during an action, when the action ends. now: a
+    // click the window answers (pause, resume) is built at once during a pass too, unless the
+    // server is being read (then right after the read).
+    private void RequestPublish(bool now = false)
     {
         viewWanted = true;
         if (passGate.CurrentCount > 0) PublishLocked();
+        else if (inPass && now && !refreshing) PublishLocked();
         else if (inPass) PublishSoon();
     }
 
-    // During a pass: now if the last view is 500 ms old, else once that much time has passed. Never
-    // while the server is being read (the next look after the read builds it).
+    // During a pass (or while units it carried still move): now if the last view is 500 ms old,
+    // else once that much time has passed. Never while the server is being read (the next look
+    // after the read builds it).
+    private bool Moving => inPass || queue.Count > 0;
+
     private void PublishSoon()
     {
-        if (!viewWanted || refreshing || !inPass) return;
+        if (!viewWanted || refreshing || !Moving) return;
         if (deps.Clock.GetElapsedTime(lastViewBuilt) >= ViewEvery)
         {
             PublishLocked();
@@ -1566,7 +1883,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
             while (true)
             {
                 await Task.Delay(WaitBeforeNextView(deps.Clock.GetElapsedTime(lastViewBuilt)));
-                if (!viewWanted || refreshing || !inPass) return;
+                if (!viewWanted || refreshing || !Moving) return;
                 if (deps.Clock.GetElapsedTime(lastViewBuilt) < ViewEvery) continue;
                 PublishLocked();
                 return;
@@ -1618,13 +1935,14 @@ public sealed partial class SyncEngine : IAsyncDisposable
         lock (activityGate) activityStopping = true;
     }
 
-    private void RaiseActivity()
+    // now: raised at once, whatever was raised a moment ago (a click's running line).
+    private void RaiseActivity(bool now = false)
     {
         ActivityView snapshot;
         lock (activityGate)
         {
-            var now = System.Diagnostics.Stopwatch.GetTimestamp();
-            if (activityRaisedAt != 0 && System.Diagnostics.Stopwatch.GetElapsedTime(activityRaisedAt, now) < ActivityEvery) return;
+            var at = System.Diagnostics.Stopwatch.GetTimestamp();
+            if (!now && activityRaisedAt != 0 && System.Diagnostics.Stopwatch.GetElapsedTime(activityRaisedAt, at) < ActivityEvery) return;
             var version = activity.Version;
             var busy = activity.Busy;
             if (version == activityVersionRaised && !busy)
@@ -1638,7 +1956,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
             }
             snapshot = activity.Snapshot();
             activityVersionRaised = version;
-            activityRaisedAt = now;
+            activityRaisedAt = at;
             try { ActivityChanged?.Invoke(snapshot); }
             catch (Exception error) when (error is not OutOfMemoryException) { deps.Log?.Invoke("activity: " + error.Message); }
         }

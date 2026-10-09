@@ -48,7 +48,9 @@ public sealed partial class SyncEngine
             case SyncActionKind.SaveSideVersion:
                 return await PreserveAsync(st, project, path, input.LocalHash!, action.ReleaseNotChecked, input.SavedRelease, remote, action.Why, ct);
             case SyncActionKind.MoveLocalToRecovery:
-                // Removed by the team: it goes aside once it is closed, never while open.
+                // Removed by the team: it goes aside once it is closed, never while open (and,
+                // for a carried unit, once a scan in progress is taken in).
+                await AfterScanAsync(ct);
                 if (IsOpenNow(path)) { st.RemovedWaiting = true; return false; }
                 var moved = fs.MoveToRecovery(path, input.LocalHash!);
                 if (!moved.Succeeded)
@@ -107,10 +109,10 @@ public sealed partial class SyncEngine
         var current = remote.Current!;
         // Recheck right before writing: the plan was made a moment ago.
         if (IsOpenNow(path)) { st.NewerWaiting = true; st.NewerAuthor = current.Author; return false; }
-        if (FolderMovedAway(path)) return false;
+        if (FolderMovedAway(path, st)) return false;
         // The read-only rule is set on the staged copy, so the new bytes are never writable here
         // unless this computer has the file checked out.
-        var ownership = DesiredOwnership(st, OwnershipOf(remote.Lock), path);
+        var ownership = DesiredOwnership(st, OwnershipOf(remote.Lock), IsOpenNow(path));
         var readOnly = CheckoutRules.IsReadOnlyOnDisk(ownership);
         var staging = fs.CreateStaging(out var stagingName);
         var transfer = activity.Start(Directions.Download, st.Path, current.Bytes);
@@ -119,9 +121,11 @@ public sealed partial class SyncEngine
         {
             await deps.Blobs.DownloadAsync(project.Id, current.Hash, current.Bytes, staging, ct, transfer);
             staging.Position = 0;
+            // A carried download is put in place only once a scan in progress is taken in.
+            await AfterScanAsync(ct);
             Checkpoint("before-replace", ct);
             if (IsOpenNow(path)) { st.NewerWaiting = true; st.NewerAuthor = current.Author; return false; }
-            if (FolderMovedAway(path)) return false;
+            if (FolderMovedAway(path, st)) return false;
             var outcome = fs.Replace(path, input.LocalHash, staging, readOnly);
             if (!outcome.Succeeded)
             {
@@ -129,6 +133,9 @@ public sealed partial class SyncEngine
                     outcome.Problem ?? "Replace refused");
                 return false;
             }
+            // The platform keeps the hash of bytes Armory wrote itself: the next scan doesn't read
+            // them again (0.3.3: a scan after a 542 MB slice read every file of it once more).
+            fs.Wrote(path, current.Hash);
             arrived = true;
         }
         finally
@@ -147,6 +154,7 @@ public sealed partial class SyncEngine
         st.AppliedOwnership = null;
         Complete(st, current.Hash);
         downloaded++;
+        runDownloaded++;
         lastActivity = deps.Clock.GetUtcNow();
         MarkDirty();
         Checkpoint("after-download", ct);
@@ -158,8 +166,11 @@ public sealed partial class SyncEngine
     // would make the old folder again, and the next pass would take the files in it for files
     // moved back, for the whole team); the next pass sees the move and downloads the file where
     // its folder is now. A folder that was never here (new for the team) is made as before.
-    private bool FolderMovedAway(VaultPath path)
+    private bool FolderMovedAway(VaultPath path, FileState? st = null)
     {
+        // A download in the transfer queue asks about the folder it was planned into: a pass that
+        // began since may have scanned the student's move of it already.
+        if (st is not null && plannedFolders.TryGetValue(st, out var planned)) return planned is not null && !fs.FolderExists(planned);
         var folder = Parent(path.Value);
         for (var f = folder; f is not null; f = Parent(f))
             if (localFolders.Contains(f)) return !fs.FolderExists(f);
@@ -199,7 +210,7 @@ public sealed partial class SyncEngine
     {
         // Already durable on the server (as this file's current version, or as a side version
         // the server or this engine already acknowledged): the obligation is met.
-        if (st.Preserved == hash || remote?.Current?.Hash == hash || st.Sides.Any(s => s.Hash == hash))
+        if (AlreadyKept(st, hash, remote))
         {
             // Force checked in with nothing new here: the notice still says who did it (for a
             // while), never that changes were kept (N5).
@@ -525,6 +536,7 @@ public sealed partial class SyncEngine
                     st.SetBase(new(answer.VersionId.ToString(), f.Hash, state.Email!));
                     st.Preserved = null;
                     uploaded++;
+                    runUploaded++;
                 }
                 else
                 {
@@ -593,6 +605,7 @@ public sealed partial class SyncEngine
         st.Sides.Add(new(versionId, hash, reason, deps.Clock.GetUtcNow()));
         if (st.Sides.Count > SidesKept) st.Sides.RemoveRange(0, st.Sides.Count - SidesKept);
         sideVersions++;
+        runKept++;
     }
 
     private async Task UploadBlobAsync(Inflight f, IProgress<long> progress, CancellationToken ct)
@@ -656,6 +669,8 @@ public sealed partial class SyncEngine
         var sent = false;
         foreach (var st in state.Files.Values.Where(f => f.Inflight is not null).ToArray())
         {
+            // A carried unit's write is in flight now, not left by a stop.
+            if (Fenced(st)) continue;
             var project = state.Projects.GetValueOrDefault(st.ProjectId);
             if (project is null || !project.Usable) continue;
             if (st.Inflight!.Kind is "release" or "tombstone") { st.Inflight = null; MarkDirty(); continue; }
@@ -673,7 +688,7 @@ public sealed partial class SyncEngine
     {
         foreach (var st in state.Files.Values.Where(f => (f.Entries.Count > 0 || f.Drafts.Count > 0) && f.Inflight is null && f.LocalMoveTo is null).ToArray())
         {
-            if (!VaultPath.TryCreate(st.Path, out var path, out _, options.VaultRoot)) continue;
+            if (Fenced(st) || !VaultPath.TryCreate(st.Path, out var path, out _, options.VaultRoot)) continue;
             var project = state.Projects.GetValueOrDefault(st.ProjectId);
             if (project is null || !project.Usable || (project.Archived && !MineToFinish(st)) || HeldByWork(st.Path) || heldProjects.Contains(project.Id)) continue;
             // Never added because another file holds its name: nothing of it can go until one of
@@ -764,8 +779,8 @@ public sealed partial class SyncEngine
     private bool ApplyRemoteMoves()
     {
         var any = false;
-        var moving = state.Files.Values.Where(f => f.FileId is not null && f.LocalMoveTo is null &&
-            remoteById.TryGetValue(f.FileId.Value, out var remote) && !string.Equals(remote.Path.Value, f.Path, StringComparison.Ordinal)).ToArray();
+        var moving = state.Files.Values.Where(f => f.FileId is not null && f.LocalMoveTo is null && !Fenced(f) &&
+            remoteById.TryGetValue(f.FileId.Value, out var remote) && !string.Equals(remote.Path.Value, f.Path, StringComparison.Ordinal) && !Fenced(remote.Path.Value)).ToArray();
         if (moving.Length == 0) return false;
         // The pass's moves are one operation, shown as moving to the folder they all go to.
         BeginMoving(moving.Count(f => local.ContainsKey(f.Path)), CommonFolder(moving.Select(f => remoteById[f.FileId!.Value].Path.Value)));
@@ -864,7 +879,7 @@ public sealed partial class SyncEngine
         var platform = (scan.Renames ?? []).ToDictionary(r => r.From.Value, r => r.To.Value, StringComparer.OrdinalIgnoreCase);
         foreach (var st in state.Files.Values.ToArray())
         {
-            if (st.FileId is null || st.BaseHash is null || st.LocalMoveTo is not null || st.Inflight is not null || local.ContainsKey(st.Path)) continue;
+            if (st.FileId is null || st.BaseHash is null || st.LocalMoveTo is not null || st.Inflight is not null || local.ContainsKey(st.Path) || Fenced(st)) continue;
             if (state.Moves.Any(m => m.FileId == st.FileId)) continue;
             var project = state.Projects.GetValueOrDefault(st.ProjectId);
             if (project is null || !project.Usable || project.Archived || HeldByWork(st.Path) || heldProjects.Contains(project.Id)) continue;
@@ -1020,9 +1035,10 @@ public sealed partial class SyncEngine
     // this computer is letting go of (a check in, an undo, a closed add, a lock taken only for a
     // move or a removal) is read-only already, before its lock is released. A check in, an undo
     // or an add waiting for its file to close keeps it writable: SolidWorks can go on saving it
-    // until it is closed, and the check in shares what was saved (feedback N4).
-    private LockOwnership DesiredOwnership(FileState st, LockOwnership ownership, VaultPath path)
-        => ownership == LockOwnership.ThisDevice && (st.TransientLock || ((st.Request != CheckoutRequest.None || st.AutoCheckIn) && !IsOpenNow(path)))
+    // until it is closed, and the check in shares what was saved (feedback N4). open: whether the
+    // file is open (asked now before a write; this pass's answer for the read-only rule).
+    private static LockOwnership DesiredOwnership(FileState st, LockOwnership ownership, bool open)
+        => ownership == LockOwnership.ThisDevice && (st.TransientLock || ((st.Request != CheckoutRequest.None || st.AutoCheckIn) && !open))
             ? LockOwnership.Free : ownership; // MUTATION: a checked-in file left writable
 
     // Decision D4: a file the server has is read-only on disk unless this computer has it
@@ -1031,21 +1047,26 @@ public sealed partial class SyncEngine
     // Files the server does not have (not added yet, refused, drafts) are never touched. What
     // this computer knows of the server includes its own lock changes of this pass (KnowLock),
     // so a check in whose connection dropped right after the lock went is read-only all the same.
-    private void ApplyReadOnly()
+    private async Task ApplyReadOnlyAsync(CancellationToken ct)
     {
         List<(VaultPath Path, LockOwnership Ownership)> batch = [];
         List<FileState> changed = [];
-        // Whether the files waiting to be checked in are open (DesiredOwnership), asked once.
-        List<VaultPath> waiting = [];
+        // Whether the files waiting to be checked in are open (DesiredOwnership): this pass's
+        // answers (the plan's, and the fresh one the check ins were decided on), and one question
+        // for the rest.
+        List<VaultPath> unknown = [];
         foreach (var st in state.Files.Values)
-            if ((st.Request != CheckoutRequest.None || st.AutoCheckIn) && TryLocal(st.Path, out var here)) waiting.Add(here.Path);
-        using (KnowOpen(waiting))
+            if ((st.Request != CheckoutRequest.None || st.AutoCheckIn) && TryLocal(st.Path, out var here) &&
+                !(openAnswers.TryGetValue(here.Path.Value, out var known) && known.Pass == passNumber) && !markerDocuments.Contains(here.Path.Value))
+                unknown.Add(here.Path);
+        var asked = await AskOpenAsync(unknown, ct);
         foreach (var st in state.Files.Values)
         {
             // Where the file is on disk (in a folder waiting to go back, too: the rule holds there).
             // A file the scan could not read is left as it is: its read-only bit is the last one
             // read, not the disk's (feedback N4), and a later pass that can read it applies the rule.
-            if (st.FileId is not { } id || !TryLocal(st.Path, out var file) || file.Unread) continue;
+            // A carried unit's file gets its bit with its bytes, and the rule from a later pass.
+            if (st.FileId is not { } id || Fenced(st) || !TryLocal(st.Path, out var file) || file.Unread) continue;
             // Archived (decision D8): its files are left as they are.
             if (state.Projects.GetValueOrDefault(st.ProjectId) is { Archived: true }) continue;
             LockOwnership ownership;
@@ -1059,7 +1080,9 @@ public sealed partial class SyncEngine
             // before the rule ran), by the check out last known, and with none known, nobody's.
             else if (st.BaseHash is not null) ownership = st.AppliedOwnership ?? KnownOwnership(st);
             else continue;
-            var desired = DesiredOwnership(st, ownership, file.Path);
+            // Only a file waiting to be let go needs the answer (a failed question asks it alone).
+            var waiting = ownership == LockOwnership.ThisDevice && (st.Request != CheckoutRequest.None || st.AutoCheckIn);
+            var desired = DesiredOwnership(st, ownership, waiting && (asked is null ? IsOpenNow(file.Path) : KnownOpen(file.Path)));
             if (st.AppliedOwnership == desired && file.ReadOnly == CheckoutRules.IsReadOnlyOnDisk(desired)) continue;
             // The rule was applied and the scan finds the file writable all the same: someone (or
             // some program) cleared the bit. It is put back below; the flight recorder keeps it.
@@ -1082,6 +1105,47 @@ public sealed partial class SyncEngine
             Problem(NoticeKinds.CantRead, null, "Armory couldn't set which files can be saved on this computer. It tries again by itself.", error.Message);
         }
         MarkDirty();
+    }
+
+    // Many files' read-only bits at once, each where the file is on disk: one durable manifest
+    // write on Windows, never one per file (0.3.3: 0.3.1's 1,424-file check outs spent about 2.5
+    // seconds per 500 files on them, and its check ins 6 seconds before the first release).
+    // Returns the records whose bit could not be set now: a lock is never let go over a writable
+    // file, and a check out made writable later is retried by the next scan.
+    private HashSet<FileState> SetAttributes(IEnumerable<(FileState State, VaultPath Path)> files, LockOwnership ownership)
+    {
+        var refused = new HashSet<FileState>(ReferenceEqualityComparer.Instance);
+        List<(VaultPath Path, LockOwnership Ownership)> batch = [];
+        List<(FileState State, LocalFile File)> applied = [];
+        foreach (var (st, path) in files)
+        {
+            if (!TryLocal(path.Value, out var file)) continue;
+            batch.Add((file.Path, ownership));
+            applied.Add((st, file));
+        }
+        if (batch.Count == 0) return refused;
+        IReadOnlyList<(VaultPath Path, string Problem)> failed;
+        try { failed = fs.ApplyLockAttributesNow(batch); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            Problem(NoticeKinds.CantRead, null, "Armory couldn't set which files can be saved on this computer. It tries again by itself.", error.Message);
+            foreach (var (st, _) in applied) refused.Add(st);
+            return refused;
+        }
+        var why = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (path, problem) in failed) why[path.Value] = problem;
+        foreach (var (st, file) in applied)
+        {
+            if (why.TryGetValue(file.Path.Value, out var problem))
+            {
+                refused.Add(st);
+                Problem(NoticeKinds.CantRead, file.Path.Value, "Armory couldn't make it read-only or writable yet. Close any program that might be using it. Armory tries again by itself.", problem);
+                continue;
+            }
+            st.AppliedOwnership = ownership;
+            local[file.Path.Value] = file with { ReadOnly = CheckoutRules.IsReadOnlyOnDisk(ownership) };
+        }
+        return refused;
     }
 
     // One file's read-only bit, now (a check out makes it writable; a check in read-only), where

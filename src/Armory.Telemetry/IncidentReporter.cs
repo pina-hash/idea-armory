@@ -16,6 +16,10 @@ public sealed class IncidentSources
     public Scrubber Scrubber { get; init; } = Scrubber.None;
     public Action<string>? Log { get; init; }
     public static readonly TimeSpan SnapshotDeadline = TimeSpan.FromSeconds(3);
+    // How long an incident or a note waits for the engine's own snapshot before it takes what can
+    // be said at once (QuickSnapshot, the window's last view) instead (0.3.3: 5 of 15 notes and 9 of
+    // 23 slowAction incidents had none, the engine thread busy past the deadline).
+    public static readonly TimeSpan SnapshotPatience = TimeSpan.FromMilliseconds(500);
 }
 
 // Watches the flight recorder's events with the glitch rules and, at most once per kind per
@@ -61,7 +65,8 @@ public sealed class IncidentReporter : IFlightObserver
     public async Task<string?> WriteAsync(Glitch glitch, IncidentFeedback? feedback = null)
         => Write(glitch, await SnapshotAsync().ConfigureAwait(false), feedback);
 
-    // The engine's snapshot if it answers within the deadline; what can be said at once otherwise.
+    // The engine's snapshot if it answers within SnapshotPatience; what can be said at once
+    // otherwise (the window's last view, marked so), never nothing.
     private async Task<JsonNode?> SnapshotAsync()
     {
         JsonNode? snapshot = null;
@@ -72,13 +77,17 @@ public sealed class IncidentReporter : IFlightObserver
             try
             {
                 asked = take(deadline.Token);
-                await Task.WhenAny(asked, Task.Delay(IncidentSources.SnapshotDeadline)).ConfigureAwait(false);
+                await Task.WhenAny(asked, Task.Delay(IncidentSources.SnapshotPatience)).ConfigureAwait(false);
             }
             catch (Exception error) when (error is not OutOfMemoryException) { snapshot = new JsonObject { ["unavailable"] = error.GetType().Name + ": " + error.Message }; }
             if (asked is { IsCompletedSuccessfully: true } && !deadline.IsCancellationRequested) snapshot = asked.Result;
             else if (asked is { IsFaulted: true } && asked.Exception!.InnerException is { } failed and not OperationCanceledException)
                 snapshot = new JsonObject { ["unavailable"] = failed.GetType().Name + ": " + failed.Message };
-            else snapshot ??= new JsonObject { ["unavailable"] = "the engine did not answer within 3 seconds" };
+            else if (snapshot is null)
+            {
+                snapshot = Quick() ?? new JsonObject();
+                if (snapshot is JsonObject quick) quick["engineBusy"] = "the engine did not answer within half a second; this is what the window showed";
+            }
         }
         else snapshot = Quick();
         return snapshot;

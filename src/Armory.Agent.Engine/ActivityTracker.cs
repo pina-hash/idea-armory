@@ -13,11 +13,23 @@ namespace Armory.Agent.Engine;
 // average that starts from nothing would read low for its first seconds, and time left high);
 // time left appears after 3 seconds and 2 files. After its uploads, a pass lets go of the locks
 // of what it checked in or added: "Checking in 412 of 4,900 files", shown as the upload direction.
+// Since 0.3.3 (feedback N8) a check out, an undo and a Force check in of several files have lanes
+// of their own from the click to their answer: "Checking out 500 of 1,400 files" (shown as the
+// download direction while nothing downloads), "Undoing 3 of 10 check outs" and "Force checking
+// in 120 of 300 files" (shown as the upload direction while nothing uploads). Their lanes belong
+// to the action, not the pass: the end of a pass leaves them, and each goes once it is complete.
+// A long download's lane is kept across the passes that move it (feedback N3): files a pass left
+// for the next one stay expected (Carry), and the next pass lets go of those it no longer plans
+// (Prune).
 internal sealed class ActivityTracker(TimeProvider clock)
 {
     internal const int ActiveShown = 8;
     // The locks a check in or an add lets go of at the end of a pass (shown as the upload direction).
     internal const string CheckIn = "checkIn";
+    // A window action's own lanes (0.3.3): the files a check out takes, the check outs an undo
+    // ends, the check outs a Force check in ends.
+    internal const string CheckOut = "checkOut", Undo = "undo", TakeBack = "takeBack";
+    private static bool IsWork(string direction) => direction is CheckOut or Undo or TakeBack;
     private static readonly TimeSpan Smoothing = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan EstimateAfter = TimeSpan.FromSeconds(3);
     private static readonly TimeSpan SampleEvery = TimeSpan.FromMilliseconds(200);
@@ -149,7 +161,7 @@ internal sealed class ActivityTracker(TimeProvider clock)
         }
     }
 
-    // A planned step with no bytes (a lock let go for a check in) is done.
+    // A planned step with no bytes (a lock let go for a check in, a check out taken) is done.
     internal void Done(string direction, string path)
     {
         lock (gate)
@@ -158,22 +170,60 @@ internal sealed class ActivityTracker(TimeProvider clock)
             Begin(lane);
             lane.FilesDone++;
             Changed();
+            Over(lane);
         }
     }
 
-    // A planned file that ended without moving (nothing to send after all, refused): out of the totals.
-    internal void Drop(string path)
+    // A planned file that ended without moving (nothing to send after all, refused): out of the
+    // totals of every lane of the pass that expected it, or of one lane only (a window action's
+    // own lane is left only this way: its file's unit ending in a pass does not end the action).
+    internal void Drop(string path, string? direction = null)
     {
         lock (gate)
         {
-            foreach (var lane in lanes.Values)
+            foreach (var lane in lanes.Values.ToArray())
             {
+                if (direction is null ? IsWork(lane.Direction) : lane.Direction != direction) continue;
                 if (!lane.Expected.Remove(path, out var bytes)) continue;
+                lane.FilesTotal--;
+                lane.BytesTotal -= bytes;
+                Changed();
+                Over(lane);
+            }
+        }
+    }
+
+    // A window action's lane with nothing left to do goes (the next action starts its own count).
+    private void Over(Lane lane)
+    {
+        if (!IsWork(lane.Direction) && lane.Direction != CheckIn) return;
+        if (lane.Expected.Count > 0 || active.Any(t => t.Direction == lane.Direction)) return;
+        lanes.Remove(lane.Direction);
+        Changed();
+    }
+
+    // The next pass of a long download planned again: files the pass before left for it and that
+    // it does not plan now (nothing to move after all) leave the totals. Files on their way stay.
+    internal void Prune(string direction, IReadOnlySet<string> planned)
+    {
+        lock (gate)
+        {
+            if (!lanes.TryGetValue(direction, out var lane)) return;
+            foreach (var (path, bytes) in lane.Expected.ToArray())
+            {
+                if (planned.Contains(path)) continue;
+                lane.Expected.Remove(path);
                 lane.FilesTotal--;
                 lane.BytesTotal -= bytes;
                 Changed();
             }
         }
+    }
+
+    // How many files of a direction are done and in all now (0 and 0 when nothing goes that way).
+    internal (int Done, int Total) Count(string direction)
+    {
+        lock (gate) return lanes.TryGetValue(direction, out var lane) ? (lane.FilesDone, lane.FilesTotal) : (0, 0);
     }
 
     // One move operation starts (a folder renamed here and sent to the team, the team's rename
@@ -203,13 +253,15 @@ internal sealed class ActivityTracker(TimeProvider clock)
         }
     }
 
-    // Nothing is moving any more (the end of a pass).
+    // Nothing is moving any more (the end of a run of passes). A window action's own lane stays
+    // until the action is answered.
     internal void Reset()
     {
         lock (gate)
         {
-            if (lanes.Count == 0 && active.Count == 0) return;
-            lanes.Clear();
+            var ended = lanes.Keys.Where(d => !IsWork(d)).ToArray();
+            if (ended.Length == 0 && active.Count == 0) return;
+            foreach (var direction in ended) lanes.Remove(direction);
             active.Clear();
             Changed();
         }
@@ -231,7 +283,7 @@ internal sealed class ActivityTracker(TimeProvider clock)
         lock (gate)
         {
             var now = clock.GetTimestamp();
-            DirectionView? upload = null, download = null, move = null, checkIn = null;
+            DirectionView? upload = null, download = null, move = null, checkIn = null, checkOut = null, undo = null, takeBack = null;
             string? line = null;
             var mostLeft = -1;
             foreach (var lane in lanes.Values)
@@ -244,13 +296,19 @@ internal sealed class ActivityTracker(TimeProvider clock)
                     case Directions.Upload: upload = view; break;
                     case Directions.Download: download = view; break;
                     case CheckIn: checkIn = view; break;
+                    case CheckOut: checkOut = view; break;
+                    case Undo: undo = view; break;
+                    case TakeBack: takeBack = view; break;
                     default: move = view; break;
                 }
                 var left = lane.FilesTotal - lane.FilesDone;
                 if (left > mostLeft) { mostLeft = left; line = view.Line; }
             }
-            // The locks let go after the uploads count in the upload direction.
-            upload ??= checkIn;
+            // The locks let go after the uploads (a check in's, an undo's, a Force check in's)
+            // count in the upload direction, and the files a check out takes in the download
+            // direction, while nothing moves that way.
+            upload ??= checkIn ?? undo ?? takeBack;
+            download ??= checkOut;
             var files = active.Take(ActiveShown).Select(t => new ActiveTransferView(t.Path, NameOf(t.Path), t.Direction, t.Done, t.Bytes)).ToArray();
             var since = clock.GetUtcNow() - LogFor;
             var lines = log.Where(l => l.At >= since).Select(l => new ActivityLineView(l.At.UtcDateTime.ToString("O", CultureInfo.InvariantCulture), l.Line)).ToArray();
@@ -272,9 +330,14 @@ internal sealed class ActivityTracker(TimeProvider clock)
             double? byFiles = lane.FilesPerSecond is > 0 ? filesLeft / lane.FilesPerSecond.Value : null;
             if (byBytes is not null || byFiles is not null) secondsLeft = (int)Math.Ceiling(Math.Max(byBytes ?? 0, byFiles ?? 0));
         }
-        var text = lane.Direction == CheckIn
-            ? $"Checking in {Number(lane.FilesDone)} of {Files(lane.FilesTotal)}"
-            : $"{(lane.Direction == Directions.Upload ? "Uploading" : "Downloading")} {Number(lane.FilesDone)} of {Files(lane.FilesTotal)}, {Bytes(bytesLeft)} left";
+        var text = lane.Direction switch
+        {
+            CheckIn => $"Checking in {Number(lane.FilesDone)} of {Files(lane.FilesTotal)}",
+            CheckOut => $"Checking out {Number(lane.FilesDone)} of {Files(lane.FilesTotal)}",
+            Undo => $"Undoing {Number(lane.FilesDone)} of {(lane.FilesTotal == 1 ? "1 check out" : $"{Number(lane.FilesTotal)} check outs")}",
+            TakeBack => $"Force checking in {Number(lane.FilesDone)} of {Files(lane.FilesTotal)}",
+            _ => $"{(lane.Direction == Directions.Upload ? "Uploading" : "Downloading")} {Number(lane.FilesDone)} of {Files(lane.FilesTotal)}, {Bytes(bytesLeft)} left",
+        };
         if (secondsLeft is { } seconds) text += ", " + TimeLeft(seconds);
         return new DirectionView(lane.FilesDone, lane.FilesTotal, bytesDone, lane.BytesTotal, (long)Math.Round(lane.BytesPerSecond ?? 0), secondsLeft, text);
     }

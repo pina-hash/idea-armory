@@ -10,7 +10,7 @@ public sealed class IncidentTests
     private static readonly IncidentHeader Header = new("0.3.0", "Windows 11 Education 10.0.22631", "LAB-PC-07", "alex.kim@students.test");
 
     private static (IncidentReporter Reporter, FlightRecorder Recorder, ManualClock Clock, List<string> Log) Reporter(string folder,
-        Scrubber? scrubber = null, Func<CancellationToken, Task<JsonNode?>>? snapshot = null, ManualClock? clock = null)
+        Scrubber? scrubber = null, Func<CancellationToken, Task<JsonNode?>>? snapshot = null, ManualClock? clock = null, Func<JsonNode?>? quick = null)
     {
         clock ??= new ManualClock();
         var recorder = new FlightRecorder(clock: clock);
@@ -21,6 +21,7 @@ public sealed class IncidentTests
             Header = () => Header,
             Snapshot = snapshot ?? (_ => Task.FromResult<JsonNode?>(new JsonObject { ["online"] = true, ["filesByStatus"] = new JsonObject { ["synced"] = 40 } })),
             LogTail = n => Enumerable.Range(1, 400).Select(i => $"2026-10-07T18:00:00.000Z line {i}").ToList(),
+            QuickSnapshot = quick,
             Scrubber = scrubber ?? Scrubber.None,
             Log = log.Add,
         }, clock, lastFlight)
@@ -198,14 +199,21 @@ public sealed class IncidentTests
         Assert.Null(reporter.CrashNow("unhandled exception", "a string thrown by native code"));
     }
 
+    // An engine that does not answer within half a second (0.3.3: 5 of 15 notes lost their
+    // snapshot to a busy engine) gives way to what the window showed, said so, at once.
     [Fact]
     public async Task A_late_snapshot_never_holds_the_incident_back()
     {
         using var temp = new TempFolder();
-        var (reporter, recorder, _, _) = Reporter(temp.Path, snapshot: ct => Task.Delay(Timeout.Infinite, ct).ContinueWith<JsonNode?>(_ => null, TaskScheduler.Default));
+        var (reporter, recorder, _, _) = Reporter(temp.Path, snapshot: ct => Task.Delay(Timeout.Infinite, ct).ContinueWith<JsonNode?>(_ => null, TaskScheduler.Default),
+            quick: () => new JsonObject { ["connection"] = "signedIn", ["checkedOutHere"] = 2 });
+        var watch = System.Diagnostics.Stopwatch.StartNew();
         var path = await reporter.WriteAsync(GlitchRules.UserReport("bug", "it froze"), new IncidentFeedback("bug", "it froze"));
+        watch.Stop();
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(2), $"the incident waited {watch.Elapsed.TotalSeconds:F1} s for the engine");
         var incident = reporter.Store.Read(path!);
-        Assert.Contains("did not answer", incident["snapshot"]!["unavailable"]!.GetValue<string>());
+        Assert.Contains("did not answer", incident["snapshot"]!["engineBusy"]!.GetValue<string>());
+        Assert.Equal(2, incident["snapshot"]!["checkedOutHere"]!.GetValue<int>());
         Assert.Equal("it froze", incident["feedback"]!["body"]!.GetValue<string>());
         Assert.Equal("userReport", incident["kind"]!.GetValue<string>());
     }
