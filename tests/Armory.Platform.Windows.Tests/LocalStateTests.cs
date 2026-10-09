@@ -30,6 +30,32 @@ public sealed class LocalStateTests(ITestOutputHelper output)
         Assert.NotEqual(first.Files[0].Hash, refreshed.Files[0].Hash);
     }
 
+    // 0.3.3 (feedback N3: the scan after a 542 MB slice of a download read all of it once more): a
+    // file Armory put in place itself is known by the hash it checked, so the next scan takes it
+    // without reading the file, just written as it is, until the file is written again.
+    [WindowsFact]
+    public void A_file_armory_wrote_is_not_read_again_until_it_changes()
+    {
+        using var vault = new TestVault();
+        using var scanner = new LocalChangeDetector(vault.Paths);
+        Assert.Equal(0, scanner.Scan().HashesComputed);
+        var file = vault.File("part.txt");
+        File.WriteAllText(file, "downloaded");
+        Assert.True(VaultPath.TryCreate("part.txt", out var path, out _));
+        var hash = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes("downloaded")));
+        Assert.True(scanner.Seed(path, hash));
+        var next = scanner.Scan();
+        Assert.Equal(0, next.HashesComputed);
+        Assert.Equal(hash, Assert.Single(next.Files).Hash);
+        Assert.Equal(0, scanner.Scan().HashesComputed);
+        // Written again: read again.
+        File.WriteAllText(file, "saved again");
+        File.SetLastWriteTimeUtc(file, DateTime.UtcNow.AddMinutes(1));
+        var after = scanner.Scan();
+        Assert.Equal(1, after.HashesComputed);
+        Assert.NotEqual(hash, Assert.Single(after.Files).Hash);
+    }
+
     [WindowsFact]
     public void Rename_uses_real_NTFS_identity()
     {

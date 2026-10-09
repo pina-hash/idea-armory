@@ -266,6 +266,7 @@ Armory.Platform.Windows.Tests|Armory.Platform.Windows.Tests.LocalStateTests|Fold
 Armory.Platform.Windows.Tests|Armory.Platform.Windows.Tests.LocalStateTests|The_first_scan_after_a_start_proves_moves_only_from_a_saved_folder_map
 Armory.Platform.Windows.Tests|Armory.Platform.Windows.Tests.LocalStateTests|The_first_scan_after_a_start_reuses_the_hashes_it_kept
 Armory.Platform.Windows.Tests|Armory.Platform.Windows.Tests.LocalStateTests|A_file_is_unchanged_since_the_scan_only_while_its_id_size_and_time_are
+Armory.Platform.Windows.Tests|Armory.Platform.Windows.Tests.LocalStateTests|A_file_armory_wrote_is_not_read_again_until_it_changes
 Armory.Platform.Windows.Tests|Armory.Platform.Windows.Tests.LocalStateTests|A_canceled_scan_stops_between_files
 Armory.Platform.Windows.Tests|Armory.Platform.Windows.Tests.FolderMoveOrderTests|A_chain_vacates_the_name_before_it_is_taken
 Armory.Platform.Windows.Tests|Armory.Platform.Windows.Tests.FolderMoveOrderTests|A_swap_goes_through_a_temporary_name
@@ -336,6 +337,8 @@ Armory.Agent.Engine.Tests|Armory.Agent.Engine.Tests.StateAndActivityTests|The_st
 Armory.Agent.Engine.Tests|Armory.Agent.Engine.Tests.StateAndActivityTests|Every_field_of_a_file_record_marks_it_changed
 Armory.Agent.Engine.Tests|Armory.Agent.Engine.Tests.StateAndActivityTests|Ids_come_from_saved_blocks_and_never_repeat_after_a_restart
 Armory.Agent.Engine.Tests|Armory.Agent.Engine.Tests.StateAndActivityTests|The_activity_panel_says_what_moves_in_the_window_s_words
+Armory.Agent.Engine.Tests|Armory.Agent.Engine.Tests.StateAndActivityTests|Carried_downloads_stay_visible_between_continuation_passes
+Armory.Agent.Engine.Tests|Armory.Agent.Engine.Tests.StateAndActivityTests|A_window_action_has_its_own_count_from_the_click_to_the_answer
 Armory.Client.Tests|Armory.Client.Tests.ClientTests|A_storage_refusal_or_timeout_fails_one_transfer_and_a_dead_connection_is_offline
 Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.ConcurrencyTests|The_engine_works_on_its_own_thread_never_the_callers
 Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.ConcurrencyTests|File_detail_answers_while_a_pass_moves_files
@@ -352,6 +355,13 @@ Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.ConcurrencyTests|Names_the_server_ho
 Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.ConcurrencyTests|Moving_files_reads_as_one_line_while_the_move_lasts
 Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.ResponsivenessTests|A_check_out_answers_while_hundreds_of_files_download
 Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.ResponsivenessTests|Someone_elses_check_out_shows_during_a_long_download
+# 0.3.3 feedback N2 and N3: the transfer queue, stalls, one finished line, the scan after a download, a kept save
+Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.ContinuousTransferTests|A_big_download_never_pauses_between_slices
+Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.ContinuousTransferTests|A_stalled_download_does_not_hold_the_others
+Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.ContinuousTransferTests|A_long_download_says_it_finished_once_at_the_end
+Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.ContinuousTransferTests|Pausing_a_long_download_says_how_far_it_got
+Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.ContinuousTransferTests|A_downloaded_file_is_not_read_again_by_the_next_scan
+Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.ContinuousTransferTests|A_save_already_kept_is_never_moving_again
 Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.ResponsivenessTests|A_check_in_answers_while_hundreds_of_files_upload
 # 0.3.3 responsiveness (feedback N6, requirement E): clicks coalesce, the open-files question never holds a click, and every window action on a 1,500-file vault answers within 1 second plus its server time
 Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.ResponsivenessTests|Ten_check_in_clicks_waiting_for_a_pass_are_one_pass_and_one_release_call
@@ -459,6 +469,9 @@ Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.ForceCheckInTests|A_deadlock_is_sent
 Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.ForceCheckInTests|A_lost_answer_is_answered_again_from_the_receipt_with_the_same_operation_id
 Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.ForceCheckInTests|A_stop_before_the_call_is_finished_by_the_next_pass_and_a_stop_after_it_never_ends_a_new_check_out
 Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.ForceCheckInTests|The_holders_unsaved_work_is_kept_as_their_own_copy
+# 0.3.3 feedback N8: a count of its own for a check out and a Force check in, live while it works
+Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.RunningLineTests|Force_check_in_running_lines_arrive_while_locks_break
+Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.RunningLineTests|A_check_out_of_1400_files_shows_a_count
 Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.FeedbackTests|A_note_goes_with_its_picture_a_refused_picture_is_left_out_on_request_and_the_hours_limit_holds
 Armory.EndToEnd.Tests|Armory.EndToEnd.Tests.FeedbackTests|A_site_before_0235_takes_the_note_without_the_new_fields
 Armory.Client.Tests|Armory.Client.Tests.ServerCallsClientTests|Each_screenshot_refusal_keeps_the_note_and_offers_it_without_the_picture

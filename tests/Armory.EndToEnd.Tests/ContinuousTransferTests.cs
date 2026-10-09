@@ -89,7 +89,8 @@ public sealed class ContinuousTransferTests(ITestOutputHelper output)
     }
 
     // 0.3.3 (feedback N3): B downloads 1,500 files with one second slices, the open-files question
-    // costing what it did on Windows (15 ms a file asked about). Downloads never stop between
+    // costing what it did on Windows (15 ms a file asked about) and each read of the server taking
+    // a second (0.2 to 0.9 s on DESKTOP-QH30N35, plus the scan). Downloads never stop between
     // slices: after the first one starts, there is never a whole second with none running, and
     // every view and activity message until the last one ends says files are downloading (never
     // "Checking for changes." or "saved" in between).
@@ -109,6 +110,7 @@ public sealed class ContinuousTransferTests(ITestOutputHelper output)
         t.B.Disk.ReuseHashes = true;
         t.B.Disk.OpenAmongCost = (readOnly, writable) => TimeSpan.FromMilliseconds(15 * (readOnly + writable));
         t.B.Network.StorageDelay = request => request.Method == HttpMethod.Get ? TimeSpan.FromMilliseconds(30) : TimeSpan.Zero;
+        t.B.Network.RpcDelay = rpc => rpc.EndsWith("/armory_my_projects", StringComparison.Ordinal) ? TimeSpan.FromSeconds(1) : TimeSpan.Zero;
         var timeline = new Timeline();
         t.B.Network.StorageWatch = timeline.Watch;
         var seen = new ConcurrentQueue<(long At, string What, bool Downloading)>();
@@ -145,7 +147,7 @@ public sealed class ContinuousTransferTests(ITestOutputHelper output)
         await t.A.SyncTimesAsync(2);
 
         t.B.PassSlice = TimeSpan.FromSeconds(1);
-        t.B.StallAfter = TimeSpan.FromSeconds(8);
+        t.B.StallAfter = TimeSpan.FromSeconds(10);
         t.B.Restart();
         var stalled = Hash("bulk part 5");
         var stalls = 1;
@@ -162,8 +164,8 @@ public sealed class ContinuousTransferTests(ITestOutputHelper output)
         var all = watch.Elapsed;
         output.WriteLine(string.Create(CultureInfo.InvariantCulture, $"STALLED DOWNLOAD others_s={others.TotalSeconds:F1} all_s={all.TotalSeconds:F1}"));
         Assert.False(stalledHereThen, "the stalled file arrived before the others");
-        Assert.True(others < TimeSpan.FromSeconds(8), $"the other 199 took {others.TotalSeconds:F1} s: they waited for the stalled one");
-        Assert.True(all >= TimeSpan.FromSeconds(8), "the stalled download was never stalled");
+        Assert.True(others < TimeSpan.FromSeconds(10), $"the other 199 took {others.TotalSeconds:F1} s: they waited for the stalled one");
+        Assert.True(all >= TimeSpan.FromSeconds(10), "the stalled download was never stalled");
         Assert.Equal("bulk part 5", t.B.Text(Stalled));
         Assert.Contains(t.B.Flight.Snapshot(), e => e.Kind == Armory.Telemetry.FlightKind.Transfer && e.Detail == "stalled");
     }
