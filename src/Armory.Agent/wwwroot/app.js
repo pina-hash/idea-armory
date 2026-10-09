@@ -1753,6 +1753,20 @@
 		});
 		html += '</div></section>';
 
+		// Armory's status on file icons in File Explorer (the badges): what Windows does with
+		// them on this computer, and Turn on when they are not installed or a file is missing.
+		var b = s.badges;
+		if (b) {
+			html += '<section class="setting" aria-labelledby="set-badges-label">';
+			html += '<h3 class="section-label" id="set-badges-label">Status on file icons</h3>';
+			html += '<div class="setting-row"><p class="setting-state" id="set-badges-value">' + icon(b.state === 'on' ? 'check' : 'note') + '<span>' + esc(b.line) + '</span></p>';
+			if (b.state === 'off' || b.state === 'broken')
+				html += '<button class="key" type="button" data-action="turnOnBadges" data-key="set-badges" aria-describedby="set-badges-label set-badges-value">Turn on</button>';
+			html += '</div>';
+			html += '<p class="setting-help">Badges on your files in File Explorer show at a glance which ones you have checked out, which someone else has, and which need you.</p>';
+			html += '</section>';
+		}
+
 		// Something wrong: a person's own report, and the folder of saved reports to hand over by hand.
 		html += '<section class="setting" aria-labelledby="set-report-label">';
 		html += '<h3 class="section-label" id="set-report-label">Something not working?</h3>';
@@ -2247,6 +2261,8 @@
 				return { line: 'Sending your report...', row: null };
 			case 'sendFeedback':
 				return { line: 'Sending your feedback...', row: null };
+			case 'turnOnBadges':
+				return { line: 'Waiting for an administrator\'s password...', row: null };
 		}
 		return { line: null, row: null };
 	}
@@ -2888,6 +2904,12 @@
 			case 'openIncidents':
 				bridge.send('openIncidents');
 				break;
+			case 'turnOnBadges':
+				// Windows asks for an administrator's password over everything; the answer comes to
+				// the window's foot, so Settings steps aside.
+				sheet.close();
+				act('turnOnBadges', {}, { key: 'hdr-settings' });
+				break;
 			case 'closeSettings':
 				sheet.close();
 				break;
@@ -3124,6 +3146,39 @@
 		}
 	}
 
+	/** Show in Armory, from File Explorer's right-click: a file's detail, or Team files at a
+	 *  folder ('' is Home). A file Armory doesn't have yet shows its folder. A question the
+	 *  student is answering stays where it is. */
+	function reveal(path) {
+		if (!ui.view || ui.view.connection !== 'signedIn' || ask.open) return;
+		if (sheet.open) sheet.close();
+		path = String(path || '');
+		var hit = path ? ui.index.byPath[path] : null;
+		if (path && !hit) {
+			var lower = path.toLowerCase();
+			Object.keys(ui.index.byPath).some(function (p) {
+				if (p.toLowerCase() === lower) hit = ui.index.byPath[p];
+				return !!hit;
+			});
+		}
+		if (hit && hit.row.fileId) {
+			openFile(hit.row.fileId, 'row-' + hit.row.fileId);
+			return;
+		}
+		if (ui.screen !== 'home') back();
+		var parts = path ? path.split('/') : [];
+		var pi = null;
+		Object.keys(ui.index.projects).forEach(function (id) {
+			if (!pi && parts.length && ui.index.projects[id].root.toLowerCase() === parts[0].toLowerCase()) pi = ui.index.projects[id];
+		});
+		if (!pi) {
+			scroller.scrollTop = 0;
+			return;
+		}
+		ui.projectId = pi.project.id;
+		goFolder(hit ? hit.folder.path : parts.slice(1).join('/'), null);
+	}
+
 	bridge.onMessage(function (message) {
 		if (message.type === 'view') {
 			var wasSignedIn = ui.view && ui.view.connection === 'signedIn';
@@ -3163,6 +3218,8 @@
 			delete ui.pending[message.requestId];
 			endWorking(message.requestId);
 			showResult(!!message.ok, message.message);
+		} else if (message.type === 'reveal') {
+			reveal(message.path);
 		}
 	});
 

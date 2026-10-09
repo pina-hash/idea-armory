@@ -86,6 +86,9 @@ public sealed partial class AgentViewContractTests
         {
             (BridgeMessages.Activity, BridgeMessages.ActivityMessage(activity)),
             (BridgeMessages.ActionResult, BridgeMessages.ActionResultMessage("r7", false, "Close Plate.SLDPRT in SolidWorks first.")),
+            // File Explorer's answers come as an actionResult too, and Show in Armory as reveal.
+            (BridgeMessages.ActionResult, BridgeMessages.ActionResultMessage(BridgeMessages.ShellRequest, true, "Checked in 3 files.")),
+            (BridgeMessages.Reveal, BridgeMessages.RevealMessage("Robot/Drivetrain/Plate.SLDPRT")),
         })
         {
             using var document = JsonDocument.Parse(json);

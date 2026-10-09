@@ -124,6 +124,8 @@ internal sealed partial class AgentHost : IAsyncDisposable
         hintTimer.Change(HintPoll, HintPoll);
         // Beats until a clean stop; a failed beat is logged and never touches a sync pass.
         beating = Task.Run(() => Heartbeat.RunAsync(running.Token));
+        // File Explorer's right-click items and badges (AgentHost.Shell.cs).
+        StartShell();
     }
 
     internal void Pause() => OnEngine("pause", e => e.Pause());
@@ -388,6 +390,7 @@ internal sealed partial class AgentHost : IAsyncDisposable
 
     internal async Task StopAsync()
     {
+        StopShell();
         hintTimer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         CancelConnect();
         // A clean stop says so to the team ("offline-soon"), within a few seconds at most.
@@ -473,9 +476,9 @@ internal sealed partial class AgentHost : IAsyncDisposable
     // a theme picked in 0.3.1 came back as the old one until the pass ended (and flickered).
     private AgentView WithSettings(AgentView view)
     {
-        SettingsView current;
+        var current = SettingsNow();
         string theme;
-        lock (gate) { current = settings.ToView(); theme = effectiveTheme; }
+        lock (gate) theme = effectiveTheme;
         return view.Settings == current && view.EffectiveTheme == theme ? view : view with { Settings = current, EffectiveTheme = theme };
     }
 
@@ -563,7 +566,7 @@ internal sealed partial class AgentHost : IAsyncDisposable
         return new AgentView(connection, new ConnectView(phase, message),
             session is null ? null : new AccountView(session.Email, session.DeviceName),
             new SyncView(SyncStates.Attention, line, null, 0), new ActivityView(null, null, null, null, null, [], []), current.VaultRoot, [], null, [], [],
-            current.ToView(), theme);
+            SettingsNow(), theme);
     }
 
     private void StartupRegistrationApply(AgentSettings settings, bool startup)

@@ -37,7 +37,12 @@ public sealed record FolderView(string Path, string Name, int FileCount, IReadOn
 // NewerThanPin: that year is newer than the project's pinned release.
 public sealed record FileRowView(string? FileId, string Name, string Path, string Status, CheckoutView Checkout, bool Changed, bool ReleaseNotChecked,
     string? UpdatedAt, string? UpdatedBy, int? SavedRelease, bool NewerThanPin);
-public sealed record SettingsView(string VaultRoot, bool StartAtSignIn, string Theme);
+// Badges: whether File Explorer shows Armory's status on file icons on this computer (the host's
+// BadgeHealth check), or null before the host has checked (the engine never knows).
+public sealed record SettingsView(string VaultRoot, bool StartAtSignIn, string Theme, BadgesView? Badges = null);
+// State is off, on, afterSignIn, crowded, partial or broken (BadgesStates); Line is Settings'
+// sentence about it. Settings offers Turn on (turnOnBadges) for off and broken.
+public sealed record BadgesView(string State, string Line);
 public sealed record FileDetailView(string FileId, string Name, string Path, string Project, string Folder, string Status, CheckoutView Checkout,
     bool ReleaseNotChecked, bool CanTakeBack, IReadOnlyList<HistoryEntryView> History, int? SavedRelease, bool NewerThanPin);
 // Routine: a kept copy that is the ordinary record of work (saved while checked out, an earlier
@@ -103,6 +108,10 @@ public static class NoticeKinds
         FolderPutBack = "folderPutBack", ProjectPutBack = "projectPutBack", ProjectRenaming = "projectRenaming", CantSend = "cantSend",
         CantRead = "cantRead", CheckInPartial = "checkInPartial", ProjectDeleted = "projectDeleted", NewerRelease = "newerRelease";
 }
+public static class BadgesStates
+{
+    public const string Off = "off", On = "on", AfterSignIn = "afterSignIn", Crowded = "crowded", Partial = "partial", Broken = "broken";
+}
 public static class HistoryKinds
 {
     public const string Version = "version", KeptCopy = "keptCopy", Removed = "removed";
@@ -112,17 +121,19 @@ public static class HistoryKinds
 // wwwroot/bridge.js in step with these lists.
 public static class BridgeMessages
 {
-    public const string View = "view", FileDetail = "fileDetail", Activity = "activity", ActionResult = "actionResult";
-    public static readonly IReadOnlyList<string> HostToPage = [View, FileDetail, Activity, ActionResult];
+    // Reveal: Show in Armory from File Explorer's right-click (the window on a file's detail, or
+    // Team files at a folder; "" is Home).
+    public const string View = "view", FileDetail = "fileDetail", Activity = "activity", ActionResult = "actionResult", Reveal = "reveal";
+    public static readonly IReadOnlyList<string> HostToPage = [View, FileDetail, Activity, ActionResult, Reveal];
     public const string Ready = "ready", Connect = "connect", CancelConnect = "cancelConnect", SignOut = "signOut", Pause = "pause", Resume = "resume",
         OpenVault = "openVault", OpenFile = "openFile", LaunchFile = "launchFile", ShowInFolder = "showInFolder", CheckOut = "checkOut", CheckIn = "checkIn",
         UndoCheckOut = "undoCheckOut", TakeBack = "takeBack", CreateFolder = "createFolder", RenameFolder = "renameFolder", DeleteFolder = "deleteFolder",
         RenameFile = "renameFile", AddFiles = "addFiles", DropFiles = "dropFiles", DismissNotice = "dismissNotice", SaveSettings = "saveSettings",
         ChooseVaultRoot = "chooseVaultRoot", ReportProblem = "reportProblem", OpenIncidents = "openIncidents", SendFeedback = "sendFeedback", TakeBackAll = "takeBackAll",
-        TakeOverFolder = "takeOverFolder", SwitchAccount = "switchAccount", PutBackKeptCopy = "putBackKeptCopy";
+        TakeOverFolder = "takeOverFolder", SwitchAccount = "switchAccount", PutBackKeptCopy = "putBackKeptCopy", TurnOnBadges = "turnOnBadges";
     public static readonly IReadOnlyList<string> PageToHost = [Ready, Connect, CancelConnect, SignOut, Pause, Resume, OpenVault, OpenFile, LaunchFile, ShowInFolder,
         CheckOut, CheckIn, UndoCheckOut, TakeBack, CreateFolder, RenameFolder, DeleteFolder, RenameFile, AddFiles, DropFiles, DismissNotice, SaveSettings, ChooseVaultRoot,
-        ReportProblem, OpenIncidents, SendFeedback, TakeBackAll, TakeOverFolder, SwitchAccount, PutBackKeptCopy];
+        ReportProblem, OpenIncidents, SendFeedback, TakeBackAll, TakeOverFolder, SwitchAccount, PutBackKeptCopy, TurnOnBadges];
 
     public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
     {
@@ -134,4 +145,7 @@ public static class BridgeMessages
     // The one answer to an action: the action's requestId comes back with it.
     public static string ActionResultMessage(string? requestId, bool ok, string message)
         => JsonSerializer.Serialize(new { type = ActionResult, requestId, ok, message }, Json);
+    // The requestId of an answer to something File Explorer or a notification asked for.
+    public const string ShellRequest = "shell";
+    public static string RevealMessage(string path) => JsonSerializer.Serialize(new { type = Reveal, path }, Json);
 }

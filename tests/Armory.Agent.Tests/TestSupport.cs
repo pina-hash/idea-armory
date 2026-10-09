@@ -66,7 +66,7 @@ internal static class AgentExe
         if (System.IO.File.Exists(Path.Combine(AppContext.BaseDirectory, "IdeaArmory.exe"))) return AppContext.BaseDirectory;
         var configuration = typeof(AgentExe).Assembly.GetCustomAttribute<AssemblyConfigurationAttribute>()?.Configuration ?? "Debug";
         var root = Repo.FindRoot() ?? throw new InvalidOperationException("Repository root not found.");
-        var built = Path.Combine(root, "src", "Armory.Agent", "bin", configuration, "net10.0-windows");
+        var built = Path.Combine(root, "src", "Armory.Agent", "bin", configuration, "net10.0-windows10.0.17763.0");
         Assert.True(System.IO.File.Exists(Path.Combine(built, "IdeaArmory.exe")), "IdeaArmory.exe was not built at " + built);
         return built;
     }

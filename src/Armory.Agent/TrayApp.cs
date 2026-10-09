@@ -6,8 +6,9 @@ namespace Armory.Agent;
 // The notification-area icon and its menu. The window is created the first time it opens;
 // "--background" starts with the icon only. Quit stops the engine and exits cleanly. The icon
 // follows the sync state (view.Sync.State) with a badge whose shape, not only its color, says
-// syncing, paused, offline or attention (tools/agent-icon/make_icon.py draws them).
-internal sealed class TrayApp : ApplicationContext
+// syncing, paused, offline or attention (tools/agent-icon/make_icon.py draws them). File
+// Explorer's requests and Windows notifications are in TrayApp.Shell.cs.
+internal sealed partial class TrayApp : ApplicationContext
 {
     // NotifyIcon.Text refuses longer text on some Windows Forms versions.
     private const int TooltipLimit = 63;
@@ -16,7 +17,6 @@ internal sealed class TrayApp : ApplicationContext
     private readonly AgentLog log;
     private readonly Icon appIcon;
     private readonly Dictionary<string, Icon> trayIcons = new(StringComparer.Ordinal);
-    private readonly CheckOutPrompts prompts = new();
     private readonly NotifyIcon notify;
     private readonly ContextMenuStrip menu;
     private readonly ToolStripMenuItem pauseItem;
@@ -90,18 +90,9 @@ internal sealed class TrayApp : ApplicationContext
         catch (InvalidOperationException) { }
     }
 
-    private void OnViewChanged(AgentView view)
-    {
-        // The quiet check-out question outside the window (decision D13): files that closed may
-        // ask again when reopened, and the newest question gets one balloon while hidden.
-        var stillOpen = host.OpenWithoutCheckOut;
-        Post(() => UpdateMenu(view));
-        KeepCheckOutPromptsFor(stillOpen);
-        if (view.Prompt is { } prompt)
-            OfferCheckOut(prompt.Path, prompt.Name, prompt.CanCheckOut ? null
-                : prompt.Checkout.State == CheckoutStates.MyOtherComputer ? "you on " + (prompt.Checkout.Device ?? "another computer")
-                : (prompt.Checkout.Name ?? "someone else") + " on " + (prompt.Checkout.Device ?? "another computer"));
-    }
+    // The quiet check-out question outside the window (decisions D13 and C5) is a Windows
+    // notification now, asked from TrayApp.Shell.cs.
+    private void OnViewChanged(AgentView view) => Post(() => UpdateMenu(view));
 
     private void OnUserPreferenceChanged(object? sender, UserPreferenceChangedEventArgs e)
     {
@@ -126,31 +117,16 @@ internal sealed class TrayApp : ApplicationContext
         if (!ReferenceEquals(notify.Icon, icon)) notify.Icon = icon;
     }
 
-    // Decision D13, for when SolidWorks opened a file this computer has not checked out (its ~$
-    // marker appeared). While the window shows, its own prompt card asks; while it is hidden,
-    // one quiet balloon per opened file, and clicking it opens the window on that card.
-    // checkedOutBy is "Maria Lopez on LAB-PC-07" when someone else has it. Called whenever the
-    // view changes, with the engine's newest question and the files still open.
-    internal void OfferCheckOut(string path, string name, string? checkedOutBy) => Post(() =>
-    {
-        if (quitting) return;
-        var showing = window is { IsDisposed: false, Visible: true } && window.WindowState != FormWindowState.Minimized;
-        if (!prompts.ShouldOffer(path, showing)) return;
-        var (title, text) = CheckOutPrompts.Words(name, checkedOutBy);
-        notify.BalloonTipTitle = title;
-        notify.BalloonTipText = text;
-        notify.BalloonTipIcon = ToolTipIcon.None;
-        notify.ShowBalloonTip(10000);
-    });
-
-    // The files SolidWorks still has open; any other file may ask again when reopened.
-    internal void KeepCheckOutPromptsFor(IReadOnlyCollection<string> stillOpen) => Post(() => prompts.KeepOnly(stillOpen));
+    // The window is up and not minimized (its own cards and foot line speak; no notification does).
+    internal bool WindowShowing => window is { IsDisposed: false, Visible: true } && window.WindowState != FormWindowState.Minimized;
 
     internal void OpenWindow()
     {
         if (quitting) return;
         if (window is null || window.IsDisposed) window = new MainWindow(host, paths, log, appIcon);
         window.Open();
+        // Settings tells the truth about the badges whenever it can be seen.
+        _ = Task.Run(host.CheckBadgeHealth);
     }
 
     private void OpenVault()
@@ -193,6 +169,7 @@ internal sealed class TrayApp : ApplicationContext
         quitting = true;
         log.Info("quitting");
         host.ViewChanged -= OnViewChanged;
+        CloseShell();
         notify.Visible = false;
         window?.CloseForQuit();
         try { await host.DisposeAsync(); }
@@ -209,6 +186,7 @@ internal sealed class TrayApp : ApplicationContext
             showWait.Unregister(null);
             quitWait.Unregister(null);
             host.ViewChanged -= OnViewChanged;
+            CloseShell();
             notify.Dispose();
             menu.Dispose();
             window?.Dispose();

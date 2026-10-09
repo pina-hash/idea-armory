@@ -33,6 +33,8 @@ internal sealed record SaveSettingsMessage(string? VaultRoot, bool? StartAtSignI
 internal sealed record ReportProblemMessage(string? Kind, string? Body, string? RequestId);
 // Send feedback (v0.3): kind is bug, idea or other; body is what the person wrote. A note on its own.
 internal sealed record SendFeedbackMessage(string? Kind, string? Body, string? RequestId);
+// Settings' Turn on for the badges on file icons: the bundled badges setup, as an administrator.
+internal sealed record TurnOnBadgesMessage(string? RequestId);
 
 // What the bridge needs from the window it lives in. Every member runs on the UI thread.
 internal interface IBridgeWindow
@@ -86,6 +88,7 @@ internal sealed class Bridge(AgentHost host, IBridgeWindow window, AgentLog log)
         [BridgeMessages.TakeOverFolder] = typeof(TakeOverFolderMessage),
         [BridgeMessages.SwitchAccount] = null,
         [BridgeMessages.PutBackKeptCopy] = typeof(PutBackKeptCopyMessage),
+        [BridgeMessages.TurnOnBadges] = typeof(TurnOnBadgesMessage),
     };
 
     // The answer to an action the window sent with something unusable in it.
@@ -284,6 +287,10 @@ internal sealed class Bridge(AgentHost host, IBridgeWindow window, AgentLog log)
                 case BridgeMessages.SendFeedback:
                     var note = Read<SendFeedbackMessage>(message);
                     await AnswerAsync(type, 0, asked, note?.RequestId, host.SendFeedbackAsync(note?.Kind, note?.Body));
+                    break;
+                case BridgeMessages.TurnOnBadges:
+                    var badges = Read<TurnOnBadgesMessage>(message);
+                    await AnswerAsync(type, 0, asked, badges?.RequestId, host.TurnOnBadgesAsync());
                     break;
                 case BridgeMessages.OpenIncidents:
                     // The incidents folder, so a person can hand the files over by hand today.

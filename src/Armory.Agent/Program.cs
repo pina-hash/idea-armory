@@ -11,12 +11,18 @@ namespace Armory.Agent;
 //   --quit        ask the running agent to exit cleanly, wait for it, then exit
 //   --check       no UI: print one JSON line and exit 0 when the app files and the WebView2
 //                 runtime are present, 1 otherwise
-public sealed record AgentCommandLine(bool Background, bool Quit, bool Check)
+// IdeaArmory.exe "idea-armory:act?t=<token>&a=<checkout|show>"
+//   a notification's button or body (ProtocolLink): a second launch hands it to the running
+//   agent and exits; a first one starts with the window open. Link keeps the argument as given.
+public sealed record AgentCommandLine(bool Background, bool Quit, bool Check, string? Link = null)
 {
     public static AgentCommandLine Parse(IEnumerable<string> args)
     {
-        var set = new HashSet<string>(args.Select(a => a.Trim().ToLowerInvariant()), StringComparer.Ordinal);
-        return new(set.Contains("--background"), set.Contains("--quit"), set.Contains("--check"));
+        var list = args.Select(a => a.Trim()).ToArray();
+        var set = new HashSet<string>(list.Select(a => a.ToLowerInvariant()), StringComparer.Ordinal);
+        var link = list.FirstOrDefault(ProtocolLink.IsLink);
+        // A link is a click: the window opens, even with --background beside it.
+        return new(set.Contains("--background") && link is null, set.Contains("--quit"), set.Contains("--check"), link);
     }
 }
 
@@ -37,6 +43,14 @@ internal static class Program
         using var instance = SingleInstance.Acquire(paths);
         if (!instance.IsFirst)
         {
+            // A notification's link goes to the running Armory, which acts on it; if it can't be
+            // reached, its window still comes up.
+            if (command.Link is { } link)
+            {
+                if (LinkForwarder.Forward(paths, link, TimeSpan.FromSeconds(10))) return 0;
+                instance.SignalShow();
+                return 1;
+            }
             // Already running for this Windows user: bring its window up (unless this is the
             // sign-in start entry) and leave.
             if (!command.Background) instance.SignalShow();
@@ -44,6 +58,10 @@ internal static class Program
         }
 
         var log = new AgentLog(paths.LogFile, paths.CrashFile);
+        // File Explorer's right-click items and a notification's second launch reach this Armory
+        // over its pipe from here on, before the window or WebView2 (ShellDesk, ShellInbox).
+        var desk = new ShellDesk(log.Info);
+        using var inbox = ShellDesk.StartInbox(paths, desk, log.Info);
         // The flight recorder and the incident files (docs/agent/TELEMETRY.md), before anything
         // that could crash.
         var telemetry = new AgentTelemetry(paths, log);
@@ -76,10 +94,15 @@ internal static class Program
         };
         log.Info("started " + AgentPaths.Version);
 
+        // Before any window: one identity for the taskbar, the tray and the notifications.
+        if (ShellIdentity.IsInstalledCopy(paths)) ShellIdentity.SetProcessAppId();
         ApplicationConfiguration.Initialize();
         var host = new AgentHost(paths, log, AgentPaths.Site(), telemetry);
         using (var tray = new TrayApp(host, paths, log, instance, command.Background))
+        {
+            tray.AttachShell(desk, command.Link);
             Application.Run(tray);
+        }
         telemetry.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(5));
         log.Info("stopped");
         return 0;
