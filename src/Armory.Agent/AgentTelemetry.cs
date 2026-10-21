@@ -113,7 +113,7 @@ internal sealed class AgentTelemetry : IAsyncDisposable
 
     // At start: the run before ended without "stopped". Its crash incident comes from the last
     // flight it wrote (a stack overflow leaves nothing else).
-    internal string? PreviousRunEnded(string lastLine) => Reporter.PreviousRunEnded(lastLine);
+    internal string? PreviousRunEnded(string lastLine, string? why = null, string? veryLastLine = null) => Reporter.PreviousRunEnded(lastLine, why, veryLastLine);
 
     // An exception nothing caught; the process ends after this returns.
     internal void CrashNow(string where, object? error)

@@ -123,16 +123,28 @@ public sealed class AgentLog
         if (start < 0) return null;
         string? lastPass = null, last = null;
         var quitting = false;
+        var asleep = false;
         for (var i = start + 1; i < lines.Count; i++)
         {
             var message = Message(lines[i]);
             if (message == "stopped") return null;
             if (message == "quitting" || message.StartsWith(SessionEndingLine, StringComparison.Ordinal)) quitting = true;
+            // Asleep: the run's last word about the power was that the computer went to sleep.
+            if (message == SleepLine) asleep = true;
+            else if (message == WakeLine) asleep = false;
             last = lines[i];
             if (message.StartsWith("pass: ", StringComparison.Ordinal)) lastPass = lines[i];
         }
-        return new(lastPass ?? last ?? lines[start], quitting);
+        var veryLast = last ?? lines[start];
+        return new(lastPass ?? veryLast, quitting, veryLast, asleep, TimeOf(veryLast));
     }
+
+    internal const string SleepLine = "the computer is going to sleep", WakeLine = "the computer woke up";
+
+    // When a line was written (its first word), or null.
+    internal static DateTimeOffset? TimeOf(string line)
+        => line.IndexOf(' ') is var space and > 0 &&
+           DateTimeOffset.TryParse(line[..space], CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var at) ? at : null;
 
     private static string SafeLine(string message)
     {
@@ -169,4 +181,6 @@ public sealed class AgentLog
 
 // How a run that never wrote "stopped" ended: the last line it wrote about a pass (or its last
 // line), and whether it had begun to quit.
-public sealed record RunEnd(string LastLine, bool Quitting);
+// VeryLastLine is the last line it wrote whatever it was about, Asleep whether the computer had
+// gone to sleep and not woken, LastAt when the last line was written.
+public sealed record RunEnd(string LastLine, bool Quitting, string? VeryLastLine = null, bool Asleep = false, DateTimeOffset? LastAt = null);

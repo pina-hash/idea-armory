@@ -104,7 +104,9 @@ public sealed class HostPiecesTests
         string[] quit = ["2026-10-08T22:00:00.000Z started 0.3.1", "2026-10-08T22:00:32.619Z pass: ended after 28000 ms (loop), 0 downloaded, 0 uploaded, 0 kept copies, 0 refused",
             "2026-10-08T22:01:06.398Z quitting"];
         Assert.Null(AgentLog.UncleanEnd(quit));
-        Assert.Equal(new RunEnd(quit[1], Quitting: true), AgentLog.EndOf(quit));
+        var end = AgentLog.EndOf(quit)!;
+        Assert.Equal((quit[1], true, quit[2], false), (end.LastLine, end.Quitting, end.VeryLastLine, end.Asleep));
+        Assert.Equal(DateTimeOffset.Parse("2026-10-08T22:01:06.398Z", System.Globalization.CultureInfo.InvariantCulture), end.LastAt);
         string[] sessionEnded = ["2026-10-08T22:00:00.000Z started 0.3.3", "2026-10-08T22:00:10.000Z " + AgentLog.SessionEndingLine + " (SystemShutdown)"];
         Assert.Null(AgentLog.UncleanEnd(sessionEnded));
         Assert.True(AgentLog.EndOf(sessionEnded)!.Quitting);
@@ -123,6 +125,21 @@ public sealed class HostPiecesTests
             Assert.True(second.PreviousRun()!.Quitting);
         }
         finally { Directory.Delete(folder, true); }
+    }
+
+    // 0.4.0: a run whose last word about the power was "the computer is going to sleep" ended
+    // while the computer slept (IDEA-06, 2026-10-20T23:13Z): the next start knows it.
+    [Fact]
+    public void A_run_that_ended_asleep_says_so()
+    {
+        string[] slept = ["2026-10-20T22:00:00.000Z started 0.3.3", "2026-10-20T23:10:00.000Z pass: ended after 15000 ms (loop), 0 downloaded, 0 uploaded, 0 kept copies, 0 refused",
+            "2026-10-20T23:13:39.846Z " + AgentLog.SleepLine];
+        var end = AgentLog.EndOf(slept)!;
+        Assert.True(end.Asleep);
+        Assert.False(end.Quitting);
+        Assert.Equal(slept[2], end.VeryLastLine);
+        string[] woke = [.. slept, "2026-10-21T06:00:00.000Z " + AgentLog.WakeLine, "2026-10-21T06:00:05.000Z pass: moving 1 of 3 files (loop)"];
+        Assert.False(AgentLog.EndOf(woke)!.Asleep);
     }
 
     // v0.2.1: a run that ended without "stopped" (a stack overflow or a native crash, which no

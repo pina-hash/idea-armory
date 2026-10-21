@@ -110,14 +110,16 @@ public sealed class IncidentReporter : IFlightObserver
     }
 
     // The previous run ended without a word: its crash incident, from the last flight it wrote.
-    public string? PreviousRunEnded(string lastLine)
+    public string? PreviousRunEnded(string lastLine, string? why = null, string? veryLastLine = null)
     {
         var flight = LastFlight?.TryRead();
-        var glitch = GlitchRules.PreviousRunEnded(lastLine);
+        var glitch = GlitchRules.PreviousRunEnded(lastLine, why);
         var trigger = new JsonObject
         {
             ["kind"] = "previousRunEnded",
             ["lastLogLine"] = lastLine,
+            ["veryLastLogLine"] = veryLastLine,
+            ["windowsSays"] = why,
             ["lastFlightWrittenAt"] = flight?["writtenAt"]?.DeepClone(),
         };
         var events = flight?["events"] as JsonArray;

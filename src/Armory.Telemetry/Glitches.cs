@@ -58,8 +58,8 @@ public static class GlitchRules
 
     // The run before this one ended without saying "stopped" (a stack overflow, a native crash,
     // the power): found at the next start from the log and the last flight.
-    public static Glitch PreviousRunEnded(string lastLine)
-        => new(GlitchKinds.Crash, Clip("The previous run ended unexpectedly. Its last log line was: " + lastLine), null);
+    public static Glitch PreviousRunEnded(string lastLine, string? why = null)
+        => new(GlitchKinds.Crash, Clip("The previous run ended unexpectedly. " + (why is null ? "" : why + " ") + "Its last log line was: " + lastLine), null);
 
     public static Glitch UserReport(string kind, string body)
         => new(GlitchKinds.UserReport, Clip($"Reported from the window ({kind}): {body.ReplaceLineEndings(" ").Trim()}"), null);

@@ -191,7 +191,7 @@ internal sealed partial class AgentHost : IAsyncDisposable
     internal void PowerChanged(bool resumed)
     {
         Telemetry.Recorder.Power(resumed ? "resume" : "suspend");
-        log.Info(resumed ? "the computer woke up" : "the computer is going to sleep");
+        log.Info(resumed ? AgentLog.WakeLine : AgentLog.SleepLine);
         if (resumed) Wake();
     }
 

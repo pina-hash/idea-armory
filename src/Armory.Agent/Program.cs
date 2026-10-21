@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Armory.Telemetry;
 using Microsoft.Web.WebView2.Core;
 
 namespace Armory.Agent;
@@ -67,8 +68,19 @@ internal static class Program
         var previous = log.PreviousRun();
         if (previous is { Quitting: false })
         {
-            log.Info("previous run ended unexpectedly; its last line was: " + previous.LastLine);
-            telemetry.PreviousRunEnded(previous.LastLine);
+            // Windows' own records say whether it restarted, lost power or saw Armory crash
+            // (0.4.0): only a crash, or an end nobody recorded, is a crash incident.
+            var why = RunEndCause.Explain(previous.LastAt, previous.Asleep, WindowsEventHistory.Since(previous.LastAt, log.Info));
+            if (why.Crash)
+            {
+                log.Info("previous run ended unexpectedly; its last line was: " + previous.LastLine + " (" + why.Words + ")");
+                telemetry.PreviousRunEnded(previous.LastLine, why.Words, previous.VeryLastLine);
+            }
+            else
+            {
+                log.Info("previous run ended with Windows, not a crash: " + why.Words + " Its last line was: " + (previous.VeryLastLine ?? previous.LastLine));
+                telemetry.LastFlight.Clear();
+            }
         }
         else
         {
