@@ -789,6 +789,61 @@ public sealed class CheckOutTests
         NoViolations(t.A);
     }
 
+    // Feedback 80b71edc (Abraham, IDEA-06, 0.3.1), reproduced against 0.3.3 exactly as reported:
+    // a part that was already saved in Armory is checked out, edited, saved and checked in,
+    // several times over, closed and open, with another computer syncing in between. Every
+    // cycle's edits stay on this disk and become the shared version; nothing is ever put back
+    // over them and nothing is kept aside as "changed without a check out".
+    [PostgresFact]
+    public async Task A_previously_saved_part_keeps_every_check_in_cycles_edits()
+    {
+        await using var t = await TeamAsync();
+        t.A.Write(Plate, "v1");
+        await t.A.SyncAsync();
+        await t.B.SyncAsync();
+        var file = await t.FileId("Plate.SLDPRT");
+        var expected = "v1";
+        for (var cycle = 1; cycle <= 4; cycle++)
+        {
+            Assert.True((await t.A.CheckOutAsync(Plate)).Ok, $"cycle {cycle} check out");
+            Assert.Equal(expected, t.A.Text(Plate));
+            var open = cycle % 2 == 0;
+            if (open) t.A.Disk.Hold(Plate); // SolidWorks has it open for writing
+            expected = $"cycle {cycle} edit 1";
+            t.A.Save(Plate, expected);
+            await t.A.SyncAsync(); // a loop pass between the save and the check in
+            expected = $"cycle {cycle} edit 2";
+            t.A.Save(Plate, expected);
+            // SolidWorks saves once more, right after the check in's pass has scanned and while the
+            // file is still writable (Windows refuses a save to a read-only file): those bytes are
+            // what the student sees, so they are what is shared.
+            var late = $"cycle {cycle} edit 3";
+            t.A.Disk.AfterNextScan = () =>
+            {
+                Assert.False(t.A.Disk.IsReadOnly(Plate));
+                File.WriteAllText(t.A.Disk.Full(Plate), late);
+            };
+            expected = late;
+            var answer = await t.A.CheckInAsync(Plate);
+            Assert.True(answer.Ok, $"cycle {cycle}: {answer.Message}");
+            if (open)
+            {
+                Assert.Equal(expected, t.A.Text(Plate));
+                t.A.Disk.Unhold(Plate);
+            }
+            await t.A.SyncTimesAsync(3);
+            await t.B.SyncAsync();
+            var summary = $"cycle {cycle}: answer '{answer.Message}', disk '{t.A.Text(Plate)}', kept [{string.Join("; ", await t.SideAuthors(file))}]";
+            Assert.True(expected == t.A.Text(Plate), summary);
+            Assert.True(Hash(expected) == await t.CurrentHash(file), summary);
+            Assert.Equal(0L, await t.LiveLocks(file));
+            Assert.True(t.A.Disk.IsReadOnly(Plate), summary);
+            Assert.Equal(expected, t.B.Text(Plate));
+            Assert.DoesNotContain(await t.SideAuthors(file), s => s.EndsWith("|changed without a check out", StringComparison.Ordinal));
+        }
+        NoViolations(t.A, t.B);
+    }
+
     // The check in waits while SolidWorks has the part: the lock stays, the file stays writable
     // (SolidWorks can go on saving), the window says so in one sentence and shows it as
     // checking in when closed, and the first pass after it is closed shares the last save and

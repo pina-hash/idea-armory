@@ -184,8 +184,17 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
     {
         var started = System.Diagnostics.Stopwatch.GetTimestamp();
         try { return ScanAll(cancellationToken); }
-        finally { lock (gate) ScanTimes.Add(System.Diagnostics.Stopwatch.GetElapsedTime(started)); }
+        finally
+        {
+            Action? after;
+            lock (gate) { ScanTimes.Add(System.Diagnostics.Stopwatch.GetElapsedTime(started)); after = AfterNextScan; AfterNextScan = null; }
+            after?.Invoke();
+        }
     }
+
+    // Runs once, right after the next scan finishes and before the pass acts on it: a program
+    // (SolidWorks) saving at the worst moment, between the scan and a check in's release.
+    public Action? AfterNextScan { get; set; }
 
     private VaultScan ScanAll(CancellationToken cancellationToken)
     {
