@@ -51,3 +51,19 @@ Design and evidence: [audit](docs/core/audit.md), [simulation](docs/core/simulat
 ## Server and storage lane
 
 `server/sql/` contains the reviewed draft PostgreSQL contract for later numbering in idea-app, with its identity integration notes in `server/IDEA_APP_CONVENTIONS.md`. `Armory.Storage` implements credential-free, content-addressed S3 transfers. Server integration tests require `ARMORY_TEST_POSTGRES` to identify a throwaway cluster; CI supplies a PostgreSQL service and the fixture creates and drops only its own database.
+
+## Publishing a release (Mr. Pina)
+
+Every computer with Armory 0.4.0 or later updates itself from the newest release here. To ship one:
+
+1. Open https://github.com/pina-hash/idea-armory/releases/new
+2. Click **Choose a tag**, type the version with a `v` in front, exactly as the newest file in `docs/agent/release-notes/` names it (for this one, `v0.4.0`), and click **Create new tag: v0.4.0 on publish**. Leave **Target** on `main`.
+3. In **Release title**, type `IDEA Armory v0.4.0`. Leave the description empty: the workflow writes it.
+4. Leave **Set as a pre-release** unchecked and **Set as the latest release** checked.
+5. Click **Publish release**.
+
+What happens next: the **Agent release** workflow builds, tests and attaches the files (about 40 minutes). When it is done, the release lists `IDEAArmory-win-Setup.exe`, `IDEAArmory-0.4.0-full.nupkg` and `releases.win.json` beside the older installers. Within four hours every running Armory downloads it, and each one runs the new version the next time it opens (the next sign-in, or Quit and open Armory again). Nothing to do on any computer.
+
+If the tag does not match the version in `src/Armory.Agent/Armory.Agent.csproj`, the workflow stops and says which tag to use; delete that release and publish again with the right tag.
+
+**Once only, for computers still on 0.3.1, 0.3.2 or 0.3.3** (they have no updater): run `IDEAArmory-win-Setup.exe` from the 0.4.0 release on each one, signed in as the Windows account that uses Armory (on lab computers, the IDEA account). Copy it to a flash drive for the lab. Windows may say "Windows protected your PC" the first time: click **More info**, then **Run anyway** (the installer is not code-signed; updates never ask). It installs in a few seconds with no administrator password, keeps the Armory folder, the files and the sign-in, removes the old copy, and Armory opens. From then on that computer updates itself.

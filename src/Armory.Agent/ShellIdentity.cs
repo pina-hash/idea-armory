@@ -36,7 +36,9 @@ internal static class ShellIdentity
         return string.Equals(processPath[..cut].TrimEnd('\\', '/'), installFolder.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase);
     }
 
-    internal static bool IsInstalledCopy(AgentPaths paths) => IsInstalledCopy(paths, Environment.ProcessPath, InstallFolder());
+    // 0.4.0: or the copy Velopack's setup installed, which updates itself (Updates.cs).
+    internal static bool IsInstalledCopy(AgentPaths paths) =>
+        IsInstalledCopy(paths, Environment.ProcessPath, InstallFolder()) || !paths.IsOverridden && Updates.IsVelopackCopy(Environment.ProcessPath, File.Exists);
 
     // Every value, relative to HKCU\Software\Classes. appFolder: where IdeaArmory.exe is.
     internal static IReadOnlyList<ShellRegistryValue> Layout(string appFolder)
@@ -149,6 +151,20 @@ internal static class ShortcutAppId
             finally { PropVariantClear(ref value); }
             file.Save(shortcut, true);
             return true;
+        }
+        finally { Marshal.FinalReleaseComObject(link); }
+    }
+
+    // Where the shortcut points, or null.
+    internal static string? Target(string shortcut)
+    {
+        var link = (IShellLinkW)new ShellLinkObject();
+        try
+        {
+            ((System.Runtime.InteropServices.ComTypes.IPersistFile)link).Load(shortcut, 0);
+            var buffer = new System.Text.StringBuilder(32768);
+            link.GetPath(buffer, buffer.Capacity, IntPtr.Zero, 0);
+            return buffer.Length == 0 ? null : buffer.ToString();
         }
         finally { Marshal.FinalReleaseComObject(link); }
     }

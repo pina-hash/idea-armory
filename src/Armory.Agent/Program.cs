@@ -33,6 +33,10 @@ internal static class Program
     private static int Main(string[] args)
     {
         var command = AgentCommandLine.Parse(args);
+        // Velopack's install, update and uninstall steps run (and exit) here, before anything
+        // else; a downloaded update is applied here and the new version starts instead (0.4.0),
+        // never for --quit or --check, which must answer as the version that is here.
+        Updates.RunInstallerSteps(args, applyDownloaded: !command.Quit && !command.Check);
         var paths = AgentPaths.Resolve();
         if (command.Check)
         {

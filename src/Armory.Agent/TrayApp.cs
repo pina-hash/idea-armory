@@ -24,6 +24,9 @@ internal sealed partial class TrayApp : ApplicationContext
     private readonly ToolStripMenuItem vaultItem;
     // A shared computer (docs/agent/PROFILES.md): "Using Armory: Jordan Reyes", never a button.
     private readonly ToolStripMenuItem usingItem;
+    // 0.4.0: "Armory 0.4.1 is ready. It starts the next time Armory opens." (Updates.cs), never a button.
+    private readonly ToolStripMenuItem updateItem;
+    private readonly Updater updater;
     private readonly Control marshal;
     private readonly RegisteredWaitHandle showWait;
     private readonly RegisteredWaitHandle quitWait;
@@ -46,13 +49,14 @@ internal sealed partial class TrayApp : ApplicationContext
         // Every item says what it does on hover (N1); the words are in HostTips.
         menu = new ContextMenuStrip { ShowItemToolTips = true };
         usingItem = new ToolStripMenuItem("") { Enabled = false, Visible = false };
+        updateItem = new ToolStripMenuItem("") { Enabled = false, Visible = false };
         var openItem = new ToolStripMenuItem(HostTips.OpenArmory, null, (_, _) => OpenWindow()) { Font = new Font(menu.Font, FontStyle.Bold) };
         vaultItem = new ToolStripMenuItem(HostTips.OpenFolder, null, (_, _) => OpenVault());
         pauseItem = new ToolStripMenuItem(HostTips.Pause, null, (_, _) => TogglePause());
         accountItem = new ToolStripMenuItem(HostTips.Connect, null, (_, _) => ConnectOrSignOut());
         var quitItem = new ToolStripMenuItem(HostTips.Quit, null, (_, _) => Quit());
         foreach (var item in new[] { openItem, vaultItem, pauseItem, accountItem, quitItem }) item.ToolTipText = HostTips.Tray(item.Text ?? "", host.VaultFolder);
-        menu.Items.AddRange([usingItem, openItem, vaultItem, pauseItem, accountItem, quitItem]);
+        menu.Items.AddRange([updateItem, usingItem, openItem, vaultItem, pauseItem, accountItem, quitItem]);
         menu.Opening += (_, _) => UpdateMenu(host.View);
 
         notify = new NotifyIcon
@@ -75,6 +79,13 @@ internal sealed partial class TrayApp : ApplicationContext
         quitWait = ThreadPool.RegisterWaitForSingleObject(instance.QuitSignal, (_, _) => Post(Quit), null, Timeout.Infinite, executeOnlyOnce: false);
 
         _ = StartAsync(background);
+        updater = new Updater(log, paths, words => Post(() =>
+        {
+            updateItem.Text = words;
+            updateItem.ToolTipText = words;
+            updateItem.Visible = true;
+        }));
+        updater.Start();
     }
 
     private async Task StartAsync(bool background)
@@ -212,6 +223,8 @@ internal sealed partial class TrayApp : ApplicationContext
         window?.CloseForQuit();
         try { await host.DisposeAsync(); }
         catch (Exception error) when (error is not OutOfMemoryException) { log.Error("stop failed", error); }
+        // A downloaded update goes on as this process ends (0.4.0).
+        updater.ApplyOnQuit();
         ExitThread();
     }
 
@@ -229,6 +242,7 @@ internal sealed partial class TrayApp : ApplicationContext
             host.ViewChanged -= OnViewChanged;
             CloseShell();
             notify.Dispose();
+            updater.Dispose();
             menu.Dispose();
             window?.Dispose();
             marshal.Dispose();

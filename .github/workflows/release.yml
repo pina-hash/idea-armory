@@ -62,6 +62,9 @@ jobs:
       - name: Install over itself with SolidWorks open (the link's test fake)
         run: ./tools/test-agent-install.ps1 -Kind SolidWorks
 
+      - name: The install that updates itself (Velopack) installs, answers and uninstalls
+        run: ./tools/test-velopack.ps1 -Version '${{ steps.package.outputs.version }}' -ReleaseDir '${{ steps.package.outputs.velopack-dir }}'
+
       # Last: it installs for the whole computer (the runner's steps run as an administrator).
       - name: The optional badges setup (status on file icons), for the whole computer
         run: ./tools/test-agent-install.ps1 -Kind Badges
@@ -85,12 +88,18 @@ jobs:
           SETUP_SHA256: ${{ steps.package.outputs.setup-sha256 }}
           BADGES_EXE: ${{ steps.package.outputs.badges-exe }}
           BADGES_SHA256: ${{ steps.package.outputs.badges-sha256 }}
+          VELOPACK_DIR: ${{ steps.package.outputs.velopack-dir }}
         run: |
           $tag = $env:GITHUB_REF_NAME
           $assets = @($env:USB_ZIP, "$env:USB_ZIP.sha256", $env:SETUP_EXE, "$env:SETUP_EXE.sha256", $env:BADGES_EXE, "$env:BADGES_EXE.sha256")
           foreach ($file in $assets) {
             if (-not $file -or -not (Test-Path -LiteralPath $file)) { throw "Missing release asset $file" }
           }
+          # 0.4.0: the install that updates itself. Every installed Armory reads releases.win.json
+          # from the latest release, so these go on every release.
+          $velopack = @(Get-ChildItem -LiteralPath $env:VELOPACK_DIR -File | ForEach-Object { $_.FullName })
+          if (-not ($velopack | Where-Object { $_ -like '*releases.win.json' })) { throw "Missing the Velopack feed in $env:VELOPACK_DIR" }
+          $assets += $velopack
           $zipName = Split-Path -Leaf $env:USB_ZIP
           $exeName = Split-Path -Leaf $env:SETUP_EXE
           $badgesName = Split-Path -Leaf $env:BADGES_EXE
@@ -99,9 +108,10 @@ jobs:
             '',
             '## Install',
             "- **$zipName**: the flash-drive installer for lab computers. Extract All onto the drive, then on each computer double-click ``Install IDEA Armory.cmd``, signed in as the Windows account that will use Armory. README.txt inside explains each step.",
-            "- **$exeName**: the normal installer, for a student's own laptop.",
+            '- **IDEAArmory-win-Setup.exe**: the installer that updates itself. Use it on every computer from 0.4.0 on: Armory then finds each new release by itself, downloads it in the background and runs it the next time it opens.',
+            "- **$exeName**: the older installer, for a student's own laptop; a copy it installs moves onto the one that updates itself at its first update.",
             '',
-            'Both install for one Windows account and never ask for an administrator password. Uninstall never deletes the vault folder (C:\IDEA\Armory) or any file in it. There is no self-update yet; see docs/agent/INSTALL.md.',
+            'Every installer installs for one Windows account and never asks for an administrator password. Uninstall never deletes the vault folder (C:\IDEA\Armory) or any file in it. Armory 0.4.0 and later update themselves; see docs/agent/INSTALL.md, Updates.',
             '',
             '## Optional: Armory''s status on file icons',
             "- **$badgesName**: optional. It shows Armory's status on file icons in File Explorer for every Windows account on a computer, and it needs an administrator once per computer (Windows asks for the password). Armory works the same without it. Both installers already carry it: the flash drive's ``Show Armory status on file icons.cmd`` and setup.exe's last page run it, and IT can run it silently with ``/VERYSILENT /SUPPRESSMSGBOXES /NORESTART``. It has its own entry in Settings > Apps.",

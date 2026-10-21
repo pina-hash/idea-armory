@@ -444,33 +444,42 @@ Playwright 1.56.1 (the version the window tools were checked with) and its Chrom
 outside the checkout, and runs `node tools/agent-ui/check-ui.mjs` and
 `node tools/agent-ui/bbox-diff.mjs`, keeping their output.
 
-## Self-update: not shipped, and the choice it needs
+## Updates (0.4.0): Armory updates itself
 
-The agent ships without self-update. `pina-hash/idea-armory` is public, so its GitHub
-Releases download with no token (the upgrade test above does exactly that). Where the agent
-should look for updates is still Mr. Pina's choice:
+Mr. Pina asked for Velopack (MIT licensed, free) and this repository's releases on 2026-10-21.
+From 0.4.0, the release carries `IDEAArmory-win-Setup.exe`, `IDEAArmory-<version>-full.nupkg`
+and Velopack's feed (`releases.win.json`, `RELEASES`, `assets.win.json`), built from the same
+payload as the other installers by `tools/package-velopack.ps1` and checked on the runner by
+`tools/test-velopack.ps1` (silent install, `--check` answers the release's version, uninstall
+keeps the vault).
 
-- **This repository's releases.** The agent would read
-  `https://api.github.com/repos/pina-hash/idea-armory/releases/latest` with no token. No
-  new secret or release step is needed.
-- **An update feed on ideabosco.com**, for example `GET /api/armory/agent/latest` answering
-  `{version, url, sha256}`, with the installer in the same R2 storage as the blobs. This
-  needs a release step that copies the assets there with the R2 credentials stored as a
-  repository secret. Today's workflows need no secret.
+- **Where it installs:** `%LOCALAPPDATA%\IDEAArmory\` (`Update.exe`, and the app in
+  `current\`), for one Windows account, no administrator. It makes a Start menu shortcut
+  "IDEA Armory" and an Apps entry. Settings, the sign-in and the vault stay where they always
+  were (`%LOCALAPPDATA%\IDEA Armory\` and `C:\IDEA\Armory`).
+- **How it updates:** about a minute after it starts and every four hours after, Armory reads
+  `https://github.com/pina-hash/idea-armory/releases/latest/download/releases.win.json` (the
+  latest release's own file: never the GitHub API, so a lab full of computers behind one
+  address is never rate limited). A newer release downloads in the background. Quitting
+  applies it at once; otherwise the next start (sign-in) applies it and starts the new
+  version. The tray menu says "Armory 0.4.1 is ready. It starts the next time Armory opens."
+  No reinstall and no code signing: Windows SmartScreen asks only when a person opens the
+  setup the first time, never for an update.
+- **Copies installed the old way** (the flash drive or `IDEA-Armory-Setup-v<version>.exe`, in
+  `%LOCALAPPDATA%\Programs\IDEA Armory`) at 0.4.0 or later move themselves over: when a newer
+  release exists, Armory downloads `IDEAArmory-win-Setup.exe` and runs it silently. Velopack's
+  install step (`Updates.cs`, `LegacyInstall.Retire`) asks the old copy to quit, removes its
+  two Apps entries, its Start menu shortcut and its folder, and points the sign-in start entry
+  at the new copy. Nothing in `%LOCALAPPDATA%\IDEA Armory` or the vault is touched.
+- **Copies older than 0.4.0** (0.3.1, 0.3.2, 0.3.3) have no updater. Each needs 0.4.0 installed
+  once, by hand (below); after that it updates itself.
+- **Uninstall** (Settings > Apps > IDEA Armory) removes the app, the sign-in start entry, the
+  right-click items and the notification registration, and never the vault.
+- A developer's build and a test instance (`ARMORY_DATA_DIR`) never look for updates.
 
-Turning it on needs:
+How Mr. Pina publishes a release is in the README, "Publishing a release".
 
-1. That choice, made by Mr. Pina.
-2. For the feed, the release step that copies the assets.
-3. Agent code that checks once a day, downloads `IDEA-Armory-Setup-v<version>.exe` to
-   `%LOCALAPPDATA%\IDEA Armory\updates\`, verifies its SHA-256 against the feed (served
-   over HTTPS from a host the agent trusts), and runs it with
-   `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART`. Setup already closes the running copy with
-   `--quit` and starts the new one in the tray. A code-signing certificate, checked by the
-   agent before running the download, would make this much stronger and would also remove
-   the SmartScreen warning.
-
-Until then, updating means running the new release's Install from the flash drive (or the
+Before 0.4.0, updating meant running the new release's Install from the flash drive (or the
 new setup.exe) over the old one; the settings and the sign-in file keep every byte, the new
 version loads that sign-in and opens the old vault, as the upgrade cycle above checks on
 every run (it does not reach a real server). The window's page is replaced as a whole: setup.exe deletes

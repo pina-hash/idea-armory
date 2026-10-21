@@ -30,6 +30,9 @@ outputs:
   arm64:
     description: true when the badges setup carries the ARM64 DLL too.
     value: ${{ steps.package.outputs.arm64 }}
+  velopack-dir:
+    description: Folder of the release that updates itself (IDEAArmory-win-Setup.exe, the full nupkg and the feed), every file of which goes on the GitHub release (0.4.0).
+    value: ${{ steps.velopack.outputs.velopack_dir }}
 runs:
   using: composite
   steps:
@@ -93,3 +96,17 @@ runs:
       run: |
         New-Item -ItemType Directory -Force evidence | Out-Null
         ./tools/package-agent.ps1 -PublishDir publish/agent -NativeDir publish/native -OutDir dist | Tee-Object -FilePath evidence/package.txt
+
+    # 0.4.0: the same payload as the install that updates itself (Velopack). vpk is the version
+    # of the Velopack package in src/Armory.Agent, read from it so the two never drift.
+    - name: Package the install that updates itself (Velopack)
+      id: velopack
+      shell: pwsh
+      run: |
+        $project = [xml](Get-Content -LiteralPath src/Armory.Agent/Armory.Agent.csproj -Raw)
+        $velopack = @($project.Project.ItemGroup.PackageReference | Where-Object { $_.Include -eq 'Velopack' })[0].Version
+        if (-not $velopack) { throw 'src/Armory.Agent has no Velopack package reference.' }
+        dotnet tool install --global vpk --version $velopack
+        if ($LASTEXITCODE -ne 0) { throw "Installing vpk $velopack failed." }
+        $version = @($project.Project.PropertyGroup | ForEach-Object { $_.Version } | Where-Object { $_ }) | Select-Object -First 1
+        ./tools/package-velopack.ps1 -Version $version | Tee-Object -FilePath evidence/velopack.txt
