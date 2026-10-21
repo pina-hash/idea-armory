@@ -15,6 +15,21 @@ periodic re-hash: every scan enumerates everything and re-hashes exactly what ch
 detector built with a maximum cache age (tests) also re-hashes older entries on a full
 rescan. A real watcher overflow requests a full rescan, which costs only the enumeration.
 
+A read-only file is not even opened for reading when nothing about it changed (0.4.1: quiet
+passes of 15 to 20 seconds on IDEA-06, where every open is a look by the virus scanner and the
+scan opened all 1,500 files on every pass). The scan first reads a stamp through a handle
+opened for attributes only (`NativeMethods.FileStampWithReadOnly`: NTFS id, size, last-write
+time, the read-only bit), and takes the cached entry as it is (`TakenFromStamp`) only when the
+cache read that very file at that path (the same id; never an entry carried over `Unread`, and
+never one from the file map of the last run, which keeps no bit), the file was read-only then
+and is read-only now, its size and time are the same, it was hashed outside the racy window,
+and no age-based re-hash is due. The read-only bit on both sides is the whole of the rule
+(feedback N4): that earlier read opened the file sharing read only, so nobody had it open for
+writing then, and a read-only file cannot be opened for writing since. A writable file (checked
+out here, or new) is opened on every scan as before, which is how a program holding it for
+writing is seen. The residual risk is the one the scan already had: the same bytes rewritten
+with the size and time put back (here it also needs the bit cleared and set again in between).
+
 Folders are reported with their NTFS directory ids, read by opening each directory with
 `CreateFileW`, `FILE_FLAG_BACKUP_SEMANTICS` and `FILE_FLAG_OPEN_REPARSE_POINT`, for
 attributes only and sharing read, write and delete, so the scan never blocks a student's

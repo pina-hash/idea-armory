@@ -38,6 +38,9 @@ public sealed record LocalScan(IReadOnlyList<LocalFileState> Files, IReadOnlyLis
     public IReadOnlyList<string> Markers { get; init; } = [];
     // Files whose hash was reused by NTFS id, size and time after only their path changed.
     public int HashesReused { get; init; }
+    // Read-only files taken from their stamp alone (NTFS id, size, last-write time and the bit,
+    // read for attributes only), never opened for reading (0.4.1).
+    public int TakenFromStamp { get; init; }
 }
 
 public sealed class LocalChangeDetector : IDisposable
@@ -158,6 +161,7 @@ public sealed class LocalChangeDetector : IDisposable
         var oldById = cache.Values.GroupBy(f => f.FileId).Where(g => g.Count() == 1).ToDictionary(g => g.Key, g => g.Single());
         var hashes = 0;
         var reused = 0;
+        var stamped = 0;
         foreach (var file in Enumerate(walk, folders))
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -169,6 +173,15 @@ public sealed class LocalChangeDetector : IDisposable
                 continue;
             }
             string? id = null;
+            // 0.4.1: a read-only file already hashed, unchanged, is taken from its stamp alone
+            // (QuietlyUnchanged), never opened for reading: on a lab computer every open costs the
+            // virus scanner's look, and 1,500 of them made a quiet pass take 15 to 20 seconds.
+            if (QuietlyUnchanged(file, path, full, now) is { } quiet)
+            {
+                next.Add(path, quiet);
+                stamped++;
+                continue;
+            }
             try
             {
                 // Sharing delete as well as read: a student can rename or delete the file, or
@@ -270,7 +283,29 @@ public sealed class LocalChangeDetector : IDisposable
             Markers = walk.Markers,
             HashesReused = reused,
             Held = walk.Held,
+            TakenFromStamp = stamped,
         };
+    }
+
+    // The entry for a file this scan can take without opening it for reading, or null to read it
+    // as before. Only the file the cache already has at this very path (the same NTFS id), read
+    // there by an earlier scan (never one carried over unread), read-only then and read-only now,
+    // with the same size and last-write time, hashed outside the racy window, and not due for a
+    // re-hash by age. Why read-only on both sides is the whole rule (feedback N4): the earlier read
+    // opened the file sharing read only, so no program had it open for writing then, and a
+    // read-only file can't be opened for writing since; so its bytes are the ones hashed. A
+    // writable file (checked out here, or new) is always opened, which is how a program holding
+    // it for writing is seen (the open is refused, and the entry carried over unread).
+    private LocalFileState? QuietlyUnchanged(string file, VaultPath path, bool full, DateTimeOffset now)
+    {
+        var basis = cache.TryGetValue(path, out var cached) ? cached : !cacheKnown && saved.TryGetValue(path, out var kept) ? kept : null;
+        if (basis is null || basis.Unread || !basis.ReadOnly || IsRacy(basis)) return null;
+        if (full && maximumCacheAge is { } age && now - basis.HashedAt >= age) return null;
+        (string Id, DateTime LastWriteUtc, long Size, bool ReadOnly)? stamp;
+        try { stamp = NativeMethods.FileStampWithReadOnly(file); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or Win32Exception) { return null; }
+        if (stamp is not { } now2 || !now2.ReadOnly || now2.Id != basis.FileId || now2.Size != basis.Size || now2.LastWriteUtc != basis.LastWriteUtc) return null;
+        return basis with { Path = path };
     }
 
     // Armory just put these bytes at path itself (a download), through private staging, with the

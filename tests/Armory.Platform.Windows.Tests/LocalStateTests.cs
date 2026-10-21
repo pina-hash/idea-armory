@@ -30,6 +30,68 @@ public sealed class LocalStateTests(ITestOutputHelper output)
         Assert.NotEqual(first.Files[0].Hash, refreshed.Files[0].Hash);
     }
 
+    // 0.4.1 (quiet passes of 15 to 20 seconds on IDEA-06: the scan opened every file of the vault
+    // for reading on every pass, and every open is a look by the virus scanner). A read-only file
+    // the cache already read at its path, with the same NTFS id, size, time and bit, is taken from
+    // a stamp read for attributes only: never opened for reading again. A writable file is opened
+    // every time, so a program holding it for writing is still seen (feedback N4), and anything
+    // that changed (the bit, the id, the size, the time) is read again.
+    [WindowsFact]
+    public void A_read_only_file_already_read_is_taken_from_its_stamp_and_a_writable_one_is_still_opened()
+    {
+        using var vault = new TestVault();
+        foreach (var name in new[] { "a.SLDPRT", "b.SLDPRT", "c.SLDPRT", "d.SLDPRT" }) File.WriteAllText(vault.File(name), "bytes of " + name);
+        var written = DateTime.UtcNow.AddMinutes(-1); // outside the racy window
+        foreach (var file in Directory.EnumerateFiles(vault.Root)) File.SetLastWriteTimeUtc(file, written);
+        foreach (var name in new[] { "a.SLDPRT", "b.SLDPRT", "d.SLDPRT" }) File.SetAttributes(vault.File(name), FileAttributes.ReadOnly);
+        using var scanner = new LocalChangeDetector(vault.Paths);
+        var opened = new List<string>();
+        scanner.WhileHashing = file => { lock (opened) opened.Add(Path.GetFileName(file)); };
+        var first = scanner.Scan();
+        Assert.Equal(4, first.HashesComputed);
+        Assert.Equal(0, first.TakenFromStamp);
+        Assert.Equal(4, opened.Count);
+
+        // Unchanged: only the writable one is opened, and every hash is the one read before.
+        opened.Clear();
+        var quiet = scanner.Scan();
+        Assert.Equal(["c.SLDPRT"], opened);
+        Assert.Equal(3, quiet.TakenFromStamp);
+        Assert.Equal(0, quiet.HashesComputed);
+        Assert.Equal(first.Files, quiet.Files);
+
+        // Read-only and held by a reader: still taken from its stamp. Writable and held for writing:
+        // opened, refused, carried over unread, as before.
+        using (new FileStream(vault.File("b.SLDPRT"), FileMode.Open, FileAccess.Read, FileShare.Read))
+        using (new FileStream(vault.File("c.SLDPRT"), FileMode.Open, FileAccess.ReadWrite, FileShare.Read))
+        {
+            opened.Clear();
+            var held = scanner.Scan();
+            Assert.Equal(["c.SLDPRT"], opened);
+            Assert.Equal(3, held.TakenFromStamp);
+            Assert.True(held.Files.Single(f => f.Path.Value == "c.SLDPRT").Unread);
+            Assert.False(held.Files.Single(f => f.Path.Value == "b.SLDPRT").Unread);
+            Assert.Equal(["c.SLDPRT"], held.Held);
+        }
+
+        // The bit cleared: read again (and reported writable). Another file put at d's path with
+        // the same size, time and bit (a new NTFS id): read again. c, unread last time: read again.
+        File.SetAttributes(vault.File("a.SLDPRT"), FileAttributes.Normal);
+        File.SetAttributes(vault.File("d.SLDPRT"), FileAttributes.Normal);
+        File.Delete(vault.File("d.SLDPRT"));
+        File.WriteAllText(vault.File("d.SLDPRT"), "bytes of D.SLDPRT");
+        File.SetLastWriteTimeUtc(vault.File("d.SLDPRT"), written);
+        File.SetAttributes(vault.File("d.SLDPRT"), FileAttributes.ReadOnly);
+        opened.Clear();
+        var changed = scanner.Scan();
+        Assert.Equal(["a.SLDPRT", "c.SLDPRT", "d.SLDPRT"], opened.Order(StringComparer.Ordinal));
+        Assert.Equal(1, changed.TakenFromStamp);
+        Assert.False(changed.Files.Single(f => f.Path.Value == "a.SLDPRT").ReadOnly);
+        Assert.False(changed.Files.Single(f => f.Path.Value == "c.SLDPRT").Unread);
+        Assert.Equal(TestVault.Hash(System.Text.Encoding.UTF8.GetBytes("bytes of D.SLDPRT")), changed.Files.Single(f => f.Path.Value == "d.SLDPRT").Hash);
+        output.WriteLine($"quiet scan: {quiet.TakenFromStamp} of {quiet.Files.Count} files taken from their stamp, {opened.Count} opened after the changes");
+    }
+
     // 0.3.3 (feedback N3: the scan after a 542 MB slice of a download read all of it once more): a
     // file Armory put in place itself is known by the hash it checked, so the next scan takes it
     // without reading the file, just written as it is, until the file is written again.

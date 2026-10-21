@@ -93,6 +93,26 @@ internal static class NativeMethods
         return (FileId(info), written, ((long)info.SizeHigh << 32) | info.SizeLow);
     }
 
+    // The same stamp with the file's read-only bit (0.4.1): what the scan needs to take a
+    // read-only file it already hashed without opening it for reading (LocalChangeDetector).
+    // Opened for attributes only, so no program's sharing refuses it and nothing reads the bytes.
+    internal static (string Id, DateTime LastWriteUtc, long Size, bool ReadOnly)? FileStampWithReadOnly(string path)
+    {
+        using var handle = CreateFileW(WindowsPaths.Extended(path), FileReadAttributes,
+            (uint)(FileShare.Read | FileShare.Write | FileShare.Delete), IntPtr.Zero, OpenExisting,
+            FileFlagBackupSemantics | FileFlagOpenReparsePoint, IntPtr.Zero);
+        if (handle.IsInvalid)
+        {
+            var error = Marshal.GetLastWin32Error();
+            if (error is 2 or 3) return null;
+            throw new Win32Exception(error);
+        }
+        if (!GetFileInformationByHandle(handle, out var info)) throw new Win32Exception(Marshal.GetLastWin32Error());
+        if ((info.Attributes & FileAttributeDirectory) != 0) return null;
+        var written = DateTime.FromFileTimeUtc(((long)info.WriteTime.dwHighDateTime << 32) | (uint)info.WriteTime.dwLowDateTime);
+        return (FileId(info), written, ((long)info.SizeHigh << 32) | info.SizeLow, (info.Attributes & FileAttributeReadOnly) != 0);
+    }
+
     internal static void Move(string source, string destination, bool replace)
     {
         if (!MoveFileExW(source, destination, WriteThrough | (replace ? ReplaceExisting : 0)))
