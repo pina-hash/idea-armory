@@ -21,6 +21,16 @@ public sealed class RealtimeFeed
 {
     public const string Schema = "public", Table = "armory_change_feed", Event = "INSERT";
     public static readonly TimeSpan HeartbeatEvery = TimeSpan.FromSeconds(25);
+    // The sign-in in the joins is renewed this long before it runs out (by this computer's
+    // clock, which AccessToken.LocalExpiry already corrects), so the server never closes a
+    // channel for an expired token in the first place (feedback b32e6726: an hourly storm of
+    // "Token has expired" closes and refused joins, and a status line that flickered with them).
+    public static readonly TimeSpan RenewAhead = TimeSpan.FromMinutes(5);
+    // A channel the server closed or refused is joined again no sooner than this, doubling to a
+    // minute while it keeps failing; a renewed sign-in lets every channel try again at once.
+    public static readonly TimeSpan RejoinFirst = TimeSpan.FromSeconds(5), RejoinLongest = TimeSpan.FromSeconds(60);
+    // A sign-in the server calls expired is renewed at once, but at most this often.
+    public static readonly TimeSpan ForcedRenewalEvery = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan[] Backoff = [TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(60)];
     private readonly SessionManager sessions;
     private readonly Func<Uri, CancellationToken, Task<WebSocket>> connect;
@@ -28,7 +38,7 @@ public sealed class RealtimeFeed
     private readonly object gate = new();
     private readonly SemaphoreSlim wake = new(0, int.MaxValue);
     private HashSet<Guid> wanted = [];
-    private string? lastProblem;
+    private readonly HashSet<string> problemsLogged = new(StringComparer.Ordinal);
 
     // connect: opens the websocket (tests pass their own); the default is a ClientWebSocket.
     public RealtimeFeed(SessionManager sessions, Func<Uri, CancellationToken, Task<WebSocket>>? connect = null, Action<string>? log = null)
@@ -43,6 +53,10 @@ public sealed class RealtimeFeed
 
     // How many times a connection opened, and the topics joined now (tests and the incident snapshot).
     public int Connections { get; private set; }
+    // How many joins were sent, and how many times the server's "expired" made the sign-in renew early.
+    public int JoinsSent => Volatile.Read(ref joinsSent);
+    public int ForcedRenewals => Volatile.Read(ref forcedRenewals);
+    private int joinsSent, forcedRenewals;
     public IReadOnlyCollection<Guid> Joined { get { lock (gate) return joinedNow.ToArray(); } }
     private HashSet<Guid> joinedNow = [];
 
@@ -116,7 +130,7 @@ public sealed class RealtimeFeed
             try
             {
                 // A token good for a while goes in the joins (a refresh, when it is close to expiring).
-                session = await sessions.GetFreshAsync(cancellationToken: ct);
+                session = await sessions.GetFreshAsync(cancellationToken: ct, minimumLife: RenewAhead);
                 healthy = await RunConnectionAsync(session, ct);
             }
             catch (ArmorySignedOutException) { continue; } // signed out: waits above for a sign-in
@@ -143,6 +157,25 @@ public sealed class RealtimeFeed
         string? heartbeatRef = null;
         var useful = false;
         var token = session.AccessToken;
+        // Set when the server says the sign-in in a join has expired: the loop renews it at once.
+        var expiredSaid = 0;
+        long lastForced = long.MinValue;
+        // A channel the server closed or refused waits before it is joined again (per project).
+        var retryAt = new Dictionary<Guid, (long At, TimeSpan Wait)>();
+        void Later(Guid project)
+        {
+            lock (retryAt)
+            {
+                var wait = retryAt.TryGetValue(project, out var was) ? TimeSpan.FromTicks(Math.Min(was.Wait.Ticks * 2, RejoinLongest.Ticks)) : RejoinFirst;
+                retryAt[project] = (Environment.TickCount64 + (long)wait.TotalMilliseconds, wait);
+            }
+        }
+        void Expired(string? said)
+        {
+            if (said is null || !(said.Contains("expired", StringComparison.OrdinalIgnoreCase) || said.Contains("InvalidJWT", StringComparison.OrdinalIgnoreCase))) return;
+            Volatile.Write(ref expiredSaid, 1);
+            wake.Release();
+        }
 
         async Task SendAsync(JsonObject message)
         {
@@ -190,15 +223,19 @@ public sealed class RealtimeFeed
                     if (Text(payload?["status"]) == "ok")
                     {
                         useful = true;
-                        lastProblem = null;
+                        lock (problemsLogged) problemsLogged.Clear();
+                        lock (retryAt) retryAt.Remove(project);
                         lock (gate) joinedNow.Add(project);
                         // Joined late: whatever was written meanwhile is read now.
                         Changed?.Invoke(project);
                     }
                     else
                     {
-                        Problem("join refused for " + topic + ": " + payload?["response"]?.ToJsonString());
+                        var response = payload?["response"]?.ToJsonString();
+                        Problem("join refused for " + topic + ": " + response);
                         lock (joined) joined.Remove(project);
+                        Later(project);
+                        Expired(response);
                     }
                     return;
                 case "postgres_changes":
@@ -207,12 +244,15 @@ public sealed class RealtimeFeed
                 case "system" when Text(payload?["status"]) == "error":
                 case "phx_error":
                 case "phx_close":
-                    Problem(name + " on " + topic + (payload is null ? "" : ": " + Text(payload["message"])));
+                    var said = payload is null ? null : Text(payload["message"]);
+                    Problem(name + " on " + topic + (said is null ? (payload is null ? "" : ": ") : ": " + said));
                     if (ProjectOf(topic) is { } dropped)
                     {
                         lock (joined) joined.Remove(dropped);
                         lock (gate) joinedNow.Remove(dropped);
+                        Later(dropped);
                     }
+                    Expired(said);
                     return;
             }
         }
@@ -227,15 +267,31 @@ public sealed class RealtimeFeed
                     await receiving; // a failure ends this connection
                     return useful;
                 }
+                // The server said the sign-in expired: renew it now (not at the next heartbeat),
+                // hand it to every channel still open, and let the closed ones join again with it.
+                if (Interlocked.Exchange(ref expiredSaid, 0) == 1 && (lastForced == long.MinValue || Environment.TickCount64 - lastForced >= (long)ForcedRenewalEvery.TotalMilliseconds))
+                {
+                    lastForced = Environment.TickCount64;
+                    try
+                    {
+                        var fresh = await sessions.GetFreshAsync(forceRefresh: true, cancellationToken: stop.Token);
+                        Interlocked.Increment(ref forcedRenewals);
+                        await RenewAsync(fresh.AccessToken);
+                        lock (retryAt) retryAt.Clear();
+                    }
+                    catch (ArmorySignedOutException) { await CloseAsync(socket); return useful; }
+                    catch (ArmoryOfflineException) { }
+                }
                 // Channels follow the projects this computer syncs.
                 HashSet<Guid> want;
                 lock (gate) want = [.. wanted];
                 if (want.Count == 0) { await CloseAsync(socket); return useful; }
                 List<(Guid Project, string Topic)> leave, join;
+                var nowTick = Environment.TickCount64;
                 lock (joined)
                 {
                     leave = joined.Where(j => !want.Contains(j.Key)).Select(j => (j.Key, j.Value)).ToList();
-                    join = want.Where(p => !joined.ContainsKey(p)).Select(p => (p, TopicFor(p))).ToList();
+                    lock (retryAt) join = want.Where(p => !joined.ContainsKey(p) && !(retryAt.TryGetValue(p, out var r) && r.At > nowTick)).Select(p => (p, TopicFor(p))).ToList();
                     foreach (var (project, _) in leave) joined.Remove(project);
                     foreach (var (project, topic) in join) joined[project] = topic;
                 }
@@ -248,6 +304,7 @@ public sealed class RealtimeFeed
                 {
                     var r = Next();
                     lock (pendingJoins) pendingJoins[r] = project;
+                    Interlocked.Increment(ref joinsSent);
                     await SendAsync(JoinMessage(project, token, r));
                 }
                 if (Environment.TickCount64 - lastBeat >= (long)HeartbeatEvery.TotalMilliseconds)
@@ -263,24 +320,21 @@ public sealed class RealtimeFeed
                     var beat = Next();
                     Volatile.Write(ref heartbeatRef, beat);
                     await SendAsync(new JsonObject { ["topic"] = "phoenix", ["event"] = "heartbeat", ["payload"] = new JsonObject(), ["ref"] = beat });
-                    // A renewed sign-in goes to every channel, so the server keeps delivering.
+                    // A renewed sign-in goes to every channel, so the server keeps delivering: renewed
+                    // RenewAhead before it runs out, never after.
                     try
                     {
-                        var fresh = await sessions.GetFreshAsync(cancellationToken: stop.Token);
-                        if (fresh.AccessToken != token)
-                        {
-                            token = fresh.AccessToken;
-                            List<string> topics;
-                            lock (joined) topics = [.. joined.Values];
-                            foreach (var topic in topics)
-                                await SendAsync(new JsonObject { ["topic"] = topic, ["event"] = "access_token", ["payload"] = new JsonObject { ["access_token"] = token }, ["ref"] = Next() });
-                        }
+                        var fresh = await sessions.GetFreshAsync(cancellationToken: stop.Token, minimumLife: RenewAhead);
+                        await RenewAsync(fresh.AccessToken);
                     }
                     catch (ArmorySignedOutException) { await CloseAsync(socket); return useful; }
                     catch (ArmoryOfflineException) { }
                 }
-                // The next look: when the heartbeat is due, sooner when the projects change.
-                var due = TimeSpan.FromMilliseconds(Math.Max(1, (long)HeartbeatEvery.TotalMilliseconds - (Environment.TickCount64 - lastBeat)));
+                // The next look: when the heartbeat is due, sooner when the projects change or a
+                // channel that waits may join again.
+                var dueMs = (long)HeartbeatEvery.TotalMilliseconds - (Environment.TickCount64 - lastBeat);
+                lock (retryAt) foreach (var (project, r) in retryAt) if (want.Contains(project)) dueMs = Math.Min(dueMs, r.At - Environment.TickCount64);
+                var due = TimeSpan.FromMilliseconds(Math.Max(1, dueMs));
                 await Task.WhenAny(wake.WaitAsync(due, stop.Token), receiving);
             }
             return useful;
@@ -293,6 +347,16 @@ public sealed class RealtimeFeed
         }
 
         string Next() => (++reference).ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+        async Task RenewAsync(string fresh)
+        {
+            if (fresh == token) return;
+            token = fresh;
+            List<string> topics;
+            lock (joined) topics = [.. joined.Values];
+            foreach (var topic in topics)
+                await SendAsync(new JsonObject { ["topic"] = topic, ["event"] = "access_token", ["payload"] = new JsonObject { ["access_token"] = token }, ["ref"] = Next() });
+        }
     }
 
     private static Guid? ProjectOf(string? topic)
@@ -302,9 +366,11 @@ public sealed class RealtimeFeed
 
     private void Problem(string what)
     {
-        // The same problem again (a site without Realtime, a refused join) is logged once.
-        if (what == lastProblem) return;
-        lastProblem = what;
+        // The same problem again (a site without Realtime, a refused join, the same close on
+        // another project's channel) is logged once until a join succeeds: the topic and the
+        // seconds in "expired 12 seconds ago" do not make it a new problem.
+        var kind = System.Text.RegularExpressions.Regex.Replace(what, @"realtime:armory-feed-[0-9a-fA-F-]+|\d+", "#");
+        lock (problemsLogged) if (!problemsLogged.Add(kind)) return;
         log?.Invoke("live updates: " + what + " (the regular check for changes carries on)");
     }
 

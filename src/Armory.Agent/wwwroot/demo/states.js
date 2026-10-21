@@ -371,7 +371,7 @@
 			connection: connection,
 			connect: { phase: phase, message: message },
 			account: null,
-			sync: { state: 'paused', line: 'Not connected yet.', detail: null, pendingCount: 0 },
+			sync: { state: 'paused', line: 'Not connected yet.', detail: null, pendingCount: 0, now: 'Waiting for you to connect this computer.' },
 			activity: idle(),
 			vaultRoot: SETTINGS.vaultRoot,
 			notices: [],
@@ -386,7 +386,7 @@
 		};
 	}
 
-	var SYNCED = { state: 'synced', line: 'Everything is saved to Armory.', detail: 'Last checked 2 minutes ago.', pendingCount: 0 };
+	var SYNCED = { state: 'synced', line: 'Everything is saved to Armory.', detail: 'Last checked 2 minutes ago.', pendingCount: 0, now: 'Watching your folder for saves.' };
 
 	function pausedSync(pending) {
 		return {
@@ -394,7 +394,8 @@
 			line: 'Paused. Nothing uploads or downloads until you resume.',
 			// How many wait is Right now's to say (activity.waiting), once.
 			detail: null,
-			pendingCount: pending
+			pendingCount: pending,
+			now: 'Paused by you. Nothing moves until you resume.'
 		};
 	}
 
@@ -452,7 +453,7 @@
 			changes[e[0]] = { status: 'notOnThisComputer' };
 		});
 		return signedIn({
-			sync: { state: 'syncing', line: TRANSFERS.line, detail: 'You can keep working.', pendingCount: 2 },
+			sync: { state: 'syncing', line: TRANSFERS.line, detail: 'You can keep working.', pendingCount: 2, now: TRANSFERS.line },
 			activity: TRANSFERS,
 			changes: shared(changes),
 			opts: { files: ARM, folders: { 'proj-robot-2027': ['Arm'] } }
@@ -570,7 +571,7 @@
 			label: 'Offline, with files waiting to upload',
 			screens: ['home'],
 			view: signedIn({
-				sync: { state: 'offline', line: "You're offline. Your work is safe on this computer.", detail: null, pendingCount: 3 },
+				sync: { state: 'offline', line: "You're offline. Your work is safe on this computer.", detail: null, pendingCount: 3, now: "Offline. Saves wait on this computer and go up when it's back online." },
 				activity: {
 					line: null,
 					upload: null,
@@ -629,7 +630,7 @@
 			screens: ['home'],
 			params: { folder: 'CopyDesignTemp' },
 			view: signedIn({
-				sync: { state: 'attention', line: 'Everything else is saved. A few files need you.', detail: 'Last checked just now.', pendingCount: 0 },
+				sync: { state: 'attention', line: 'Everything else is saved. A few files need you.', detail: 'Last checked just now.', pendingCount: 0, now: 'Watching your folder for saves.' },
 				notices: [
 					notice(
 						'import',
@@ -681,7 +682,7 @@
 			screens: ['home'],
 			params: { folder: 'Drivetrain' },
 			view: signedIn({
-				sync: { state: 'attention', line: 'Everything else is saved. A few files need you.', detail: 'Last checked just now.', pendingCount: 0 },
+				sync: { state: 'attention', line: 'Everything else is saved. A few files need you.', detail: 'Last checked just now.', pendingCount: 0, now: 'Watching your folder for saves.' },
 				notices: [
 					notice(
 						'folderPutBack',
@@ -903,7 +904,7 @@
 			label: 'The other notices: a file taken back, files Armory can\'t read, a check in that left two out',
 			screens: ['home'],
 			view: signedIn({
-				sync: { state: 'attention', line: 'Everything else is saved. A few files need you.', detail: 'Last checked just now.', pendingCount: 0 },
+				sync: { state: 'attention', line: 'Everything else is saved. A few files need you.', detail: 'Last checked just now.', pendingCount: 0, now: 'Watching your folder for saves.' },
 				notices: [
 					notice(
 						'takenBack',
@@ -963,7 +964,7 @@
 			screens: ['home'],
 			params: { folder: 'CopyDesignTemp', at: 'browser' },
 			view: signedIn({
-				sync: { state: 'syncing', line: 'Checking for changes.', detail: 'You can keep working.', pendingCount: 0 },
+				sync: { state: 'syncing', line: 'Checking for changes.', detail: 'You can keep working.', pendingCount: 0, now: 'Asking Armory what changed.' },
 				activity: {
 					line: null,
 					upload: null,
@@ -988,7 +989,7 @@
 			screens: ['home'],
 			params: { folder: 'Practice', at: 'browser' },
 			view: signedIn({
-				sync: { state: 'syncing', line: 'Checking for changes.', detail: 'You can keep working.', pendingCount: 0 },
+				sync: { state: 'syncing', line: 'Checking for changes.', detail: 'You can keep working.', pendingCount: 0, now: 'Asking Armory what changed.' },
 				activity: {
 					line: null,
 					upload: null,
@@ -1037,7 +1038,7 @@
 			detailFileId: 'f-wheel-hub',
 			params: { folder: 'Drivetrain' },
 			view: signedIn({
-				sync: { state: 'attention', line: 'Everything else is saved. A few files need you.', detail: 'Last checked just now.', pendingCount: 0 },
+				sync: { state: 'attention', line: 'Everything else is saved. A few files need you.', detail: 'Last checked just now.', pendingCount: 0, now: 'Watching your folder for saves.' },
 				notices: [
 					notice(
 						'newerRelease',
@@ -1088,7 +1089,7 @@
 			label: 'A file kept on this computer only, with Save it in 2025 now; Settings says why this SolidWorks can\'t save team files in 2025 yet',
 			screens: ['home', 'settings'],
 			view: signedIn({
-				sync: { state: 'attention', line: 'Everything else is saved. A few files need you.', detail: 'Last checked just now.', pendingCount: 0 },
+				sync: { state: 'attention', line: 'Everything else is saved. A few files need you.', detail: 'Last checked just now.', pendingCount: 0, now: 'Watching your folder for saves.' },
 				notices: [
 					notice(
 						'solidWorks',
@@ -1128,7 +1129,7 @@
 
 	function groupedView() {
 		return signedIn({
-			sync: { state: 'attention', line: 'Everything else is saved. A few files need you.', detail: 'Last checked just now.', pendingCount: 2 },
+			sync: { state: 'attention', line: 'Everything else is saved. A few files need you.', detail: 'Last checked just now.', pendingCount: 2, now: 'Watching your folder for saves.' },
 			notices: [
 				nameShared('CopyDesignTemp', 14),
 				notice(
@@ -1297,7 +1298,7 @@
 	 *  and nothing of their files is in it. */
 	function picking(profiles, nobody) {
 		var v = nobody ? notSignedIn('signedOut', 'idle', null) : notSignedIn('signedIn', 'idle', null);
-		if (!nobody) v.sync = { state: 'synced', line: 'Everything is saved to Armory.', detail: 'Last checked 2 minutes ago.', pendingCount: 0 };
+		if (!nobody) v.sync = { state: 'synced', line: 'Everything is saved to Armory.', detail: 'Last checked 2 minutes ago.', pendingCount: 0, now: 'Watching your folder for saves.' };
 		v.settings.sharedComputer = true;
 		v.profiles = profiles;
 		return v;

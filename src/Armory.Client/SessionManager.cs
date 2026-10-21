@@ -69,17 +69,19 @@ public sealed class SessionManager
         return ended;
     }
 
-    // Returns a session whose access token is valid for at least the refresh margin.
-    public async Task<ArmorySession> GetFreshAsync(bool forceRefresh = false, CancellationToken cancellationToken = default)
+    // Returns a session whose access token is valid for at least the refresh margin, or for
+    // minimumLife when a caller needs longer (the live updates renew five minutes ahead).
+    public async Task<ArmorySession> GetFreshAsync(bool forceRefresh = false, CancellationToken cancellationToken = default, TimeSpan? minimumLife = null)
     {
+        var margin = minimumLife is { } life && life > RefreshMargin ? life : RefreshMargin;
         var current = Current ?? throw new ArmorySignedOutException("This computer is not connected to Armory.");
-        if (!forceRefresh && current.ExpiresAt - clock.GetUtcNow() > RefreshMargin) return current;
+        if (!forceRefresh && current.ExpiresAt - clock.GetUtcNow() > margin) return current;
         await refreshGate.WaitAsync(cancellationToken);
         try
         {
             var latest = Current ?? throw new ArmorySignedOutException("This computer is not connected to Armory.");
             // Another caller refreshed while this one waited.
-            if (!ReferenceEquals(latest, current) && latest.ExpiresAt - clock.GetUtcNow() > RefreshMargin) return latest;
+            if (!ReferenceEquals(latest, current) && latest.ExpiresAt - clock.GetUtcNow() > margin) return latest;
             var refreshed = await RefreshAsync(latest, cancellationToken);
             SessionStorage.Save(secrets, refreshed);
             Volatile.Write(ref session, refreshed);
@@ -112,8 +114,8 @@ public sealed class SessionManager
             catch (JsonException error) { throw new ArmoryOfflineException("Armory sign-in service sent an unreadable answer.", error); }
             if (answer?.AccessToken is not { Length: > 0 } access || answer.RefreshToken is not { Length: > 0 } refresh)
                 throw new ArmoryOfflineException("Armory sign-in service sent an incomplete answer.");
-            var expires = answer.ExpiresAt is { } at ? DateTimeOffset.FromUnixTimeSeconds(at)
-                : clock.GetUtcNow().AddSeconds(answer.ExpiresIn ?? 3600);
+            var expires = AccessToken.LocalExpiry(clock.GetUtcNow(), access,
+                answer.ExpiresAt is { } at ? DateTimeOffset.FromUnixTimeSeconds(at) : null, answer.ExpiresIn);
             return current with { AccessToken = access, RefreshToken = refresh, ExpiresAt = expires };
         }
     }

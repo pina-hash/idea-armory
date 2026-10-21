@@ -38,16 +38,50 @@ public sealed partial class SyncEngine
         var pending = files.Count(Unsent);
         var notices = Notices(files);
         var moving = Activity(files, pending);
+        // A quick look at the server with nothing to move keeps the status as it was: until
+        // 0.4.0 every such pass (one each time live updates rejoined) flipped "All saved" to
+        // "Updating" and back, and the window twitched (feedback b32e6726). Past QuietPassGrace,
+        // or once anything moves, it says so.
+        var quietLook = syncing && !continuing && moving.Line is null && pending == 0 && lastSettled is not null &&
+            deps.Clock.GetElapsedTime(passStarted) < QuietPassGrace;
         var sync = paused ? new SyncView(SyncStates.Paused, "Paused. Nothing uploads or downloads until you resume.", null, pending)
             : online == false ? new SyncView(SyncStates.Offline, "You're offline. Your work is safe on this computer.", pending > 0 ? null : LastChecked(), pending)
+            : quietLook ? lastSettled!
             // While files move, the status line is the activity's line ("Downloading 412 of 1,280 files, ..."),
             // between the passes of a long download too (continuing: never "saved" between two slices).
             : syncing || continuing ? new SyncView(SyncStates.Syncing, moving.Line ?? "Checking for changes.", null, pending)
             : notices.Any(n => n.Tone != NoticeTones.Info) ? new SyncView(SyncStates.Attention, AttentionLine(notices, pending), LastChecked(), pending)
             : pending > 0 ? new SyncView(SyncStates.Syncing, "Uploading your saves.", null, pending)
             : new SyncView(SyncStates.Synced, "Everything is saved to Armory.", LastChecked(), 0);
+        if (sync.State is SyncStates.Synced or SyncStates.Attention && !quietLook) lastSettled = sync with { Detail = null };
+        if (quietLook) sync = sync with { Detail = LastChecked() };
+        sync = sync with { Now = NowLine(session is not null, moving.Line, quietLook) };
         return new AgentView(connection, new ConnectView(connectPhase, connectMessage), account, sync, moving, options.VaultRoot,
             notices, Prompt(), MyFiles(files), Projects(), settings, effectiveTheme, FolderOwner(connection), SolidWorks: SolidWorksStatus());
+    }
+
+    // Files waiting for SolidWorks (or another program) to let go of them, this pass.
+    private int LockWaits() => notes.Count(n => n.Kind == NoticeKinds.LockWait);
+
+    // How long a pass that moves nothing may look at the server before the status says so.
+    internal static readonly TimeSpan QuietPassGrace = TimeSpan.FromSeconds(4);
+    // The last settled status (all saved, or needs you), kept through a quick quiet look.
+    private SyncView? lastSettled;
+
+    // SyncView.Now: what Armory is doing this moment, in one steady sentence.
+    private string NowLine(bool signedIn, string? moving, bool quietLook)
+    {
+        if (!signedIn) return "Waiting for you to connect this computer.";
+        if (paused) return "Paused by you. Nothing moves until you resume.";
+        if (online == false) return "Offline. Saves wait on this computer and go up when it's back online.";
+        if (moving is not null) return moving;
+        var lockWait = LockWaits();
+        if (lockWait > 0) return lockWait == 1 ? "Waiting for SolidWorks to let go of 1 file, then uploading it." : $"Waiting for SolidWorks to let go of {lockWait:N0} files, then uploading them.";
+        if (syncing && !quietLook && currentStep is { Over: false } step) return step.Line + ".";
+        var closing = releasesWaiting.Count(r => r.Value == ReleaseOutcome.WaitingForClose);
+        if (closing > 0) return closing == 1 ? "Waiting for you to close 1 file in SolidWorks to check it in." : $"Waiting for you to close {closing:N0} files in SolidWorks to check them in.";
+        if (syncing && !quietLook) return "Checking for changes.";
+        return "Watching your folder for saves.";
     }
 
     // The status line while files need the student: what is saved, and what waits for them. Files

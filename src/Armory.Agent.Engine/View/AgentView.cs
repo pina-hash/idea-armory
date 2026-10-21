@@ -27,7 +27,10 @@ public sealed record AgentView(
 
 public sealed record ConnectView(string Phase, string? Message);
 public sealed record AccountView(string Email, string DeviceName);
-public sealed record SyncView(string State, string Line, string? Detail, int PendingCount);
+// Now: one steady sentence of what Armory is doing at this moment ("Watching your folder for
+// saves.", "Asking Armory what changed.", "Downloading 412 of 1,280 files"), always present, so
+// the window's status never goes blank or jumps between two states (feedback b32e6726).
+public sealed record SyncView(string State, string Line, string? Detail, int PendingCount, string Now = "");
 // The files THIS computer has checked out, in any project (archived ones too, so they can
 // always be checked in).
 public sealed record MyFileView(string? FileId, string Path, string Name, string Project, string Status, string? Note, CheckoutView Checkout);
@@ -177,7 +180,10 @@ public static class NoticeKinds
 {
     public const string Import = "import", NameShared = "nameShared", NewerWaiting = "newerWaiting", KeptCopy = "keptCopy", TakenBack = "takenBack",
         FolderPutBack = "folderPutBack", ProjectPutBack = "projectPutBack", ProjectRenaming = "projectRenaming", CantSend = "cantSend",
-        CantRead = "cantRead", CheckInPartial = "checkInPartial", ProjectDeleted = "projectDeleted", NewerRelease = "newerRelease", SolidWorks = "solidWorks";
+        CantRead = "cantRead", CheckInPartial = "checkInPartial", ProjectDeleted = "projectDeleted", NewerRelease = "newerRelease", SolidWorks = "solidWorks",
+        // 0.4.0: SolidWorks (or another program) still has the file, so Armory waits and uploads
+        // it the moment it lets go. Information, never an error.
+        LockWait = "lockWait";
 }
 public static class BadgesStates
 {

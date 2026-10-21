@@ -130,7 +130,9 @@
 		checkInPartial: 'person',
 		// 0.3.3: files saved in a newer SolidWorks year, and the SolidWorks link's card.
 		newerRelease: 'newer',
-		solidWorks: 'part'
+		solidWorks: 'part',
+		// 0.4.0: a file SolidWorks still has, waiting to upload.
+		lockWait: 'clock'
 	};
 
 	var SYNC = {
@@ -1706,13 +1708,23 @@
 			'<div class="display" data-tone="' + tone + '">' +
 			'<p class="screen lcd" role="status"><span>' + esc(readout) + '</span></p>' +
 			'<p class="sync-line" id="sync-line">' + esc(glue(line)) + '</p>' +
-			(detail ? '<p class="sync-detail">' + esc(glue(detail)) + '</p>' : '') +
+			// Always drawn, one line each, so the status never changes height as it changes
+			// (feedback b32e6726): an empty detail keeps its place.
+			'<p class="sync-detail" data-part="sync-detail"' + (detail ? '' : ' aria-hidden="true"') + '>' + (detail ? esc(glue(detail)) : '&nbsp;') + '</p>' +
+			nowHtml(v.sync) +
 			latestHtml(v.activity) +
 			'</div>' +
 			k +
 			lastActionHtml() +
 			'</section>'
 		);
+	}
+
+	/** What Armory is doing this moment, one steady sentence (SyncView.now): always there,
+	 *  in room kept for it, so the status never changes height. */
+	function nowHtml(sync) {
+		var now = (sync && sync.now) || 'Watching your folder for saves.';
+		return '<p class="sync-now" id="sync-now">' + icon('clock') + '<span class="now-words"><span class="now-label">Now</span> ' + esc(glue(now)) + '</span></p>';
 	}
 
 	/** The newest running line, always in sight (N8): under the status line in a wide window
@@ -1731,7 +1743,9 @@
 
 	function latestHtml(a) {
 		var l = newestLine(a);
-		return '<p class="sync-latest" id="sync-latest"' + (l ? ' data-tip="' + esc(l.line) + '"' : ' hidden') + '>' + (l ? latestInner(l) : '') + '</p>';
+		// Always in its place, empty and unseen until there is a line, so the status never grows
+		// when the first one comes (feedback b32e6726: the window jumped as the status changed).
+		return '<p class="sync-latest" id="sync-latest"' + (l ? ' data-tip="' + esc(l.line) + '"' : ' data-empty="true" aria-hidden="true"') + '>' + (l ? latestInner(l) : '&nbsp;') + '</p>';
 	}
 
 	var latestStrip = document.getElementById('latest-strip');
@@ -1750,11 +1764,18 @@
 			var mine = l || newestLine(a);
 			var inner = mine ? latestInner(mine) : '';
 			if (inStatus._html !== inner) {
-				inStatus.innerHTML = inner;
+				inStatus.innerHTML = inner || '&nbsp;';
 				inStatus._html = inner;
 			}
-			inStatus.hidden = !mine;
-			if (mine) inStatus.setAttribute('data-tip', mine.line);
+			if (mine) {
+				inStatus.removeAttribute('data-empty');
+				inStatus.removeAttribute('aria-hidden');
+				inStatus.setAttribute('data-tip', mine.line);
+			} else {
+				inStatus.setAttribute('data-empty', 'true');
+				inStatus.setAttribute('aria-hidden', 'true');
+				inStatus.removeAttribute('data-tip');
+			}
 		}
 	}
 

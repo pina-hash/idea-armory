@@ -99,7 +99,8 @@ public sealed partial class SyncEngine
     // the engine thread, which the step leaves free while it waits for the disk or the server).
     private IDisposable Step(string line)
     {
-        var step = new QuietStep();
+        var step = new QuietStep { Line = line, Started = deps.Clock.GetTimestamp() };
+        currentStep = step;
         _ = StepLineAsync(line, step, passScope is not null ? ActionStepQuietFor : StepQuietFor);
         return step;
     }
@@ -113,8 +114,13 @@ public sealed partial class SyncEngine
     private sealed class QuietStep : IDisposable
     {
         internal bool Over;
+        internal string Line = "";
+        internal long Started;
         public void Dispose() => Over = true;
     }
+
+    // The step going on now, for the steady "now" sentence (SyncView.Now).
+    private QuietStep? currentStep;
 
     // A long count ("Read 600 of 1,400 files", "Copying 300 of 1,000 files into Intake"): said
     // once it has taken CountEvery, then at most every CountEvery, and at its end if anything was

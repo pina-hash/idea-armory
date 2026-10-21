@@ -2088,6 +2088,43 @@ body[data-screen='connect'] .screen-root {
 	color: var(--plate-ink-2);
 	text-wrap: pretty;
 }
+/* The status keeps one height whatever it says (feedback b32e6726): the line and the now
+   sentence keep room for two lines each and the detail for one, drawn or not, so nothing under
+   them moves when Armory goes from saved to updating and back. */
+.status-group .sync-line {
+	min-height: calc(2 * 1.4em);
+}
+.status-group .sync-detail {
+	min-height: 1.45em;
+}
+.status-group .sync-now {
+	min-height: calc(2 * 1.45em);
+}
+.sync-now {
+	display: flex;
+	align-items: flex-start;
+	gap: 0.45rem;
+	margin: 0;
+	font-size: 0.85rem;
+	line-height: 1.45;
+	color: var(--plate-ink-2);
+}
+.sync-now svg {
+	flex: none;
+	width: 14px;
+	height: 14px;
+	margin-top: 3px;
+	color: var(--ink-ok);
+}
+.now-words {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+.now-label {
+	font-weight: 600;
+	color: var(--plate-head-ink);
+}
 
 /* UP TO DATE: a ring gauge after the site's GRADE ring, at the top of This computer. A
    raised bezel, a recessed track, the arc in the severity color, and a dark glass center
@@ -3053,6 +3090,7 @@ dialog.housing > .title-bar {
 			'screen key'
 			'line line'
 			'detail detail'
+			'now now'
 			'last last';
 		align-items: center;
 		column-gap: var(--space-2);
@@ -3063,6 +3101,7 @@ dialog.housing > .title-bar {
 			'screen screen'
 			'line line'
 			'detail detail'
+			'now now'
 			'last last';
 	}
 	/* The strip says it, so the label is for screen readers only: clipped to nothing,
@@ -3093,6 +3132,10 @@ dialog.housing > .title-bar {
 	}
 	.status-group .sync-detail {
 		grid-area: detail;
+		padding-inline: 2px;
+	}
+	.status-group .sync-now {
+		grid-area: now;
 		padding-inline: 2px;
 	}
 	.status-group > .status-key {
@@ -4759,6 +4802,11 @@ body[data-screen='picker'] .screen-root {
 	font-size: 0.85rem;
 	line-height: 1.4;
 	color: var(--plate-ink);
+	/* Room for its two lines, drawn or not. */
+	min-height: calc(2 * 1.4em + var(--space-2));
+}
+.sync-latest[data-empty='true'] {
+	visibility: hidden;
 }
 .sync-latest svg,
 .latest-strip svg {

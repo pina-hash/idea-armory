@@ -157,8 +157,10 @@ public sealed class ConnectFlow(HttpClient siteHttp, Uri site, IBrowserLauncher 
                 _ => throw new ConnectException("ideabosco.com sent an incomplete sign-in. Click Connect again."),
             } : throw new ConnectException("ideabosco.com sent an incomplete sign-in. Click Connect again.");
             if (!Guid.TryParse(Text("device_id"), out var device)) throw new ConnectException("ideabosco.com sent an incomplete sign-in. Click Connect again.");
-            return new ArmorySession(Text("supabase_url").TrimEnd('/'), Text("anon_key"), Text("access_token"), Text("refresh_token"),
-                expires, Text("email").Trim().ToLowerInvariant(), device, deviceName);
+            var access = Text("access_token");
+            long? expiresIn = root.TryGetProperty("expires_in", out var inS) && inS.ValueKind == JsonValueKind.Number && inS.TryGetInt64(out var secs) ? secs : null;
+            return new ArmorySession(Text("supabase_url").TrimEnd('/'), Text("anon_key"), access, Text("refresh_token"),
+                AccessToken.LocalExpiry(DateTimeOffset.UtcNow, access, expires, expiresIn), Text("email").Trim().ToLowerInvariant(), device, deviceName);
         }
     }
 }

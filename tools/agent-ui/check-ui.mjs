@@ -2352,7 +2352,8 @@ tally.bridgeTypes = 0;
 		expect(m.type === 'signOut', 'Sign out sent ' + JSON.stringify(m));
 		// How many files wait is said once: by Right now when it says so, else by the status.
 		await host({ type: 'view', view: view('offlineWaiting') });
-		expect(!(await page.$('.status-group .sync-detail')), 'the status repeats the waiting files Right now already counts');
+		// The detail keeps its place (it is always drawn, so the status never changes height), but empty.
+		expect(!/waiting/i.test(await page.$eval('.status-group .sync-detail', (e) => e.textContent).catch(() => '')), 'the status repeats the waiting files Right now already counts');
 		const quiet = view('offlineWaiting');
 		quiet.sync.detail = null;
 		quiet.activity.waiting = null;

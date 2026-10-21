@@ -51,7 +51,7 @@
 	 * @typedef {'upload' | 'download' | 'move'} Direction
 	 * @typedef {'info' | 'look' | 'bad'} NoticeTone
 	 * @typedef {'import' | 'nameShared' | 'newerWaiting' | 'keptCopy' | 'takenBack' | 'folderPutBack'
-	 *   | 'projectPutBack' | 'projectRenaming' | 'projectDeleted' | 'cantSend' | 'cantRead' | 'checkInPartial' | 'newerRelease' | 'solidWorks'} NoticeKind
+	 *   | 'projectPutBack' | 'projectRenaming' | 'projectDeleted' | 'cantSend' | 'cantRead' | 'checkInPartial' | 'newerRelease' | 'solidWorks' | 'lockWait'} NoticeKind
 	 * @typedef {'version' | 'keptCopy' | 'removed'} HistoryKind
 	 * @typedef {'system' | 'idea' | 'spaceWhite'} ThemeSetting
 	 * @typedef {'idea' | 'spaceWhite'} EffectiveTheme
@@ -78,6 +78,7 @@
 	 * @property {string} line           Plain student sentence, e.g. "Everything is saved to Armory."
 	 * @property {string | null} detail  e.g. "Last checked 2 minutes ago"
 	 * @property {number} pendingCount
+	 * @property {string} now            What Armory is doing this moment, e.g. "Watching your folder for saves."
 	 */
 
 	/**
