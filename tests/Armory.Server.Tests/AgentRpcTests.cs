@@ -252,7 +252,7 @@ public sealed class AgentRpcTests(DatabaseFixture db)
             await using var row = await Cmd(student, "select * from armory_commit_version_with_release(@f,@p,'key',@h,3,@d,@o,@r)", ("f", file), ("p", (object?)parent ?? DBNull.Value), ("h", Hash), ("d", device), ("o", op ?? Guid.NewGuid()), ("r", (object?)release ?? DBNull.Value)).ExecuteReaderAsync();
             Assert.True(await row.ReadAsync()); return (row.GetGuid(0), row.GetBoolean(1));
         }
-        // 0.4.0 (0288): a release newer than the pin is recorded, never refused.
+        // 0.4.0 (0293): a release newer than the pin is recorded, never refused.
         var newer = await Commit(part, null, 2026);
         Assert.True(newer.Advanced);
         Assert.Equal((short)2026, (short)(await Cmd(student, "select saved_release from armory_version_releases where version_id=@v", ("v", newer.Version)).ExecuteScalarAsync())!);

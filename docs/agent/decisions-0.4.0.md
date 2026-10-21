@@ -12,7 +12,7 @@ silences it for that file. Never block."
 - Core: `SolidWorksVersionGate.Decide` allows a release known to be newer than the pin in Warn
   and Enforce, marked `NewerThanPin`. It still refuses a missing pin, and an unknown release
   under Enforce (that is not a newer year; it is a year nobody could read).
-- Server: idea-app migration 0288 (`armory_check_release`) records a newer release instead of
+- Server: idea-app migration 0293 (`armory_check_release`) records a newer release instead of
   raising 22023. `server/sql/006_v040_newer_release.sql` is that migration byte for byte.
 - Every computer of the project shows one "newerRelease" card per file (any version, checked by
   the server or not), with "This is on purpose" (one file) or "These are on purpose" (several),
