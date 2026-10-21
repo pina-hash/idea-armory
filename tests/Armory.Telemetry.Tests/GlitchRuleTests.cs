@@ -47,9 +47,15 @@ public sealed class GlitchRuleTests
     public void A_pass_slower_than_sixty_seconds_is_a_slow_pass()
     {
         Assert.Null(GlitchRules.SlowPass(Last(r => r.PassEnd("loop", false, 60_000, 0, 0, 0, 0))));
-        var glitch = GlitchRules.SlowPass(Last(r => r.PassEnd("loop", false, 74_000, 12, 3, 1, 0)));
+        var glitch = GlitchRules.SlowPass(Last(r => r.PassEnd("loop", false, 74_000, 0, 0, 0, 3)));
         Assert.Equal(GlitchKinds.SlowPass, glitch?.Kind);
-        Assert.Equal("A loop pass took 74.0 s: 12 downloaded, 3 uploaded, 1 kept copies, 0 refused.", glitch!.Summary);
+        Assert.Equal("A loop pass took 74.0 s: 0 downloaded, 0 uploaded, 0 kept copies, 3 refused.", glitch!.Summary);
+        // 0.4.0: a pass that moved files runs its slice of about a minute by design (0.3.3 sent
+        // "61.8 s: 608 downloaded" as slow); past three minutes it is slow all the same.
+        Assert.Null(GlitchRules.SlowPass(Last(r => r.PassEnd("loop", false, 61_800, 608, 0, 0, 0))));
+        Assert.Null(GlitchRules.SlowPass(Last(r => r.PassEnd("loop", false, 74_000, 12, 3, 1, 0))));
+        Assert.Equal("A loop pass took 181.0 s: 12 downloaded, 3 uploaded, 1 kept copies, 0 refused.",
+            GlitchRules.SlowPass(Last(r => r.PassEnd("loop", false, 181_000, 12, 3, 1, 0)))?.Summary);
         Assert.Null(GlitchRules.SlowPass(Last(r => r.WindowAction("checkIn", 1, 70_000, true))));
     }
 

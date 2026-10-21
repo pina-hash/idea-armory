@@ -59,7 +59,7 @@ public sealed class ReadIncidentToolTests(ITestOutputHelper output)
         recorder.Rpc("armory_commit_version_with_release", 90, 500, "XX000");
         recorder.FileFailed("Robot 2027/Drivetrain/Plate.SLDPRT", new IOException("The process cannot access the file"));
         clock.Advance(TimeSpan.FromSeconds(70));
-        recorder.PassEnd("loop", false, 72_000, 12, 0, 0, 1);
+        recorder.PassEnd("loop", false, 72_000, 0, 0, 0, 1); // moved nothing: slow (0.4.0)
         var file = Assert.Single(reporter.Store.All());
 
         var (code, text) = Run(python, file);

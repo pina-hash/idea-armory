@@ -23,6 +23,14 @@ public sealed partial class SyncEngine
     // One phase of a pass ended: how long it took since the last one.
     private void Phase(string name)
     {
+        Progress(name switch
+        {
+            "scan" => "asking Armory what changed",
+            "server" => "deciding what to move",
+            "plan" => "moving files",
+            "move" => "finishing check ins and read-only files",
+            _ => null,
+        });
         if (flight is null) return;
         flight.PassPhase(name, flight.MillisecondsSince(phaseStarted));
         phaseStarted = flight.Now();

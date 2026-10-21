@@ -38,7 +38,7 @@ public sealed class IncidentTests
         recorder.Rpc("armory_project_files", 340, 200, null);
         recorder.FileFailed("Robot/Plate.SLDPRT", new IOException("in use"));
         clock.Advance(TimeSpan.FromSeconds(75));
-        recorder.PassEnd("loop", false, 75_000, 12, 0, 0, 0);
+        recorder.PassEnd("loop", false, 75_000, 0, 0, 0, 0); // moved nothing: slow (0.4.0)
 
         var file = Assert.Single(reporter.Store.All());
         Assert.Equal("20261007T180115000Z-slowPass.json.gz", Path.GetFileName(file));

@@ -101,6 +101,7 @@ public sealed partial class SyncEngine
     {
         var step = new QuietStep { Line = line, Started = deps.Clock.GetTimestamp() };
         currentStep = step;
+        Progress(null);
         _ = StepLineAsync(line, step, passScope is not null ? ActionStepQuietFor : StepQuietFor);
         return step;
     }
@@ -134,6 +135,7 @@ public sealed partial class SyncEngine
         internal void One()
         {
             done++;
+            engine.Progress(null);
             if (total <= 1) return;
             if (done >= total)
             {

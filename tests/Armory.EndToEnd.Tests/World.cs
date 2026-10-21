@@ -192,6 +192,10 @@ internal sealed class Computer : IAsyncDisposable
     public int EngineStackBytes { get; set; }
     // A loop pass's slice (EngineOptions.PassSlice); null is the default.
     public TimeSpan? PassSlice { get; set; }
+    // How long a loop pass may make no progress (EngineOptions.StallLimit), and how often the
+    // watch looks; null is the default.
+    public TimeSpan? StallLimit { get; set; }
+    public TimeSpan? WatchEvery { get; set; }
     // How long a transfer may move no bytes before it counts as stalled (BlobClient.StallAfter);
     // null is the default.
     public TimeSpan? StallAfter { get; set; }
@@ -238,6 +242,8 @@ internal sealed class Computer : IAsyncDisposable
             TransferConcurrency = TransferConcurrency ?? EngineOptions.DefaultTransferConcurrency,
             EngineStackBytes = EngineStackBytes,
             PassSlice = PassSlice ?? defaults.PassSlice,
+            StallLimit = StallLimit ?? defaults.StallLimit,
+            WatchEvery = WatchEvery ?? defaults.WatchEvery,
             ActivePollInterval = Poll ?? defaults.ActivePollInterval,
             IdlePollInterval = Poll ?? defaults.IdlePollInterval,
         }, new EngineDependencies

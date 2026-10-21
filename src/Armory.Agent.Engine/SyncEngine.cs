@@ -26,6 +26,14 @@ public sealed record EngineOptions
     public TimeSpan LivePassSlice { get; init; } = TimeSpan.FromSeconds(60);
     public TimeSpan IdleAfter { get; init; } = TimeSpan.FromMinutes(2);
     public TimeSpan StaleMarkerAfter { get; init; } = TimeSpan.FromMinutes(10);
+    // 0.4.0 (slowPass incidents of 0.3.3: loop passes of 60 seconds to 10 hours that moved
+    // nothing): a loop pass that makes no progress for StallLimit is stopped and started again,
+    // and the log and the flight say where it stood (SyncEngine.Watch.cs). A gap of more than
+    // FrozenAfter between two looks of the watch is the computer asleep or the process paused by
+    // Windows, never a stall.
+    public TimeSpan StallLimit { get; init; } = TimeSpan.FromMinutes(2);
+    public TimeSpan WatchEvery { get; init; } = TimeSpan.FromSeconds(5);
+    public TimeSpan FrozenAfter { get; init; } = TimeSpan.FromSeconds(45);
     // The contract's PUT limit (2 GiB); tests lower it.
     public long MaximumFileBytes { get; init; } = Armory.Client.BlobClient.MaximumPutBytes;
     // How many files a pass moves at once (uploads, downloads and the server calls around them).
@@ -178,6 +186,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
     {
         if (loop is not null) return;
         loop = LoopAsync(stopping.Token);
+        StartWatch();
         // Live updates (v0.3) run beside the loop, off the engine thread: an event only wakes it.
         if (deps.Live is { } live)
         {
@@ -203,6 +212,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
 
     private async Task<bool> StopLoopAsync()
     {
+        StopWatch();
         await stopping.CancelAsync();
         if (loop is not null) { try { await loop; } catch (OperationCanceledException) { } }
         // The units the loop carried stop at their next step (their token is the engine's).
@@ -301,14 +311,23 @@ public sealed partial class SyncEngine : IAsyncDisposable
     {
         await passGate.WaitAsync(ct);
         using var questions = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        // The watch ends a pass that stopped making progress (SyncEngine.Watch.cs).
+        using var stall = CancellationTokenSource.CreateLinkedTokenSource(ct);
         try
         {
             loopPass = true;
             loopQuestions = questions;
-            await PassLockedAsync(ct);
+            stalledPass = stall;
+            await PassLockedAsync(stall.Token);
+        }
+        catch (OperationCanceledException) when (stall.IsCancellationRequested && !ct.IsCancellationRequested)
+        {
+            // Stopped by the watch: the next pass starts from the beginning, at once.
+            cutShort = true;
         }
         finally
         {
+            stalledPass = null;
             loopPass = false;
             loopQuestions = null;
             passGate.Release();
@@ -448,6 +467,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
         if (openAnswers.Count > 0) foreach (var key in openAnswers.Where(a => a.Value.Pass < passNumber - 1).Select(a => a.Key).ToArray()) openAnswers.Remove(key);
         passStarted = deps.Clock.GetTimestamp();
         lastHeartbeat = passStarted;
+        Progress("looking at this computer");
         passMoving = 0;
         noticesRecorded = 0;
         var kind = scope is not null ? "action" : PassKind();
@@ -714,6 +734,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
 
     private void Heartbeat()
     {
+        Progress(null);
         if (deps.Log is null || deps.Clock.GetElapsedTime(lastHeartbeat) < HeartbeatEvery) return;
         lastHeartbeat = deps.Clock.GetTimestamp();
         deps.Log($"pass: still going after {deps.Clock.GetElapsedTime(passStarted).TotalSeconds:F0} s, {downloaded:N0} downloaded, {uploaded:N0} uploaded so far ({PassKind()})");
