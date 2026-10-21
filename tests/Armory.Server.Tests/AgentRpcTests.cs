@@ -240,7 +240,7 @@ public sealed class AgentRpcTests(DatabaseFixture db)
     }
 
     [DatabaseFact]
-    public async Task ReleaseGateDefaultsToWarnAndKnownNewerIsRefused()
+    public async Task ReleaseGateDefaultsToWarnAndKnownNewerIsRecorded()
     {
         var (p, mentor) = await Team(); await using var _ = mentor;
         await using var student = await db.Open("student@example.com"); var device = await Device(student);
@@ -252,10 +252,13 @@ public sealed class AgentRpcTests(DatabaseFixture db)
             await using var row = await Cmd(student, "select * from armory_commit_version_with_release(@f,@p,'key',@h,3,@d,@o,@r)", ("f", file), ("p", (object?)parent ?? DBNull.Value), ("h", Hash), ("d", device), ("o", op ?? Guid.NewGuid()), ("r", (object?)release ?? DBNull.Value)).ExecuteReaderAsync();
             Assert.True(await row.ReadAsync()); return (row.GetGuid(0), row.GetBoolean(1));
         }
-        var newer = await Refused(() => Commit(part, null, 2026), "22023");
-        Assert.Contains("2026", newer.MessageText); Assert.Contains("2025", newer.MessageText);
+        // 0.4.0 (0288): a release newer than the pin is recorded, never refused.
+        var newer = await Commit(part, null, 2026);
+        Assert.True(newer.Advanced);
+        Assert.Equal((short)2026, (short)(await Cmd(student, "select saved_release from armory_version_releases where version_id=@v", ("v", newer.Version)).ExecuteScalarAsync())!);
+        Assert.True((bool)(await Cmd(student, "select release_checked from armory_version_releases where version_id=@v", ("v", newer.Version)).ExecuteScalarAsync())!);
         var op = Guid.NewGuid();
-        var unchecked1 = await Commit(part, null, null, op); // warn mode: uploads, marked not checked
+        var unchecked1 = await Commit(part, newer.Version, null, op); // warn mode: uploads, marked not checked
         Assert.True(unchecked1.Advanced);
         Assert.Equal(unchecked1, await Commit(part, null, null, op)); // receipt hit
         Assert.False((bool)(await Cmd(student, "select release_checked from armory_version_releases where version_id=@v", ("v", unchecked1.Version)).ExecuteScalarAsync())!);
@@ -268,7 +271,8 @@ public sealed class AgentRpcTests(DatabaseFixture db)
         await Refused(() => Commit(part, unchecked1.Version, null), "22023"); // enforce: unknown release refused
         var checkedVersion = await Commit(part, unchecked1.Version, 2025);
         Assert.True((bool)(await Cmd(student, "select release_checked from armory_version_releases where version_id=@v", ("v", checkedVersion.Version)).ExecuteScalarAsync())!);
-        await Refused(() => Cmd(student, "select armory_save_side_version_with_release(@f,null,'key',@h,3,'conflict',@d,@o,2026::smallint)", ("f", part), ("h", Hash), ("d", device), ("o", Guid.NewGuid())).ExecuteNonQueryAsync(), "22023");
+        var newerSide = (Guid)(await Cmd(student, "select armory_save_side_version_with_release(@f,null,'key',@h,3,'conflict',@d,@o,2026::smallint)", ("f", part), ("h", Hash), ("d", device), ("o", Guid.NewGuid())).ExecuteScalarAsync())!;
+        Assert.Equal((short)2026, (short)(await Cmd(student, "select saved_release from armory_version_releases where version_id=@v", ("v", newerSide)).ExecuteScalarAsync())!);
         var side = (Guid)(await Cmd(student, "select armory_save_side_version_with_release(@f,null,'key',@h,3,'conflict',@d,@o,2024::smallint)", ("f", part), ("h", Hash), ("d", device), ("o", Guid.NewGuid())).ExecuteScalarAsync())!;
         Assert.True((bool)(await Cmd(student, "select side from armory_version_releases where version_id=@v", ("v", side)).ExecuteScalarAsync())!);
         await Refused(() => Cmd(mentor, "select armory_raise_pinned_release(@p,2025::smallint,@o)", ("p", p), ("o", Guid.NewGuid())).ExecuteNonQueryAsync(), "22023");

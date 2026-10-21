@@ -322,10 +322,12 @@ public sealed class SolidWorksLinkTests
             ("h", HashOf(savedDown))));
     }
 
-    // A document SolidWorks says can't go back to 2025 is saved as 2026 here and stays a private
-    // draft in Warn and in Enforce, with SolidWorks' own words for why and what to change.
+    // A document SolidWorks says can't go back to 2025 is saved as 2026 here and, since 0.4.0
+    // (Mr. Pina, 2026-10-21: "Never block"), goes up in Warn and in Enforce, its year recorded,
+    // with SolidWorks' own words for why and what to change, and every computer warned about it.
+    // "Keep this file on this computer only" is the student's choice, and still keeps it here.
     [PostgresFact]
-    public async Task A_blocked_document_stays_a_private_draft_in_both_modes()
+    public async Task A_blocked_document_uploads_in_its_own_year_warned_in_both_modes()
     {
         await using var t = await TeamAsync();
         t.A.Write(Plate, Part(18000));
@@ -337,12 +339,13 @@ public sealed class SolidWorksLinkTests
         sw.Open(Plate, readOnly: false);
         sw.Compatibility(Plate, 2025, blocked: [new CompatibilityItem("Hole Wizard instances on sketch geometry", "Clear \"Create instances on sketch geometry\".", "Hole1")]);
         await t.B.LinkSettledAsync();
-        const string Words = "It uses Hole Wizard instances on sketch geometry, which SolidWorks 2025 doesn't have. Change it to something 2025 has " +
-            "(SolidWorks suggests: Clear \"Create instances on sketch geometry\"), then save again. Until then nobody else gets these changes.";
+        const string Words = "It uses Hole Wizard instances on sketch geometry, which SolidWorks 2025 doesn't have, so it is saved in this computer's SolidWorks and " +
+            "people on SolidWorks 2025 computers can't change it. To keep it 2025, change it to something 2025 has (SolidWorks suggests: Clear \"Create instances on sketch geometry\"), then save again.";
         var card = SolidWorksCard(t.B);
-        Assert.Equal(("Plate.SLDPRT is saved on this computer only", Words), (card.Title, card.Detail));
+        Assert.Equal(("Plate.SLDPRT can't be saved in SolidWorks 2025", Words), (card.Title, card.Detail));
 
-        // Saved with Save to Version off: 2026, on this computer only.
+        // Saved with Save to Version off: 2026, and it goes up when checked in, in Enforce too.
+        Assert.True(await t.Mentor.Api.SetReleaseGateAsync(t.Project, ProjectReleaseGate.Enforce, Guid.NewGuid()));
         var newer = Part(19000, 3);
         var saving = sw.Saving(Plate, LinkSaveMode.PrivateDraft);
         await t.B.LinkSettledAsync();
@@ -350,15 +353,55 @@ public sealed class SolidWorksLinkTests
         sw.Saved(Plate, saving, new ReleaseStamp(HashOf(newer), SavedReleaseRule.StampYear(2026, 2026), "34.4.1", 2026, null, sw.Now));
         await t.B.LinkSettledAsync();
         await t.B.SyncAsync();
-        Assert.Equal(Words, Refusal(t.B, Plate));
-        Assert.Equal(0, await AnywhereOnServer(t, HashOf(newer)));
-        Assert.True(await t.Mentor.Api.SetReleaseGateAsync(t.Project, ProjectReleaseGate.Enforce, Guid.NewGuid()));
+        Assert.DoesNotContain(t.B.NoticeItems, n => n.Card.Kind == NoticeKinds.CantSend);
+        sw.Close(Plate);
+        Assert.True((await t.B.CheckInAsync(Plate)).Ok);
         await t.B.SyncAsync();
-        Assert.Equal(Words, Refusal(t.B, Plate));
+        var file = await t.FileId("Plate.SLDPRT");
+        Assert.Equal(HashOf(newer), await t.CurrentHash(file));
+        Assert.Equal(1, await t.World.CountAsync("select count(*) from armory_version_releases r join armory_versions v on v.id=r.version_id where v.content_sha256=@h and r.saved_release=2026",
+            ("h", HashOf(newer))));
+        await t.A.SyncAsync();
+        Assert.Contains(t.A.NoticeItems, n => n.Card.Kind == NoticeKinds.NewerRelease && n.Item.Path == Plate);
+    }
+
+    // 0.4.0: Armory no longer keeps a newer year here on its own, so the student's own "Keep this
+    // file on this computer only" is what does: the 2026 save stays here, in Warn and Enforce,
+    // after SolidWorks closes it too, until it is saved in 2025.
+    [PostgresFact]
+    public async Task Keep_on_this_computer_only_keeps_a_2026_save_here_until_it_is_saved_in_2025()
+    {
+        await using var t = await TeamAsync();
+        t.A.Write(Plate, Part(18000));
+        await t.A.SyncAsync();
+        t.B.ReleaseReader = new SolidWorksSavedReleaseReader();
+        var sw = t.B.LinkSolidWorks();
+        await t.B.SyncAsync();
+        Assert.True((await t.B.CheckOutAsync(Plate)).Ok);
+        sw.Open(Plate, readOnly: false);
+        await t.B.LinkSettledAsync();
+        Assert.True((await t.B.Engine.KeepLocalAsync([Plate])).Ok);
+        var newer = Part(19000, 5);
+        var saving = sw.Saving(Plate, LinkSaveMode.PrivateDraft);
+        await t.B.LinkSettledAsync();
+        t.B.Save(Plate, newer);
+        sw.Saved(Plate, saving, new ReleaseStamp(HashOf(newer), SavedReleaseRule.StampYear(2026, 2026), "34.4.1", 2026, null, sw.Now));
+        await t.B.LinkSettledAsync();
+        await t.B.SyncAsync();
+        Assert.Equal("You chose to keep it here. Until it is saved in SolidWorks 2025, nobody else gets these changes.", Refusal(t.B, Plate));
         Assert.Equal(0, await AnywhereOnServer(t, HashOf(newer)));
+        // Closed in SolidWorks: still the student's choice, still here.
+        sw.Close(Plate);
+        await t.B.LinkSettledAsync();
+        await t.B.SyncTimesAsync(2);
         Assert.False((await t.B.CheckInAsync(Plate)).Ok);
         Assert.Equal(0, await AnywhereOnServer(t, HashOf(newer)));
         Assert.Equal(newer, t.B.Read(Plate));
+        // Saved in 2025: it goes up.
+        var back = Part(18000, 6);
+        t.B.Save(Plate, back);
+        Assert.True((await t.B.CheckInAsync(Plate)).Ok);
+        Assert.Equal(HashOf(back), await t.CurrentHash(await t.FileId("Plate.SLDPRT")));
     }
 
     // Save to Version was on and SolidWorks still wrote 2026 (no license for it, B4): in Warn

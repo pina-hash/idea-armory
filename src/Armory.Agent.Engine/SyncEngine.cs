@@ -1384,6 +1384,17 @@ public sealed partial class SyncEngine : IAsyncDisposable
         SolidWorksRelease? saved = null;
         if (Reconciler.IsSolidWorks(path) && localHash is not null && (localHash != st.BaseHash || st.BreakNotice))
             saved = await ReadReleaseAsync(st, path, localHash, ct);
+        // The student chose to keep these bytes on this computer only (0.4.0): the one thing that
+        // still keeps a newer year here, now that Armory warns rather than refuses.
+        if (localHash is not null && Reconciler.IsSolidWorks(path))
+        {
+            if (KeptHereByChoice(path.Value) && st.KeptHereHash != localHash) st.KeptHereHash = localHash;
+            if (st.KeptHereHash == localHash && saved is { } kept && kept.Year > project.PinnedRelease)
+            {
+                SetRefusal(st, GateKind, KeptWords(project.PinnedRelease));
+                return null;
+            }
+        }
         var input = new SyncInput(path, st.Base, localHash, remoteRevision, ownership, false, isOnline, st.BreakNotice,
             saved, new SolidWorksRelease(project.PinnedRelease), st.Preserved, GateModeFor(project, localHash),
             CheckoutMode.Explicit, RequestOf(st, open: false));

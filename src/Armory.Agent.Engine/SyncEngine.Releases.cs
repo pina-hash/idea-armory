@@ -182,6 +182,16 @@ public sealed partial class SyncEngine
                 yield return (file, project, path, current);
     }
 
+    // Every team version of a SolidWorks file in a synced project, checked by the server or not:
+    // since 0.4.0 a version saved in a newer year than the pin is accepted and checked, and is
+    // warned about like one the server never checked.
+    private IEnumerable<(RemoteFile File, ProjectState Project, VaultPath Path, RemoteVersion Current)> TeamSolidWorksVersions()
+    {
+        foreach (var (file, project, path) in remoteById.Values.ToArray())
+            if (!file.Deleted && file.Current is { } current && Reconciler.IsSolidWorks(path) && project.Usable && !project.Archived)
+                yield return (file, project, path, current);
+    }
+
     // The year the team's current version of a file was saved in, as this computer knows it: the
     // server's own check, else what was read here in those very bytes (B5: an identical copy;
     // the reading stays known by its hash after the copy here changes). Never reads.

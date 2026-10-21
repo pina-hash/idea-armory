@@ -43,60 +43,66 @@ public sealed class ReleaseTests(ITestOutputHelper output)
 
     private static string Refusal(Computer c, string path) => Assert.Single(c.NoticeItems, n => n.Card.Kind == NoticeKinds.CantSend && n.Item.Path == path).Item.Detail!;
 
-    // A 2026 part is a private draft in both modes: nothing of it reaches the server, its bytes
-    // stay as they are, and the words say what this computer can do. Saved again as 2025 it
-    // uploads, checked; the 2026 save stays a private draft (never an "earlier save, kept").
+    // 0.4.0 (Mr. Pina, 2026-10-21: "warn once and offer 'this is on purpose' ... Never block"):
+    // a 2026 part in a 2025 project uploads in both modes, its year recorded, and every computer
+    // warns about it once, in words that say what this computer can do. "This is on purpose"
+    // silences it for that file; saved again as 2025, the warning goes by itself.
+    private static (NoticeGroupView Card, NoticeItemView Item) Warning(Computer c, string path)
+        => Assert.Single(c.NoticeItems, n => n.Card.Kind == NoticeKinds.NewerRelease && n.Item.Path == path);
+
     [PostgresFact]
-    public async Task A_2026_part_stays_a_private_draft_and_the_words_say_what_this_computer_can_do()
+    public async Task A_2026_part_uploads_warned_and_the_words_say_what_this_computer_can_do()
     {
         await using var t = await TeamWithReaderAsync();
         var draft = Part(19000);
         t.A.Write(Plate, draft);
         await t.A.SyncAsync();
-        // No SolidWorks link has said what this computer runs.
-        Assert.Equal("Saved in SolidWorks 2026, and Robot 2027 uses SolidWorks 2025. It stays on this computer only until it is saved in SolidWorks 2025.", Refusal(t.A, Plate));
-        Assert.Equal(0, t.World.Supabase.RpcCount("armory_create_file"));
-        Assert.Equal(0, t.World.Supabase.RpcCount("armory_commit_version_with_release"));
-        Assert.Equal(0, t.World.Supabase.RpcCount("armory_save_side_version_with_release"));
-        Assert.Equal(0, await AnywhereOnServer(t, HashOf(draft)));
+        var file = await t.FileId("Plate.SLDPRT");
+        Assert.Equal(HashOf(draft), await t.CurrentHash(file));
+        Assert.Equal(1, await ReleaseRows(t, HashOf(draft), 2026));
+        Assert.DoesNotContain(t.A.NoticeItems, n => n.Card.Kind == NoticeKinds.CantSend);
         Assert.Equal(draft, t.A.Read(Plate));
-        Assert.False(t.A.Disk.IsReadOnly(Plate));
+        // No SolidWorks link has said what this computer runs.
+        var (card, item) = Warning(t.A, Plate);
+        Assert.Equal("Plate.SLDPRT in Robot 2027 was saved in SolidWorks 2026", card.Title);
+        Assert.Equal("People on SolidWorks 2025 computers can look at these files but can't change them, and drawings won't open. Someone with SolidWorks 2026 " +
+            "can fix them: check it out in Armory, open it in SolidWorks 2026, click Save so Armory saves it as SolidWorks 2025, then check it in.", card.Detail);
+        Assert.Equal("This is on purpose", card.Action?.Label);
+        Assert.Equal(2026, t.A.Row(Plate).SavedRelease);
+        Assert.True(t.A.Row(Plate).NewerThanPin);
 
-        // SolidWorks 2026 SP4 here, with the link able to save down: open it and click Save.
+        // SolidWorks 2026 SP4 here, with the link able to save down: this computer can fix it.
         t.A.Engine.SolidWorksAttached("34.4.1");
         await t.A.SyncAsync();
-        Assert.Equal("Saved in SolidWorks 2026, and Robot 2027 uses SolidWorks 2025. Open it in SolidWorks 2026 and click Save: Armory saves it as 2025, then it uploads by itself.", Refusal(t.A, Plate));
-        // SolidWorks 2026 before Service Pack 3 has no Save to Version.
-        t.A.Engine.SolidWorksAttached("34.2.0");
-        await t.A.SyncAsync();
-        Assert.Equal("Saved in SolidWorks 2026, and Robot 2027 uses SolidWorks 2025. It stays on this computer only until it is saved in SolidWorks 2025. " +
-            "Update SolidWorks 2026 to Service Pack 3 or newer so Armory can save it in 2025.", Refusal(t.A, Plate));
-        // SolidWorks did not save down when asked (its license): it stays here, and says so.
-        t.A.Engine.SolidWorksAttached("34.4.1", saveDownWorks: false);
-        await t.A.SyncAsync();
-        Assert.Equal("Saved in SolidWorks 2026, and Robot 2027 uses SolidWorks 2025. It stays on this computer only until it is saved in SolidWorks 2025. " +
-            "SolidWorks on this computer couldn't save it in 2025. Ask a CAD lead or a mentor what to do.", Refusal(t.A, Plate));
+        Assert.StartsWith("People on SolidWorks 2025 computers can't change these files. You can fix them here: 1. Check one out in Armory.", Warning(t.A, Plate).Card.Detail);
         t.A.Engine.SolidWorksDetached();
 
-        // Enforce refuses it the same way.
-        Assert.True(await t.Mentor.Api.SetReleaseGateAsync(t.Project, ProjectReleaseGate.Enforce, Guid.NewGuid()));
-        await t.A.SyncAsync();
-        Assert.StartsWith("Saved in SolidWorks 2026, and Robot 2027 uses SolidWorks 2025.", Refusal(t.A, Plate));
-        Assert.Equal(0, await AnywhereOnServer(t, HashOf(draft)));
+        // Another computer hears it too, and says it is on purpose: silenced there, for this file.
+        await t.B.SyncAsync();
+        var there = Warning(t.B, Plate).Card;
+        await t.B.Engine.DismissNoticeAsync(there.Key);
+        await t.B.SyncTimesAsync(2);
+        Assert.DoesNotContain(t.B.NoticeItems, n => n.Card.Kind == NoticeKinds.NewerRelease);
 
-        // Saved again in 2025: it uploads, its year checked.
+        // Enforce never blocks it either: a second 2026 part goes up.
+        Assert.True(await t.Mentor.Api.SetReleaseGateAsync(t.Project, ProjectReleaseGate.Enforce, Guid.NewGuid()));
+        var other = Part(19000, seed: 1);
+        t.A.Write("Robot 2027/Drivetrain/Other.SLDPRT", other);
+        await t.A.SyncAsync();
+        Assert.Equal(HashOf(other), await t.CurrentHash(await t.FileId("Other.SLDPRT")));
+        Assert.DoesNotContain(t.A.NoticeItems, n => n.Card.Kind == NoticeKinds.CantSend);
+
+        // Saved again in 2025: it uploads, checked, and its warning goes.
+        Assert.True((await t.A.CheckOutAsync(Plate)).Ok);
         var good = Part(18000);
-        t.A.Write(Plate, good);
+        t.A.Save(Plate, good);
+        Assert.True((await t.A.CheckInAsync(Plate)).Ok);
         await t.A.SyncTimesAsync(2);
-        var file = await t.FileId("Plate.SLDPRT");
         Assert.Equal(HashOf(good), await t.CurrentHash(file));
         Assert.Equal(1, await ReleaseRows(t, HashOf(good), 2025));
-        Assert.DoesNotContain(t.A.NoticeItems, n => n.Card.Kind == NoticeKinds.CantSend);
-        // The 2026 save was journaled before the 2025 one: it is kept here as a private draft
-        // and never sent, not even as an earlier save.
-        Assert.Equal(0, await AnywhereOnServer(t, HashOf(draft)));
         Assert.Equal(2025, t.A.Row(Plate).SavedRelease);
         Assert.False(t.A.Row(Plate).NewerThanPin);
+        Assert.DoesNotContain(t.A.NoticeItems, n => n.Card.Kind == NoticeKinds.NewerRelease && n.Item.Path == Plate);
     }
 
     // Warn takes a file whose year can't be read, marked "release not checked"; Enforce keeps it

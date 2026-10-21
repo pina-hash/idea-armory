@@ -520,16 +520,22 @@ public sealed partial class SyncEngine
     // ---- Words ------------------------------------------------------------------------------------
 
     // Research section 3.4 step 3: what the pinned year doesn't have, in SolidWorks' own words.
+    // 0.4.0: a document that can't go back to the pinned year is saved in this computer's year
+    // and goes up all the same, warned about on every computer (never blocked).
     internal static string BlockedWords(string name, LinkCompatibility compatibility, int pin)
     {
         var items = compatibility.Blocked.Select(b => Sentence(b.Message)).Where(m => m.Length > 0).Distinct(StringComparer.Ordinal).ToList();
         var what = items.Count == 0 ? "something" : Names(items);
         var hint = compatibility.Blocked.Select(b => Sentence(b.Action ?? "")).FirstOrDefault(a => a.Length > 0);
-        return $"It uses {what}, which SolidWorks {pin} doesn't have. Change it to something {pin} has" + (hint is null ? "" : $" (SolidWorks suggests: {hint})") +
-            ", then save again. Until then nobody else gets these changes.";
+        return $"It uses {what}, which SolidWorks {pin} doesn't have, so it is saved in this computer's SolidWorks and people on SolidWorks {pin} computers can't change it. " +
+            $"To keep it {pin}, change it to something {pin} has" + (hint is null ? "" : $" (SolidWorks suggests: {hint})") + ", then save again.";
     }
 
-    private static string KeptWords(int pin) => $"You chose to keep it here. Until it is saved in SolidWorks {pin}, nobody else gets these changes.";
+    // The SolidWorks link says the student chose "Keep this file on this computer only" for it.
+    private bool KeptHereByChoice(string path)
+        => linkDocuments.Values.Any(d => d.KeepLocal && string.Equals(d.Path, path, StringComparison.OrdinalIgnoreCase));
+
+    internal static string KeptWords(int pin) => $"You chose to keep it here. Until it is saved in SolidWorks {pin}, nobody else gets these changes.";
 
     // "3 appearances (colors), 2 explode steps, 1 simulation study" (research section 3.4 step
     // 4); null when nothing is dropped.
@@ -727,7 +733,7 @@ public sealed partial class SyncEngine
             if (!canSave) continue;
             if (doc.Compatibility is { Blocked.Count: > 0 } blocked && blocked.TargetYear == pin)
             {
-                items.Add(($"solidWorks:blocked:{doc.Path}", doc.Path, $"{name} is saved on this computer only", BlockedWords(name, blocked, pin), null, "blocked"));
+                items.Add(($"solidWorks:blocked:{doc.Path}", doc.Path, $"{name} can't be saved in SolidWorks {pin}", BlockedWords(name, blocked, pin), null, "blocked"));
                 continue;
             }
             var saveNow = new NoticeActionView($"Save it in {pin} now", BridgeMessages.SaveDown, [doc.Path]);

@@ -3,7 +3,7 @@ using Armory.Core;
 namespace Armory.Core.Tests;
 
 // The per-project release gate (lane A): Warn uploads an unreadable release marked "release
-// not checked"; Enforce refuses it; a release known to be newer is refused in both modes.
+// not checked"; Enforce refuses it; a release known to be newer uploads in both modes (0.4.0).
 public sealed class ReleaseGateModeTests
 {
     private static SyncInput Part(string extension = ".SLDPRT") => Fixtures.Input with
@@ -11,18 +11,22 @@ public sealed class ReleaseGateModeTests
         Path = Fixtures.Path("robot/gear" + extension), LocalHash = "edit", PinnedRelease = new(2025),
     };
 
+    // 0.4.0 (Mr. Pina, 2026-10-21: "Never block"): a release known to be newer than the pin goes
+    // up in both modes on every route, never refused, and is not "release not checked": its year
+    // is known, and every computer warns about it (SyncEngine's newerRelease notice).
     [Theory]
     [InlineData(ReleaseGateMode.Enforce)][InlineData(ReleaseGateMode.Warn)]
-    public void A_release_known_to_be_newer_is_refused_in_both_modes_naming_both_releases(ReleaseGateMode mode)
+    public void A_release_known_to_be_newer_uploads_in_both_modes_and_is_never_refused(ReleaseGateMode mode)
     {
         foreach (var ownership in Enum.GetValues<LockOwnership>())
         foreach (var remote in new[] { Fixtures.Base, Fixtures.Newer, new Revision("dead", null, "Maria") })
         {
-            var action = Assert.Single(Reconciler.Plan(Part() with { Lock = ownership, Remote = remote, SavedRelease = new(2026), ReleaseGate = mode }).Actions);
-            Assert.Equal(SyncActionKind.Refuse, action.Kind);
-            Assert.Contains("2026", action.Reason);
-            Assert.Contains("2025", action.Reason);
+            var actions = Reconciler.Plan(Part() with { Lock = ownership, Remote = remote, SavedRelease = new(2026), ReleaseGate = mode }).Actions;
+            Assert.DoesNotContain(actions, a => a.Kind == SyncActionKind.Refuse);
+            Assert.All(actions, a => Assert.False(a.ReleaseNotChecked));
         }
+        var decision = SolidWorksVersionGate.Decide(new SolidWorksRelease(2026), new(2025), mode);
+        Assert.Equal((true, false, (string?)null, true), (decision.Allowed, decision.ReleaseNotChecked, decision.Problem, decision.NewerThanPin));
     }
 
     [Theory]
@@ -82,8 +86,8 @@ public sealed class ReleaseGateModeTests
     [InlineData(1994, ReleaseGateMode.Warn, true, true)]
     [InlineData(2025, ReleaseGateMode.Enforce, true, false)]
     [InlineData(2023, ReleaseGateMode.Warn, true, false)]
-    [InlineData(2026, ReleaseGateMode.Warn, false, false)]
-    [InlineData(2026, ReleaseGateMode.Enforce, false, false)]
+    [InlineData(2026, ReleaseGateMode.Warn, true, false)]
+    [InlineData(2026, ReleaseGateMode.Enforce, true, false)]
     public void Decide_matches_the_gate_table(int? saved, ReleaseGateMode mode, bool allowed, bool notChecked)
     {
         var decision = SolidWorksVersionGate.Decide(saved is null ? null : new SolidWorksRelease(saved.Value), new(2025), mode);

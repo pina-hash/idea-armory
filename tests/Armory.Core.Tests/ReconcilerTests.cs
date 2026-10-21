@@ -96,10 +96,8 @@ public sealed class ReconcilerTests
         foreach (var remote in new[] { Fixtures.Base, Fixtures.Newer, new Revision("dead", null, "Maria") })
         {
             var input = Fixtures.Input with { Path = Fixtures.Path("part" + extension), LocalHash = "edit", Lock = ownership, Remote = remote, SavedRelease = new(2026), PinnedRelease = new(2025) };
-            var action = Assert.Single(Reconciler.Plan(input).Actions);
-            Assert.Equal(SyncActionKind.Refuse, action.Kind);
-            Assert.Contains("2026", action.Reason);
-            Assert.Contains("2025", action.Reason);
+            // 0.4.0: a newer release goes up (warned about, never refused); an unknown one is refused under Enforce.
+            Assert.DoesNotContain(SyncActionKind.Refuse, Kinds(input));
             Assert.Equal(SyncActionKind.Refuse, Kinds(input with { SavedRelease = null })[0]);
             Assert.NotEqual(SyncActionKind.Refuse, Kinds(input with { SavedRelease = new(2025) })[0]);
         }

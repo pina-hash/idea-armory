@@ -345,6 +345,7 @@ internal sealed class FileState
     private bool transientLock;
     private bool purged;
     private string? releaseHash;
+    private string? keptHereHash;
     private int? releaseYear;
 
     private void Set<T>(ref T field, T value)
@@ -438,6 +439,10 @@ internal sealed class FileState
     // reader could not place are read again after a restart (a newer reader may place them).
     public string? ReleaseHash { get => releaseHash; set => Set(ref releaseHash, value); }
     public int? ReleaseYear { get => releaseYear; set => Set(ref releaseYear, value); }
+    // 0.4.0: the bytes the student chose to keep on this computer only ("Keep this file on this
+    // computer only", the SolidWorks link's question before a save in a newer year). Since Armory
+    // no longer refuses a newer year on its own, this choice is what keeps them here.
+    public string? KeptHereHash { get => keptHereHash; set => Set(ref keptHereHash, value); }
 
     [JsonIgnore] public Revision? Base => BaseId is null ? null : new(BaseId, BaseHash, "");
     public void SetBase(Revision? revision) { BaseId = revision?.Id; BaseHash = revision?.Hash; }

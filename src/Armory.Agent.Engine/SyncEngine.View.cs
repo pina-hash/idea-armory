@@ -75,11 +75,12 @@ public sealed partial class SyncEngine
         if (paused) return "Paused by you. Nothing moves until you resume.";
         if (online == false) return "Offline. Saves wait on this computer and go up when it's back online.";
         if (moving is not null) return moving;
-        var lockWait = LockWaits();
-        if (lockWait > 0) return lockWait == 1 ? "Waiting for SolidWorks to let go of 1 file, then uploading it." : $"Waiting for SolidWorks to let go of {lockWait:N0} files, then uploading them.";
         if (syncing && !quietLook && currentStep is { Over: false } step) return step.Line + ".";
+        // A check in that waits for the student says so first: it is theirs to do.
         var closing = releasesWaiting.Count(r => r.Value == ReleaseOutcome.WaitingForClose);
         if (closing > 0) return closing == 1 ? "Waiting for you to close 1 file in SolidWorks to check it in." : $"Waiting for you to close {closing:N0} files in SolidWorks to check them in.";
+        var lockWait = LockWaits();
+        if (lockWait > 0) return lockWait == 1 ? "Waiting for SolidWorks to let go of 1 file, then uploading it." : $"Waiting for SolidWorks to let go of {lockWait:N0} files, then uploading them.";
         if (syncing && !quietLook) return "Checking for changes.";
         return "Watching your folder for saves.";
     }
@@ -253,12 +254,14 @@ public sealed partial class SyncEngine
         }
         // B5: the team's version of a file saved in a newer SolidWorks than its project uses. On a
         // computer that can fix it, the student is needed; elsewhere it is news.
-        foreach (var (remote, project, path, current) in UncheckedTeamVersions().OrderBy(v => v.Path.Value, StringComparer.OrdinalIgnoreCase))
+        foreach (var (remote, project, path, current) in TeamSolidWorksVersions().Where(v => v.Project.PinnedRelease > 0).OrderBy(v => v.Path.Value, StringComparer.OrdinalIgnoreCase))
         {
             state.Files.TryGetValue(path.Value, out var st);
             if (TeamRelease(remote, path, st) is not { } saved || saved <= project.PinnedRelease) continue;
             var (detail, needsYou) = NewerThanPinNotice(saved, project.PinnedRelease, solidWorks?.Revision, solidWorksSupport ?? SupportOf(solidWorks?.SaveDownWorks ?? false));
-            Add(NoticeKinds.NewerRelease, new RawItem($"newerRelease:{path.Value}:{current.Id}", remote.Id, path.Value, detail, Flavor: needsYou ? "needsYou" : "news",
+            // One item per file, whatever its version (0.4.0): "This is on purpose" silences that
+            // file until it is saved in the project's year again.
+            Add(NoticeKinds.NewerRelease, new RawItem($"newerRelease:{remote.Id}", remote.Id, path.Value, detail, Flavor: needsYou ? "needsYou" : "news",
                 ItemDetail: $"Saved in SolidWorks {saved}. {project.Name} uses SolidWorks {project.PinnedRelease}.", Release: (project.Name, saved, project.PinnedRelease)));
         }
         // The SolidWorks link (SyncEngine.Open.cs): what a save in the pinned year does to each
@@ -303,7 +306,9 @@ public sealed partial class SyncEngine
                 NewerReleaseTitle(items),
                 items.Select(i => i.Detail).Distinct(StringComparer.Ordinal).Count() == 1 ? first.Detail ?? ""
                     : "Each one says which SolidWorks it was saved in. Someone with that SolidWorks can fix it: check it out in Armory, open it, click Save so Armory saves it in the project's SolidWorks year, then check it in.",
-                n == 1 ? null : expand),
+                // A warning, never a block (0.4.0): the file is in Armory either way. Saying it is
+                // on purpose silences it for these files.
+                new NoticeActionView(n == 1 ? OnPurposeOne : OnPurposeMany, BridgeMessages.DismissNotice, [])),
             NoticeKinds.NameShared => (NoticeTones.Look,
                 n == 1 ? "1 file shares a name with another file in this project" : $"{n:N0} files share a name with other files in this project",
                 items.All(i => IsSolidWorksPath(i.Path)) ? NameSharedSolidWorksWords
@@ -409,6 +414,8 @@ public sealed partial class SyncEngine
 
     // "3 files in Robot 2027 were saved in SolidWorks 2026"; files of several projects or years
     // are counted together.
+    internal const string OnPurposeOne = "This is on purpose", OnPurposeMany = "These are on purpose";
+
     private static string NewerReleaseTitle(List<RawItem> items)
     {
         var first = items[0];

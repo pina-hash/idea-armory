@@ -312,45 +312,36 @@ public sealed class HardeningTests
         NoViolations(t.A); NoViolations(t.B);
     }
 
-    // A SolidWorks save the release gate refuses touches nothing on the server and does not
-    // keep the lock once a good save follows; in enforce mode an unknown release is refused.
+    // A SolidWorks save in a newer year is added like any other (0.4.0); in enforce mode an
+    // unknown release is still refused and touches nothing on the server.
     [PostgresFact]
-    public async Task A_refused_draft_never_reaches_the_server_and_never_holds_the_lock()
+    public async Task A_2026_save_reaches_the_server_warned_and_an_unknown_release_is_still_refused_in_enforce()
     {
+        // 0.4.0 (Mr. Pina, 2026-10-21: "Never block"): a 2026 save is added like any other, and
+        // the lock rules are the ones every add follows. Enforce still keeps an unknown year here.
         await using var t = await TeamAsync();
         t.A.ReleaseReader = new FakeReleaseReader();
         t.A.Restart();
         t.A.Write(Plate, "SW2026 draft");
         await t.A.SyncAsync();
-        Assert.Equal(0, t.World.Supabase.RpcCount("armory_commit_version_with_release"));
-        Assert.Equal(0, t.World.Supabase.RpcCount("armory_create_file"));
-        Assert.Equal(0, await t.World.CountAsync("select count(*) from armory_files where project_id=@p", ("p", t.Project)));
-        Assert.Equal(0, await t.World.CountAsync("select count(*) from armory_locks"));
-        t.A.Open(Plate);
-        t.A.Save(Plate, "SW2025 saved back");
-        await t.A.SyncAsync();
-        // Added while open: it stays checked out to Alex until it is closed (decision D2).
         var file = await t.FileId("Plate.SLDPRT");
-        Assert.Equal(1, await LiveLocks(t, file));
-        Assert.False(t.A.Disk.IsReadOnly(Plate));
-        t.A.Close(Plate);
-        await t.A.SyncTimesAsync(2);
-        Assert.Equal(Hash("SW2025 saved back"), await t.CurrentHash(file));
-        Assert.Equal(0, await LiveLocks(t, file)); // the 2026 draft does not hold it
+        Assert.Equal(Hash("SW2026 draft"), await t.CurrentHash(file));
+        Assert.Equal(0, await LiveLocks(t, file)); // added closed: checked in at once
         Assert.True(t.A.Disk.IsReadOnly(Plate));
-        Assert.Equal(0, await t.World.CountAsync("select count(*) from armory_side_versions where content_sha256=@h", ("h", Hash("SW2026 draft"))));
-        // B can now edit it, once B checks it out.
+        Assert.Contains(t.A.NoticeItems, n => n.Card.Kind == NoticeKinds.NewerRelease);
+        // B can edit it, once B checks it out, and saves it back to 2025.
         await t.B.SyncAsync();
         Assert.True((await t.B.CheckOutAsync(Plate)).Ok);
         t.B.Save(Plate, "SW2025 by Maria");
         Assert.True((await t.B.CheckInAsync(Plate)).Ok);
         Assert.Equal(Hash("SW2025 by Maria"), await t.CurrentHash(file));
-        // Enforce: a release that cannot be read is refused too.
+        // Enforce: a release that cannot be read is refused, and never reaches the server.
         Assert.True(await t.Mentor.Api.SetReleaseGateAsync(t.Project, ProjectReleaseGate.Enforce, Guid.NewGuid()));
         t.B.Write("Robot 2027/Drivetrain/Unknown.SLDPRT", "no release header");
         await t.B.SyncAsync();
         Assert.Contains(t.B.NoticeItems, n => n.Card.Kind == NoticeKinds.CantSend && n.Item.Detail!.Contains("unknown", StringComparison.Ordinal));
         Assert.Equal(0, await t.World.CountAsync("select count(*) from armory_files where name='Unknown.SLDPRT'"));
+        Assert.Equal(0, await t.World.CountAsync("select count(*) from armory_locks l join armory_files f on f.id=l.file_id where f.name='Unknown.SLDPRT'"));
     }
 
     // Reconnecting registers a new device id; check outs and unsent work from the old id stay

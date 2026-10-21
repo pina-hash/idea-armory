@@ -11,7 +11,12 @@ public sealed class CheckoutTests
 {
     // Every Automatic plan over the small state space below, hashed. Recorded from the
     // unchanged v1 reconciler at b18791d, so any change to Automatic behavior shows here.
-    private const string AutomaticFingerprint = "22de5ad905fbe042bf760c896a1b9194b26126d5e2a3541946f05701d0294518";
+    // 0.4.0 changed exactly one thing in Automatic's plans: a release known to be newer than the
+    // pin uploads instead of being refused (Mr. Pina, 2026-10-21, "Never block"). Every other plan
+    // is still v1's, which AutomaticFingerprintNotNewer holds to the value v1 gave.
+    private const string AutomaticFingerprint = "b6a3c080b9e4ab560d3e1c6a79a1e4605acf3a55911699cb810a95b996c15866"; // v1: 22de5ad905fbe042bf760c896a1b9194b26126d5e2a3541946f05701d0294518
+    private const string AutomaticFingerprintNotNewer = "73760a0854f7490a46529407d9486badb2ba65eb59e20387b7870c523268884c"; // the same on v1 and 0.4.0
+    private static bool KnownNewer(SyncInput input) => input.SavedRelease is { } saved && input.PinnedRelease is { } pin && saved.Year > pin.Year;
     private static readonly Revision Removed = new("v3", null, "Maria");
     private static SyncInput Explicit => Fixtures.Input with { Checkout = CheckoutMode.Explicit };
 
@@ -38,10 +43,10 @@ public sealed class CheckoutTests
         => string.Join(";", plan.Actions.Select(a => $"{a.Kind}|{a.Reason}|{a.ReleaseNotChecked}")) + "#" +
            string.Join(";", plan.Intents.Select(i => $"{i.Kind}|{i.Path}|{i.Hash}"));
 
-    private static string Fingerprint(Func<SyncInput, SyncInput> shape)
+    private static string Fingerprint(Func<SyncInput, SyncInput> shape, Func<SyncInput, bool>? only = null)
     {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        foreach (var input in SmallStateSpace())
+        foreach (var input in SmallStateSpace().Where(only ?? (_ => true)))
             hash.AppendData(Encoding.UTF8.GetBytes(Describe(Reconciler.Plan(shape(input))) + "\n"));
         return Convert.ToHexStringLower(hash.GetHashAndReset());
     }
@@ -71,7 +76,10 @@ public sealed class CheckoutTests
 
     [Fact]
     public void Automatic_plans_match_the_v1_fingerprint()
-        => Assert.Equal(AutomaticFingerprint, Fingerprint(input => input));
+    {
+        Assert.Equal(AutomaticFingerprintNotNewer, Fingerprint(input => input, input => !KnownNewer(input)));
+        Assert.Equal(AutomaticFingerprint, Fingerprint(input => input));
+    }
 
     [Fact]
     public void Automatic_is_the_default_ignores_requests_and_never_names_why()
@@ -254,12 +262,13 @@ public sealed class CheckoutTests
         foreach (var route in ChangedRoutes(Fixtures.Path("robot/gear" + extension)))
         foreach (var mode in Enum.GetValues<ReleaseGateMode>())
         {
+            // 0.4.0: a newer release is never refused, on any route, in either mode, as in Automatic.
             var input = route with { SavedRelease = new(2026), PinnedRelease = new(2025), ReleaseGate = mode };
-            var action = Assert.Single(Reconciler.Plan(input).Actions);
-            Assert.Equal(SyncActionKind.Refuse, action.Kind);
-            Assert.Contains("2026", action.Reason);
-            Assert.Contains("2025", action.Reason);
-            Assert.Equal(Reconciler.Plan(AsAutomatic(input)).Actions, Reconciler.Plan(input).Actions);
+            Assert.DoesNotContain(Reconciler.Plan(input).Actions, a => a.Kind == SyncActionKind.Refuse);
+            Assert.DoesNotContain(Reconciler.Plan(AsAutomatic(input)).Actions, a => a.Kind == SyncActionKind.Refuse);
+            // Explicit plans a newer release exactly as it plans the same bytes saved in the pinned year.
+            Assert.Equal(Reconciler.Plan(input with { SavedRelease = new(2025) }).Actions, Reconciler.Plan(input).Actions);
+            // What the gate still refuses: no pin, and an unknown release under Enforce.
             Assert.Equal(SyncActionKind.Refuse, Assert.Single(Reconciler.Plan(input with { PinnedRelease = null }).Actions).Kind);
             var unknown = input with { SavedRelease = null, ReleaseGate = ReleaseGateMode.Enforce };
             Assert.Equal(SyncActionKind.Refuse, Assert.Single(Reconciler.Plan(unknown).Actions).Kind);

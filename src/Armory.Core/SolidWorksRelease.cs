@@ -213,9 +213,12 @@ public enum SaveToVersionChoice
 public sealed record InstallationGap(string Installation, int ReleasesBehind, bool WarnNextSeason, bool ExceedsBackSaveRange);
 // Per-project gate. Enforce refuses a SolidWorks file whose saved release cannot be read;
 // Warn uploads it marked "release not checked". A release known to be newer than the pin
-// is refused in both modes. Enforce is the library default; projects default to Warn.
+// uploads in both modes, marked NewerThanPin (0.4.0, Mr. Pina 2026-10-21: "warn once and offer
+// 'this is on purpose' ... Never block"): every computer then warns about it once, and a person
+// can say it is on purpose. Until 0.4.0 it was refused and kept on that computer as a private
+// draft. Enforce is the library default; projects default to Warn.
 public enum ReleaseGateMode { Enforce, Warn }
-public sealed record ReleaseGateDecision(bool Allowed, bool ReleaseNotChecked, string? Problem);
+public sealed record ReleaseGateDecision(bool Allowed, bool ReleaseNotChecked, string? Problem, bool NewerThanPin = false);
 
 public static class SolidWorksVersionGate
 {
@@ -230,6 +233,7 @@ public static class SolidWorksVersionGate
         if (pinned is null) return new(false, false, "The vault has no pinned SolidWorks release; upload is unsafe.");
         var problem = UploadProblem(saved, pinned.Value);
         if (problem is null) return new(true, false, null);
+        if (pinned.Value.Year >= 1995 && saved is { } known && known.Year >= 1995 && known.Year > pinned.Value.Year) return new(true, false, null, NewerThanPin: true); // MUTATION: refuse a newer release
         var unknown = pinned.Value.Year >= 1995 && (saved is null || saved.Value.Year < 1995);
         return unknown && mode == ReleaseGateMode.Warn ? new(true, true, null) : new(false, false, problem);
     }

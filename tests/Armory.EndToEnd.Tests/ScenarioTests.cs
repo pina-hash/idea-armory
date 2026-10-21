@@ -277,31 +277,35 @@ public sealed class ScenarioTests
         Assert.Equal(1, await t.World.CountAsync("select count(*) from armory_files where id=@f and deleted_at is null", ("f", file)));
     }
 
-    // h. A 2026-release SolidWorks file is refused at upload, naming both releases. The
+    // h. A 2026-release SolidWorks file uploads and is warned about, naming both releases. The
     // saved-release reader here is a stand-in (FakeReleaseReader); ReleaseTests runs the real
     // reader on synthetic SolidWorks containers.
     [PostgresFact]
-    public async Task A_2026_SolidWorks_file_is_refused_naming_both_releases()
+    public async Task A_2026_SolidWorks_file_uploads_and_is_warned_naming_both_releases()
     {
+        // 0.4.0 (Mr. Pina, 2026-10-21: "Never block"): it goes up, its year recorded, and the
+        // warning names both years and offers "This is on purpose".
         await using var t = await TeamAsync();
         t.A.ReleaseReader = new FakeReleaseReader();
         t.A.Restart();
         t.A.Write(Plate, "SW2026 part with a 2026-only feature");
         await t.A.SyncAsync();
-        var refusal = Assert.Single(t.A.NoticeItems, n => n.Card.Kind == NoticeKinds.CantSend && n.Item.Path == Plate);
-        Assert.Contains("2026", refusal.Item.Detail);
-        Assert.Contains("2025", refusal.Item.Detail);
-        Assert.Equal(0, await t.World.CountAsync("select count(*) from armory_versions"));
-        Assert.Equal(0, await t.World.CountAsync("select count(*) from armory_side_versions"));
-        Assert.Equal("SW2026 part with a 2026-only feature", t.A.Text(Plate)); // the private draft stays
-        Assert.False(t.A.Disk.IsReadOnly(Plate)); // a file the server does not have stays writable
-        // Saved back to 2025, it goes through and is marked checked.
-        t.A.Save(Plate, "SW2025 part saved back");
-        await t.A.SyncAsync();
+        Assert.DoesNotContain(t.A.NoticeItems, n => n.Card.Kind == NoticeKinds.CantSend);
         var file = await t.FileId("Plate.SLDPRT");
+        Assert.Equal(Hash("SW2026 part with a 2026-only feature"), await t.CurrentHash(file));
+        Assert.Equal(1, await t.World.CountAsync("select count(*) from armory_version_releases where release_checked and saved_release=2026"));
+        var warning = Assert.Single(t.A.NoticeItems, n => n.Card.Kind == NoticeKinds.NewerRelease && n.Item.Path == Plate).Card;
+        Assert.Contains("2026", warning.Title);
+        Assert.Contains("2025", warning.Detail);
+        Assert.Equal("This is on purpose", warning.Action?.Label);
+        // Saved back to 2025, it goes through, is marked checked, and the warning goes.
+        Assert.True((await t.A.CheckOutAsync(Plate)).Ok);
+        t.A.Save(Plate, "SW2025 part saved back");
+        Assert.True((await t.A.CheckInAsync(Plate)).Ok);
+        await t.A.SyncAsync();
         Assert.Equal(Hash("SW2025 part saved back"), await t.CurrentHash(file));
         Assert.Equal(1, await t.World.CountAsync("select count(*) from armory_version_releases where release_checked and saved_release=2025"));
-        Assert.Equal(0, await t.World.CountAsync("select count(*) from armory_versions v where v.content_sha256=@h", ("h", Hash("SW2026 part with a 2026-only feature"))));
+        Assert.DoesNotContain(t.A.NoticeItems, n => n.Card.Kind == NoticeKinds.NewerRelease);
     }
 
     // i. Two students try to edit the same part (brief section 5). Only the one who checked it
