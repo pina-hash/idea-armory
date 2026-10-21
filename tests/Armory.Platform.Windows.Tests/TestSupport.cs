@@ -40,7 +40,14 @@ internal sealed class TestVault : IDisposable
         if (!Directory.Exists(actual)) return;
         foreach (var file in Directory.EnumerateFiles(actual, "*", SearchOption.AllDirectories))
             System.IO.File.SetAttributes(file, FileAttributes.Normal);
-        Directory.Delete(actual, recursive: true);
+        // The runner's virus scanner can still be reading files a test just wrote (1,500 parts in
+        // ReplaceAndLockTests: "part-1366.SLDPRT ... being used by another process", 0.4.0's
+        // checks): the cleanup waits for it, up to 10 seconds, instead of failing the test.
+        for (var attempt = 0; ; attempt++)
+        {
+            try { Directory.Delete(actual, recursive: true); return; }
+            catch (IOException) when (attempt < 50) { Thread.Sleep(200); }
+        }
     }
 }
 internal sealed class ChildProcess : IDisposable
