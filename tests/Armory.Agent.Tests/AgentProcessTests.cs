@@ -79,25 +79,35 @@ public sealed class AgentProcessTests
         using var data = new TempFolder();
         using var copy = new TempFolder();
         var folder = AgentExe.Folder();
-        // The app without its wwwroot folder.
-        foreach (var file in Directory.EnumerateFiles(folder))
-        {
-            var name = Path.GetFileName(file);
-            if (name.StartsWith("IdeaArmory.", StringComparison.OrdinalIgnoreCase) || name.StartsWith("Armory.", StringComparison.OrdinalIgnoreCase) ||
-                name.StartsWith("Microsoft.Web.WebView2", StringComparison.OrdinalIgnoreCase) || name.Equals("WebView2Loader.dll", StringComparison.OrdinalIgnoreCase))
-                File.Copy(file, Path.Combine(copy.Root, name));
-        }
-        if (Directory.Exists(Path.Combine(folder, "runtimes")))
-            foreach (var file in Directory.EnumerateFiles(Path.Combine(folder, "runtimes"), "*", SearchOption.AllDirectories))
-            {
-                var target = Path.Combine(copy.Root, Path.GetRelativePath(folder, file));
-                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-                File.Copy(file, target);
-            }
+        // The whole app without its wwwroot folder. Every file beside IdeaArmory.exe is copied,
+        // never a list of names: a list went stale when 0.4.0 added Velopack.dll, and the copy
+        // then died in Main before --check could print anything.
+        CopyApp(folder, copy.Root, skip: "wwwroot");
+        Assert.False(Directory.Exists(Path.Combine(copy.Root, "wwwroot")));
         var (code, json) = RunCheck(copy.Root, data.Root);
         Assert.False(json.RootElement.GetProperty("wwwroot").GetBoolean());
         Assert.Equal(@"C:\IDEA\Armory", json.RootElement.GetProperty("vaultRoot").GetString());
         Assert.Equal(1, code);
+
+        // The control: the same copy with wwwroot put back is a whole app, so the missing page
+        // files above are the only reason it failed.
+        CopyApp(Path.Combine(folder, "wwwroot"), Path.Combine(copy.Root, "wwwroot"), skip: null);
+        var (wholeCode, whole) = RunCheck(copy.Root, data.Root);
+        Assert.True(whole.RootElement.GetProperty("wwwroot").GetBoolean());
+        Assert.Equal(whole.RootElement.GetProperty("webView2Runtime").ValueKind == JsonValueKind.String ? 0 : 1, wholeCode);
+    }
+
+    private static void CopyApp(string from, string to, string? skip)
+    {
+        foreach (var file in Directory.EnumerateFiles(from, "*", SearchOption.AllDirectories))
+        {
+            var relative = Path.GetRelativePath(from, file);
+            var top = relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)[0];
+            if (skip is not null && relative != top && top.Equals(skip, StringComparison.OrdinalIgnoreCase)) continue;
+            var target = Path.Combine(to, relative);
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Copy(file, target);
+        }
     }
 
     private static (int Code, JsonDocument Json) RunCheck(string folder, string dataFolder)
