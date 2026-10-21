@@ -32,6 +32,15 @@
 -- public.armory_check_release"). Versions recorded as newer while this was
 -- applied stay recorded; that is history, and the app only warns about them.
 
+-- The one statement of "newer than the pin", first, so the object the deploy
+-- probe checks is new in this file. Private: only armory_check_release calls it.
+create or replace function public._armory_release_is_newer(p_saved smallint, p_pin smallint) returns boolean
+language sql immutable set search_path = '' as $nw$
+	select p_saved is not null and p_pin is not null and p_saved > p_pin
+$nw$;
+
+revoke all on function public._armory_release_is_newer(smallint, smallint) from public, anon, authenticated;
+
 create or replace function public.armory_check_release(p_file uuid, p_saved_release smallint) returns boolean
 language plpgsql stable security definer set search_path = '' as $$
 declare f public.armory_files; p public.armory_projects;
@@ -41,6 +50,9 @@ begin
 	if f.name !~* '\.(sldprt|sldasm|slddrw)$' then return false; end if;
 	select * into p from public.armory_projects where id = f.project_id;
 	-- A release newer than the pin is recorded, never refused (0288): every computer warns.
+	if public._armory_release_is_newer(p_saved_release, p.pinned_release) then
+		return true;
+	end if;
 	if p_saved_release is null and p.release_gate = 'enforce' then
 		raise exception 'The saved SolidWorks release is unknown; keep the local draft until it can be read.' using errcode = '22023';
 	end if;
@@ -65,8 +77,10 @@ begin
 		raise exception '0288: armory_check_release lost the enforce refusal of an unknown release';
 	end if;
 	if has_function_privilege('anon', 'public.armory_check_release(uuid, smallint)', 'execute')
-		or has_function_privilege('authenticated', 'public.armory_check_release(uuid, smallint)', 'execute') then
-		raise exception '0288: armory_check_release is callable by a client role';
+		or has_function_privilege('authenticated', 'public.armory_check_release(uuid, smallint)', 'execute')
+		or has_function_privilege('anon', 'public._armory_release_is_newer(smallint, smallint)', 'execute')
+		or has_function_privilege('authenticated', 'public._armory_release_is_newer(smallint, smallint)', 'execute') then
+		raise exception '0288: an Armory release helper is callable by a client role';
 	end if;
 	raise notice '0288: armory_check_release records a newer release instead of refusing it';
 end $check$;
