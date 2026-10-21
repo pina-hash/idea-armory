@@ -67,7 +67,8 @@ public sealed class LocalStateTests(ITestOutputHelper output)
         {
             opened.Clear();
             var held = scanner.Scan();
-            Assert.Equal(["c.SLDPRT"], opened);
+            // c's open is refused before anything is read (WhileHashing runs once a file is open).
+            Assert.Empty(opened);
             Assert.Equal(3, held.TakenFromStamp);
             Assert.True(held.Files.Single(f => f.Path.Value == "c.SLDPRT").Unread);
             Assert.False(held.Files.Single(f => f.Path.Value == "b.SLDPRT").Unread);
