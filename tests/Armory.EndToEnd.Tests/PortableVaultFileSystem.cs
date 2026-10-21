@@ -184,6 +184,9 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
     public VaultScan Scan(CancellationToken cancellationToken)
     {
         var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        Interlocked.Increment(ref scansStarted);
+        // What a scan of a large vault costs on a lab computer (0.4.1: 15 to 20 s on IDEA-06).
+        if (ScanDelay > TimeSpan.Zero) cancellationToken.WaitHandle.WaitOne(ScanDelay);
         try { return ScanAll(cancellationToken); }
         finally
         {
@@ -192,6 +195,12 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
             after?.Invoke();
         }
     }
+
+    // How long every scan takes before it reads the disk (a slow lab computer), and how many
+    // scans have started.
+    public TimeSpan ScanDelay { get; set; }
+    private int scansStarted;
+    public int ScansStarted => Volatile.Read(ref scansStarted);
 
     // Runs once, right after the next scan finishes and before the pass acts on it: a program
     // (SolidWorks) saving at the worst moment, between the scan and a check in's release.

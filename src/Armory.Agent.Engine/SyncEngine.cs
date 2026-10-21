@@ -558,43 +558,64 @@ public sealed partial class SyncEngine : IAsyncDisposable
         }
 
         VaultScan scan;
-        // Off the engine thread (0.3.3): a click, File detail or Pause never waits for the disk
-        // to be read, and a stop ends it between files. What the last scan found stays in place
-        // (the window keeps showing it) until this one is done. A unit carried from the pass
-        // before writes into the vault only once this scan is taken in (SyncEngine.Queue.cs).
-        ScanStarting();
-        try
+        // A window action right after a loop pass that gave way to it the moment its scan was
+        // taken in (0.4.1, slow check ins of 10.8 to 17.8 s on IDEA-06: the click waited for the
+        // loop's scan and then read the whole disk again for itself). That scan is a moment old and
+        // was taken in completely (saves captured, folder changes followed), so the action goes on
+        // from it as the loop pass would have, and reads the disk no second time. What it then
+        // changes on disk is still checked by the disk itself: every write, move and recovery
+        // refuses a file that changed or is open, and a check in reads the file before it lets go.
+        if (TakeFreshScan() is { } fresh)
         {
-            using (Step(local.Count > 0 ? $"Looking over {Count(local.Count, "file", "files")} on this computer" : "Looking over the files on this computer"))
-                scan = await Task.Run(() => fs.Scan(ct), ct);
-        }
-        catch (IOException error)
-        {
-            ScanTakenIn();
-            Problem(NoticeKinds.CantRead, null, "Armory can't look through your Armory folder right now. It tries again by itself.", error.Message);
-            return Report(true);
-        }
-        // Renames a pass that gave way found but never acted on come with this scan's.
-        if (carriedRenames.Count > 0)
-        {
-            scan = scan with { Renames = [.. carriedRenames.Concat(scan.Renames ?? []).GroupBy(r => r.From.Value, StringComparer.OrdinalIgnoreCase).Select(g => g.Last())] };
+            scan = fresh;
+            flight?.Note("scanReused", $"{scan.Files.Count} files, taken {deps.Clock.GetElapsedTime(freshScanAt).TotalMilliseconds:F0} ms before");
+            // The renames the loop pass kept for the next scan are this scan's own.
             carriedRenames.Clear();
+            renamesRead = false;
+            // This pass's notices of what the scan could not read.
+            foreach (var problem in scan.Problems) ScanProblem(problem);
         }
-        renamesRead = false;
-        local.Clear(); localFolders.Clear(); createdThisPass.Clear();
-        scanned = true;
-        foreach (var file in scan.Files) local[file.Path.Value] = file;
-        folderScan = scan.Folders is not null;
-        if (scan.Folders is { } folders) localFolders.UnionWith(folders);
-        ScanTakenIn();
-        await ReadMarkersAsync(scan, ct);
-        scanHeld = scan.Held is { Count: > 0 } held ? held.ToHashSet(StringComparer.OrdinalIgnoreCase) : [];
-        foreach (var problem in scan.Problems) ScanProblem(problem);
-        // Folder changes on this disk come before anything is captured: a renamed folder's
-        // files keep their records (never captured again as new files at the new path), and a
-        // project folder renamed or removed in Explorer is put back before anything could take
-        // its files for removed ones (SyncEngine.Folders.cs).
-        DetectFolderChanges(scan);
+        else
+        {
+            // Off the engine thread (0.3.3): a click, File detail or Pause never waits for the disk
+            // to be read, and a stop ends it between files. What the last scan found stays in place
+            // (the window keeps showing it) until this one is done. A unit carried from the pass
+            // before writes into the vault only once this scan is taken in (SyncEngine.Queue.cs).
+            ScanStarting();
+            try
+            {
+                using (Step(local.Count > 0 ? $"Looking over {Count(local.Count, "file", "files")} on this computer" : "Looking over the files on this computer"))
+                    scan = await Task.Run(() => fs.Scan(ct), ct);
+                scanFinishedAt = deps.Clock.GetTimestamp();
+            }
+            catch (IOException error)
+            {
+                ScanTakenIn();
+                Problem(NoticeKinds.CantRead, null, "Armory can't look through your Armory folder right now. It tries again by itself.", error.Message);
+                return Report(true);
+            }
+            // Renames a pass that gave way found but never acted on come with this scan's.
+            if (carriedRenames.Count > 0)
+            {
+                scan = scan with { Renames = [.. carriedRenames.Concat(scan.Renames ?? []).GroupBy(r => r.From.Value, StringComparer.OrdinalIgnoreCase).Select(g => g.Last())] };
+                carriedRenames.Clear();
+            }
+            renamesRead = false;
+            local.Clear(); localFolders.Clear(); createdThisPass.Clear();
+            scanned = true;
+            foreach (var file in scan.Files) local[file.Path.Value] = file;
+            folderScan = scan.Folders is not null;
+            if (scan.Folders is { } folders) localFolders.UnionWith(folders);
+            ScanTakenIn();
+            await ReadMarkersAsync(scan, ct);
+            scanHeld = scan.Held is { Count: > 0 } held ? held.ToHashSet(StringComparer.OrdinalIgnoreCase) : [];
+            foreach (var problem in scan.Problems) ScanProblem(problem);
+            // Folder changes on this disk come before anything is captured: a renamed folder's
+            // files keep their records (never captured again as new files at the new path), and a
+            // project folder renamed or removed in Explorer is put back before anything could take
+            // its files for removed ones (SyncEngine.Folders.cs).
+            DetectFolderChanges(scan);
+        }
 
         // Saves are captured before any network step, so nothing on the server side can stop
         // this computer from keeping every save.
@@ -602,8 +623,14 @@ public sealed partial class SyncEngine : IAsyncDisposable
         Capture(session, notify: false);
         CrashAt("after-capture");
         Phase("scan");
-        // A loop pass gives way to a window action before it reads the server (0.3.3).
-        if (GiveWay()) return GaveWay(0, scan);
+        // A loop pass gives way to a window action before it reads the server (0.3.3), and the
+        // action goes on from this scan (TakeFreshScan, 0.4.1).
+        if (GiveWay())
+        {
+            freshScan = scan;
+            freshScanAt = scanFinishedAt;
+            return GaveWay(0, scan);
+        }
 
         using (Step("Asking Armory what changed")) online = await RefreshAsync(ct, mayGiveWay: true);
         // The server is read: the downloads the last slice left are this pass's to plan again
@@ -710,6 +737,21 @@ public sealed partial class SyncEngine : IAsyncDisposable
     // it read them): the next scan does not report them again, so they are kept for it.
     private readonly List<LocalMove> carriedRenames = [];
     private bool renamesRead;
+
+    // The scan of a loop pass that gave way right after it was taken in, for the action it gave
+    // way to (0.4.1). Any pass takes it away; only a window action's pass, within FreshScanFor of
+    // the scan's end, uses it.
+    private VaultScan? freshScan;
+    private long freshScanAt, scanFinishedAt;
+    internal static readonly TimeSpan FreshScanFor = TimeSpan.FromSeconds(3);
+
+    private VaultScan? TakeFreshScan()
+    {
+        var fresh = freshScan;
+        freshScan = null;
+        if (fresh is null || loopPass || passScope is null || !scanned) return null;
+        return deps.Clock.GetElapsedTime(freshScanAt) <= FreshScanFor ? fresh : null;
+    }
 
     private SyncReport GaveWay(int pathsLeft, VaultScan scan)
     {
