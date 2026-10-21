@@ -693,6 +693,18 @@ from DETAIL. A folder call that races a check out can deadlock; the client resen
 40001 with the same operation id, and anything else that is not an answer is sent again with
 the same id on the next pass.
 
+- **A lead organizes over check outs (0.4.1, idea-app 0236).** For a mentor, CAD lead or
+  instructor of the project (`can_take_back`), Rename file, Move and Rename folder go over
+  other people's check outs without force: `armory_move_file` is sent without taking the lock
+  (`LeadOver`) and `armory_rename_folder` is sent with the check outs in place. The locks stay
+  their holders'; the answer says so ("Check outs stay as they were: ..."). On the holder's
+  computer the move is the team's (`ApplyRemoteMoves`, `TryMoveRemoteFolder`): a file open in
+  SolidWorks stays where it is, its saves captured and sent there, until it closes, and then
+  moves with its last bytes, still writable and still checked out; one running line says who
+  moved it (`MovedOverMyCheckOuts`, from `file_moved` `checked_out_by` and `folder_renamed`
+  `over_checkouts`). Force still force checks in first, and Delete folder still needs every
+  file checked in. Against a server without 0236 the lead's call is refused as before
+  (`LeadOrganizeTests`, `ForceOrganizeTests`).
 - **A folder renamed on this disk** (`VaultScan.FolderMoves`, proven by directory identity
   and in an order that applies one by one; without it, a known folder that is gone whose
   every file is found byte for byte at the same place under one new folder of the same
@@ -1299,6 +1311,14 @@ planned the whole vault again for itself. Now:
   ends the question at once (`loopQuestions`) instead of waiting out its budget. A pass that
   gave way moves nothing and finishes nothing (`passYield` `action` in the flight recorder);
   the renames its scan proved are kept for the next scan, which does not report them again.
+- **The click goes on from the loop's scan (0.4.1).** A loop pass that gives way right after
+  its scan (its saves captured and its folder changes followed) hands that scan to the action
+  pass that takes the gate next, within `FreshScanFor` (3 s) of the scan's end
+  (`TakeFreshScan`, `scanReused` in the flight recorder): the click waited for that scan, and
+  no longer reads the whole disk a second time (check ins of 10.8 to 17.8 s on IDEA-06, two
+  scans of a lab computer's vault each). Any other pass drops it. Nothing on disk is decided by
+  its age alone: every write, move and recovery refuses a file that changed or is open, and a
+  check in reads the file before it lets go (`SlowScanActionTests`).
 - **An action's pass plans only its own files** (`PathsToPlan`): the paths its scope holds and
   the files sharing a name with them in their project (one unit). Phases A and D stay whole,
   except that its marker question asks only about its own files; the other markers stay as the
