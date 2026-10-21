@@ -26,6 +26,19 @@ public static class ArmoryV3StandIn
     public static Task ApplyBreakLocksAsync(ArmoryTestDatabase database) => ApplyAsync(database, "armory_v3_break_locks.sql");
 
     /// <summary>
+    /// idea-app 0236 (<c>armory_v3_organize.sql</c>), after the core stand-in (applied here first,
+    /// as 0233 came before it): armory_can_take_back (a mentor, CAD lead or instructor of the
+    /// project, or a site admin), armory_my_projects and armory_break_lock asking it, and
+    /// armory_move_file and armory_rename_folder letting such a lead organize files someone else
+    /// has checked out, with 0236's bodies as they are.
+    /// </summary>
+    public static async Task ApplyOrganizeAsync(ArmoryTestDatabase database)
+    {
+        await ApplyCoreAsync(database);
+        await ApplyAsync(database, "armory_v3_organize.sql");
+    }
+
+    /// <summary>
     /// idea-app 0235 (<c>armory_v3_feedback_v2.sql</c>), after the reports stand-in (applied here
     /// first): the eight-argument armory_submit_app_feedback, the five-argument wrapper and
     /// armory_my_app_feedback with 0235's bodies as they are, plus auth.uid(), the storage tables

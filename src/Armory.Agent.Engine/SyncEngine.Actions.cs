@@ -913,7 +913,8 @@ public sealed partial class SyncEngine
             bool done;
             try
             {
-                done = remote.File is { Deleted: false } && (OwnershipOf(remote.File.Lock) == LockOwnership.ThisDevice || await AcquireTransientAsync(st, move.Operation.ToString(), ct));
+                done = remote.File is { Deleted: false } && (OwnershipOf(remote.File.Lock) == LockOwnership.ThisDevice || LeadOver(remote) ||
+                    await AcquireTransientAsync(st, move.Operation.ToString(), ct));
                 if (done)
                 {
                     var (folder, name) = Split(to);
@@ -937,6 +938,12 @@ public sealed partial class SyncEngine
         // The projects a move changed are read again (only those), and the team's moves follow.
         if (any && await RefreshStaleAsync(ct)) ApplyRemoteMoves();
     }
+
+    // 0.4.1: a mentor, CAD lead or instructor (can_take_back) moves a file someone else has
+    // checked out without taking its lock (idea-app 0236); the check out stays the holder's and
+    // their computer moves the file once nothing has it open.
+    private bool LeadOver((RemoteFile File, ProjectState Project, VaultPath Path) remote)
+        => remote.Project?.CanTakeBack == true && remote.File?.Lock is { IsLive: true } held && OwnershipOf(held) is LockOwnership.OtherPerson or LockOwnership.MyOtherDevice;
 
     private void FinishLocalMove(FileState st, VaultPath from, VaultPath to, bool moved, RemoteLock? held)
     {
@@ -1007,7 +1014,7 @@ public sealed partial class SyncEngine
             // Never rename under an open document or onto a file this computer already has.
             if (fs.IsOpen(from) || markerDocuments.Contains(from.Value) || state.Files.ContainsKey(to.Value) || Exists(to)) return false;
             if (force && remoteById.TryGetValue(st.FileId.Value, out var remote) && remote.File.Lock is { IsLive: true } held &&
-                OwnershipOf(held) is LockOwnership.OtherPerson or LockOwnership.MyOtherDevice)
+                OwnershipOf(held) is LockOwnership.OtherPerson or LockOwnership.MyOtherDevice && !LeadOver(remote))
             {
                 if (!remote.Project.CanTakeBack || online != true) return false;
                 if ((await ForceCheckInForAsync([new(st.FileId.Value, remote.Project, held)], from.Name, "", cancellationToken)).Refusal is not null) return false;

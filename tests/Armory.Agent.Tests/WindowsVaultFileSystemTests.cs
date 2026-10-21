@@ -133,6 +133,41 @@ public sealed class WindowsVaultFileSystemTests
         Assert.False(File.Exists(vault.File("a.SLDPRT")));
     }
 
+    // 0.4.1: a lead moved a file someone has checked out (idea-app 0236). On the holder's computer
+    // the copy is writable and may be open in SolidWorks, which keeps it open for writing: the move
+    // is refused while it is (never a half-moved file, never new bytes left behind at the old path),
+    // and goes once it lets go, with what it saved last, still writable (the check out stays).
+    [WindowsFact]
+    public void A_checked_out_file_another_program_holds_for_writing_moves_only_once_it_lets_go()
+    {
+        using var vault = new TempFolder();
+        Directory.CreateDirectory(vault.File("Robot/Gearbox"));
+        File.WriteAllBytes(vault.File("Robot/Gearbox/Gear.SLDPRT"), A);
+        using var files = new WindowsVaultFileSystem(vault.Root);
+        var from = TempFolder.PathValue("Robot/Gearbox/Gear.SLDPRT");
+        var to = TempFolder.PathValue("Robot/Gearbox v2/Gear.SLDPRT");
+        files.ApplyLockAttribute(from, LockOwnership.ThisDevice);
+        using (var solidWorks = new FileStream(vault.File("Robot/Gearbox/Gear.SLDPRT"), FileMode.Open, FileAccess.ReadWrite, FileShare.Read))
+        {
+            Assert.True(files.IsOpen(from));
+            Assert.False(files.Move(from, to, TempFolder.Hash(A)).Succeeded);
+            // A save through its own handle meanwhile.
+            solidWorks.SetLength(0);
+            solidWorks.Write(C);
+            solidWorks.Flush(true);
+            Assert.False(files.Move(from, to, TempFolder.Hash(C)).Succeeded);
+        }
+        Assert.Equal(C, File.ReadAllBytes(vault.File("Robot/Gearbox/Gear.SLDPRT")));
+        Assert.False(File.Exists(vault.File("Robot/Gearbox v2/Gear.SLDPRT")));
+        // The hash of before the save never moves the newer bytes as if they were the old ones.
+        Assert.False(files.Move(from, to, TempFolder.Hash(A)).Succeeded);
+        var outcome = files.Move(from, to, TempFolder.Hash(C));
+        Assert.True(outcome.Succeeded, outcome.Problem);
+        Assert.False(File.Exists(vault.File("Robot/Gearbox/Gear.SLDPRT")));
+        Assert.Equal(C, File.ReadAllBytes(vault.File("Robot/Gearbox v2/Gear.SLDPRT")));
+        Assert.True((File.GetAttributes(vault.File("Robot/Gearbox v2/Gear.SLDPRT")) & FileAttributes.ReadOnly) == 0);
+    }
+
     // The v2 rule (CheckoutRules.IsReadOnlyOnDisk): read-only unless THIS device holds the
     // file's check out. Free, OtherPerson and MyOtherDevice are read-only; only ThisDevice is
     // writable, and the single and batch calls agree.

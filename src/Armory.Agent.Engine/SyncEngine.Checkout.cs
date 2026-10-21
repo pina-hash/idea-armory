@@ -552,6 +552,7 @@ public sealed partial class SyncEngine
         if (string.Equals(from.Value, to.Value, StringComparison.Ordinal)) return new(false, "That is already its name.");
         Guid operation;
         Forced? forced = null;
+        RemoteLock? over = null;
         Working($"Renaming {from.Name} to {to.Name}");
         await EnterActionAsync(cancellationToken);
         try
@@ -593,11 +594,17 @@ public sealed partial class SyncEngine
             if (remoteById.TryGetValue(fileId, out var remote) && OwnershipOf(remote.File.Lock) is LockOwnership.OtherPerson or LockOwnership.MyOtherDevice)
             {
                 var held = remote.File.Lock!;
-                if (!force) return new(false, $"{Who(held)} has {from.Name} checked out, so it can't be renamed now.{InTheWay([held], remote.Project)}");
-                if (!remote.Project.CanTakeBack) return new(false, "Only a mentor or CAD lead can force a check in.");
-                if (online != true) return Offline($"{from.Name} can be renamed once this computer is back online.");
-                (forced, var refusal) = await ForceCheckInForAsync([new(fileId, remote.Project, held)], from.Name, $"{from.Name} wasn't renamed.", cancellationToken);
-                if (refusal is not null) return refusal;
+                // 0.4.1: a mentor, CAD lead or instructor renames it over the check out, which stays
+                // theirs (idea-app 0236); their computer moves it once SolidWorks lets go.
+                if (!force && remote.Project.CanTakeBack) over = held;
+                else if (!force) return new(false, $"{Who(held)} has {from.Name} checked out, so it can't be renamed now.{InTheWay([held], remote.Project)}");
+                else
+                {
+                    if (!remote.Project.CanTakeBack) return new(false, "Only a mentor or CAD lead can force a check in.");
+                    if (online != true) return Offline($"{from.Name} can be renamed once this computer is back online.");
+                    (forced, var refusal) = await ForceCheckInForAsync([new(fileId, remote.Project, held)], from.Name, $"{from.Name} wasn't renamed.", cancellationToken);
+                    if (refusal is not null) return refusal;
+                }
             }
             operation = Guid.NewGuid();
             state.Moves.Add(new PendingMove(operation, fileId, from.Value, to.Value));
@@ -606,7 +613,7 @@ public sealed partial class SyncEngine
         }
         finally { LeaveAction(); }
         return With(forced, moveResults.Remove(operation, out var done) && done
-            ? new(true, forced is null ? $"Renamed {from.Name} to {to.Name}." : $"Renamed it to {to.Name}.")
+            ? new(true, forced is not null ? $"Renamed it to {to.Name}." : over is not null ? $"Renamed {from.Name} to {to.Name}. {Who(over)} still has it checked out." : $"Renamed {from.Name} to {to.Name}.")
             : new(false, online != true ? $"You're offline. {from.Name} can be renamed once this computer is back online." : $"Armory couldn't rename {from.Name}. Someone may have it checked out, or {to.Name} is already used in the project."));
     }
 

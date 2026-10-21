@@ -162,3 +162,17 @@ existed. 0232 is what both lanes now build on; where it differs, 0232 wins and t
    feed as a hint and the read snapshots (`armory_project_files`, `armory_my_projects`) as the
    truth; an agent that skips a snapshot refresh because the feed did not move still needs a
    periodic full refresh (the v2 design's 60-second safety refresh).
+
+## idea-app 0236 in the tests (Armory 0.4.1)
+
+`tests/Armory.TestSupport/sql-v3/armory_v3_organize.sql` is idea-app
+`supabase/migrations/0236_armory_v033.sql` lines 71 to 131 and 183 to 281 as they are:
+`armory_can_take_back` (a mentor, CAD lead or instructor of the project, or a site admin),
+`armory_my_projects` and `armory_break_lock` asking it, and `armory_move_file` and
+`armory_rename_folder` letting such a lead organize files someone else has checked out. The lock
+is never touched (it belongs to the file id); `file_moved` gains `checked_out_by` and
+`folder_renamed` gains `over_checkouts` on that path only. A student's answers are unchanged.
+`ArmoryV3StandIn.ApplyOrganizeAsync` applies it after the core stand-in; `LeadOrganizeTests`
+runs the agent against it. Left out: `armory_add_member`, `armory_remove_empty_file` (the app
+calls neither) and 0236's incidents column. `armory_delete_folder` still refuses over anyone's
+check out (0236 did not change it).

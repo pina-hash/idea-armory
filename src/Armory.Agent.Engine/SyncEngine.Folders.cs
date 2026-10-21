@@ -732,6 +732,10 @@ public sealed partial class SyncEngine
         return ($"{Names(names)} {(names.Count == 1 ? "has" : "have")} {locks.Count:N0} of {what} checked out", string.Join('\n', names));
     }
 
+    // After a lead's rename over check outs (0.4.1): "Check outs stay as they were: Maria Lopez
+    // has 1 of its files checked out."
+    private string StillHeldWords(IReadOnlyCollection<RemoteLock> locks) => $"Check outs stay as they were: {HoldersWords(locks, "its files").Text}.";
+
     // The server's spelling of a folder, from its files (the match on the server is exact): one
     // per spelling, almost always one.
     private List<string> ServerFolders(string localFolder, ProjectState ps)
@@ -1106,12 +1110,15 @@ public sealed partial class SyncEngine
                 return new(false, $"Armory is still sending files in {name}. Try again in a moment.");
             if (await OpenUnderAsync(from, cancellationToken) is { } open) return new(false, $"Close {open} in SolidWorks first.");
             var holders = HeldUnder(from, ps);
-            if (holders.Count > 0 && !force) return new(false, $"{name} can't be renamed now: {HoldersWords(holders, "its files").Text}.{InTheWay(holders, ps)}");
+            // 0.4.1: a mentor, CAD lead or instructor renames it over the check outs in it, which
+            // stay their holders' (idea-app 0236); force still force checks them in first.
+            var over = holders.Count > 0 && !force && ps.CanTakeBack;
+            if (holders.Count > 0 && !force && !over) return new(false, $"{name} can't be renamed now: {HoldersWords(holders, "its files").Text}.{InTheWay(holders, ps)}");
             if (holders.Count > 0 && !ps.CanTakeBack) return new(false, "Only a mentor or CAD lead can force a check in.");
             if (!caseOnly && RekeyCollides(from, to)) return new(false, $"{newName} still has files in Armory. Try again in a moment.");
             if (online != true) return Offline("Folders can be renamed once this computer is back online.");
             Forced? forced = null;
-            if (holders.Count > 0)
+            if (holders.Count > 0 && !over)
             {
                 (forced, var refusal) = await ForceCheckInForAsync(HeldTargets(from, ps), null, $"{name} wasn't renamed.", cancellationToken);
                 if (refusal is not null) return refusal;
@@ -1133,6 +1140,7 @@ public sealed partial class SyncEngine
                 return With(forced, new(true, $"Armory couldn't reach the server to rename {name}. It tries again by itself."), done: false);
             }
             if (answer.Ok || forced is not null) await PassLockedAsync(cancellationToken, PassScope.Under(to, from));
+            if (over && answer.Ok) answer = new(true, $"{answer.Message} {StillHeldWords(holders)}");
             return With(forced, answer);
         }
         finally { LeaveAction(); }

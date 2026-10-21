@@ -920,6 +920,10 @@ public sealed partial class SyncEngine : IAsyncDisposable
                             if (change.Kind == "folder_renamed" && Text(change.Payload, "from") is { } from && Text(change.Payload, "to") is { } to &&
                                 !(Guid.TryParse(Text(change.Payload, "device_id"), out var by) && state.IsMine(by)))
                                 state.RemoteFolderRenames.Add(new RemoteFolderRename(ps.Id, from, to));
+                            // A mentor, CAD lead or instructor moved files checked out here (0.4.1, idea-app 0236):
+                            // they stay checked out here, and move here once nothing has them open.
+                            if (!(Guid.TryParse(Text(change.Payload, "device_id"), out var mover) && state.IsMine(mover)))
+                                MovedOverMyCheckOuts(ps, change);
                             ps.Cursor = Math.Max(ps.Cursor, change.Cursor);
                         }
                         if (changes.Count > 0) lastActivity = deps.Clock.GetUtcNow();
@@ -1789,6 +1793,32 @@ public sealed partial class SyncEngine : IAsyncDisposable
     {
         state.Remembered.RemoveAll(n => n.Path == path && n.Kind == kind);
         state.Remembered.Add(new RememberedNotice(kind, fileId, path, title, detail, deps.Clock.GetUtcNow(), itemDetail, reasonKind, who));
+    }
+
+    // "Pina moved Plate.SLDPRT to Drivetrain › Plates. It's still checked out to you." (0.4.1): one
+    // running line when someone who can (idea-app 0236's file_moved checked_out_by, folder_renamed
+    // over_checkouts) moves files this computer has checked out. Only the files this device holds
+    // are counted, as the last read of the server knew them.
+    private void MovedOverMyCheckOuts(ProjectState ps, RemoteChange change)
+    {
+        var by = Text(change.Payload, "by") is { } email ? DisplayName(email) : "A mentor or CAD lead";
+        if (change.Kind == "file_moved" && change.Payload["checked_out_by"] is not null &&
+            remoteById.TryGetValue(change.EntityId, out var remote) && OwnershipOf(remote.File.Lock) == LockOwnership.ThisDevice &&
+            Text(change.Payload, "name") is { } name && Text(change.Payload, "folder") is { } folder)
+        {
+            var renamed = !string.Equals(Text(change.Payload, "old_name"), name, StringComparison.Ordinal);
+            var where = Where(folder.Length == 0 ? ps.Folder : ps.Folder + "/" + folder);
+            Line(renamed ? $"{by} renamed {remote.Path.Name} to {name}. It's still checked out to you."
+                : $"{by} moved {remote.Path.Name} to {where}. It's still checked out to you.");
+        }
+        else if (change.Kind == "folder_renamed" && change.Payload["over_checkouts"] is not null &&
+            Text(change.Payload, "from") is { } from && Text(change.Payload, "to") is { } to)
+        {
+            var mine = remoteById.Values.Count(r => r.Project.Id == ps.Id && !r.File.Deleted && OwnershipOf(r.File.Lock) == LockOwnership.ThisDevice &&
+                (string.Equals(r.File.Folder, from, StringComparison.Ordinal) || r.File.Folder.StartsWith(from + "/", StringComparison.Ordinal)));
+            if (mine == 0) return;
+            Line($"{by} renamed the folder {Leaf(from)} to {Leaf(to)}. {(mine == 1 ? "Your 1 file in it is" : $"Your {mine:N0} files in it are")} still checked out to you.");
+        }
     }
 
     // A pass's own notice about one file or folder; the view groups them by kind into cards.
