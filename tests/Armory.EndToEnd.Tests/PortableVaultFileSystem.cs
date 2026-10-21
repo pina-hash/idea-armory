@@ -71,7 +71,8 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
     public bool IsHeld(string relative) { lock (gate) return held.Contains(P(relative).Value); }
     // SolidWorks opened it while it was writable: its saves go through its handle.
     public bool HeldForWriting(string relative) { lock (gate) return heldForWriting.Contains(P(relative).Value); }
-    private static IOException SharingViolation(string full) => new($"The process cannot access the file '{full}' because it is being used by another process.");
+    // As Windows: ERROR_SHARING_VIOLATION (32) in the HRESULT.
+    private static IOException SharingViolation(string full) => new($"The process cannot access the file '{full}' because it is being used by another process.", unchecked((int)0x80070020));
     private readonly List<FolderMove> studentFolderMoves = [];
     private int recoveries;
     public PortableVaultFileSystem(string root) { Root = root; Directory.CreateDirectory(root); }
@@ -201,6 +202,7 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
         List<LocalFile> files = [];
         List<string> markers = [];
         List<string> problems = [];
+        List<string> heldNow = [];
         foreach (var full in Directory.EnumerateFiles(Root, "*", SearchOption.AllDirectories))
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -218,6 +220,7 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
             {
                 // As LocalChangeDetector: never a deletion, and never the old entry passed off as read.
                 problems.Add($"{relative}: {SharingViolation(full).Message}");
+                heldNow.Add(path.Value);
                 if (lastScan.TryGetValue(path.Value, out var previous)) files.Add(previous with { Unread = true });
                 continue;
             }
@@ -267,7 +270,7 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
             studentFolderMoves.Clear();
             lastScan = files.ToDictionary(f => f.Path.Value, StringComparer.OrdinalIgnoreCase);
         }
-        return new(files.OrderBy(f => f.Path).ToArray(), markers, problems, null, folders, ReportsFolderMoves ? moves : null);
+        return new(files.OrderBy(f => f.Path).ToArray(), markers, problems, null, folders, ReportsFolderMoves ? moves : null, heldNow);
     }
 
     public bool IsOpen(VaultPath path) { lock (gate) { IsOpenCalls++; return open.Contains(path.Value); } }

@@ -42,8 +42,11 @@ public sealed record OpenFilesAnswer(IReadOnlySet<string> Open, bool TimedOut = 
 // means checked, none. Files and Folders keep, as they were, only the entries a problem could
 // hide (an unreadable folder or file, a path the vault refuses, a reparse point), each such
 // file marked Unread: anything else missing is missing.
+// Held: paths the scan could not read because another program has them (SolidWorks), which wait
+// rather than count as problems (0.4.0); each is also in Problems.
 public sealed record VaultScan(IReadOnlyList<LocalFile> Files, IReadOnlyList<string> Markers, IReadOnlyList<string> Problems,
-    IReadOnlyList<LocalMove>? Renames = null, IReadOnlyList<string>? Folders = null, IReadOnlyList<FolderMove>? FolderMoves = null);
+    IReadOnlyList<LocalMove>? Renames = null, IReadOnlyList<string>? Folders = null, IReadOnlyList<FolderMove>? FolderMoves = null,
+    IReadOnlyList<string>? Held = null);
 public sealed record LocalMove(VaultPath From, VaultPath To);
 public sealed record FolderMove(string From, string To);
 public sealed record ReplaceOutcome(bool Succeeded, string? Problem)

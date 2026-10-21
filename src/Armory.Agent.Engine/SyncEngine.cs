@@ -568,6 +568,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
         if (scan.Folders is { } folders) localFolders.UnionWith(folders);
         ScanTakenIn();
         await ReadMarkersAsync(scan, ct);
+        scanHeld = scan.Held is { Count: > 0 } held ? held.ToHashSet(StringComparer.OrdinalIgnoreCase) : [];
         foreach (var problem in scan.Problems) ScanProblem(problem);
         // Folder changes on this disk come before anything is captured: a renamed folder's
         // files keep their records (never captured again as new files at the new path), and a
@@ -1516,6 +1517,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
             {
                 await ExecutePlannedAsync(planned, ct);
                 if (failedFiles.Count > 0 && failedFiles.Remove(planned.Key)) flight?.FileRecovered(planned.Key);
+                if (lockWaits.Count > 0) LockReleased(planned.Key);
             }
             // Signed out during the pass: a stop like going offline, never this file's problem.
             catch (Exception error) when (Stopped(error)) { online = false; }
@@ -1787,6 +1789,14 @@ public sealed partial class SyncEngine : IAsyncDisposable
     private void FileProblem(string path, Exception error)
     {
         if (VaultPath.TryCreate(path, out var where, out _, options.VaultRoot)) NoteNotMember(ProjectOf(where)?.Id, error);
+        // Another program still has it ("being used by another process"): SolidWorks finishing
+        // a save, or holding a document it has open. Not a failure: it waits, and the next pass
+        // after the program lets go moves it (0.4.0; the repeatedFailure incidents of 0.3.3).
+        if (IsHeldByAnotherProgram(error))
+        {
+            LockWait(path, error.Message);
+            return;
+        }
         if (flight is not null)
         {
             flight.FileFailed(path, error);
@@ -1814,12 +1824,64 @@ public sealed partial class SyncEngine : IAsyncDisposable
         }
     }
 
+    // Windows' sharing violation (32) and lock violation (33): another program has the file.
+    internal static bool IsHeldByAnotherProgram(Exception error)
+        => error is IOException && !(error is FileNotFoundException or DirectoryNotFoundException or PathTooLongException) && (error.HResult & 0xffff) is 32 or 33;
+
+    // The paths this pass's scan found held by another program.
+    private HashSet<string> scanHeld = [];
+
+    // Files waiting for another program to let go, since when (the now sentence counts them).
+    private readonly Dictionary<string, DateTimeOffset> lockWaits = new(StringComparer.OrdinalIgnoreCase);
+
+    // One file waits for the program that has it: an information notice, a note in the flight
+    // the first time (never FileFailed, so no repeatedFailure incident), and a pass soon after.
+    private void LockWait(string path, string raw)
+    {
+        var name = NameOf(path);
+        if (!lockWaits.ContainsKey(path))
+        {
+            lockWaits[path] = deps.Clock.GetUtcNow();
+            flight?.Note("lockWait", path);
+        }
+        (Holding ? heldNotes : notes).Add(new Note(NoticeKinds.LockWait, null, path,
+            $"SolidWorks (or another program) still has {name}. Armory uploads it as soon as it lets go. Nothing to do.", $"Waiting for SolidWorks to let go of {name}"));
+        (Holding ? heldProblems : problems).Add($"{path}: {raw}");
+        deps.Log?.Invoke($"waiting: {path}: {raw}");
+        SoonAgain();
+    }
+
+    // A file that waited went through, or is gone: it waits no more.
+    private void LockReleased(string path) => lockWaits.Remove(path);
+
+    // Another pass a few seconds from now, so a file a program let go of moves at once.
+    private static readonly TimeSpan LockWaitRetry = TimeSpan.FromSeconds(3);
+    private bool soonAgainSet;
+    private void SoonAgain()
+    {
+        if (soonAgainSet) return;
+        soonAgainSet = true;
+        _ = Task.Delay(LockWaitRetry).ContinueWith(_ =>
+        {
+            soonAgainSet = false;
+            try { Wake(); }
+            catch (Exception error) when (error is ObjectDisposedException or InvalidOperationException) { } // stopped meanwhile
+        }, TaskScheduler.Default);
+    }
+
     // A problem the scan met, "path: what went wrong" or a sentence about the folder, in plain words.
     private void ScanProblem(string raw)
     {
         var colon = raw.IndexOf(": ", StringComparison.Ordinal);
         var path = colon > 0 && VaultPath.TryCreate(raw[..colon], out var where, out _) ? where.Value : null;
         var what = path is null ? raw : raw[(colon + 2)..];
+        // A file the scan could not read because a program has it (the scan keeps its last
+        // entry, marked Unread): waiting, not an error.
+        if (path is not null && (scanHeld.Contains(path) || local.TryGetValue(path, out var held) && held.Unread))
+        {
+            LockWait(path, what);
+            return;
+        }
         string plain;
         if (what.Contains("exceeds", StringComparison.OrdinalIgnoreCase) || what.Contains("too long", StringComparison.OrdinalIgnoreCase))
             plain = "Its path is too long for Windows. Give it, or a folder it is in, a shorter name.";

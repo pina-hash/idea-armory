@@ -99,7 +99,8 @@ public sealed class WindowsVaultFileSystem : IVaultFileSystem, IDisposable
             return new VaultScan(files, scan.Markers, problems,
                 scan.Renames?.Select(r => new LocalMove(r.Before, r.After)).ToArray(),
                 scan.Folders.Select(f => f.Path).ToArray(),
-                scan.FolderMoves?.Select(m => new FolderMove(m.Before, m.After)).ToArray());
+                scan.FolderMoves?.Select(m => new FolderMove(m.Before, m.After)).ToArray(),
+                scan.Held);
         }
     }
 

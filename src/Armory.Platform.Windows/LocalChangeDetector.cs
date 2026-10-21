@@ -26,6 +26,9 @@ public sealed record LocalScan(IReadOnlyList<LocalFileState> Files, IReadOnlyLis
     int HashesComputed, bool FullRescan, int OverflowCount)
 {
     public IReadOnlyList<LocalFolderState> Folders { get; init; } = [];
+    // Files this scan could not read because another program has them (Windows' sharing or lock
+    // violation): SolidWorks saving or holding a document. Each is also in Problems.
+    public IReadOnlyList<string> Held { get; init; } = [];
     // Null when this scan cannot prove every folder move: there is no earlier folder map (the
     // first scan after a start, unless .armory\folder-ids.json holds one), a folder that left
     // its path had no readable id, or its id was not found while another folder's id was
@@ -195,6 +198,8 @@ public sealed class LocalChangeDetector : IDisposable
             catch (Exception error) when (error is IOException or UnauthorizedAccessException or Win32Exception)
             {
                 walk.Problems.Add($"{relative}: {error.Message}");
+                // Another program has it (sharing or lock violation): waiting, not broken (0.4.0).
+                if (error is IOException && (error.HResult & 0xffff) is 32 or 33) walk.Held.Add(path.Value);
                 walk.Unread(file, id ?? NativeMethods.EntryId(file));
                 // Something is at this path: never a deletion of what was here. What was read
                 // last time is kept, marked unread, so nothing trusts it as the disk's bytes now.
@@ -264,6 +269,7 @@ public sealed class LocalChangeDetector : IDisposable
             FolderMoves = folderMoves,
             Markers = walk.Markers,
             HashesReused = reused,
+            Held = walk.Held,
         };
     }
 
@@ -488,6 +494,7 @@ public sealed class LocalChangeDetector : IDisposable
     private sealed class Walk(string root)
     {
         internal List<string> Problems { get; } = [];
+        internal List<string> Held { get; } = [];
         internal List<string> Markers { get; } = [];
         // Vault-relative paths ("" is the whole vault) whose contents this walk could not see.
         internal List<string> Blind { get; } = [];

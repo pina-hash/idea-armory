@@ -15,7 +15,7 @@ public sealed partial class SyncEngine
     private static readonly TimeSpan KeptCopiesShownFor = TimeSpan.FromDays(1);
     private static readonly string[] NoticeOrder =
     [
-        NoticeKinds.CantSend, NoticeKinds.CantRead, NoticeKinds.SolidWorks, NoticeKinds.NewerRelease, NoticeKinds.NameShared, NoticeKinds.TakenBack, NoticeKinds.FolderPutBack, NoticeKinds.ProjectPutBack,
+        NoticeKinds.CantSend, NoticeKinds.CantRead, NoticeKinds.LockWait, NoticeKinds.SolidWorks, NoticeKinds.NewerRelease, NoticeKinds.NameShared, NoticeKinds.TakenBack, NoticeKinds.FolderPutBack, NoticeKinds.ProjectPutBack,
         NoticeKinds.ProjectRenaming, NoticeKinds.ProjectDeleted, NoticeKinds.CheckInPartial, NoticeKinds.KeptCopy, NoticeKinds.NewerWaiting, NoticeKinds.Import,
     ];
     private IReadOnlyCollection<string> openWithoutCheckOut = [];
@@ -316,6 +316,9 @@ public sealed partial class SyncEngine
             NoticeKinds.CantRead when items.All(i => i.Flavor == "stale") => (NoticeTones.Look,
                 n == 1 ? StaleMarkerTitle : $"{StaleMarkerTitle} with {n:N0} files open",
                 n == 1 ? first.Detail ?? "" : "Armory is treating them as closed. If SolidWorks still has one open, save it there.", null),
+            NoticeKinds.LockWait => (NoticeTones.Info,
+                n == 1 ? first.Title ?? $"Waiting for SolidWorks to let go of {name}" : $"Waiting for SolidWorks to let go of {n:N0} files",
+                n == 1 ? first.Detail ?? "" : "SolidWorks (or another program) still has them. Armory uploads each one as soon as it lets go. Nothing to do.", n == 1 ? null : expand),
             NoticeKinds.CantRead => (NoticeTones.Bad,
                 n == 1 ? "Armory can't read a file on this computer" : $"Armory can't read {n:N0} files on this computer",
                 n == 1 ? first.Detail ?? "" : "Close any program that might be using them. Armory tries again by itself.", null),
