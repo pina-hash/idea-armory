@@ -63,11 +63,21 @@ Each rule is a pure function in `GlitchRules` with its own test (`GlitchRuleTest
 |---|---|
 | `crash` | an exception nothing handled: the process (`AppDomain.UnhandledException`, saved on the spot before the process ends), the window's thread, the engine's loop or thread; and, at the next start, a run that ended without writing "stopped" in agent.log (e02d811), built from the last flight it left, unless that run had begun to quit (below) |
 | `slowAction` | a window action whose answer took more than 10 seconds |
-| `slowPass` | a pass that took more than 60 seconds, unless the computer slept or woke during it (a `power` event since its `passStart`: IDEA-06's 52 minute "pass" was the computer asleep) |
+| `slowPass` | a pass that took more than 60 seconds, unless the computer slept or woke during it (a `power` event since its `passStart`: IDEA-06's 52 minute "pass" was the computer asleep). A pass that moved files is judged by its work (0.4.2, `GlitchRules.SlowPassLimitMs`): 60 seconds plus 250 ms for each file it downloaded, uploaded or kept, and never less than 3 minutes, so 3,000 files in 5 minutes is not slow and 2 files in 5 minutes is |
 | `repeatedFailure` | the same file failing 3 times with no success of it between (the count starts again after each incident) |
 | `repairedCheckout` | any `repairedCheckout` event |
 | `readOnlyBroken` | any `readOnlyBroken` event |
 | `userReport` | Report a problem (below) |
+
+**A sign out is not a crash** (0.4.2). A shared lab computer signs each student out, and an
+Armory still running then ends with the session. Two things now tell that apart from a crash: the
+line "windows is ending the session (Logoff, asked)" is written the moment Windows asks
+(`SystemEvents.SessionEnding`, from Windows' own thread, `AgentHost.SessionEnding`), before the
+window's thread runs Quit, so a run cut off right after still reads as quitting at the next start;
+and `RunEndCause` reads Winlogon 7002 (a sign out) from the System log, counted only when it names
+this Windows account (the event's user id against `WindowsIdentity.GetCurrent().User`), so another
+student's sign out later on the same computer explains nothing. Not verified on a lab computer:
+no Windows sign out can be made from a test.
 
 **A quit cut short is not a crash** (0.3.3). The crash reports of 0.2.1 to 0.3.1 were
 Windows ending the session while a quit waited behind a plan. A run whose log's last lines

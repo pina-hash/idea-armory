@@ -584,6 +584,18 @@ a second launch forwards it (section 1.3) and exits; a first launch starts with 
 and hands the link to itself, where its token means nothing. `AgentCommandLine.Link` keeps the
 argument as Windows gave it; a link beside `--background` still opens the window.
 
+**Open from the website** (0.4.2, website feedback ba81c57d). A file's page on ideabosco.com
+(`/armory/<project>/file/<file>`) carries Open, a link to exactly `idea-armory:open?f=<file id>`
+(`ProtocolLink.TryParseOpen`): the file's uuid with its dashes, in any case, one trailing slash
+let go, nothing else. It needs no token because it only opens: the running Armory finds the file
+in its own view by id, shows its page in the window, and opens it with the window's own Open
+(`IShellHost.LaunchAsync`, the engine's `LaunchAsync`: SolidWorks for a part, read-only unless it is
+checked out to this computer, and the quiet check-out question follows as for any open). It
+checks nothing out. A file this computer's Armory doesn't have opens nothing and says so; one not
+downloaded yet shows its page and says to try again; signed out, the window opens on Connect.
+The website cannot see whether Armory is installed: its page says plainly that Open needs Armory
+on this computer, with the download link, when the browser stays on the page after the click.
+
 **Tokens** (`ToastTokens`, in memory only): each stands for one action (`checkout`, `show`,
 `savein` or `keeplocal`) on
 the vault paths of one notification, answers once and only for 30 minutes, and at most 200 live

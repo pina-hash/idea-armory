@@ -107,6 +107,7 @@ page's own crumbs are: "Added 4,987 of 5,000 files to Robot 2027 › CopyDesignT
 | `actionResult` | `requestId`, `ok`, `message`, `offer` | once for each action (see Page to host); the page shows `message` in a quiet line at the window's foot, never an alert and never a focus change. `offer` is null, except `"withoutPicture"` after a `sendFeedback` with a picture that couldn't go (0.3.3; Send feedback shows that answer in its own dialog) | 0.3.3: also with `requestId: "shell"` for answers to File Explorer's right-click or a notification.
 | `windowShot` | `requestId`, `ok`, `id`, `url`, `width`, `height`, `bytes`, `scaled`, `message` | the answer to `captureWindow` (0.3.3): a picture of this window (`WindowShotView`, its fields flat in the message); `url` serves exactly the bytes that would be sent; not `ok`: `message` says why, in one sentence |
 | `myFeedback` | `requestId`, `state`, `pictures`, `message`, `notes` | the answer to `readMyFeedback` (0.3.3): Your feedback (`FeedbackListView`, its fields flat in the message) |
+| `noticeItems` | `requestId`, `key`, `count`, `groups` | the answer to `readNoticeItems` (0.4.2): every file of one notice card (`NoticeItemsView`, its fields flat in the message), grouped by reason (`NoticeReasonView`: `reason`, `count`, `items`), the most common reason first and each reason's files in path order. `count` is the card's own and the reasons' counts add up to it; a card that is gone answers `count` 0 and no groups |
 | `reveal` | `path` | 0.3.3: Show in Armory from File Explorer's right-click, after the host opened the window; `path` is vault-relative ("" is the Armory folder itself). The page shows the file's detail (a file in Armory), Team files at that folder (a folder, or the folder of a file Armory doesn't have yet), or Home; never while its small dialog is asking something. Sent once the page has said `ready`, right after its `view` |
 
 ```
@@ -193,11 +194,14 @@ NoticeGroupView {
   key: string,                      // dismissNotice sends it back
   kind: "import" | "nameShared" | "newerWaiting" | "keptCopy" | "takenBack" | "folderPutBack"
       | "projectPutBack" | "projectRenaming" | "projectDeleted" | "cantSend" | "cantRead" | "checkInPartial"
-      | "newerRelease" | "solidWorks",
+      | "newerRelease" | "solidWorks" | "lockWait"
+      | "outsideProject" | "vaultRoot",  // 0.4.2: files outside every project (one card however
+                                        // many, its action Open the Armory folder); the host's card
+                                        // for an Armory folder inside a project folder (Fix it)
   tone: "info" | "look" | "bad",    // the page shows info green, look amber, bad red
   title: string,                    // e.g. "14 files share a name with other files in this project"
   detail: string,
-  count: number,                    // the total; items holds at most 200
+  count: number,                    // the total; items holds at most 200 (readNoticeItems: all of them)
   action: NoticeActionView | null,  // the card's one key
   items: NoticeItemView[]           // the card's list, opened by its own key
 }
@@ -205,7 +209,8 @@ NoticeActionView { label: string, command: string, paths: string[] }
   // command is a page-to-host type the page sends for it:
   //   checkOut {paths, open: false}, checkIn {paths}, undoCheckOut {paths},
   //   launchFile {path: paths[0]}, showInFolder {path: paths[0]}, dismissNotice {key},
-  //   openFile (the first item's fileId), keepLocal {paths}, saveDown {paths} (0.3.3, solidWorks cards)
+  //   openFile (the first item's fileId), keepLocal {paths}, saveDown {paths} (0.3.3, solidWorks cards),
+  //   openVault, chooseVaultRoot, repairVaultRoot {} (0.4.2)
   // or "expand", which the page handles itself: it opens and closes the card's list.
 NoticeItemView { fileId: string | null, path: string, name: string, detail: string | null }
 
@@ -449,6 +454,8 @@ replaces it.
 | `sendFeedback` | `kind`, `body`, `tried`, `area`, `shot`, `requestId` | Send (or Ctrl+Enter) in Send feedback (the header's key, or Settings), after the page refuses empty words; "Send without the picture" after the offer | 0.3.3, the same as the website's: `kind` is `bug`, `idea`, `praise` or `other`; `tried` what the person tried (at most 1,000 characters) or null; `area` the window or view it is about, filled in by the page (at most 120: "Settings", "File details: Gear.SLDPRT", "Home > Robot 2027 > Drivetrain", "Home"); `shot` the id of the picture `windowShot` answered with, or null (the host checks it is 32 lowercase hex digits). A note on its own (`armory_submit_app_feedback`), with Armory's version and what it was doing as its context, and no incident after it. Without a picture it is saved first and sent at once when it can be; with one it goes now and is never saved. The answer is one sentence ("Sent. Thank you for the feedback.", "Saved. It will be sent ..."); a picture that couldn't go is answered with `offer: "withoutPicture"` |
 | `captureWindow` | `width`, `height`, `requestId` | Add a picture of this window, in Send feedback (an ask) | 0.3.3: the page's size in CSS pixels (1 to 16,384). The host takes a picture of this window only and answers `windowShot` (see "Send feedback's picture" below) |
 | `readMyFeedback` | `requestId` | opening Settings or Send feedback (at most once a minute), and Your feedback (an ask) | 0.3.3: the host answers `myFeedback` |
+| `readNoticeItems` | `key`, `requestId` | opening a notice card's list, and again while it is open when the card's count changes (an ask) | 0.4.2: the host answers `noticeItems`. The view carries at most 200 items of a card (IDEA-06's "Show the 200 files" of 1,498); the list is drawn from the answer, every file, a line before each reason ("1,400 files" and the reason) when there is more than one, each file's line saying where it is. Until the answer is in, the view's first files show with "Showing 200 of 1,498. Getting the rest." The key says the card's own count ("Show the 1,498 files") |
+| `repairVaultRoot` | `requestId` | Fix it, on the `vaultRoot` card | 0.4.2: the Armory folder is a project folder or inside one (docs/agent/ENGINE.md, "The Armory folder is never a project folder"). The host stops the engine, folds the wrong folder into the right one and runs Armory there, then answers "Fixed. Armory uses C:\IDEA\Armory again, and every file is where it belongs." (and where any older changed copies were kept), or what to close first. Never timed as a window action (a folder of thousands of files takes as long as their bytes) |
 | `openIncidents` | | Open incidents folder (Settings) | opens `%LOCALAPPDATA%\IDEA Armory\incidents` in File Explorer, so the files can be handed over by hand |
 | `turnOnBadges` | `requestId` | Turn on, in Settings' "Status on file icons" row (only for `off` and `broken`); Settings closes so the answer shows at the window's foot | 0.3.3: the host runs `<app>\badges\IDEA-Armory-Badges-Setup.exe /SILENT /SUPPRESSMSGBOXES /NORESTART` with the `runas` verb (Windows asks for an administrator's password), waits for it, checks the badges again (a new `view`) and answers with the new Settings line ("Armory's status shows on file icons after you sign out of Windows and back in."), or "Nothing changed. This one step needs an administrator's password." for a canceled prompt (error 1223), "The badges setup stopped before it finished, so nothing changed." for an exit code other than 0, and "The badges setup isn't in Armory's folder on this computer. Ask an administrator to run IDEA-Armory-Badges-Setup." when the file is missing |
 | `putBackKeptCopy` | `fileId`, `versionId`, `requestId` | Put back on this computer, on a File detail history entry of kind `keptCopy` (0.3.3, feedback N4) | `versionId` is the entry's `id`. The host's `PutBackKeptCopyAsync` (docs/agent/ENGINE.md, "Put back on this computer"): only the signed-in person's own kept copy; the file is checked out first when it is checked out to nobody; any save on disk the server doesn't have is kept first, and an open file is refused; the copy is put in place and stays checked out, shared only at check in. Answers "Put your copy of Plate.SLDPRT back on this computer. It's checked out to you: look at it in SolidWorks, then check it in to share it.", or why not ("That copy of Plate.SLDPRT is Maria Lopez's. Only your own kept copies can be put back here.", "Close Plate.SLDPRT in SolidWorks first, then put your copy back.") |

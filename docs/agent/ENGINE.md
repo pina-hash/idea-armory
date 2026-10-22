@@ -379,6 +379,21 @@ files.
 
 ## Activity (v2-design.md 4.4)
 
+**Quiet loops (0.4.2).** A step's own line ("Asking Armory what changed", "Looking over 1,467
+files on this computer"), written once the step has taken a second, is one line however often the
+step comes back: an earlier copy leaves the list as the new one comes in (IDEA-00's panel was that
+one line every 3 to 4 seconds). What Armory did ("Downloaded Plate.SLDPRT") is still one line
+each. In the log (agent.log), a file another program holds is written once when it starts to wait
+(`waiting: <path>: <what Windows said>`), again only when Windows says something else about it,
+and once more when it is let go (`waiting: <path>: let go`); it is never a `sync:` line as well.
+Every other problem's `sync:` line is written when it first appears and again only after a loop
+pass went by without it (a window action's pass, which looks at a few files, forgets nothing).
+While a file waits, the next pass comes 3 seconds later for its first 30 seconds, then every 10
+seconds, every 30 after 2 minutes and every 60 after 10 (`LockWaitRetryAfter`): about 85 passes in
+an hour instead of 1,100. SolidWorks letting go removes its `~$` marker, and that change wakes
+the engine at once anyway. A new SolidWorks document has no path until it is saved, and the log
+names it "a new document (not saved yet)" (it was `solidworks:  changed`).
+
 Since 0.3.2 the tracker also keeps the running lines (`ActivityView.log`): the last 40 things
 Armory did, from the last 3 minutes, each one plain sentence ("Downloaded Plate.SLDPRT
 (612 KB)", "Getting 1,400 files ready to check out", "Asking the server to check out 1,400
@@ -956,6 +971,99 @@ checked out", "Kept when the check out was undone", "Changed without a check out
 Alex Kim's own copy", ...; `routine` for saves kept while checked out and earlier saves) and
 `removed`.
 The activity panel's words are in Activity above. No view field carries a season.
+
+**Thousands of files (0.4.2, the field round of 2026-10-22).** IDEA-06 showed one card, "1,498
+files can't be uploaded", whose key said "Show the 200 files" and whose 1,298 other files were
+nowhere, each of the 200 saying it was outside every project. Now:
+
+- Files outside every project are a card of their own, `outsideProject`: "1,498 files are outside
+  every project", one sentence ("Armory keeps only files inside a project folder. Move them into
+  your project folders, and they upload by themselves.") and one action, Open the Armory folder
+  (`openVault`). `cantSend` keeps the files the server or the SolidWorks year refused; when they
+  all share one reason, that reason is the card's sentence instead of "Each one says why".
+- The view still carries at most 200 items of a card (it is posted on every change); its `count`
+  is the whole. Opening the list asks for all of it (`NoticeItemsAsync`, `readNoticeItems`):
+  every file, grouped by its reason (the item's own sentence), the most common reason first, each
+  reason's files in path order, the counts adding up to the card's. The page draws it in the
+  virtual list (a screenful of rows at a time), a line before each reason when there is more
+  than one, and each file's line says where the file is. The list's key says the card's count.
+- While the Armory folder waits for Fix it (below), the host's `vaultRoot` card replaces the
+  `outsideProject` card: they are one condition.
+
+## The Armory folder is never a project folder (0.4.2)
+
+On IDEA-06 (note 62ba98eb) a student set the Armory folder to `C:\IDEA\Armory\FRC 2026
+Off-Season`, the project folder of the Armory folder `C:\IDEA\Armory`. Armory made
+`...\FRC 2026 Off-Season\FRC 2026 Off-Season\` and downloaded all 1,496 project files into it, and
+the 1,498 files already in the project folder became "outside every project". Nothing was uploaded
+and the server was untouched, but nothing the student saved there could go up.
+
+What marks the folders: an Armory folder holds Armory's own `.armory` folder (state, journal, safe
+copies). A project folder holds no marker: it is a top-level folder of an Armory folder named for a
+project (`ProjectState.Folder`). `VaultRootRule.Judge` (src/Armory.Agent/VaultRoot.cs) refuses
+both shapes:
+
+1. A folder inside an Armory folder (a folder above it holds `.armory`; the outermost one when
+   they nest) is corrected to that Armory folder.
+2. Otherwise a folder named for one of the account's projects whose contents share a top-level
+   name with that project's tree (or a folder inside one) is corrected to the folder that holds
+   it; at the top of a drive there is none, and the choice is refused with what to choose.
+
+The projects come from the engine's view (their folders and the names at their top) and from the
+folder's own `state.json` (its projects and records), so a folder is judged even while no engine
+runs. A student's own folder on a shared computer (`C:\IDEA\Armory-alex`) sits beside the shared
+one, never inside it, and is never refused.
+
+- **Settings** (`SaveSettingsAsync`): a refused folder is not saved and its sentence is shown; a
+  corrected one saves the folder the rule names and shows the sentence ("C:\IDEA\Armory\FRC 2026
+  Off-Season is the FRC 2026 Off-Season project folder inside your Armory folder, so Armory uses
+  C:\IDEA\Armory, the folder that holds all your projects.").
+- **A computer already in that state**: no engine starts in such a folder (`StartRuntimeAsync`
+  asks `FolderUsable` first; one already running stops as soon as its view names the projects
+  that show it). Running there could only download the projects again inside a project. The
+  window shows one card, `vaultRoot` ("Armory's folder is inside the FRC 2026 Off-Season project
+  folder"), with Fix it, the status says "Armory is waiting for you to fix its folder." and its
+  Now line "Nothing moves until Armory's folder is fixed."
+- **Fix it** (`RepairVaultRootAsync`, `VaultRootRepair.Run`) runs with no engine in either folder
+  and folds the wrong folder into the right one, file by file. Each project folder Armory made in
+  the wrong folder (`bad\Q`) goes to `target\Q`; on IDEA-06 `bad` is `target\P`, so the doubled
+  `bad\P\X` lands on `bad\X`. A file not there yet is moved. A byte-identical copy (SHA-256) is a
+  duplicate and is deleted. Two different copies: a copy equal to its folder's base for that path
+  (the version that folder last had in step with the team, from its own `state.json`) is the
+  team's version, kept in Armory's history, and gives way to the other; two changed copies are
+  both kept, the newer in place and the other in `<target> kept copies <date>` beside the Armory
+  folder, outside it, at the same path, never uploaded. Nothing is written over. Windows' own
+  folder files are left with their empty folders, which are removed. The wrong folder's own
+  `.armory` becomes the right folder's when that one has none (its records name the same places
+  after the fold) and is set aside in `<target>\.armory\set-aside\<time>` otherwise; never
+  deleted. Then the setting is the right folder and the engine starts there: its scan finds every
+  file where the team has it (identical copies are adopted as they are, changed ones go the usual
+  way), so nothing is uploaded twice.
+- **Stopped part way** (SolidWorks has a document open from the doubled folder, a file another
+  program holds): nothing runs, the card stays with the sentence that says what to close, and Fix
+  it again goes on from where it stopped. It is equally safe when the doubled folder, or the whole
+  wrong folder, was already moved away by hand: only what is still there is folded.
+- On a computer shared by several students Fix it asks to turn shared mode off first.
+
+`VaultRootTests` (the rule, and Fix it on real folders: the IDEA-06 layout, already moved by hand,
+SolidWorks still open then done, run twice, no records in the right folder) and
+`VaultRootHostTests` (Settings' correction, a computer started in a project folder, Fix it stopped
+part way) hold it.
+
+## Device identity (by design)
+
+Each sign-in registers a device (`armory_register_device`, idea-app 0231): a new `DeviceId` every
+time this computer connects, which the session keeps. Two sign-ins two minutes apart on IDEA-06
+(note 62ba98eb: e4755527-... at 21:07:46, 8b906ba1-... at 21:09:54) are two devices by design: a
+device id is a sign-in's, so a check out held under one sign-in is never taken by another
+person's, or by the same person's other computer. One computer's history stays one: the vault's
+`state.json` keeps every id it was synced under (`FormerDevices`), every lock held under any of
+them is still this computer's (see "Every lock this computer holds is its check out"), and writes
+under those locks use the holding id. Check outs name the computer by its name ("on IDEA-06"),
+with the first characters of the id only when two computers known here share a name. Team status
+(`armory_heartbeat`) beats under the current device only; a former device simply stops beating and
+reads offline. Incidents also carry `MachineId` (from Windows' own install id), which is the same
+for a computer across sign-ins and accounts.
 
 ## The SolidWorks year (0.3.3)
 
