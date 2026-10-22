@@ -4,7 +4,8 @@ namespace Armory.Telemetry;
 
 // One record Windows kept in its own event logs (System or Application), as read at the next
 // start. Text is the event's message, or null when it could not be read.
-public sealed record WindowsEvent(string Log, string Provider, int Id, DateTimeOffset At, string? Text);
+// User is the account the event is about (its security id, "S-1-5-21-..."), when Windows says.
+public sealed record WindowsEvent(string Log, string Provider, int Id, DateTimeOffset At, string? Text, string? User = null);
 
 // Why the previous run ended without saying "stopped" (0.4.0). Until then every such end was a
 // crash incident: on IDEA-06 alone 0.3.3 reported 26 in a week, most of them overnight, when the
@@ -21,11 +22,18 @@ public static class RunEndCause
     // Kernel-General 13 (the operating system is shutting down), EventLog 6006 (the event log
     // stopped, part of every shut down). Application: Application Error 1000, .NET Runtime 1026,
     // Windows Error Reporting 1001, each only when it names IdeaArmory.
-    public const string SystemQueryIds = "41,6008,1074,13,6006";
+    //
+    // 0.4.2: Winlogon 7002 (a user's sign out: "User Logoff Notification for Customer Experience
+    // Improvement Program"), only for this Windows account. A shared lab computer signs each
+    // student out at the end of a period, and an Armory still running then is ended with the
+    // session: 0.3.3 reported those as crashes (IDEA-06, IDEA-12, IDEA-16 on 2026-10-22).
+    public const string SystemQueryIds = "41,6008,1074,13,6006,7002";
     public const string ApplicationQueryIds = "1000,1026,1001";
     public const string ProcessName = "IdeaArmory";
 
-    public static Verdict Explain(DateTimeOffset? lastLineAt, bool asleep, IReadOnlyList<WindowsEvent> events)
+    // user: this Windows account's security id, or null when it is not known (a sign out is then
+    // never taken for this account's).
+    public static Verdict Explain(DateTimeOffset? lastLineAt, bool asleep, IReadOnlyList<WindowsEvent> events, string? user = null)
     {
         // Only what Windows wrote after the run's last line (a minute's grace for the clock).
         var since = lastLineAt?.AddMinutes(-1) ?? DateTimeOffset.MinValue;
@@ -43,6 +51,10 @@ public static class RunEndCause
         var shutdown = after.FirstOrDefault(e => e.Log == "System" && (e.Id == 13 && e.Provider.Contains("Kernel-General", StringComparison.OrdinalIgnoreCase) || e.Id == 6006));
         if (shutdown is not null)
             return new(false, $"Windows shut down at {Time(shutdown.At)} before Armory could stop.");
+        var signOut = user is null ? null : after.FirstOrDefault(e => e.Log == "System" && e.Id == 7002 &&
+            e.Provider.Contains("Winlogon", StringComparison.OrdinalIgnoreCase) && string.Equals(e.User, user, StringComparison.OrdinalIgnoreCase));
+        if (signOut is not null)
+            return new(false, $"Windows signed this account out at {Time(signOut.At)}, and Armory ended with the session.");
         if (asleep)
             return new(false, "The computer went to sleep and was turned off or restarted before it woke up.");
         return new(true, "Windows has no record of why it ended.");

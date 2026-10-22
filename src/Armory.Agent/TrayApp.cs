@@ -120,8 +120,15 @@ internal sealed partial class TrayApp : ApplicationContext
             host.RefreshSystemTheme();
     }
 
-    // Sign-out or shutdown: stop the engine the same way Quit does, while Windows waits.
-    private void OnSessionEnding(object? sender, SessionEndingEventArgs e) => Post(Quit);
+    // Sign-out or shutdown: stop the engine the same way Quit does, while Windows waits. The line
+    // that says so is written here, at once, from Windows' own thread (0.4.2): Quit runs on the
+    // window's thread, and a sign out that ended Armory before that thread got to it left a run
+    // with no word of why, reported as a crash.
+    private void OnSessionEnding(object? sender, SessionEndingEventArgs e)
+    {
+        host.SessionEnding(e.Reason.ToString());
+        Post(Quit);
+    }
 
     // Windows locked: on a shared computer the window is on the picker when it is unlocked.
     private void OnSessionSwitch(object? sender, SessionSwitchEventArgs e)

@@ -10,6 +10,18 @@ namespace Armory.Agent;
 // log that can't be read is left out, never an error.
 internal static class WindowsEventHistory
 {
+    // This Windows account's security id, the one a sign out names (RunEndCause), or null.
+    internal static string? CurrentUser()
+    {
+        if (!OperatingSystem.IsWindows()) return null;
+        try
+        {
+            using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
+            return identity.User?.Value;
+        }
+        catch (System.Security.SecurityException) { return null; }
+    }
+
     private const int MostEvents = 40;
     private static readonly TimeSpan Budget = TimeSpan.FromSeconds(3);
 
@@ -34,7 +46,7 @@ internal static class WindowsEventHistory
                         try { text = record.FormatDescription(); }
                         catch (EventLogException) { text = null; }
                         if (record.TimeCreated is { } at)
-                            found.Add(new WindowsEvent(logName, record.ProviderName ?? "", record.Id, new DateTimeOffset(at.ToUniversalTime(), TimeSpan.Zero), text));
+                            found.Add(new WindowsEvent(logName, record.ProviderName ?? "", record.Id, new DateTimeOffset(at.ToUniversalTime(), TimeSpan.Zero), text, record.UserId?.Value));
                     }
                 }
             }

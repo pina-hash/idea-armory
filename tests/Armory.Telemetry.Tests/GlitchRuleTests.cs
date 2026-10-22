@@ -59,6 +59,23 @@ public sealed class GlitchRuleTests
         Assert.Null(GlitchRules.SlowPass(Last(r => r.WindowAction("checkIn", 1, 70_000, true))));
     }
 
+    // 0.4.2: judged by the work too (the field round asked for time per file, not wall time). Each
+    // file moved gives a pass 250 ms more past the first minute, never less than three minutes.
+    [Fact]
+    public void A_pass_that_moved_many_files_is_judged_by_its_work()
+    {
+        Assert.Equal(60_000, GlitchRules.SlowPassLimitMs(0));
+        Assert.Equal(180_000, GlitchRules.SlowPassLimitMs(12));
+        Assert.Equal(810_000, GlitchRules.SlowPassLimitMs(3_000));
+        // 3,000 files in five minutes is ten a second: not slow. 2 files in five minutes is.
+        Assert.Null(GlitchRules.SlowPass(Last(r => r.PassEnd("loop", false, 300_000, 3_000, 0, 0, 0))));
+        Assert.Equal(GlitchKinds.SlowPass, GlitchRules.SlowPass(Last(r => r.PassEnd("loop", false, 300_000, 2, 0, 0, 0)))?.Kind);
+        // IDEA-06's 28c4c6c6: 486 downloaded in 61.8 s.
+        Assert.Null(GlitchRules.SlowPass(Last(r => r.PassEnd("loop", false, 61_820, 486, 0, 0, 0))));
+        // Idle passes of minutes that moved nothing are still slow (unless the computer slept).
+        Assert.Equal(GlitchKinds.SlowPass, GlitchRules.SlowPass(Last(r => r.PassEnd("loop", false, 852_100, 0, 0, 0, 0)))?.Kind);
+    }
+
     // The computer slept in the middle of a pass (0.3.3: a 52 minute "pass" on IDEA-06 was the
     // computer asleep): no slowPass. A slow pass that starts after it woke is still one.
     [Fact]

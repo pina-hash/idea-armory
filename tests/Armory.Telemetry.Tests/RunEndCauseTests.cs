@@ -52,6 +52,25 @@ public sealed class RunEndCauseTests
         Assert.Equal("The computer went to sleep and was turned off or restarted before it woke up.", verdict.Words);
     }
 
+    // 0.4.2: a shared lab computer signs the student out, and Armory ends with the session
+    // (0.3.3 sent these as crashes from IDEA-06, IDEA-12 and IDEA-16). Only this account's sign out
+    // counts: another student's, later on the same computer, says nothing about this run.
+    [Fact]
+    public void This_account_signed_out_is_not_a_crash_and_another_account_s_sign_out_says_nothing()
+    {
+        const string Me = "S-1-5-21-1-2-3-1001", Other = "S-1-5-21-1-2-3-1002";
+        var signOut = new WindowsEvent("System", "Microsoft-Windows-Winlogon", 7002, Last.AddMinutes(3), "User Logoff Notification for Customer Experience Improvement Program", Me);
+        var verdict = RunEndCause.Explain(Last, false, [signOut], Me);
+        Assert.False(verdict.Crash);
+        Assert.Equal("Windows signed this account out at 2026-10-21 04:54 UTC, and Armory ended with the session.", verdict.Words);
+        Assert.True(RunEndCause.Explain(Last, false, [signOut with { User = Other }], Me).Crash);
+        Assert.True(RunEndCause.Explain(Last, false, [signOut], null).Crash);
+        Assert.True(RunEndCause.Explain(Last, false, [signOut with { At = Last.AddMinutes(-30) }], Me).Crash);
+        // Armory's own crash still wins over a sign out after it.
+        Assert.True(RunEndCause.Explain(Last, false, [E("Application", "Application Error", 1000, 1, "Faulting application name: IdeaArmory.exe"), signOut], Me).Crash);
+        Assert.Contains("7002", RunEndCause.SystemQueryIds.Split(','));
+    }
+
     [Fact]
     public void A_crash_incident_carries_what_Windows_said()
         => Assert.Equal("The previous run ended unexpectedly. Windows has no record of why it ended. Its last log line was: pass: x",

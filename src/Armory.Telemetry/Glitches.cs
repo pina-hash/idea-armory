@@ -38,10 +38,14 @@ public static class GlitchRules
     // A pass that took more than 60 seconds from start to end, unless the computer slept during
     // it (0.3.3: a 52 minute "pass" on IDEA-06 was the computer asleep, the clock counting on).
     // A pass that moved files is slow only past MovingPassMs: a long download's slices run about a
-    // minute each by design (0.3.3 reported "61.8 s: 608 downloaded" as slow).
+    // minute each by design (0.3.3 reported "61.8 s: 608 downloaded" as slow). Since 0.4.2 it is
+    // judged by its work too: each file it moved gives it PerFileMs more, so a pass that moved
+    // 3,000 files in five minutes (ten a second) is not slow, and one that moved 2 in five is.
     public const long MovingPassMs = 180_000;
+    public const long PerFileMs = 250;
+    public static long SlowPassLimitMs(int moved) => moved > 0 ? Math.Max(MovingPassMs, SlowPassMs + PerFileMs * moved) : SlowPassMs;
     public static Glitch? SlowPass(in FlightEvent e, bool slept = false)
-        => e.Kind == FlightKind.PassEnd && e.Ms > (e.Count + e.Count2 + e.Count3 > 0 ? MovingPassMs : SlowPassMs) && !slept
+        => e.Kind == FlightKind.PassEnd && e.Ms > SlowPassLimitMs(e.Count + e.Count2 + e.Count3) && !slept
             ? new(GlitchKinds.SlowPass, Clip($"A {e.Name} pass took {Seconds(e.Ms)}{(e.Ok ? "" : " and failed")}: {e.Count:N0} downloaded, {e.Count2:N0} uploaded, " +
                 $"{e.Count3:N0} kept copies, {e.Count4:N0} refused."), e)
             : null;
