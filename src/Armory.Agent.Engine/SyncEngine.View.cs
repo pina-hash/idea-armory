@@ -11,11 +11,16 @@ namespace Armory.Agent.Engine;
 // file's detail. A year known to be newer than the project's pin is one (newerRelease, B5).
 public sealed partial class SyncEngine
 {
+    // The items a card carries in the view; the whole list, grouped by reason, is asked for when
+    // the student opens it (NoticeItemsAsync, 0.4.2: IDEA-06's card said "Show the 200 files" of
+    // 1,498, and the rest were nowhere).
     private const int NoticeItemsShown = 200;
+    // A file outside every project, as its item in the list says it.
+    internal const string OutsideProjectWords = "Outside every project. Move it into one of your project folders so Armory can keep it.";
     private static readonly TimeSpan KeptCopiesShownFor = TimeSpan.FromDays(1);
     private static readonly string[] NoticeOrder =
     [
-        NoticeKinds.CantSend, NoticeKinds.CantRead, NoticeKinds.LockWait, NoticeKinds.SolidWorks, NoticeKinds.NewerRelease, NoticeKinds.NameShared, NoticeKinds.TakenBack, NoticeKinds.FolderPutBack, NoticeKinds.ProjectPutBack,
+        NoticeKinds.CantSend, NoticeKinds.OutsideProject, NoticeKinds.CantRead, NoticeKinds.LockWait, NoticeKinds.SolidWorks, NoticeKinds.NewerRelease, NoticeKinds.NameShared, NoticeKinds.TakenBack, NoticeKinds.FolderPutBack, NoticeKinds.ProjectPutBack,
         NoticeKinds.ProjectRenaming, NoticeKinds.ProjectDeleted, NoticeKinds.CheckInPartial, NoticeKinds.KeptCopy, NoticeKinds.NewerWaiting, NoticeKinds.Import,
     ];
     private IReadOnlyCollection<string> openWithoutCheckOut = [];
@@ -317,7 +322,15 @@ public sealed partial class SyncEngine
                 n == 1 ? first.Title ?? $"{name} can't be uploaded" : $"{n:N0} files can't be uploaded",
                 n == 1 ? first.Detail ?? "" : items.All(i => i.Flavor == GateKind)
                     ? "They were saved in a SolidWorks year the project can't take. Each one says what to do, then it uploads by itself."
+                    // One reason for all of them: that reason is the card's sentence (0.4.2).
+                    : items.Select(ReasonOf).Distinct(StringComparer.Ordinal).Count() == 1 ? ReasonOf(first)
                     : "Each one says why. They stay on this computer, and everything else keeps uploading.", (NoticeActionView?)null),
+            // However many there are, one card, one sentence and one action (0.4.2).
+            NoticeKinds.OutsideProject => (NoticeTones.Bad,
+                n == 1 ? $"{name} is outside every project" : $"{n:N0} files are outside every project",
+                n == 1 ? "Armory keeps only files inside a project folder. Move it into one of your project folders, and it uploads by itself."
+                    : "Armory keeps only files inside a project folder. Move them into your project folders, and they upload by themselves.",
+                new NoticeActionView("Open the Armory folder", BridgeMessages.OpenVault, [])),
             NoticeKinds.CantRead when items.All(i => i.Flavor == "stale") => (NoticeTones.Look,
                 n == 1 ? StaleMarkerTitle : $"{StaleMarkerTitle} with {n:N0} files open",
                 n == 1 ? first.Detail ?? "" : "Armory is treating them as closed. If SolidWorks still has one open, save it there.", null),
@@ -370,6 +383,28 @@ public sealed partial class SyncEngine
         return new NoticeGroupView(g.Key, g.Kind, tone, title, detail, n, action,
             items.Take(NoticeItemsShown).Select(i => new NoticeItemView(i.FileId?.ToString(), i.Path, NameOf(i.Path), i.ItemDetail ?? i.Detail)).ToArray());
     }
+
+    // What a list groups an item under: its own sentence, else the card's.
+    private static string ReasonOf(RawItem item) => item.ItemDetail ?? item.Detail ?? "";
+
+    // Every file of one card (its key), grouped by reason, the most common reason first, and in
+    // each reason by path: what the list shows when the student opens it. The count is the card's
+    // own, so the two always match. Null when the card is gone.
+    public Task<NoticeItemsView?> NoticeItemsAsync(string key, CancellationToken cancellationToken = default) => engineThread.InvokeAsync(() =>
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var group = RawNotices(state.Files.Values.Where(f => !f.Purged).ToArray()).FirstOrDefault(g => g.Key == key);
+        if (group is null) return Task.FromResult<NoticeItemsView?>(null);
+        return Task.FromResult<NoticeItemsView?>(ItemsOf(group));
+    });
+
+    private static NoticeItemsView ItemsOf(RawGroup group)
+        => new(group.Key, group.Items.Count, group.Items
+            .GroupBy(ReasonOf, StringComparer.Ordinal)
+            .OrderByDescending(g => g.Count()).ThenBy(g => g.Key, StringComparer.Ordinal)
+            .Select(g => new NoticeReasonView(g.Key, g.Count(), g.OrderBy(i => i.Path, StringComparer.OrdinalIgnoreCase)
+                .Select(i => new NoticeItemView(i.FileId?.ToString(), i.Path, NameOf(i.Path), i.ItemDetail ?? i.Detail)).ToArray()))
+            .ToArray());
 
     // The nameShared card for SolidWorks copies (a copied subassembly, a vendor part saved twice):
     // which of the two ways out fits.

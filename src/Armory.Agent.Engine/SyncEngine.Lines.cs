@@ -36,10 +36,10 @@ public sealed partial class SyncEngine
         runStarted = lastProgressLine = 0;
     }
 
-    // A line of what Armory is doing, in the window at once.
-    private void Line(string line)
+    // A line of what Armory is doing, in the window at once. step: a step's own line, kept once.
+    private void Line(string line, bool step = false)
     {
-        activity.Log(line);
+        activity.Log(line, step);
         RaiseActivity(now: true);
     }
 
@@ -109,7 +109,7 @@ public sealed partial class SyncEngine
     private async Task StepLineAsync(string line, QuietStep step, TimeSpan after)
     {
         await Task.Delay(after, CancellationToken.None);
-        if (!step.Over) Line(line);
+        if (!step.Over) Line(line, step: true);
     }
 
     private sealed class QuietStep : IDisposable

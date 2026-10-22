@@ -118,11 +118,20 @@ internal sealed class ActivityTracker(TimeProvider clock)
         }
     }
 
-    // One line of what Armory did, for the window's running lines.
-    internal void Log(string line)
+    // One line of what Armory did, for the window's running lines. A step's line ("Asking Armory
+    // what changed") is one line however often the step comes back: an earlier copy of it leaves
+    // the list as the new one comes in (0.4.2: IDEA-00's panel was "Asking Armory what changed"
+    // every 3 to 4 seconds and nothing else).
+    internal void Log(string line, bool step = false)
     {
         lock (gate)
         {
+            if (step && log.Any(l => l.Line == line))
+            {
+                var kept = log.Where(l => l.Line != line).ToArray();
+                log.Clear();
+                foreach (var l in kept) log.Enqueue(l);
+            }
             log.Enqueue((clock.GetUtcNow(), line));
             while (log.Count > LogShown) log.Dequeue();
             Changed();

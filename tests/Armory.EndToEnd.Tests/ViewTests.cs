@@ -64,23 +64,23 @@ public sealed class ViewTests
         await using var t = await TeamAsync();
         t.A.Write("Loose.SLDPRT", "outside every project");
         await t.A.SyncAsync();
-        var card = t.A.Card(NoticeKinds.CantSend)!;
-        Assert.Equal("Loose.SLDPRT can't be uploaded", card.Title);
+        var card = t.A.Card(NoticeKinds.OutsideProject)!;
+        Assert.Equal("Loose.SLDPRT is outside every project", card.Title);
         // Dismissed while a pass is running, before it has found this notice again.
         t.A.Engine.CrashPoint = p => { if (p == "after-capture") t.A.Engine.DismissNotice(card.Key); };
         await t.A.SyncAsync();
         t.A.Engine.CrashPoint = null;
-        Assert.Null(t.A.Card(NoticeKinds.CantSend));
+        Assert.Null(t.A.Card(NoticeKinds.OutsideProject));
         await t.A.SyncAsync();
-        Assert.Null(t.A.Card(NoticeKinds.CantSend));
+        Assert.Null(t.A.Card(NoticeKinds.OutsideProject));
         t.A.Restart();
         await t.A.SyncAsync();
-        Assert.Null(t.A.Card(NoticeKinds.CantSend));
+        Assert.Null(t.A.Card(NoticeKinds.OutsideProject));
         await t.A.SyncAsync();
-        Assert.Null(t.A.Card(NoticeKinds.CantSend));
+        Assert.Null(t.A.Card(NoticeKinds.OutsideProject));
         t.A.Write("Loose-2.SLDPRT", "another one");
         await t.A.SyncAsync();
-        var again = t.A.Card(NoticeKinds.CantSend)!;
+        var again = t.A.Card(NoticeKinds.OutsideProject)!;
         Assert.Equal("Loose-2.SLDPRT", Assert.Single(again.Items).Name);
     }
 

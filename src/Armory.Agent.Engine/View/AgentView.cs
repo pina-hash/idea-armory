@@ -104,6 +104,10 @@ public sealed record NoticeGroupView(string Key, string Kind, string Tone, strin
     IReadOnlyList<NoticeItemView> Items);
 public sealed record NoticeActionView(string Label, string Command, IReadOnlyList<string> Paths);
 public sealed record NoticeItemView(string? FileId, string Path, string Name, string? Detail);
+// Every file of one card (the answer to readNoticeItems, 0.4.2): Count is the card's own, and the
+// reasons' counts add up to it. Reason is the plain sentence its files share.
+public sealed record NoticeItemsView(string Key, int Count, IReadOnlyList<NoticeReasonView> Groups);
+public sealed record NoticeReasonView(string Reason, int Count, IReadOnlyList<NoticeItemView> Items);
 
 // What an action from the window came to, in one plain sentence (v2-design.md 4.2):
 // "Checked in Plate.SLDPRT.", "Close Plate.SLDPRT in SolidWorks first." Offer is what the window
@@ -183,7 +187,10 @@ public static class NoticeKinds
         CantRead = "cantRead", CheckInPartial = "checkInPartial", ProjectDeleted = "projectDeleted", NewerRelease = "newerRelease", SolidWorks = "solidWorks",
         // 0.4.0: SolidWorks (or another program) still has the file, so Armory waits and uploads
         // it the moment it lets go. Information, never an error.
-        LockWait = "lockWait";
+        LockWait = "lockWait",
+        // 0.4.2: files outside every project, one card however many (the field round's 1,498), and
+        // the Armory folder that is a project folder or inside one (the host's card, with Fix it).
+        OutsideProject = "outsideProject", VaultRoot = "vaultRoot";
 }
 public static class BadgesStates
 {
@@ -204,15 +211,19 @@ public static class BridgeMessages
     // Team files at a folder; "" is Home).
     public const string View = "view", FileDetail = "fileDetail", Activity = "activity", ActionResult = "actionResult", Reveal = "reveal";
     public const string WindowShot = "windowShot", MyFeedback = "myFeedback";
-    public static readonly IReadOnlyList<string> HostToPage = [View, FileDetail, Activity, ActionResult, WindowShot, MyFeedback, Reveal];
+    public static readonly IReadOnlyList<string> HostToPage = [View, FileDetail, Activity, ActionResult, WindowShot, MyFeedback, Reveal, NoticeItems];
     public const string Ready = "ready", Connect = "connect", CancelConnect = "cancelConnect", SignOut = "signOut", Pause = "pause", Resume = "resume",
         OpenVault = "openVault", OpenFile = "openFile", LaunchFile = "launchFile", ShowInFolder = "showInFolder", CheckOut = "checkOut", CheckIn = "checkIn",
         UndoCheckOut = "undoCheckOut", TakeBack = "takeBack", CreateFolder = "createFolder", RenameFolder = "renameFolder", DeleteFolder = "deleteFolder",
         RenameFile = "renameFile", AddFiles = "addFiles", DropFiles = "dropFiles", DismissNotice = "dismissNotice", SaveSettings = "saveSettings",
         ChooseVaultRoot = "chooseVaultRoot", ReportProblem = "reportProblem", OpenIncidents = "openIncidents", SendFeedback = "sendFeedback", TakeBackAll = "takeBackAll",
-        TakeOverFolder = "takeOverFolder", SwitchAccount = "switchAccount", PutBackKeptCopy = "putBackKeptCopy", TurnOnBadges = "turnOnBadges";
+        TakeOverFolder = "takeOverFolder", SwitchAccount = "switchAccount", PutBackKeptCopy = "putBackKeptCopy", TurnOnBadges = "turnOnBadges",
+        // 0.4.2: Fix it on the card about an Armory folder inside a project folder.
+        RepairVaultRoot = "repairVaultRoot";
     // Asks (0.3.3): each carries a requestId and is answered by its own message, not actionResult.
     public const string CaptureWindow = "captureWindow", ReadMyFeedback = "readMyFeedback";
+    // 0.4.2: every file of one notice card, grouped by reason (answered with noticeItems).
+    public const string ReadNoticeItems = "readNoticeItems", NoticeItems = "noticeItems";
     // A computer shared by several students (docs/agent/PROFILES.md).
     public const string ShowPicker = "showPicker", PickProfile = "pickProfile", EnterPin = "enterPin", SetPin = "setPin", AddProfile = "addProfile",
         ForgotPin = "forgotPin", CancelPicker = "cancelPicker", ChooseFolder = "chooseFolder", RemoveProfile = "removeProfile",
@@ -221,8 +232,8 @@ public static class BridgeMessages
     public const string KeepLocal = "keepLocal", SaveDown = "saveDown";
     public static readonly IReadOnlyList<string> PageToHost = [Ready, Connect, CancelConnect, SignOut, Pause, Resume, OpenVault, OpenFile, LaunchFile, ShowInFolder,
         CheckOut, CheckIn, UndoCheckOut, TakeBack, CreateFolder, RenameFolder, DeleteFolder, RenameFile, AddFiles, DropFiles, DismissNotice, SaveSettings, ChooseVaultRoot,
-        ReportProblem, OpenIncidents, SendFeedback, TakeBackAll, TakeOverFolder, SwitchAccount, PutBackKeptCopy, TurnOnBadges,
-        CaptureWindow, ReadMyFeedback,
+        ReportProblem, OpenIncidents, SendFeedback, TakeBackAll, TakeOverFolder, SwitchAccount, PutBackKeptCopy, TurnOnBadges, RepairVaultRoot,
+        CaptureWindow, ReadMyFeedback, ReadNoticeItems,
         ShowPicker, PickProfile, EnterPin, SetPin, AddProfile, ForgotPin, CancelPicker, ChooseFolder, RemoveProfile, SetSharedComputer, SetPinsRequired,
         KeepLocal, SaveDown];
 
@@ -252,4 +263,8 @@ public static class BridgeMessages
     // The requestId of an answer to something File Explorer or a notification asked for.
     public const string ShellRequest = "shell";
     public static string RevealMessage(string path) => JsonSerializer.Serialize(new { type = Reveal, path }, Json);
+    // The answer to readNoticeItems: the list's fields beside the type and requestId (items null
+    // when the card is gone).
+    public static string NoticeItemsMessage(string? requestId, string key, NoticeItemsView? items)
+        => JsonSerializer.Serialize(new { type = NoticeItems, requestId, key, count = items?.Count ?? 0, groups = items?.Groups ?? [] }, Json);
 }

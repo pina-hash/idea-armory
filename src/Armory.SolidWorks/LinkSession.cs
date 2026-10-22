@@ -272,7 +272,9 @@ internal sealed class LinkSession : ISaveDownCalls
     private int Modified(Document doc)
     {
         // Lab step N5 reads this line: the first change since the document was opened or saved.
-        if (doc.Changed != true) Log?.Invoke($"solidworks: {System.IO.Path.GetFileName(doc.Path)} changed");
+        // A new document has no path until it is first saved (0.4.2: IDEA-06 logged
+        // "solidworks:  changed", with no name, for each new part).
+        if (doc.Changed != true) Log?.Invoke($"solidworks: {LinkPolicy.LogName(doc.Path)} changed");
         doc.Changed = true;
         if (LinkPolicy.IsVaultDocument(doc.Path, context.VaultRoot)) context.Emit(new LinkModified(Pid, doc.Path));
         // Checked again once changes have been quiet for a while.

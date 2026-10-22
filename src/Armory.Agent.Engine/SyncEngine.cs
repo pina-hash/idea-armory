@@ -839,13 +839,19 @@ public sealed partial class SyncEngine : IAsyncDisposable
         return new(signedIn, online == true, uploaded, downloaded, sideVersions, refused, problems.ToArray());
     }
 
-    // The raw text of each problem goes to the log once, when it first appears.
-    private HashSet<string> loggedProblems = new(StringComparer.Ordinal);
+    // The raw text of each problem goes to the log once, when it first appears, and again only
+    // after a loop pass went by without it (0.4.2: a window action's pass, which looks at a few
+    // files, no longer makes the next loop pass log every problem again). A file another program
+    // holds is logged by its own waiting line, never as a sync line too.
+    private readonly HashSet<string> loggedProblems = new(StringComparer.Ordinal);
+    private readonly HashSet<string> waitProblems = new(StringComparer.Ordinal);
     private void LogNewProblems()
     {
         if (deps.Log is { } log)
-            foreach (var problem in problems.Where(p => !loggedProblems.Contains(p))) log("sync: " + problem);
-        loggedProblems = new(problems, StringComparer.Ordinal);
+            foreach (var problem in problems.Where(p => !loggedProblems.Contains(p) && !waitProblems.Contains(p))) log("sync: " + problem);
+        loggedProblems.UnionWith(problems);
+        if (passScope is null) loggedProblems.IntersectWith(problems);
+        waitProblems.Clear();
     }
 
     // ---- Refresh -------------------------------------------------------------------
@@ -1153,7 +1159,8 @@ public sealed partial class SyncEngine : IAsyncDisposable
             if (project is null)
             {
                 // A project deleted forever: its files are on their way to the recovery folder.
-                if (notify && !InPurgedProject(key)) Notice(NoticeKinds.CantSend, null, key, "It is outside every project. Move it into one of your project folders so Armory can keep it.");
+                // 0.4.2: its own card, one for all of them (the field round's 1,498 on IDEA-06).
+                if (notify && !InPurgedProject(key)) Notice(NoticeKinds.OutsideProject, null, key, OutsideProjectWords);
                 continue;
             }
             var known = state.Files.TryGetValue(key, out var existing);
@@ -1937,6 +1944,11 @@ public sealed partial class SyncEngine : IAsyncDisposable
 
     // Files waiting for another program to let go, since when (the now sentence counts them).
     private readonly Dictionary<string, DateTimeOffset> lockWaits = new(StringComparer.OrdinalIgnoreCase);
+    // The words each waiting file was last logged with: a file is logged once when it starts to
+    // wait and again only when Windows says something else about it (0.4.2: IDEA-06 logged
+    // "waiting: ... F26-ROB-0142 Full Assembly.SLDASM" every 3.3 seconds for as long as
+    // SolidWorks had it, 60 lines in 4 minutes).
+    private readonly Dictionary<string, string> lockWaitsLogged = new(StringComparer.OrdinalIgnoreCase);
 
     // One file waits for the program that has it: an information notice, a note in the flight
     // the first time (never FileFailed, so no repeatedFailure incident), and a pass soon after.
@@ -1950,22 +1962,40 @@ public sealed partial class SyncEngine : IAsyncDisposable
         }
         (Holding ? heldNotes : notes).Add(new Note(NoticeKinds.LockWait, null, path,
             $"SolidWorks (or another program) still has {name}. Armory uploads it as soon as it lets go. Nothing to do.", $"Waiting for SolidWorks to let go of {name}"));
-        (Holding ? heldProblems : problems).Add($"{path}: {raw}");
-        deps.Log?.Invoke($"waiting: {path}: {raw}");
+        var problem = $"{path}: {raw}";
+        (Holding ? heldProblems : problems).Add(problem);
+        waitProblems.Add(problem);
+        if (!lockWaitsLogged.TryGetValue(path, out var said) || !string.Equals(said, raw, StringComparison.Ordinal))
+        {
+            lockWaitsLogged[path] = raw;
+            deps.Log?.Invoke($"waiting: {path}: {raw}");
+        }
         SoonAgain();
     }
 
     // A file that waited went through, or is gone: it waits no more.
-    private void LockReleased(string path) => lockWaits.Remove(path);
+    private void LockReleased(string path)
+    {
+        lockWaits.Remove(path);
+        if (lockWaitsLogged.Remove(path)) deps.Log?.Invoke($"waiting: {path}: let go");
+    }
 
-    // Another pass a few seconds from now, so a file a program let go of moves at once.
-    private static readonly TimeSpan LockWaitRetry = TimeSpan.FromSeconds(3);
+    // Another pass soon, so a file a program let go of moves at once: 3 seconds while the longest
+    // wait is young, then less and less often (0.4.2: a file SolidWorks kept open for an hour ran
+    // a whole pass every 3 seconds for that hour). SolidWorks letting go of a file removes its
+    // "~$" marker, and that change wakes the engine at once anyway.
+    internal static TimeSpan LockWaitRetryAfter(TimeSpan waited)
+        => waited < TimeSpan.FromSeconds(30) ? TimeSpan.FromSeconds(3)
+            : waited < TimeSpan.FromMinutes(2) ? TimeSpan.FromSeconds(10)
+            : waited < TimeSpan.FromMinutes(10) ? TimeSpan.FromSeconds(30)
+            : TimeSpan.FromSeconds(60);
     private bool soonAgainSet;
     private void SoonAgain()
     {
         if (soonAgainSet) return;
         soonAgainSet = true;
-        _ = Task.Delay(LockWaitRetry).ContinueWith(_ =>
+        var oldest = lockWaits.Count == 0 ? deps.Clock.GetUtcNow() : lockWaits.Values.Min();
+        _ = Task.Delay(LockWaitRetryAfter(deps.Clock.GetUtcNow() - oldest)).ContinueWith(_ =>
         {
             soonAgainSet = false;
             try { Wake(); }

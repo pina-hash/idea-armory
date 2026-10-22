@@ -160,14 +160,14 @@ public sealed class V3Tests
         Assert.Equal("Robot 2027 was deleted forever on ideabosco.com, so Armory took it off this computer.", card.Title);
         Assert.Equal(NoticeTones.Info, card.Tone);
         Assert.Equal(1, t.World.Supabase.RpcCount("armory_project_purged") - 0); // A asked once, however many passes
-        Assert.DoesNotContain(t.A.Engine.View.Notices, n => n.Kind == NoticeKinds.CantSend);
+        Assert.DoesNotContain(t.A.Engine.View.Notices, n => n.Kind is NoticeKinds.CantSend or NoticeKinds.OutsideProject);
 
         // B had it open, with work never checked in: it stays until closed, is never sent, and
         // nothing calls it "outside every project".
         await t.B.SyncTimesAsync(2);
         Assert.Equal("Maria's unsent work", t.B.Text(Plate));
         Assert.Null(t.B.Read(Gear));
-        Assert.DoesNotContain(t.B.Engine.View.Notices, n => n.Kind == NoticeKinds.CantSend);
+        Assert.DoesNotContain(t.B.Engine.View.Notices, n => n.Kind is NoticeKinds.CantSend or NoticeKinds.OutsideProject);
         Assert.Empty(t.B.Engine.View.MyFiles);
         Assert.NotNull(t.B.Card(NoticeKinds.ProjectDeleted));
         t.B.Close(Plate);

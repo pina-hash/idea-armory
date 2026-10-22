@@ -251,6 +251,42 @@ public sealed class StateAndActivityTests
         public void Advance(double seconds) => Now += (long)(seconds * 1000);
     }
 
+    // 0.4.2 (IDEA-00, the field round of 2026-10-22): "What Armory is doing" was "Asking Armory
+    // what changed" every 3 to 4 seconds and nothing else. A step's line is one line however
+    // often the step comes back; what Armory did stays line by line.
+    [Fact]
+    public void An_idle_loop_s_step_line_is_one_line_however_often_it_comes_back()
+    {
+        var activity = new ActivityTracker(new ManualClock());
+        activity.Log("Downloaded Plate.SLDPRT (20 KB)");
+        for (var i = 0; i < 40; i++)
+        {
+            activity.Log("Asking Armory what changed", step: true);
+            if (i % 10 == 0) activity.Log("Looking over 1,655 files on this computer", step: true);
+        }
+        activity.Log("Uploaded Gear.SLDPRT (1.2 MB)");
+        activity.Log("Uploaded Gear.SLDPRT (1.2 MB)");
+        Assert.Equal(
+            ["Downloaded Plate.SLDPRT (20 KB)", "Looking over 1,655 files on this computer", "Asking Armory what changed", "Uploaded Gear.SLDPRT (1.2 MB)", "Uploaded Gear.SLDPRT (1.2 MB)"],
+            activity.Snapshot().Log.Select(l => l.Line).ToArray());
+    }
+
+    // 0.4.2: a file SolidWorks keeps open is tried again often at first and then less and less
+    // (IDEA-06 ran a whole pass every 3.3 seconds for as long as SolidWorks had its assembly).
+    [Fact]
+    public void A_file_held_open_is_tried_again_less_and_less_often()
+    {
+        Assert.Equal(TimeSpan.FromSeconds(3), SyncEngine.LockWaitRetryAfter(TimeSpan.Zero));
+        Assert.Equal(TimeSpan.FromSeconds(3), SyncEngine.LockWaitRetryAfter(TimeSpan.FromSeconds(29)));
+        Assert.Equal(TimeSpan.FromSeconds(10), SyncEngine.LockWaitRetryAfter(TimeSpan.FromSeconds(30)));
+        Assert.Equal(TimeSpan.FromSeconds(30), SyncEngine.LockWaitRetryAfter(TimeSpan.FromMinutes(2)));
+        Assert.Equal(TimeSpan.FromSeconds(60), SyncEngine.LockWaitRetryAfter(TimeSpan.FromHours(3)));
+        // An hour held open is about 85 passes, not 1,100.
+        var passes = 0;
+        for (var waited = TimeSpan.Zero; waited < TimeSpan.FromHours(1); waited += SyncEngine.LockWaitRetryAfter(waited)) passes++;
+        Assert.InRange(passes, 80, 90);
+    }
+
     [Fact]
     public void The_activity_panel_says_what_moves_in_the_window_s_words()
     {

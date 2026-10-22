@@ -63,4 +63,8 @@ internal static class LinkPolicy
         if (pinned is not { } pin || pin >= runningYear) return LinkSaveMode.Current;
         return optionOn && targetYear <= pin ? LinkSaveMode.SaveDown : LinkSaveMode.PrivateDraft;
     }
+
+    // A document's name for the log: its file name, or "a new document (not saved yet)".
+    internal static string LogName(string? path)
+        => string.IsNullOrWhiteSpace(path) || string.IsNullOrEmpty(System.IO.Path.GetFileName(path)) ? "a new document (not saved yet)" : System.IO.Path.GetFileName(path);
 }

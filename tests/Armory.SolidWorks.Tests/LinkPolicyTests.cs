@@ -111,4 +111,14 @@ public sealed class LinkPolicyTests
     [InlineData("!Excel.Application", 4120, false)]
     public void The_running_object_table_names_one_session_by_its_process(string displayName, int pid, bool names)
         => Assert.Equal(names, RunningObjects.Names(displayName, pid));
+
+    // 0.4.2 (IDEA-06's log, "solidworks:  changed" five times): a new document has no path until
+    // it is saved, and the log says so instead of an empty name.
+    [Fact]
+    public void A_new_document_is_named_in_the_log()
+    {
+        Assert.Equal("a new document (not saved yet)", LinkPolicy.LogName(""));
+        Assert.Equal("a new document (not saved yet)", LinkPolicy.LogName(null));
+        Assert.Equal("Plate.SLDPRT", LinkPolicy.LogName("C:/IDEA/Armory/Robot/Plate.SLDPRT"));
+    }
 }

@@ -67,4 +67,26 @@ public sealed class LockWaitTests
         Assert.Equal(Hash("v2"), await t.CurrentHash(await t.FileId("Plate.SLDPRT")));
         Assert.DoesNotContain(t.A.Engine.View.Notices, n => n.Kind == NoticeKinds.LockWait);
     }
+
+    // 0.4.2 (IDEA-06 on 0.4.1, the field round of 2026-10-22): "waiting: <file>: The process cannot
+    // access the file ..." was written every 3.3 seconds while SolidWorks held it, and a "sync:"
+    // line said it again. A held file is logged once, then once more when it is let go.
+    [PostgresFact]
+    public async Task A_held_file_is_logged_once_however_many_passes_wait()
+    {
+        await using var t = await TeamAsync();
+        t.A.Write(Template, "template");
+        await t.A.SyncAsync();
+        t.A.Write(Mine, "my blade");
+        t.A.Disk.HoldUnreadable(Mine);
+        await t.A.SyncTimesAsync(6);
+        string[] Lines(string start) { lock (t.A.Logged) return t.A.Logged.Where(l => l.StartsWith(start, StringComparison.Ordinal) && l.Contains(Mine, StringComparison.Ordinal)).ToArray(); }
+        Assert.Single(Lines("waiting: "));
+        Assert.Empty(Lines("sync: "));
+        Assert.Contains(t.A.Engine.View.Notices, n => n.Kind == NoticeKinds.LockWait);
+        t.A.Disk.Unhold(Mine);
+        await t.A.SyncTimesAsync(2);
+        Assert.Equal(["waiting: " + Mine + ": let go"], Lines("waiting: ").Skip(1).ToArray());
+        Assert.Equal(Hash("my blade"), await t.CurrentHash(await t.FileId("matthew body design 1.SLDPRT")));
+    }
 }
