@@ -51,7 +51,8 @@
 	 * @typedef {'upload' | 'download' | 'move'} Direction
 	 * @typedef {'info' | 'look' | 'bad'} NoticeTone
 	 * @typedef {'import' | 'nameShared' | 'newerWaiting' | 'keptCopy' | 'takenBack' | 'folderPutBack'
-	 *   | 'projectPutBack' | 'projectRenaming' | 'projectDeleted' | 'cantSend' | 'cantRead' | 'checkInPartial' | 'newerRelease' | 'solidWorks' | 'lockWait'} NoticeKind
+	 *   | 'projectPutBack' | 'projectRenaming' | 'projectDeleted' | 'cantSend' | 'cantRead' | 'checkInPartial' | 'newerRelease' | 'solidWorks' | 'lockWait'
+	 *   | 'outsideProject' | 'vaultRoot'} NoticeKind
 	 * @typedef {'version' | 'keptCopy' | 'removed'} HistoryKind
 	 * @typedef {'system' | 'idea' | 'spaceWhite'} ThemeSetting
 	 * @typedef {'idea' | 'spaceWhite'} EffectiveTheme
@@ -149,8 +150,25 @@
 	 * @property {NoticeTone} tone
 	 * @property {string} title       e.g. "14 files share a name with other files in this project"
 	 * @property {string} detail
-	 * @property {number} count       the total; items holds at most 200
+	 * @property {number} count       the total; items holds at most 200 (readNoticeItems asks for all of them)
 	 * @property {NoticeActionView | null} action
+	 * @property {NoticeItemView[]} items
+	 */
+
+	/**
+	 * Every file of one card, grouped by reason (the answer to readNoticeItems, 0.4.2). count is
+	 * the card's own; the reasons' counts add up to it.
+	 * @typedef {object} NoticeItemsView
+	 * @property {string} key
+	 * @property {number} count
+	 * @property {NoticeReasonView[]} groups
+	 */
+
+	/**
+	 * The files of one card that share one reason, in path order.
+	 * @typedef {object} NoticeReasonView
+	 * @property {string} reason      the plain sentence they share
+	 * @property {number} count
 	 * @property {NoticeItemView[]} items
 	 */
 
@@ -405,7 +423,7 @@
 	 * An actionResult with requestId 'shell' answers something File Explorer's right-click or a
 	 * notification asked for; reveal is Show in Armory (a file's detail, or Team files at a
 	 * folder; '' is Home).
-	 * @typedef {{ type: 'view', view: AgentView } | { type: 'fileDetail', detail: FileDetailView } | { type: 'activity', activity: ActivityView } | { type: 'actionResult', requestId: string, ok: boolean, message: string, offer: string | null } | { type: 'windowShot', requestId: string, ok: boolean, id: string | null, url: string | null, width: number, height: number, bytes: number, scaled: boolean, message: string | null } | { type: 'myFeedback', requestId: string, state: FeedbackListState, pictures: boolean, message: string | null, notes: FeedbackNoteView[] } | { type: 'reveal', path: string }} HostMessage
+	 * @typedef {{ type: 'view', view: AgentView } | { type: 'fileDetail', detail: FileDetailView } | { type: 'activity', activity: ActivityView } | { type: 'actionResult', requestId: string, ok: boolean, message: string, offer: string | null } | { type: 'windowShot', requestId: string, ok: boolean, id: string | null, url: string | null, width: number, height: number, bytes: number, scaled: boolean, message: string | null } | { type: 'myFeedback', requestId: string, state: FeedbackListState, pictures: boolean, message: string | null, notes: FeedbackNoteView[] } | { type: 'reveal', path: string } | { type: 'noticeItems', requestId: string, key: string, count: number, groups: NoticeReasonView[] }} HostMessage
 	 */
 
 	/**
@@ -441,6 +459,9 @@
 	 *   putBackKeptCopy: { fileId, versionId } (File detail: one of your kept copies, a keptCopy history
 	 *                                          entry's id, put back on this computer and checked out to you)
 	 *   turnOnBadges: none                    (Settings: the badges setup, as an administrator; one sentence back)
+	 *   repairVaultRoot: none                 (Fix it on the vaultRoot card: Armory goes back to the folder that
+	 *                                          holds the project folders; one sentence back)
+	 *   readNoticeItems: { key }              (an ask: the host answers noticeItems, every file of that card)
 	 * A shared computer (PROFILES.md):
 	 *   showPicker: none                      (Switch student: the picker shows)
 	 *   cancelPicker: none                    (back to the tiles; a browser sign-in under way stops)
@@ -460,7 +481,7 @@
 	 *   | 'undoCheckOut' | 'takeBack' | 'createFolder' | 'renameFolder' | 'deleteFolder' | 'renameFile'
 	 *   | 'addFiles' | 'dropFiles' | 'dismissNotice' | 'saveSettings' | 'chooseVaultRoot'
 	 *   | 'reportProblem' | 'openIncidents' | 'sendFeedback' | 'takeBackAll' | 'takeOverFolder' | 'switchAccount'
-	 *   | 'putBackKeptCopy' | 'captureWindow' | 'readMyFeedback' | 'turnOnBadges'
+	 *   | 'putBackKeptCopy' | 'captureWindow' | 'readMyFeedback' | 'turnOnBadges' | 'repairVaultRoot' | 'readNoticeItems'
 	 *   | 'showPicker' | 'pickProfile' | 'enterPin' | 'setPin' | 'addProfile' | 'forgotPin' | 'cancelPicker'
 	 *   | 'chooseFolder' | 'removeProfile' | 'setSharedComputer' | 'setPinsRequired'
 	 *   | 'keepLocal' | 'saveDown'} PageMessageType
@@ -487,10 +508,10 @@
 	/* ------------------------------------------------------- Message lists */
 
 	/** Page to host message types (BRIDGE.md, "Page to host"). */
-	var PAGE_TO_HOST = ['ready', 'connect', 'cancelConnect', 'signOut', 'pause', 'resume', 'openVault', 'openFile', 'launchFile', 'showInFolder', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'dismissNotice', 'saveSettings', 'chooseVaultRoot', 'reportProblem', 'openIncidents', 'sendFeedback', 'takeBackAll', 'takeOverFolder', 'switchAccount', 'putBackKeptCopy', 'captureWindow', 'readMyFeedback', 'turnOnBadges', 'showPicker', 'pickProfile', 'enterPin', 'setPin', 'addProfile', 'forgotPin', 'cancelPicker', 'chooseFolder', 'removeProfile', 'setSharedComputer', 'setPinsRequired', 'keepLocal', 'saveDown'];
+	var PAGE_TO_HOST = ['ready', 'connect', 'cancelConnect', 'signOut', 'pause', 'resume', 'openVault', 'openFile', 'launchFile', 'showInFolder', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'dismissNotice', 'saveSettings', 'chooseVaultRoot', 'reportProblem', 'openIncidents', 'sendFeedback', 'takeBackAll', 'takeOverFolder', 'switchAccount', 'putBackKeptCopy', 'captureWindow', 'readMyFeedback', 'turnOnBadges', 'repairVaultRoot', 'readNoticeItems', 'showPicker', 'pickProfile', 'enterPin', 'setPin', 'addProfile', 'forgotPin', 'cancelPicker', 'chooseFolder', 'removeProfile', 'setSharedComputer', 'setPinsRequired', 'keepLocal', 'saveDown'];
 
 	/** Host to page message types (BRIDGE.md, "Host to page"). */
-	var HOST_TO_PAGE = ['view', 'fileDetail', 'activity', 'actionResult', 'windowShot', 'myFeedback', 'reveal'];
+	var HOST_TO_PAGE = ['view', 'fileDetail', 'activity', 'actionResult', 'windowShot', 'myFeedback', 'reveal', 'noticeItems'];
 
 	/** Required fields per page-to-host type, as the host's message records name them. */
 	var REQUIRED = {
@@ -523,15 +544,16 @@
 		setSharedComputer: ['on', 'pin'],
 		setPinsRequired: ['on'],
 		keepLocal: ['paths'],
-		saveDown: ['paths']
+		saveDown: ['paths'],
+		readNoticeItems: ['key']
 	};
 
 	/** Actions: each carries a requestId, and the host answers it with one actionResult. */
-	var ACTIONS = ['launchFile', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'reportProblem', 'sendFeedback', 'takeBackAll', 'takeOverFolder', 'putBackKeptCopy', 'turnOnBadges', 'pickProfile', 'enterPin', 'setPin', 'addProfile', 'forgotPin', 'chooseFolder', 'removeProfile', 'setSharedComputer', 'setPinsRequired', 'keepLocal', 'saveDown'];
+	var ACTIONS = ['launchFile', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'reportProblem', 'sendFeedback', 'takeBackAll', 'takeOverFolder', 'putBackKeptCopy', 'turnOnBadges', 'pickProfile', 'enterPin', 'setPin', 'addProfile', 'forgotPin', 'chooseFolder', 'removeProfile', 'setSharedComputer', 'setPinsRequired', 'keepLocal', 'saveDown', 'repairVaultRoot'];
 
 	/** Asks: each carries a requestId too, and the host answers it with a message of its own
-	 *  (windowShot, myFeedback), never actionResult. */
-	var ASKS = ['captureWindow', 'readMyFeedback'];
+	 *  (windowShot, myFeedback, noticeItems), never actionResult. */
+	var ASKS = ['captureWindow', 'readMyFeedback', 'readNoticeItems'];
 
 	/* ----------------------------------------------------------- Plumbing */
 
@@ -664,6 +686,32 @@
 				message: how === 'offline' ? 'You\'re offline. Your feedback shows here once this computer is back online.' : null,
 				notes: shown ? demo.myFeedback : []
 			});
+		}
+		/** Every file of a card, grouped by reason: the demo card's items, or as many as its count
+		 *  says (a card of 1,498 in the demo carries 200 items; the rest are made up alike). */
+		function noticeItems(message) {
+			var n = (view.notices || []).filter(function (x) {
+				return x.key === message.key;
+			})[0];
+			var items = n ? n.items.slice() : [];
+			for (var i = items.length; n && i < n.count; i++) {
+				var model = n.items[i % n.items.length];
+				var dot = model.name.lastIndexOf('.');
+				var name = (dot > 0 ? model.name.slice(0, dot) : model.name) + ' ' + (i + 1) + (dot > 0 ? model.name.slice(dot) : '');
+				items.push({ fileId: null, path: model.path.slice(0, model.path.length - model.name.length) + name, name: name, detail: model.detail });
+			}
+			var groups = [];
+			var byReason = {};
+			items.forEach(function (it) {
+				var reason = it.detail || (n ? n.detail : '');
+				if (!byReason[reason]) groups.push((byReason[reason] = { reason: reason, count: 0, items: [] }));
+				byReason[reason].items.push(it);
+				byReason[reason].count++;
+			});
+			groups.sort(function (a, b) {
+				return b.count - a.count;
+			});
+			deliver({ type: 'noticeItems', requestId: message.requestId, key: message.key, count: n ? n.count : 0, groups: groups });
 		}
 		function useState(name) {
 			var s = demo.states[name];
@@ -1030,6 +1078,17 @@
 					break;
 				case 'readMyFeedback':
 					myFeedback(message);
+					break;
+				case 'readNoticeItems':
+					noticeItems(message);
+					break;
+				case 'repairVaultRoot':
+					// The demo's folder is fixed at once: the card goes, and Home is as connected.
+					view.notices = (view.notices || []).filter(function (n) {
+						return n.kind !== 'vaultRoot' && n.kind !== 'outsideProject';
+					});
+					postView();
+					result(message, true, 'Fixed. Armory uses ' + view.vaultRoot + ' again, and every file is where it belongs.');
 					break;
 				case 'turnOnBadges':
 					// In the app Windows asks for an administrator's password first; the demo's is given.

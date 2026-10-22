@@ -48,6 +48,10 @@ internal sealed record TurnOnBadgesMessage(string? RequestId);
 // file on this computer only", and "Save it in 2025 now" (the project's pinned year).
 internal sealed record KeepLocalMessage(IReadOnlyList<string>? Paths, string? RequestId);
 internal sealed record SaveDownMessage(IReadOnlyList<string>? Paths, string? RequestId);
+// 0.4.2: Fix it on the card about an Armory folder inside a project folder.
+internal sealed record RepairVaultRootMessage(string? RequestId);
+// 0.4.2: every file of one notice card (its key), answered with noticeItems, never actionResult.
+internal sealed record ReadNoticeItemsMessage(string? Key, string? RequestId);
 
 // What the bridge needs from the window it lives in. Every member runs on the UI thread.
 internal interface IBridgeWindow
@@ -112,6 +116,8 @@ internal sealed partial class Bridge(AgentHost host, IBridgeWindow window, Agent
         [BridgeMessages.CaptureWindow] = typeof(CaptureWindowMessage),
         [BridgeMessages.ReadMyFeedback] = typeof(ReadMyFeedbackMessage),
         [BridgeMessages.TurnOnBadges] = typeof(TurnOnBadgesMessage),
+        [BridgeMessages.RepairVaultRoot] = typeof(RepairVaultRootMessage),
+        [BridgeMessages.ReadNoticeItems] = typeof(ReadNoticeItemsMessage),
         // Several students on one computer (Bridge.Profiles.cs).
         [BridgeMessages.ShowPicker] = null,
         [BridgeMessages.PickProfile] = typeof(PickProfileMessage),
@@ -341,6 +347,23 @@ internal sealed partial class Bridge(AgentHost host, IBridgeWindow window, Agent
                 case BridgeMessages.ReadMyFeedback:
                     var mine = Read<ReadMyFeedbackMessage>(message);
                     window.Post(BridgeMessages.MyFeedbackMessage(mine?.RequestId, await host.ReadMyFeedbackAsync()));
+                    break;
+                case BridgeMessages.RepairVaultRoot:
+                    // Folding a folder of thousands of files takes as long as their bytes do: its
+                    // answer is never a slowAction, so it is not timed as a window action.
+                    var repair = Read<RepairVaultRootMessage>(message);
+                    ActionResult repaired;
+                    try { repaired = await host.RepairVaultRootAsync(); }
+                    catch (Exception error) when (error is not OutOfMemoryException)
+                    {
+                        log.Error("fix the Armory folder failed", error);
+                        repaired = new ActionResult(false, "Armory couldn't fix its folder. Try again in a moment.");
+                    }
+                    window.Post(BridgeMessages.ActionResultMessage(repair?.RequestId, repaired.Ok, repaired.Message, repaired.Offer));
+                    break;
+                case BridgeMessages.ReadNoticeItems:
+                    var list = Read<ReadNoticeItemsMessage>(message);
+                    if (list?.Key is { Length: > 0 and <= 512 } key) window.Post(BridgeMessages.NoticeItemsMessage(list.RequestId, key, await host.NoticeItemsAsync(key)));
                     break;
                 case BridgeMessages.TurnOnBadges:
                     var badges = Read<TurnOnBadgesMessage>(message);

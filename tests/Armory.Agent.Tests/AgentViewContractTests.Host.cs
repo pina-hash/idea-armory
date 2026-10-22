@@ -97,6 +97,9 @@ public sealed partial class AgentViewContractTests
             // File Explorer's answers come as an actionResult too, and Show in Armory as reveal.
             (BridgeMessages.ActionResult, BridgeMessages.ActionResultMessage(BridgeMessages.ShellRequest, true, "Checked in 3 files.")),
             (BridgeMessages.Reveal, BridgeMessages.RevealMessage("Robot/Drivetrain/Plate.SLDPRT")),
+            // 0.4.2: a card's whole list, grouped by reason.
+            (BridgeMessages.NoticeItems, BridgeMessages.NoticeItemsMessage("r11", "outsideProject", new NoticeItemsView("outsideProject", 1,
+                [new NoticeReasonView("Outside every project.", 1, [new NoticeItemView(null, "Old/Part.SLDPRT", "Part.SLDPRT", "Outside every project.")])]))),
         })
         {
             using var document = JsonDocument.Parse(json);

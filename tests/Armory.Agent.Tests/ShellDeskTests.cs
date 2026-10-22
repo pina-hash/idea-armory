@@ -81,6 +81,7 @@ internal sealed class FakeShellHost(AgentView view) : IShellHost
     public Task<ActionResult> TakeBackAsync(IReadOnlyList<Guid> fileIds) => Call("force check in", fileIds.Select(i => i.ToString()));
     public Task<ActionResult> CheckOutAndReopenAsync(IReadOnlyList<string> paths) => Call("check out and reopen", paths);
     public Task<ActionResult> AnswerSaveDownAsync(string path, bool keepLocal) => Call(keepLocal ? "keep local" : "save in the pinned year", [path]);
+    public Task<ActionResult> LaunchAsync(string path) => Call("open", [path]);
     public bool PickerShowing { get; set; }
 }
 
@@ -308,6 +309,39 @@ public sealed class ShellDeskTests
         var signedOut = ShellViews.View([ShellViews.Row(Plate)], Connections.SignedOut);
         var fresh = ProtocolLink.Format(desk.Tokens.Issue(ProtocolLink.CheckOut, [Plate]), ProtocolLink.CheckOut);
         var (outHost, outSurface, _) = await Run(signedOut, ShellViews.Batch(ShellVerb.Uri, fresh), desk: desk);
+        Assert.Empty(outHost.Calls);
+        Assert.Equal("Connect this computer first.", Assert.Single(outSurface.Answers).Message);
+    }
+
+    // 0.4.2 (website feedback ba81c57d): Open on a file's website page opens that file the way the
+    // window's own Open does (never a check out), and shows its page in the window. A file this
+    // computer doesn't have, or before signing in, only says why.
+    [Fact]
+    public async Task The_website_s_open_link_opens_the_file_as_the_window_does_and_nothing_more()
+    {
+        var plate = ShellViews.Row(Plate);
+        var view = ShellViews.View(plate, ShellViews.Row(Gear, ShellViews.HeldBy("Maria Lopez")));
+        var link = ProtocolLink.FormatOpen(Guid.Parse(plate.FileId!));
+        var (host, surface, _) = await Run(view, ShellViews.Batch(ShellVerb.Uri, link));
+        Assert.Equal(["open: " + Plate], host.Calls);
+        Assert.Equal(["reveal " + Plate], surface.Shown);
+        Assert.Equal("Done.", Assert.Single(surface.Answers).Message);
+
+        // Not one of this Armory's files: nothing opens, the window says why.
+        var (other, otherSurface, _) = await Run(view, ShellViews.Batch(ShellVerb.Uri, ProtocolLink.FormatOpen(Guid.NewGuid())));
+        Assert.Empty(other.Calls);
+        Assert.Equal(["window"], otherSurface.Shown);
+        Assert.Equal(ShellWords.NotHereFromWebsite, Assert.Single(otherSurface.Answers).Message);
+
+        // Not downloaded yet: its page shows, and the sentence says to try again.
+        var coming = plate with { Status = FileStatuses.NotOnThisComputer };
+        var (later, laterSurface, _) = await Run(ShellViews.View(coming), ShellViews.Batch(ShellVerb.Uri, link));
+        Assert.Empty(later.Calls);
+        Assert.Equal(["reveal " + Plate], laterSurface.Shown);
+        Assert.Equal("Plate.SLDPRT isn't on this computer yet. Armory is downloading it. Click Open again in a moment.", Assert.Single(laterSurface.Answers).Message);
+
+        // Signed out: the window opens on Connect.
+        var (outHost, outSurface, _) = await Run(ShellViews.View([plate], Connections.SignedOut), ShellViews.Batch(ShellVerb.Uri, link));
         Assert.Empty(outHost.Calls);
         Assert.Equal("Connect this computer first.", Assert.Single(outSurface.Answers).Message);
     }

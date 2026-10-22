@@ -240,6 +240,11 @@ internal sealed class HostParts
     // Whether SolidWorks has a document open from a folder (a "~$" marker in it).
     internal required Func<string, bool> OpenInSolidWorks { get; init; }
     internal Func<bool> LightApps { get; init; } = WindowsTheme.AppsUseLightTheme;
+    // The Armory folder rule's disk facts, a folder's own state document, and Fix it
+    // (VaultRoot.cs, 0.4.2): the real disk's unless a test gives its own.
+    internal IVaultFolderFacts FolderFacts { get; init; } = VaultFolderFacts.Disk;
+    internal Func<string, VaultStateFile> StateFile { get; init; } = VaultStateFile.Read;
+    internal Func<string, string, DateTimeOffset, Action<string>, VaultRepairResult> RepairFolder { get; init; } = (bad, target, now, log) => VaultRootRepair.Run(bad, target, now, log);
     internal TimeProvider Clock { get; init; } = TimeProvider.System;
     internal string MachineName { get; init; } = Environment.MachineName;
     internal int PinIterations { get; init; } = PinHash.Iterations;

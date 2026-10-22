@@ -42,6 +42,7 @@
 		selected: {}, // vault-relative path -> true, files picked in the open folder
 		anchor: null, // the last file picked, for a Shift range
 		expanded: {}, // notice key -> its list is open
+		noticeFull: {}, // notice key -> every file of that card, grouped by reason (readNoticeItems)
 		promptGone: null, // the prompt the student answered with Not now
 		returnKey: null, // the control that opened detail, so Back can put focus there again
 		homeScroll: 0,
@@ -132,7 +133,10 @@
 		newerRelease: 'newer',
 		solidWorks: 'part',
 		// 0.4.0: a file SolidWorks still has, waiting to upload.
-		lockWait: 'clock'
+		lockWait: 'clock',
+		// 0.4.2: files outside every project, and an Armory folder inside a project folder.
+		outsideProject: 'folder-go',
+		vaultRoot: 'folder-back'
 	};
 
 	var SYNC = {
@@ -500,6 +504,12 @@
 					return 'Keep this file on this computer only, as it is now. It isn\'t shared with the team until it can be saved in the team\'s SolidWorks year.';
 				case 'saveDown':
 					return 'Save this file in the team\'s SolidWorks year now, so it can be shared.';
+				case 'repairVaultRoot':
+					return 'Move Armory back to the folder that holds your projects. Copies that are the same are joined, and a file changed in two places keeps both.';
+				case 'openVault':
+					return 'Open your Armory folder in File Explorer, so you can move these files into a project folder.';
+				case 'chooseVaultRoot':
+					return 'Pick the folder that holds your project folders.';
 			}
 			return c.label + '.';
 		},
@@ -2116,14 +2126,18 @@
 		var items = n.items || [];
 		// A list is for two files or more: one file is named in the card and gets its own
 		// key, never a list of one.
-		var hasItems = items.length > 1 && n.kind !== 'projectDeleted';
+		var hasItems = (n.count || items.length) > 1 && items.length > 0 && n.kind !== 'projectDeleted';
+		// The whole list, grouped by reason, once the host has answered for this count (0.4.2).
+		var full = ui.noticeFull[n.key];
+		var whole = full && full.groups && full.count === n.count ? full : null;
+		var total = n.count || items.length;
 		var open = hasItems && !!ui.expanded[n.key];
 		var keys = '';
 		var a = n.action;
 		var expandKey = function (word) {
 			return (
 				'<button class="key" type="button" data-action="expand" data-notice="' + esc(n.key) + '" data-key="nt-expand-' + esc(n.key) + '" aria-expanded="' + open + '" aria-controls="' + id + '-items"' +
-				(open ? tipAttr('hideList') : tipAttr('showList', { what: plural(items.length, 'file', 'files') })) + '>' +
+				(open ? tipAttr('hideList') : tipAttr('showList', { what: plural(total, 'file', 'files') })) + '>' +
 				icon(open ? 'chev-down' : 'chev-right') + '<span>' + esc(word) + '</span></button>'
 			);
 		};
@@ -2131,7 +2145,7 @@
 			keys +=
 				'<button class="key" type="button" data-action="notice" data-notice="' + esc(n.key) + '" data-key="nt-act-' + esc(n.key) + '" aria-describedby="' + id + '-t"' +
 				tipAttr('noticeAction', { command: a.command, label: a.label, name: leaf((a.paths || [])[0] || (items[0] || {}).path || '') }) + '>' + esc(a.label) + '</button>';
-		if (hasItems) keys += expandKey(open ? (a && a.command === 'expand' ? 'Hide them' : 'Hide the files') : a && a.command === 'expand' ? a.label : 'Show the ' + plural(items.length, 'file', 'files'));
+		if (hasItems) keys += expandKey(open ? (a && a.command === 'expand' ? 'Hide them' : 'Hide the files') : a && a.command === 'expand' ? a.label : 'Show the ' + plural(total, 'file', 'files'));
 		else if (items.length === 1 && items[0].fileId && (!a || a.command === 'expand'))
 			keys += '<button class="key" type="button" data-action="openFile" data-file-id="' + esc(items[0].fileId) + '" data-key="nt-file-' + esc(n.key) + '" aria-describedby="' + id + '-t"' + tipAttr('seeFile') + '>' + icon('chev-right') + '<span>See the file</span></button>';
 		var list = '';
@@ -2140,18 +2154,19 @@
 				id: 'vl-' + id,
 				cls: 'items',
 				label: n.title,
-				items: items.map(function (it) {
-					return { kind: 'item', notice: n.key, noticeKind: n.kind, item: it };
-				}),
+				items: noticeRows(n, whole ? whole.groups : null, items),
 				key: function (x) {
-					return 'ni:' + x.notice + ':' + (x.item.fileId || x.item.path);
+					return x.kind === 'reason' ? 'nr:' + x.notice + ':' + x.at : 'ni:' + x.notice + ':' + (x.item.fileId || x.item.path);
 				},
-				row: itemRow,
+				row: function (x, i, active) {
+					return x.kind === 'reason' ? reasonRow(x, i) : itemRow(x, i, active);
+				},
 				scrollEl: function () {
 					return document.getElementById(id + '-items');
 				}
 			}) + '</div>';
-			if (n.count > items.length) list += '<p class="notice-more">' + esc('Showing ' + num(items.length) + ' of ' + num(n.count) + '.') + '</p>';
+			// Until the whole list is here, the card's first files show, and the line says the rest is coming.
+			if (!whole && n.count > items.length) list += '<p class="notice-more">' + esc('Showing ' + num(items.length) + ' of ' + num(n.count) + '. Getting the rest.') + '</p>';
 		}
 		return (
 			'<li class="attn-card panel" data-tone="' + (NOTICE_TONE[n.tone] || 'look') + '" data-kind="' + esc(n.kind) + '">' +
@@ -2162,6 +2177,37 @@
 			(keys ? '<div class="attn-actions">' + keys + '</div>' : '') +
 			list +
 			'</div></li>'
+		);
+	}
+
+	/** A card's list rows: every file, with a line before each reason when the files have more
+	 *  than one (the most common reason first), or the view's first files until the whole list
+	 *  is here. */
+	function noticeRows(n, groups, items) {
+		var rows = [];
+		if (!groups) {
+			items.forEach(function (it) {
+				rows.push({ kind: 'item', notice: n.key, noticeKind: n.kind, item: it });
+			});
+			return rows;
+		}
+		groups.forEach(function (g, at) {
+			if (groups.length > 1) rows.push({ kind: 'reason', notice: n.key, at: at, reason: g.reason, count: g.count });
+			// The reason is said once, above its files (or by the card for one reason): each
+			// file's line says where it is instead.
+			g.items.forEach(function (it) {
+				rows.push({ kind: 'item', notice: n.key, noticeKind: n.kind, item: it, where: true });
+			});
+		});
+		return rows;
+	}
+
+	/** The line before a reason's files: how many, and the reason, in a row of its own. */
+	function reasonRow(x, i) {
+		return (
+			'<li class="vrow reason-row" data-vkey="' + esc('nr:' + x.notice + ':' + x.at) + '" data-i="' + i + '">' +
+			'<span class="reason-count">' + esc(plural(x.count, 'file', 'files')) + '</span>' +
+			'<span class="reason-words">' + esc(x.reason) + '</span></li>'
 		);
 	}
 
@@ -2197,7 +2243,7 @@
 			hit: hit,
 			k: k,
 			name: it.name,
-			line: '<span class="row-meta">' + esc(it.detail || whereIs(it.path)) + '</span>',
+			line: '<span class="row-meta">' + esc((x.where ? whereIs(it.path) || 'Armory folder' : '') || it.detail || whereIs(it.path)) + '</span>',
 			extra: extra,
 			go: it.fileId || other ? 'chev-right' : 'folder-go'
 		});
@@ -2446,7 +2492,11 @@
 		html += '<h2 class="section-label" id="proj-label">Team files</h2>';
 		var place = browserPlace();
 		if (!place) {
-			html += '<p class="group-help">You\'re not in any projects yet. Ask your teacher or CAD lead to add you.</p>';
+			// 0.4.2: while Armory's folder waits to be fixed, no engine runs and no project shows.
+			var waitingForFix = (v.notices || []).some(function (n) {
+				return n.kind === 'vaultRoot';
+			});
+			html += '<p class="group-help">' + (waitingForFix ? 'Your team\'s files show here again once Armory\'s folder is fixed.' : 'You\'re not in any projects yet. Ask your teacher or CAD lead to add you.') + '</p>';
 			return html + '</section>';
 		}
 		html += '<div class="pads" role="tablist" aria-labelledby="proj-label">';
@@ -4055,6 +4105,10 @@
 			case 'showInFolder':
 				if (paths[0]) bridge.send('showInFolder', { path: paths[0] });
 				break;
+			case 'openVault':
+			case 'chooseVaultRoot':
+				bridge.send(a.command);
+				break;
 			case 'openFile':
 				var first = (n.items || []).filter(function (it) {
 					return it.fileId;
@@ -4068,8 +4122,33 @@
 
 	function toggleExpand(keyName) {
 		if (ui.expanded[keyName]) delete ui.expanded[keyName];
-		else ui.expanded[keyName] = true;
+		else {
+			ui.expanded[keyName] = true;
+			askNoticeItems(keyName);
+		}
 		render();
+	}
+
+	/** An open card's whole list is asked for once its count is not the one the page has (the
+	 *  view carries at most 200 items of a card; the host answers every one, grouped by reason). */
+	function askNoticeItems(keyName) {
+		var n = (ui.view && ui.view.notices ? ui.view.notices : []).filter(function (x) {
+			return x.key === keyName;
+		})[0];
+		if (!n) return false;
+		var have = ui.noticeFull[keyName];
+		if (have && (have.count === n.count || have.asking === n.count)) return false;
+		ui.noticeFull[keyName] = { count: have ? have.count : -1, groups: have ? have.groups : null, asking: n.count };
+		bridge.send('readNoticeItems', { key: keyName });
+		return true;
+	}
+
+	/** The host's answer: the card's list is drawn from it while the card's count is the same. */
+	function noticeItemsRead(message) {
+		if (!ui.expanded[message.key]) return;
+		ui.noticeFull[message.key] = { count: message.count, groups: message.groups, asking: null };
+		render();
+		routeAnswered('noticeItems');
 	}
 
 	/* ------------------------------------------------------- Long lists */
@@ -4088,6 +4167,8 @@
 		// A new generation of the list's items: each drawn row is checked against it once.
 		def.gen = ++listGen;
 		def.active = clamp(ui.active[def.id] || 0, 0, Math.max(0, def.items.length - 1));
+		// A reason's line is not a row to stand on: Tab enters on the file after it.
+		while (def.items[def.active] && def.items[def.active].kind === 'reason' && def.active < def.items.length - 1) def.active++;
 		lists[def.id] = def;
 		return '<ul class="vlist' + (def.cls ? ' ' + def.cls : '') + '" id="' + def.id + '" aria-label="' + esc(def.label) + '" data-total="' + def.items.length + '"></ul>';
 	}
@@ -4272,6 +4353,11 @@
 		var ul = document.getElementById(list.id);
 		var n = list.items.length;
 		to = clamp(to, 0, n - 1);
+		// A reason's line is stepped over, in the direction the keys go.
+		if (list.items[to] && list.items[to].kind === 'reason') {
+			var step = to >= (list.active || 0) ? 1 : -1;
+			if (to + step >= 0 && to + step < n) to += step;
+		}
 		setActive(list, to);
 		var sc = list.scrollEl() || scroller;
 		var sr = sc.getBoundingClientRect();
@@ -5107,7 +5193,11 @@
 				if (row.fileId && r.select.indexOf(row.name) >= 0) setPicked(row.path, true);
 			});
 		}
-		if (r.expand) ui.expanded[r.expand] = true;
+		if (r.expand) {
+			ui.expanded[r.expand] = true;
+			// The demo's picture waits for the card's whole list, as the app draws it.
+			if (askNoticeItems(r.expand)) waitFor('noticeItems');
+		}
 		ui.drag = !!r.drag;
 		render();
 		if (r.screen === 'detail' && r.fileId) {
@@ -5255,6 +5345,8 @@
 			// Not now lasts for that one question; a new one (another open) asks again.
 			if (ui.promptGone && promptKey(ui.view.prompt) !== ui.promptGone) ui.promptGone = null;
 			followRename();
+			// An open card whose count moved asks for its whole list again.
+			Object.keys(ui.expanded).forEach(askNoticeItems);
 			// Picked files that are gone from the view are let go.
 			Object.keys(ui.selected).forEach(function (p) {
 				if (!ui.index.byPath[p]) delete ui.selected[p];
@@ -5296,6 +5388,8 @@
 			shotTaken(message);
 		} else if (message.type === 'myFeedback') {
 			myFeedbackRead(message);
+		} else if (message.type === 'noticeItems') {
+			noticeItemsRead(message);
 		} else if (message.type === 'reveal') {
 			reveal(message.path);
 		}

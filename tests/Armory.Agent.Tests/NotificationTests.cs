@@ -53,6 +53,34 @@ public sealed class ProtocolLinkTests
         Assert.False(ProtocolLink.IsLink(@"C:\IDEA\Armory\idea-armory:x"));
     }
 
+    // 0.4.2 (website feedback ba81c57d): Open on a file's page on ideabosco.com. Exactly one
+    // form: the file's id and nothing else; it only ever opens.
+    [Fact]
+    public void The_website_s_open_link_names_one_file_id_and_nothing_else()
+    {
+        var id = Guid.Parse("8b906ba1-ad34-40fd-bf54-63b7db8f7e8c");
+        Assert.True(ProtocolLink.TryParseOpen("idea-armory:open?f=8b906ba1-ad34-40fd-bf54-63b7db8f7e8c", out var file));
+        Assert.Equal(id, file);
+        Assert.True(ProtocolLink.TryParseOpen("IDEA-ARMORY:open?f=8B906BA1-AD34-40FD-BF54-63B7DB8F7E8C/", out file));
+        Assert.Equal(id, file);
+        Assert.Equal("idea-armory:open?f=8b906ba1-ad34-40fd-bf54-63b7db8f7e8c", ProtocolLink.FormatOpen(id));
+        Assert.True(ProtocolLink.FormatOpen(id).Length <= ProtocolLink.MaxLength);
+        Assert.Equal(ProtocolLink.FormatOpen(id), ProtocolLink.ForForwarding("  Idea-Armory:open?f=8B906BA1-AD34-40FD-BF54-63B7DB8F7E8C "));
+        foreach (var refused in new[]
+        {
+            "idea-armory:open", "idea-armory:open?f=", "idea-armory:open?f=8b906ba1ad3440fdbf5463b7db8f7e8c", "idea-armory:open?f={8b906ba1-ad34-40fd-bf54-63b7db8f7e8c}",
+            "idea-armory:open?f=8b906ba1-ad34-40fd-bf54-63b7db8f7e8c&x=1", "idea-armory:open?f=8b906ba1-ad34-40fd-bf54-63b7db8f7e8c//",
+            "idea-armory:OPEN?f=8b906ba1-ad34-40fd-bf54-63b7db8f7e8c", "idea-armory:open?file=8b906ba1-ad34-40fd-bf54-63b7db8f7e8c",
+            "idea-armory:open?f=00000000-0000-0000-0000-000000000000", "idea-armory:open?f=..\\..\\Windows\\notepad.exe",
+            "idea-armory://open?f=8b906ba1-ad34-40fd-bf54-63b7db8f7e8c", "https://ideabosco.com/open?f=8b906ba1-ad34-40fd-bf54-63b7db8f7e8c",
+        })
+        {
+            Assert.False(ProtocolLink.TryParseOpen(refused, out _), refused);
+            Assert.False(ProtocolLink.TryParse(refused, out _), refused);
+            Assert.Equal(ProtocolLink.OpenOnly, ProtocolLink.ForForwarding(refused));
+        }
+    }
+
     [Fact]
     public void The_forwarded_link_is_a_line_the_pipe_takes()
     {

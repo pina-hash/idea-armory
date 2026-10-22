@@ -109,8 +109,8 @@ internal sealed partial class AgentHost : IAsyncDisposable
         get
         {
             var engine = Volatile.Read(ref runtime)?.Engine;
-            if (engine is null) return WithProfiles(Fallback(runtimeProblem ?? NoRuntimeLine()));
-            try { return WithProfiles(WithSettings(engine.View)); }
+            if (engine is null) return WithProfiles(WithVaultRepair(Fallback(runtimeProblem ?? NoRuntimeLine())));
+            try { return WithProfiles(WithVaultRepair(WithSettings(engine.View))); }
             catch (Exception error) when (error is not OutOfMemoryException)
             {
                 LogEngineFailure("view", error);
@@ -175,6 +175,10 @@ internal sealed partial class AgentHost : IAsyncDisposable
     // Windows is ending the session (a restart, a shut down, a sign out) and ends this process as
     // soon as its handler returns (TrayApp): the line that says so (the next start reads it: not a
     // crash), the last flight, then the stop, waited for at most `wait` on the caller's thread.
+    // Windows asked whether the session may end (a sign out, a restart, a shut down): the line
+    // the next start reads (not a crash), before anything else can be cut off.
+    internal void SessionEnding(string reason) => log.Info(AgentLog.SessionEndingLine + " (" + reason + ", asked)");
+
     internal void EndSession(string reason, TimeSpan wait)
     {
         log.Info(AgentLog.SessionEndingLine + " (" + reason + ")");
@@ -309,6 +313,19 @@ internal sealed partial class AgentHost : IAsyncDisposable
         }
     }
 
+    // Every file of one notice card, grouped by reason (0.4.2), or null.
+    internal async Task<NoticeItemsView?> NoticeItemsAsync(string key)
+    {
+        var engine = Volatile.Read(ref runtime)?.Engine;
+        if (engine is null) return null;
+        try { return await engine.NoticeItemsAsync(key); }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            LogEngineFailure("notice items", error);
+            return null;
+        }
+    }
+
     // Contract section 3 through ConnectFlow, with the window following each phase.
     internal async Task ConnectAsync()
     {
@@ -378,6 +395,15 @@ internal sealed partial class AgentHost : IAsyncDisposable
             RaiseView();
             return problem;
         }
+        // Never a project folder or a folder inside one (0.4.2): the folder around it instead, in
+        // one sentence, or a refusal when there is none.
+        var (corrected, correction) = CorrectedFolder(root!);
+        if (corrected is null)
+        {
+            RaiseView();
+            return correction;
+        }
+        root = corrected;
         // A shared computer's folders are chosen by the hand-over rule: its shared folder moves
         // only with shared mode off (docs/agent/PROFILES.md).
         if (SharedComputer && !string.Equals(root, Settings.VaultRoot, StringComparison.OrdinalIgnoreCase))
@@ -409,7 +435,7 @@ internal sealed partial class AgentHost : IAsyncDisposable
         if (!string.Equals(previous.VaultRoot, next.VaultRoot, StringComparison.OrdinalIgnoreCase)) await RestartRuntimeAsync(next);
         else ApplySettingsToEngine();
         RaiseView();
-        return problem;
+        return problem ?? correction;
     }
 
     // Windows' app mode changed; only matters while the theme follows the system.
@@ -483,6 +509,13 @@ internal sealed partial class AgentHost : IAsyncDisposable
     private async Task<bool> StartRuntimeAsync(string folder, VaultRuntime? made = null)
     {
         runtimeProblem = null;
+        // A project folder, or a folder inside one or inside another Armory folder: no engine runs
+        // there, and the window offers Fix it (AgentHost.VaultRoot.cs).
+        if (!FolderUsable(folder))
+        {
+            if (made is not null) await StopRuntimeAsync(made);
+            return false;
+        }
         engineFailureLogged = false;
         Interlocked.Exchange(ref lastHints, -1);
         var created = made;
@@ -548,7 +581,8 @@ internal sealed partial class AgentHost : IAsyncDisposable
         lock (gate) settled = firstSignedInView;
         if (settled is not null && view.Connection is Connections.SignedIn or Connections.VaultOwnedByOther) settled.TrySetResult();
         TeamState(view.Activity);
-        ViewChanged?.Invoke(WithProfiles(WithSettings(view)));
+        LearnShapes(view);
+        ViewChanged?.Invoke(WithProfiles(WithVaultRepair(WithSettings(view))));
     }
 
     // The settings and theme the window shows are the host's, saved this moment, never the

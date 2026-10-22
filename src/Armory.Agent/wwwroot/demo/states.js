@@ -386,6 +386,9 @@
 		};
 	}
 
+	// 0.4.2: the Armory folder set to the Robot 2027 project folder inside it.
+	var IN_PROJECT = 'C:\\IDEA\\Armory\\Robot 2027';
+
 	var SYNCED = { state: 'synced', line: 'Everything is saved to Armory.', detail: 'Last checked 2 minutes ago.', pendingCount: 0, now: 'Watching your folder for saves.' };
 
 	function pausedSync(pending) {
@@ -1111,6 +1114,27 @@
 			})
 		},
 
+		// 0.4.2, the field round of 2026-10-22: IDEA-06's Armory folder was set to a project
+		// folder inside the Armory folder. Nothing syncs there; one card offers Fix it.
+		folderInProject: {
+			label: 'The Armory folder is inside a project folder: one card, Fix it',
+			screens: ['home'],
+			view: folderInProjectView()
+		},
+
+		outsideMany: {
+			label: '1,498 files outside every project: one card, one action',
+			screens: ['home'],
+			view: outsideView()
+		},
+
+		outsideManyExpanded: {
+			label: '1,498 files outside every project, the whole list open',
+			screens: ['home'],
+			params: { expand: 'outsideProject' },
+			view: outsideView()
+		},
+
 		bigProject: {
 			label: 'A folder of 5,000 files, drawn a screenful at a time',
 			screens: ['home'],
@@ -1126,6 +1150,56 @@
 			})
 		}
 	};
+
+	/** Armory was asked to run in a project folder: no engine runs, no project shows, and the
+	 *  one card says what Fix it does. */
+	function folderInProjectView() {
+		var view = signedIn({
+			sync: { state: 'attention', line: 'Armory is waiting for you to fix its folder.', detail: null, pendingCount: 0, now: 'Nothing moves until Armory\'s folder is fixed.' },
+			notices: [
+				notice(
+					'vaultRoot',
+					'vaultRoot',
+					'bad',
+					'Armory\'s folder is inside the Robot 2027 project folder',
+					'Fix it moves Armory back to C:\\IDEA\\Armory and puts every file where it belongs, without uploading anything twice or losing a change.',
+					1,
+					{ label: 'Fix it', command: 'repairVaultRoot', paths: [] },
+					[{ fileId: null, path: '', name: 'Robot 2027', detail: IN_PROJECT }]
+				)
+			]
+		});
+		view.projects = [];
+		view.vaultRoot = IN_PROJECT;
+		view.settings.vaultRoot = IN_PROJECT;
+		return view;
+	}
+
+	/** 1,498 files that sit outside every project folder: one card, its first 200 files in the
+	 *  view, and every one in its list. */
+	function outsideView() {
+		var items = [];
+		for (var i = 1; i <= 200; i++) {
+			var part = 'F26-ROB-' + String(i).padStart(4, '0') + ' Standoff.SLDPRT';
+			items.push(item(null, 'Old Robot/Assembly Parts/' + part, 'Outside every project. Move it into one of your project folders so Armory can keep it.'));
+		}
+		return signedIn({
+			sync: { state: 'attention', line: 'Everything else is saved. A few files need you.', detail: 'Last checked just now.', pendingCount: 0, now: 'Watching your folder for saves.' },
+			notices: [
+				notice(
+					'outsideProject',
+					'outsideProject',
+					'bad',
+					'1,498 files are outside every project',
+					'Armory keeps only files inside a project folder. Move them into your project folders, and they upload by themselves.',
+					1498,
+					{ label: 'Open the Armory folder', command: 'openVault', paths: [] },
+					items
+				)
+			],
+			changes: shared({})
+		});
+	}
 
 	function groupedView() {
 		return signedIn({

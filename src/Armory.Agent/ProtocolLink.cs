@@ -14,6 +14,14 @@ namespace Armory.Agent;
 // made it, once, for 30 minutes. Anything else (idea-armory: alone, a trailing slash, quotes,
 // percent signs, another parameter, an unknown action) is not a link, and only opens the window,
 // so a web page or an old notification can never check anything out.
+//
+// 0.4.2 adds one link a web page may carry (website feedback ba81c57d): Open on a file's page on
+// ideabosco.com is exactly idea-armory:open?f=<the file's id> (a lowercase or uppercase uuid with
+// its dashes, nothing else; one trailing slash, which some browsers add, is let go). It only
+// opens: the running Armory opens that file of the student's Armory folder the way its own Open
+// does (SolidWorks for a part, read-only unless it is checked out to this computer), never checks
+// anything out, and shows the file's page in the window. A file this computer doesn't have opens
+// nothing.
 internal sealed record ProtocolLink(string Token, string Action)
 {
     internal const string Scheme = "idea-armory";
@@ -27,6 +35,24 @@ internal sealed record ProtocolLink(string Token, string Action)
     // What a second launch hands over for anything that is not a link: open the window, nothing more.
     internal const string OpenOnly = Prefix;
     private const string Head = "act?t=";
+    private const string OpenHead = "open?f=";
+    internal const string OpenFile = "open";
+
+    // An Open link from the website: the file's id, or false for anything else.
+    internal static bool TryParseOpen(string? text, out Guid fileId)
+    {
+        fileId = Guid.Empty;
+        if (text is null || text.Length > MaxLength || !text.StartsWith(Prefix, StringComparison.OrdinalIgnoreCase)) return false;
+        var rest = text.AsSpan(Prefix.Length);
+        if (!rest.StartsWith(OpenHead, StringComparison.Ordinal)) return false;
+        rest = rest[OpenHead.Length..];
+        if (rest.EndsWith("/")) rest = rest[..^1];
+        if (rest.Length != 36) return false;
+        foreach (var c in rest) if (!(char.IsAsciiHexDigit(c) || c == '-')) return false;
+        return Guid.TryParseExact(rest, "D", out fileId) && fileId != Guid.Empty;
+    }
+
+    internal static string FormatOpen(Guid fileId) => Prefix + OpenHead + fileId.ToString("D");
     private const string ActionField = "&a=";
 
     // An argument Windows passes for a protocol activation: the scheme first, any case.
@@ -60,7 +86,8 @@ internal sealed record ProtocolLink(string Token, string Action)
 
     // What a second launch forwards: the link as Armory writes it, or OpenOnly for anything else,
     // so nothing the browser or a script passed reaches the running Armory as it was given.
-    internal static string ForForwarding(string? argument) => TryParse(argument?.Trim(), out var link) ? link!.Format() : OpenOnly;
+    internal static string ForForwarding(string? argument)
+        => TryParse(argument?.Trim(), out var link) ? link!.Format() : TryParseOpen(argument?.Trim(), out var file) ? FormatOpen(file) : OpenOnly;
 }
 
 // A second IdeaArmory.exe started for a link (Windows runs "<app>\IdeaArmory.exe" "<link>" when a

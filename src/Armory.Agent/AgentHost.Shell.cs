@@ -44,6 +44,7 @@ internal sealed partial class AgentHost : IShellHost
     Task<ActionResult> IShellHost.CheckOutAndReopenAsync(IReadOnlyList<string> paths) => CheckOutAndReopenAsync(paths);
     Task<ActionResult> IShellHost.AnswerSaveDownAsync(string path, bool keepLocal) => AnswerSaveDownAsync(path, keepLocal);
     bool IShellHost.PickerShowing => PickerShowing;
+    Task<ActionResult> IShellHost.LaunchAsync(string path) => LaunchFileAsync(path);
 
     // The files SolidWorks has open that this computer has not checked out, for the notifications
     // that ask about them (TrayApp.Shell.cs): the engine's OpenPrompts (SyncEngine.Open.cs), which

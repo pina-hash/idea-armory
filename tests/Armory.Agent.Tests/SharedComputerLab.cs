@@ -173,6 +173,11 @@ internal sealed class Lab : IAsyncDisposable
     // Writes by an engine after its runtime closed (must stay empty).
     public List<string> Violations { get; } = [];
     public int RuntimesMade { get; private set; }
+    // The Armory folder rule's disk facts and Fix it (0.4.2), for tests that set them: the lab's
+    // folders are names, not real paths, so by default no folder holds Armory's own records.
+    public IVaultFolderFacts? Facts { get; set; }
+    public List<(string Bad, string Target)> Repairs { get; } = [];
+    public VaultRepairResult RepairAnswer { get; set; } = new(3, 2, 0, null, null);
     private static readonly string Sep = Path.DirectorySeparatorChar.ToString();
 
     public static async Task<Lab> StartAsync(bool shared)
@@ -225,6 +230,9 @@ internal sealed class Lab : IAsyncDisposable
         OpenInSolidWorks = root => Directory.Exists(Folder(root).Disk.Root) &&
             Directory.EnumerateFiles(Folder(root).Disk.Root, "~$*", SearchOption.AllDirectories).Any(f => !f.Contains(Sep + ".armory" + Sep, StringComparison.Ordinal)),
         LightApps = () => false,
+        FolderFacts = Facts ?? new NoFolderFacts(),
+        StateFile = root => VaultStateFile.Parse(Folder(root).State.Load()),
+        RepairFolder = (bad, target, _, _) => { lock (Repairs) Repairs.Add((bad, target)); return RepairAnswer; },
         Clock = Clock,
         MachineName = "LAB-PC-14",
         PinIterations = 1000,
@@ -379,4 +387,11 @@ internal sealed class Lab : IAsyncDisposable
         temp.Dispose();
         await heavy.DisposeAsync();
     }
+}
+
+// The lab's folders are names, not real paths: no folder holds Armory's own records.
+internal sealed class NoFolderFacts : IVaultFolderFacts
+{
+    public bool HoldsArmory(string folder) => false;
+    public IReadOnlyCollection<string> Children(string folder) => [];
 }

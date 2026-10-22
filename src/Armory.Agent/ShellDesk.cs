@@ -20,6 +20,8 @@ internal interface IShellHost
     Task<ActionResult> CheckOutAndReopenAsync(IReadOnlyList<string> paths);
     // The question before a save down: save in the project's year, or keep the file here only.
     Task<ActionResult> AnswerSaveDownAsync(string path, bool keepLocal);
+    // Open, as the window's own Open does it (SolidWorks for a part; read-only unless checked out here).
+    Task<ActionResult> LaunchAsync(string path);
     // A shared computer's picker is showing (docs/agent/PROFILES.md, F7): nothing acts for the
     // student who was last in use until someone picks who they are.
     bool PickerShowing { get; }
@@ -233,9 +235,15 @@ internal sealed class ShellDesk(Action<string> log, TimeProvider? timeProvider =
         s.Answer(result);
     }
 
-    // A notification's link: its token's action, once; anything else only opens the window.
+    // A notification's link: its token's action, once; the website's Open link (0.4.2): that file
+    // opened; anything else only opens the window.
     private async Task RunLinkAsync(string? text, IShellHost h, IShellSurface s)
     {
+        if (ProtocolLink.TryParseOpen(text, out var fileId))
+        {
+            await OpenFromWebsiteAsync(fileId, h, s).ConfigureAwait(false);
+            return;
+        }
         if (!ProtocolLink.TryParse(text, out var link))
         {
             log("shell: a link that isn't one of Armory's opens the window");
@@ -275,6 +283,40 @@ internal sealed class ShellDesk(Action<string> log, TimeProvider? timeProvider =
         s.Answer(result);
     }
 
+    // Open on a file's page on ideabosco.com: the window shows that file, and the file opens the
+    // way the window's own Open opens it. The link names only an id; the file must be one this
+    // computer's Armory has.
+    private async Task OpenFromWebsiteAsync(Guid fileId, IShellHost h, IShellSurface s)
+    {
+        var view = h.View;
+        if (view.Connection is not (Connections.SignedIn or Connections.VaultOwnedByOther))
+        {
+            log("shell: open from the website before signing in");
+            s.OpenWindow();
+            s.Answer(new ActionResult(false, ShellWords.ConnectFirst));
+            return;
+        }
+        var id = fileId.ToString("D");
+        var row = view.Projects.SelectMany(p => p.Folders).SelectMany(f => f.Files).FirstOrDefault(f => string.Equals(f.FileId, id, StringComparison.OrdinalIgnoreCase));
+        if (row is null)
+        {
+            log("shell: open from the website: not a file of this Armory");
+            s.OpenWindow();
+            s.Answer(new ActionResult(false, ShellWords.NotHereFromWebsite));
+            return;
+        }
+        s.Reveal(row.Path);
+        if (row.Status == FileStatuses.NotOnThisComputer)
+        {
+            log("shell: open from the website: not on this computer yet");
+            s.Answer(new ActionResult(false, ShellWords.NotDownloadedYet(row.Name)));
+            return;
+        }
+        var result = await h.LaunchAsync(row.Path).ConfigureAwait(false);
+        log("shell: open from the website" + (result.Ok ? " done" : " refused"));
+        s.Answer(result);
+    }
+
     private async Task<bool> AskAsync(IShellSurface s, ShellQuestion question)
     {
         await asking.WaitAsync().ConfigureAwait(false);
@@ -311,6 +353,9 @@ internal static class ShellWords
     internal const string ConnectFirst = "Connect this computer first.";
     internal const string PickYourselfFirst = "Pick who you are in Armory first, then try again.";
     internal const string NotInVault = "That isn't in the Armory folder.";
+    // The website's Open (0.4.2): a file of a project this computer's Armory doesn't have.
+    internal const string NotHereFromWebsite = "That file isn't in this computer's Armory folder. Check that you're signed in to Armory as yourself, in a project that has it.";
+    internal static string NotDownloadedYet(string name) => $"{name} isn't on this computer yet. Armory is downloading it. Click Open again in a moment.";
     internal const string WholeVault = "Pick files or folders inside a project for that.";
     internal const string NothingCheckedOut = "Nothing there is checked out by you.";
     internal const string NothingHeld = "None of those files is checked out by someone else now.";

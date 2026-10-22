@@ -957,7 +957,8 @@ for (const size of SIZES) {
 		await page.click(k);
 		await settle(page);
 		expect((await page.getAttribute(k, 'aria-expanded')) === 'true', 'the list did not open');
-		const rows = await page.$$eval('.attn-card[data-kind="nameShared"] .vrow', (r) => r.length);
+		// A line before each reason (0.4.2) is not a file's row.
+		const rows = await page.$$eval('.attn-card[data-kind="nameShared"] .vrow:not(.reason-row)', (r) => r.length);
 		expect(rows > 0 && rows <= 14, `the open list draws ${rows} rows`);
 		const f = await page.evaluate(() => document.activeElement.getAttribute('data-key'));
 		expect(f === 'nt-expand-nameShared', `opening the list moved focus to ${f}`);
@@ -1735,8 +1736,42 @@ const CONTRACT = {
 	// 0.3.3: the SolidWorks link's notice buttons (Keep this file on this computer only, Save it in
 	// 2025 now), pressed in solidWorksBridge.
 	keepLocal: ['paths', ...ACT],
-	saveDown: ['paths', ...ACT]
+	saveDown: ['paths', ...ACT],
+	// 0.4.2: Fix it on the card about an Armory folder inside a project folder, and the ask for
+	// a card's whole list (answered by noticeItems), both pressed in noticesBridge.
+	repairVaultRoot: [...ACT],
+	readNoticeItems: ['key', ...ACT]
 };
+
+// 0.4.2: the vaultRoot card's Fix it sends repairVaultRoot; opening a card's list asks for all of
+// its files (readNoticeItems), and the answer draws every one of them, a line before each reason.
+async function noticesBridge({ page, host, click, view, expect }) {
+	await host({ type: 'view', view: view('folderInProject') });
+	let m = await click('[data-key="nt-act-vaultRoot"]');
+	expect(m.type === 'repairVaultRoot' && typeof m.requestId === 'string', 'Fix it sent ' + JSON.stringify(m));
+	await host({ type: 'actionResult', requestId: m.requestId, ok: true, message: 'Fixed. Armory uses C:\\IDEA\\Armory again, and every file is where it belongs.' });
+	await host({ type: 'view', view: view('outsideMany') });
+	expect((await page.textContent('[data-key="nt-expand-outsideProject"]')).trim() === 'Show the 1,498 files', 'the outside card offers ' + (await page.textContent('[data-key="nt-expand-outsideProject"]')));
+	m = await click('[data-key="nt-expand-outsideProject"]');
+	expect(m.type === 'readNoticeItems' && m.key === 'outsideProject' && typeof m.requestId === 'string', 'opening the list sent ' + JSON.stringify(m));
+	const items = [];
+	for (let i = 1; i <= 1498; i++) items.push({ fileId: null, path: 'Old Robot/Part ' + i + '.SLDPRT', name: 'Part ' + i + '.SLDPRT', detail: i <= 1400 ? 'Outside every project.' : 'Saved in SolidWorks 2026.' });
+	await host({
+		type: 'noticeItems',
+		requestId: m.requestId,
+		key: 'outsideProject',
+		count: 1498,
+		groups: [
+			{ reason: 'Outside every project.', count: 1400, items: items.slice(0, 1400) },
+			{ reason: 'Saved in SolidWorks 2026.', count: 98, items: items.slice(1400) }
+		]
+	});
+	const total = await page.getAttribute('.attn-card[data-kind="outsideProject"] .vlist', 'data-total');
+	expect(total === '1500', `the whole list holds ${total} rows, not 1,498 files and 2 reason lines`);
+	expect(!(await page.$('.attn-card[data-kind="outsideProject"] .notice-more')), 'the whole list still says it shows only some');
+	const head = await page.$$eval('.attn-card[data-kind="outsideProject"] .reason-row', (r) => r.map((x) => x.textContent));
+	expect(head.length >= 1 && /^1,400 files/.test(head[0]), 'the first reason line says ' + JSON.stringify(head));
+}
 
 // A shared computer's messages, inside the stand-in host: each is sent by the control that
 // should send it. Home's Sign out gives way to Switch student; the picker is a screen of
@@ -2387,6 +2422,7 @@ tally.bridgeTypes = 0;
 
 		await profilesBridge({ page, host, click, take, view, expect, all });
 		await solidWorksBridge({ page, host, click, view, expect });
+		await noticesBridge({ page, host, click, view, expect });
 
 		for (const x of all) {
 			const want = CONTRACT[x.type];
