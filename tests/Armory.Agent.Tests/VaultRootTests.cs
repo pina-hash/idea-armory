@@ -233,8 +233,9 @@ public sealed class VaultRootTests
         Assert.Equal(7, lab.FilesUnder(byHand).Length);
         Assert.False(Directory.Exists(Path.Combine(lab.Bad, ".armory")));
         // And when the whole wrong folder is gone too: nothing to do, and still done.
-        Directory.Delete(lab.Bad, recursive: true);
+        // Read-only files first lose the bit: Windows refuses to delete them otherwise.
         foreach (var f in Directory.EnumerateFiles(lab.Root, "*", SearchOption.AllDirectories)) File.SetAttributes(f, FileAttributes.Normal);
+        Directory.Delete(lab.Bad, recursive: true);
         Assert.True(VaultRootRepair.Run(lab.Bad, lab.Target, Lab.Now).Done);
     }
 
