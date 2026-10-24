@@ -106,8 +106,10 @@ $p = Start-Process -FilePath $oldSetup -ArgumentList '--silent' -PassThru -Wait
 if ($p.ExitCode -ne 0) { Fail ('The v' + $From + ' setup exited with ' + $p.ExitCode + '.') }
 for ($i = 0; $i -lt 60 -and -not (Test-Path -LiteralPath $exe); $i++) { Start-Sleep -Seconds 1 }
 if (-not (Test-Path -LiteralPath $exe)) { Fail ('No ' + $exe + ' after the v' + $From + ' setup.') }
-# Armory itself stamps its identity on the Start menu shortcut at start, as on a real computer.
+# Armory itself stamps its identity on the Start menu shortcut at start, as on a real computer:
+# v<From> is started (the silent setup does not start it) and runs until it has.
 $oldLog = Join-Path $data 'logs\agent.log'
+Start-Process -FilePath $exe -ArgumentList '--background' | Out-Null
 for ($i = 0; $i -lt 60; $i++) {
     Start-Sleep -Seconds 1
     if ((Test-Path -LiteralPath $oldLog) -and ((Get-Content -LiteralPath $oldLog -Raw) -match 'Start menu shortcut')) { break }
