@@ -48,7 +48,14 @@ public sealed record FileRowView(string? FileId, string Name, string Path, strin
 // Badges: whether File Explorer shows Armory's status on file icons on this computer (the host's
 // BadgeHealth check), or null before the host has checked (the engine never knows).
 // SharedComputer: "This computer is shared by several students" (docs/agent/PROFILES.md).
-public sealed record SettingsView(string VaultRoot, bool StartAtSignIn, string Theme, BadgesView? Badges = null, bool SharedComputer = false);
+// About: which Armory this is and which computer (0.4.3), or null before the host has said
+// (the engine never knows).
+public sealed record SettingsView(string VaultRoot, bool StartAtSignIn, string Theme, BadgesView? Badges = null, bool SharedComputer = false, AboutView? About = null);
+// Settings' "About this Armory" (0.4.3): Version "0.4.3"; Words "Version 0.4.3, updated Oct 23,
+// 2026"; Since the ISO-8601 time this version first ran here; ComputerName the Windows name;
+// DeviceTag the first four characters of this sign-in's device id, the same tag the website and
+// the check-out rows add when two computers share a name (null while signed out).
+public sealed record AboutView(string Version, string Words, string? Since, string ComputerName, string? DeviceTag);
 // State is off, on, afterSignIn, crowded, partial or broken (BadgesStates); Line is Settings'
 // sentence about it. Settings offers Turn on (turnOnBadges) for off and broken.
 public sealed record BadgesView(string State, string Line);

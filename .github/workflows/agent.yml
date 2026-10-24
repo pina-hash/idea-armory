@@ -56,6 +56,14 @@ jobs:
       - name: Install over itself with SolidWorks open (the link's test fake)
         run: ./tools/test-agent-install.ps1 -Kind SolidWorks
 
+      - name: The install that updates itself (Velopack) installs, answers and uninstalls
+        run: ./tools/test-velopack.ps1 -Version '${{ steps.package.outputs.version }}' -ReleaseDir '${{ steps.package.outputs.velopack-dir }}'
+
+      # 0.4.3: the published v0.4.2, pinned to the taskbar, updated with this build's package by
+      # Velopack's own Update.exe; every pin of Armory points at the same exe with the window's identity.
+      - name: Taskbar pins survive an update from the published v0.4.2
+        run: ./tools/test-velopack-update.ps1 -Version '${{ steps.package.outputs.version }}' -From 0.4.2 -ReleaseDir '${{ steps.package.outputs.velopack-dir }}'
+
       # Last: it installs for the whole computer (the runner's steps run as an administrator).
       - name: The optional badges setup (status on file icons), for the whole computer
         run: ./tools/test-agent-install.ps1 -Kind Badges

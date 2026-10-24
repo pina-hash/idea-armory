@@ -161,7 +161,7 @@ internal sealed partial class TrayApp : ApplicationContext
         foreach (var item in new[] { vaultItem, pauseItem, accountItem }) item.ToolTipText = HostTips.Tray(item.Text ?? "", host.VaultFolder);
         var line = string.IsNullOrWhiteSpace(view.Sync.Line) ? "IDEA Armory" : view.Sync.Line.Trim();
         if (inUse is not null) line = inUse.Name.Split(' ')[0] + ": " + line;
-        notify.Text = line.Length <= TooltipLimit ? line : line[..(TooltipLimit - 3)] + "...";
+        notify.Text = HostTips.TrayTooltip(line, host.Installed?.ShortWords, TooltipLimit);
         var state = paused ? SyncStates.Paused : view.Sync.State;
         var icon = trayIcons.TryGetValue(state ?? string.Empty, out var found) ? found : trayIcons[SyncStates.Synced];
         if (!ReferenceEquals(notify.Icon, icon)) notify.Icon = icon;

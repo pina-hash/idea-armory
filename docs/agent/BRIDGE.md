@@ -265,7 +265,15 @@ FileStatus = "synced" | "changed" | "uploading" | "downloading" | "waiting" | "n
                                             // File detail: "Added without its first version"), never "uploading"
 SettingsView { vaultRoot: string, startAtSignIn: boolean, theme: "system" | "idea" | "spaceWhite",
                badges: BadgesView | null,     // 0.3.3; null until the host has checked
-               sharedComputer: boolean }      // 0.3.3; false unless Settings turned it on
+               sharedComputer: boolean,       // 0.3.3; false unless Settings turned it on
+               about: AboutView | null }      // 0.4.3; null until the host has read install.json
+AboutView {                         // 0.4.3: Settings' "About this Armory" (InstallRecord, AgentHost.About.cs)
+  version: string                   // "0.4.3"
+  words: string                     // "Version 0.4.3, updated Oct 23, 2026" ("installed" on a first install)
+  since: string | null              // ISO-8601: when this version first ran on this computer
+  computerName: string              // the Windows name, which cloned lab computers may share
+  deviceTag: string | null          // this sign-in's device id, first 4 characters: the website's tag beside a shared name
+}
 BadgesView {                        // 0.3.3: Armory's status on file icons (docs/agent/EXPLORER.md 2.6)
   state: "off" | "on" | "afterSignIn" | "crowded" | "partial" | "broken"   // BadgeHealthReport.Key
   line: string                      // Settings' sentence, e.g. "Armory's status shows on file icons."

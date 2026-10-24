@@ -53,6 +53,10 @@ internal static class Updates
         var log = SetupLog();
         try
         {
+            // 0.4.3: a taskbar pin of the older copy points here before that copy is deleted
+            // (TaskbarPins), so moving over never leaves a blank pin.
+            if (Environment.ProcessPath is { } pinned && IsVelopackCopy(pinned, File.Exists))
+                TaskbarPins.Repair(TaskbarPins.Folder(), pinned, log);
             LegacyInstall.Retire(LegacyInstall.Folder(), log);
             if (Environment.ProcessPath is { } exe && IsVelopackCopy(exe, File.Exists))
             {

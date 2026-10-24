@@ -9,7 +9,8 @@ namespace Armory.Agent;
 // that names the app and its icon in a notification and in Settings > Notifications; and the
 // idea-armory: link scheme that a notification's buttons open (ProtocolLink). Both installers
 // write the same keys and remove them; Armory repairs them at start, comparing before it
-// writes, but only the installed copy (%LOCALAPPDATA%\Programs\IDEA Armory\IdeaArmory.exe), so a
+// writes, but only the installed copy (%LOCALAPPDATA%\IDEAArmory\current\IdeaArmory.exe from
+// 0.4.0, or the older %LOCALAPPDATA%\Programs\IDEA Armory\IdeaArmory.exe), so a
 // test instance or a developer's build never takes the registration over.
 internal static class ShellIdentity
 {
@@ -82,9 +83,10 @@ internal static class ShellIdentity
     }
 
     // At start, the installed copy only: the registration and the link scheme, then the Start
-    // menu shortcut's AppUserModelID (the flash-drive install makes the shortcut without it).
+    // menu shortcut's AppUserModelID (the flash-drive install makes the shortcut without it), then
+    // every taskbar pin of Armory (0.4.3, TaskbarPins). Answers the pins it rewrote.
     [SupportedOSPlatform("windows")]
-    internal static void Repair(string appFolder, Action<string> log)
+    internal static IReadOnlyList<TaskbarPins.Fix> Repair(string appFolder, Action<string> log)
     {
         try
         {
@@ -100,6 +102,7 @@ internal static class ShellIdentity
         }
         catch (Exception error) when (error is COMException or IOException or UnauthorizedAccessException or InvalidCastException or ArgumentException)
         { log("could not give the Start menu shortcut Armory's notification identity: " + error.Message); }
+        return TaskbarPins.Repair(TaskbarPins.Folder(), Path.Combine(appFolder, "IdeaArmory.exe"), log);
     }
 
     // Before any window: the taskbar, the tray and the notifications are one app with one switch.

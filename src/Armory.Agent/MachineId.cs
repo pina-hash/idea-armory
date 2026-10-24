@@ -1,3 +1,4 @@
+using System.Net.NetworkInformation;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Win32;
@@ -10,19 +11,57 @@ namespace Armory.Agent;
 // accounts and reinstalls of Armory, and is never sent as it is: only the first 16 hex
 // characters of its SHA-256, under Armory's own prefix, which tells computers apart and names
 // nothing else. Null where there is no such id (another operating system, a locked-down key).
+// The id is only ever used to tell computers apart in an incident; nothing about a sign-in, a
+// check out or the team depends on it, and nothing anywhere depends on the computer's name being
+// unique (docs/agent/INSTALL.md, "Computers that share a name").
 internal static class MachineId
 {
-    private static readonly Lazy<string?> Here = new(() => OperatingSystem.IsWindows() ? FromGuid(ReadWindows()) : null);
+    private static readonly Lazy<string?> Here = new(() => OperatingSystem.IsWindows() ? FromParts(ReadWindows(), ReadHardware()) : null);
 
     internal static string? Current => Here.Value;
 
     // The id for a MachineGuid value, or null for none.
-    internal static string? FromGuid(string? machineGuid)
+    internal static string? FromGuid(string? machineGuid) => FromParts(machineGuid, null);
+
+    // 0.4.3: a lab image copied to many computers without Sysprep copies its MachineGuid too, so
+    // the id also takes this computer's own network hardware address (Hardware) when there is
+    // one; with none it is exactly the id FromGuid always gave. Never sent as it is: only the hash.
+    internal static string? FromParts(string? machineGuid, string? hardwareAddress)
     {
         var value = machineGuid?.Trim().ToLowerInvariant();
         if (string.IsNullOrEmpty(value)) return null;
-        var hash = SHA256.HashData(Encoding.UTF8.GetBytes("armory-machine\n" + value));
-        return Convert.ToHexStringLower(hash)[..16];
+        var hardware = hardwareAddress?.Trim().ToLowerInvariant();
+        var text = "armory-machine\n" + value + (string.IsNullOrEmpty(hardware) ? "" : "\n" + hardware);
+        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text)))[..16];
+    }
+
+    // One network adapter, as Hardware reads it.
+    internal sealed record NetworkAdapter(NetworkInterfaceType Kind, string Description, string Address);
+
+    // The computer's own wired address, or its wireless one when it has no wired adapter: the
+    // lowest, so the answer is the same at every start. Virtual, tunnel, Bluetooth and
+    // all-zero addresses are not the computer's own and are left out. Null when there is none.
+    internal static string? Hardware(IEnumerable<NetworkAdapter> adapters)
+    {
+        string[] virtualWords = ["virtual", "hyper-v", "vmware", "virtualbox", "vpn", "tap-", "bluetooth", "loopback", "wan miniport", "tunnel"];
+        var own = adapters
+            .Where(a => a.Kind is NetworkInterfaceType.Ethernet or NetworkInterfaceType.GigabitEthernet or NetworkInterfaceType.Wireless80211)
+            .Where(a => a.Address.Length == 12 && a.Address.Any(c => c != '0') && !virtualWords.Any(w => a.Description.Contains(w, StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+        var wired = own.Where(a => a.Kind != NetworkInterfaceType.Wireless80211).Select(a => a.Address.ToLowerInvariant()).Order(StringComparer.Ordinal).FirstOrDefault();
+        return wired ?? own.Select(a => a.Address.ToLowerInvariant()).Order(StringComparer.Ordinal).FirstOrDefault();
+    }
+
+    private static string? ReadHardware()
+    {
+        try { return Hardware(NetworkInterface.GetAllNetworkInterfaces().Select(Adapter).ToList()); }
+        catch (NetworkInformationException) { return null; }
+    }
+
+    private static NetworkAdapter Adapter(NetworkInterface adapter)
+    {
+        try { return new NetworkAdapter(adapter.NetworkInterfaceType, adapter.Description ?? "", adapter.GetPhysicalAddress().ToString()); }
+        catch (NetworkInformationException) { return new NetworkAdapter(NetworkInterfaceType.Unknown, "", ""); }
     }
 
     [System.Runtime.Versioning.SupportedOSPlatform("windows")]

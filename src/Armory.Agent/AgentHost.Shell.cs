@@ -52,10 +52,11 @@ internal sealed partial class AgentHost : IShellHost
     // parts inside an assembly. "Check out and reopen" is AgentHost.SolidWorks.cs's.
     internal IReadOnlyList<OpenPromptInfo> CurrentOpenPrompts() => HostShell.OpenPrompts(OpenPrompts);
 
-    // The settings the window shows, with the badges' health.
+    // The settings the window shows, with the badges' health and which Armory this is (0.4.3).
     private SettingsView SettingsNow()
     {
-        lock (gate) return settings.ToView() with { Badges = Volatile.Read(ref badges) };
+        var about = AboutNow();
+        lock (gate) return settings.ToView() with { Badges = Volatile.Read(ref badges), About = about };
     }
 
     // At the end of StartAsync: the registrations of the installed copy, the badges' health now
@@ -66,7 +67,7 @@ internal sealed partial class AgentHost : IShellHost
         if (shellRegisters)
         {
             // The shell's property store wants a thread of its own apartment.
-            var repair = new Thread(() => ShellIdentity.Repair(AgentPaths.AppFolder, log.Info)) { IsBackground = true, Name = "Armory shell identity" };
+            var repair = new Thread(() => PinsRepaired(ShellIdentity.Repair(AgentPaths.AppFolder, log.Info))) { IsBackground = true, Name = "Armory shell identity" };
             repair.SetApartmentState(ApartmentState.STA);
             repair.Start();
         }

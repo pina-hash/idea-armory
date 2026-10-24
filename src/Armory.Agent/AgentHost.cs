@@ -55,6 +55,8 @@ internal sealed partial class AgentHost : IAsyncDisposable
         this.site = site;
         Telemetry = telemetry;
         this.parts = parts ??= HostParts.Windows(log, telemetry, paths.SolidWorksFile);
+        // 0.4.3: which version runs here and since when, before a first install's settings exist.
+        StartInstallRecord();
         settingsStore = new SettingsStore(paths.SettingsFile);
         settings = settingsStore.Load();
         effectiveTheme = Themes.Effective(settings.Theme, parts.LightApps());

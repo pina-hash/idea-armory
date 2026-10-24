@@ -31,6 +31,9 @@ internal sealed partial class TrayApp : IShellSurface
         notifier.ClearAll();
         askTimer = new System.Threading.Timer(_ => Post(AskDue), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         host.ViewChanged += OnAsksView;
+        // 0.4.3: "Armory updated from 0.4.2 to 0.4.3." and the taskbar sentence, once each, in the
+        // window's foot line or as a notification (the same way a right-click item's answer goes).
+        host.OnNotice(words => ((IShellSurface)this).Answer(new ActionResult(true, words)));
         shellDesk.Attach(host, this);
         if (link is not null)
         {

@@ -340,6 +340,8 @@
 
 	var SETTINGS = { vaultRoot: 'C:\\IDEA\\Armory', startAtSignIn: true, theme: 'system' };
 	// Armory's status on file icons (the badges): not installed on this computer yet.
+	// 0.4.3: Settings' "About this Armory".
+	var ABOUT = { version: '0.4.3', words: 'Version 0.4.3, updated Oct 23, 2026', since: '2026-10-23T15:04:00.0000000+00:00', computerName: 'IDEA-06', deviceTag: '3f9c' };
 	function badgesOff() {
 		return { state: 'off', line: 'Armory\'s status isn\'t shown on file icons on this computer. Turning it on needs an administrator once.' };
 	}
@@ -356,7 +358,7 @@
 			prompt: parts.prompt || null,
 			myFiles: [],
 			projects: projects(parts.changes, parts.opts),
-			settings: { vaultRoot: SETTINGS.vaultRoot, startAtSignIn: SETTINGS.startAtSignIn, theme: SETTINGS.theme, badges: badgesOff(), sharedComputer: false },
+			settings: { vaultRoot: SETTINGS.vaultRoot, startAtSignIn: SETTINGS.startAtSignIn, theme: SETTINGS.theme, badges: badgesOff(), sharedComputer: false, about: ABOUT },
 			effectiveTheme: 'idea',
 			folderOwner: null,
 			profiles: null,
@@ -378,7 +380,7 @@
 			prompt: null,
 			myFiles: [],
 			projects: [],
-			settings: { vaultRoot: SETTINGS.vaultRoot, startAtSignIn: SETTINGS.startAtSignIn, theme: SETTINGS.theme, badges: badgesOff(), sharedComputer: false },
+			settings: { vaultRoot: SETTINGS.vaultRoot, startAtSignIn: SETTINGS.startAtSignIn, theme: SETTINGS.theme, badges: badgesOff(), sharedComputer: false, about: ABOUT },
 			effectiveTheme: 'idea',
 			folderOwner: null,
 			profiles: null,

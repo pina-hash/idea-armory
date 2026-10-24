@@ -3012,6 +3012,7 @@
 		}
 		html += settingsSolidWorksHtml(v);
 		html += sharedSettingsHtml(v);
+		html += settingsAboutHtml(s.about);
 
 		// Something wrong: a person's own report, and the folder of saved reports to hand over by hand.
 		html += '<section class="setting" aria-labelledby="set-report-label">';
@@ -3025,6 +3026,20 @@
 		html += '<p class="setting-help">Armory keeps a short record of what it was doing when something goes wrong: file names, never what is in your files. A report sends your words with it. Feedback sends your words, and a picture of this window if you add one, with Armory\'s version and what it was doing.</p>';
 		html += '</section>';
 		return html;
+	}
+
+	/** Which Armory this is and which computer (0.4.3, settings.about): "Version 0.4.3, updated
+	 *  Oct 23, 2026", and the computer's name with the device tag the website shows beside a name
+	 *  two computers share. Nothing until the host sends it. */
+	function settingsAboutHtml(a) {
+		if (!a || !a.words) return '';
+		return (
+			'<section class="setting" aria-labelledby="set-about-label">' +
+			'<h3 class="section-label" id="set-about-label">About this Armory</h3>' +
+			'<p class="setting-state" id="set-about-value">' + icon('check') + '<span>' + esc(a.words) + '</span></p>' +
+			'<p class="setting-help" id="set-about-computer">This computer: ' + esc(a.computerName) + (a.deviceTag ? ', device ' + esc(a.deviceTag) : '') + '. Armory updates itself and says so here.</p>' +
+			'</section>'
+		);
 	}
 
 	/** The SolidWorks link's line (0.3.3, impl/b3-solidworks-link: view.solidWorks, its state,

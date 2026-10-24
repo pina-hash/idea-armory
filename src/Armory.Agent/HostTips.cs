@@ -30,4 +30,15 @@ internal static class HostTips
 
     // The one button of the window shown when WebView2 Runtime is missing.
     internal const string GetWebView2 = "Open Microsoft's download page for WebView2 Runtime in your browser. Armory's window needs it.";
+
+    // The tray icon's hover text (0.4.3): the sync line, then which Armory this is ("Armory 0.4.3,
+    // updated Oct 23"), within limit. The sync line gives up characters first, the version line never.
+    internal static string TrayTooltip(string line, string? version, int limit)
+    {
+        static string Clip(string text, int most) => text.Length <= most ? text : text[..Math.Max(0, most - 3)] + "...";
+        if (string.IsNullOrEmpty(version)) return Clip(line, limit);
+        version = Clip(version, limit);
+        var room = limit - version.Length - 1;
+        return room < 8 ? version : Clip(line, room) + "\n" + version;
+    }
 }

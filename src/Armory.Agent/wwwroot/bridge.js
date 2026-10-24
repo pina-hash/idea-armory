@@ -254,6 +254,17 @@
 	 * @property {ThemeSetting} theme
 	 * @property {BadgesView | null} badges   null until the host has checked
 	 * @property {boolean} sharedComputer  several students take turns on this computer, each with a profile (PROFILES.md)
+	 * @property {AboutView | null} about  which Armory this is (0.4.3), null until the host has said
+	 */
+
+	/**
+	 * Settings' "About this Armory" (0.4.3).
+	 * @typedef {object} AboutView
+	 * @property {string} version        "0.4.3"
+	 * @property {string} words          "Version 0.4.3, updated Oct 23, 2026" (or "installed")
+	 * @property {string | null} since   ISO-8601: when this version first ran on this computer
+	 * @property {string} computerName   the Windows name, which lab computers may share
+	 * @property {string | null} deviceTag  this sign-in's device tag (4 characters), the website's tag beside a shared name
 	 */
 
 	/**
