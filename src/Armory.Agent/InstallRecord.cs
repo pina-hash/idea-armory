@@ -20,12 +20,13 @@ internal sealed record InstallRecord(
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
 
     // This start's record, and the one line to say when it is an update. usedBefore: Armory ran
-    // on this account before (its settings file is there), so a missing record is an update from
-    // a version that kept none (0.4.2 and older), not a first install.
-    internal static (InstallRecord Record, string? Notice) Advance(InstallRecord? stored, string current, DateTimeOffset now, bool usedBefore)
+    // on this account before (its log names an earlier start, or its settings file is there), so a
+    // missing record is an update from a version that kept none (0.4.2 and older), not a first
+    // install; earlier: that version, when the log names it.
+    internal static (InstallRecord Record, string? Notice) Advance(InstallRecord? stored, string current, DateTimeOffset now, bool usedBefore, string? earlier = null)
     {
         if (stored is null)
-            return (new InstallRecord(current, now, null, usedBefore), usedBefore ? UpdatedWords(null, current) : null);
+            return (new InstallRecord(current, now, usedBefore ? earlier : null, usedBefore), usedBefore ? UpdatedWords(earlier, current) : null);
         if (string.Equals(stored.Version, current, StringComparison.Ordinal)) return (stored, null);
         return (stored with { Version = current, Since = now, Previous = stored.Version, Updated = true }, UpdatedWords(stored.Version, current));
     }
@@ -73,9 +74,40 @@ internal sealed record InstallRecord(
     {
         var file = Path.Combine(paths.DataFolder, FileName);
         var stored = Read(file);
-        var (record, notice) = Advance(stored, current, now, File.Exists(paths.SettingsFile));
+        // Only needed when there is no record yet: the log's last start of another version.
+        var earlier = stored is null ? EarlierStart(LogTail(paths.LogFile), current) : null;
+        var (record, notice) = Advance(stored, current, now, earlier is not null || File.Exists(paths.SettingsFile), earlier);
         if (!Equals(record, stored)) Write(file, record);
         return (record, notice);
+    }
+
+    // The version of the last "started <version>" line in the log that is not this version, or
+    // null. Every start writes that line first (Program), and the log outlives an update.
+    internal static string? EarlierStart(string? log, string current)
+    {
+        if (string.IsNullOrEmpty(log)) return null;
+        string? earlier = null;
+        foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(log, @"\bstarted (\d+\.\d+\.\d+[0-9A-Za-z.+-]*)[ \t]*\r?$", System.Text.RegularExpressions.RegexOptions.Multiline))
+        {
+            var version = m.Groups[1].Value;
+            if (!string.Equals(version, current, StringComparison.Ordinal)) earlier = version;
+        }
+        return earlier;
+    }
+
+    // The last 256 KiB of the log, or null.
+    private static string? LogTail(string file)
+    {
+        try
+        {
+            using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            var take = (int)Math.Min(stream.Length, 256 * 1024);
+            stream.Seek(-take, SeekOrigin.End);
+            var bytes = new byte[take];
+            stream.ReadExactly(bytes);
+            return System.Text.Encoding.UTF8.GetString(bytes);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return null; }
     }
 
     // The taskbar sentence was said: written at once, so it is never said twice.

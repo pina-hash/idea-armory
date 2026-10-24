@@ -106,7 +106,13 @@ $p = Start-Process -FilePath $oldSetup -ArgumentList '--silent' -PassThru -Wait
 if ($p.ExitCode -ne 0) { Fail ('The v' + $From + ' setup exited with ' + $p.ExitCode + '.') }
 for ($i = 0; $i -lt 60 -and -not (Test-Path -LiteralPath $exe); $i++) { Start-Sleep -Seconds 1 }
 if (-not (Test-Path -LiteralPath $exe)) { Fail ('No ' + $exe + ' after the v' + $From + ' setup.') }
-Start-Sleep -Seconds 5
+# Armory itself stamps its identity on the Start menu shortcut at start, as on a real computer.
+$oldLog = Join-Path $data 'logs\agent.log'
+for ($i = 0; $i -lt 60; $i++) {
+    Start-Sleep -Seconds 1
+    if ((Test-Path -LiteralPath $oldLog) -and ((Get-Content -LiteralPath $oldLog -Raw) -match 'Start menu shortcut')) { break }
+}
+Start-Sleep -Seconds 2
 Quit-Armory
 $before = (& $exe --check | Select-Object -Last 1 | ConvertFrom-Json).version
 if ($before -ne $From) { Fail ('The installed Armory says ' + $before + ', not ' + $From + '.') }
@@ -140,6 +146,9 @@ Note ('Update.exe apply exited ' + $u.ExitCode)
 if ($u.ExitCode -ne 0) { Fail ('Update.exe apply exited with ' + $u.ExitCode + '.') }
 Start-Sleep -Seconds 3
 Quit-Armory
+# What the update itself wrote, before the new version has started (Velopack's rewrite, and
+# Armory's install-step repair of the pins).
+foreach ($lnk in @($startMenu, $pinned, $gonePin)) { Note ('right after the update: ' + (Split-Path -Leaf $lnk) + ' -> ' + (Describe $lnk)) }
 if (-not (Test-Path -LiteralPath $exe)) { Fail ('The app is no longer at ' + $exe + ' after the update.') }
 $after = (& $exe --check | Select-Object -Last 1 | ConvertFrom-Json).version
 if ($after -ne $Version) { Fail ('After the update the app says ' + $after + ', not ' + $Version + '.') }

@@ -66,6 +66,31 @@ public sealed class VersionAndPinsTests
         Assert.Null(InstallRecord.Read(Path.Combine(folder.Root, InstallRecord.FileName)));
     }
 
+    // 0.4.2 kept no record and may never have saved settings: its log's "started 0.4.2" says it
+    // ran (CI's first run of the update test read "installed" for exactly that computer).
+    [Fact]
+    public void The_log_names_the_version_this_one_replaced()
+    {
+        var log = "2026-10-22T08:00:00.000Z started 0.4.1\n2026-10-23T08:00:00.000Z started 0.4.2\r\n2026-10-23T08:00:01.000Z something started 9.9 later\n2026-10-24T04:42:30.000Z started 0.4.3\n";
+        Assert.Equal("0.4.2", InstallRecord.EarlierStart(log, "0.4.3"));
+        Assert.Null(InstallRecord.EarlierStart("2026-10-24T04:42:30.000Z started 0.4.3\n", "0.4.3"));
+        Assert.Null(InstallRecord.EarlierStart(null, "0.4.3"));
+        using var folder = new TempFolder();
+        var paths = new AgentPaths(folder.Root, true);
+        Directory.CreateDirectory(paths.LogFolder);
+        File.WriteAllText(paths.LogFile, log);
+        var (record, notice) = InstallRecord.Start(paths, "0.4.3", Now);
+        Assert.Equal("Armory updated from 0.4.2 to 0.4.3.", notice);
+        Assert.Equal("0.4.2", record.Previous);
+        Assert.True(record.Updated);
+        // A first install: only this version's own start in the log, no settings: nothing said.
+        using var fresh = new TempFolder();
+        var freshPaths = new AgentPaths(fresh.Root, true);
+        Directory.CreateDirectory(freshPaths.LogFolder);
+        File.WriteAllText(freshPaths.LogFile, "2026-10-24T04:42:30.000Z started 0.4.3\n");
+        Assert.Null(InstallRecord.Start(freshPaths, "0.4.3", Now).Notice);
+    }
+
     [Fact]
     public void Settings_carries_the_about_line_to_the_page()
     {
