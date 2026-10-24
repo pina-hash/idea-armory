@@ -482,44 +482,44 @@ How Mr. Pina publishes a release is in the README, "Publishing a release".
 ### Taskbar pins (0.4.3)
 
 **What broke (Mr. Pina, 2026-10-23: "the pin turned into a blank page instead of the Armory
-icon, and I had to repin the Armory").** Velopack's install lives at
-`%LOCALAPPDATA%\IDEAArmory\current\IdeaArmory.exe`, and that path is the same before and after
-every update: an update replaces what is inside `current\`, never the folder's name. So the
-path was not what changed. The identity was. 0.4.0 to 0.4.2 were packed with no `--aumid`, so
-Velopack's manifest said `shortcutAumid` = `velopack.IDEAArmory` (read from the published
-`IDEAArmory-0.4.2-full.nupkg`), while Armory runs its process as `IdeaBosco.Armory`
-(`ShellIdentity.SetProcessAppId`) and stamps that on the Start menu shortcut at start. Velopack's
-`Update.exe`, at every update, searches the Start menu, the desktop and `User Pinned` for
-shortcuts into its folder and rewrites each one's target, icon and AppUserModelID from the
-manifest: the pin came back as `velopack.IDEAArmory`, an app the running window is not, and the
-taskbar showed a blank button beside the real one. A copy installed the old way (0.4.0's flash
-drive or setup.exe) had a second cause: moving onto the updating install deletes
-`%LOCALAPPDATA%\Programs\IDEA Armory`, the folder a pin of it pointed at.
+icon, and I had to repin the Armory").** Measured on a Windows runner on 2026-10-24
+(`tools/test-velopack-update.ps1`): an update in place does NOT break a pin. Velopack's install
+lives at `%LOCALAPPDATA%\IDEAArmory\current\IdeaArmory.exe`, and after `Update.exe apply` of
+0.4.3 over the published 0.4.2 the app answered the new version at that same path, and the Start
+menu shortcut and a pin made from it kept their target and their identity (`IdeaBosco.Armory`,
+which Armory stamps at start). What does break a pin is the move onto the updating install:
+a copy installed the old way (0.4.0's flash drive or setup.exe) lives in
+`%LOCALAPPDATA%\Programs\IDEA Armory`, and the first update moves it over and deletes that folder,
+so a pin of it points at nothing and shows a blank picture. That is the most likely cause of the
+pin Mr. Pina saw; which install his computer had before is not known from here.
 
 **What 0.4.3 does.**
 
-- `tools/package-velopack.ps1` packs with `--aumid IdeaBosco.Armory`, so Velopack's own shortcut,
-  the pins it rewrites at each update and the window are one app (`VersionAndPinsTests` holds
-  the flag to `ShellIdentity.AppId`).
-- At every start of the installed copy, and in Velopack's install and update step before the
-  older copy is retired, `TaskbarPins.Repair` reads every `.lnk` in
+- In Velopack's install and update step, before the older copy is retired, and at every start
+  of the installed copy, `TaskbarPins.Repair` reads every `.lnk` in
   `%APPDATA%\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar` and points each pin of
-  Armory at this `IdeaArmory.exe` with `IdeaBosco.Armory`. A pin is Armory's by either identity,
-  or by a target named `IdeaArmory.exe` in one of the two install folders or one that is gone. No
-  other program's pin is read past its target or written.
+  Armory at this `IdeaArmory.exe` with `IdeaBosco.Armory`. A pin is Armory's by its identity
+  (`IdeaBosco.Armory` or Velopack's fallback `velopack.IDEAArmory`), or by a target named
+  `IdeaArmory.exe` in one of the two install folders or one that is gone. No other program's
+  pin is written (CI checks one byte for byte).
 - File Explorer can keep a blank picture it saved for an old pin, so when Armory rewrote a pin it
   says once, in the window's foot line or a notification: "If Armory's taskbar button shows a
   blank picture, right-click it, choose Unpin from taskbar, then find IDEA Armory in Start,
   right-click it and choose Pin to taskbar." `install.json` (`pinNoticeShown`) keeps it to once.
+- `tools/package-velopack.ps1` packs with `--aumid IdeaBosco.Armory`, so Velopack's manifest
+  names the same identity as the window instead of its fallback `velopack.IDEAArmory` (what the
+  0.4.2 package said). CI saw no shortcut take the fallback, so this is consistency only.
 - CI (`tools/test-velopack-update.ps1`, in agent.yml and release.yml) installs the published
-  v0.4.2, pins it the way Windows does (a copy of its Start menu shortcut) beside a pin of a copy
-  that is gone and another program's pin, applies this build's full package with Velopack's own
-  `Update.exe apply`, and checks the app answers the new version at the same path, the Start menu
-  shortcut and both pins point at it as `IdeaBosco.Armory`, the other pin is byte for byte
-  unchanged, and the first start records the update.
+  v0.4.2, starts it until it has stamped its Start menu shortcut, pins it the way Windows does
+  (a copy of that shortcut) beside a pin of a copy that is gone and another program's pin,
+  applies this build's full package with Velopack's own `Update.exe apply`, and checks: the app
+  answers the new version at the same path, the Start menu shortcut and both pins point at it as
+  `IdeaBosco.Armory`, the other pin is unchanged, and the first start records "updated from
+  0.4.2".
 
-What CI cannot show is File Explorer's own taskbar: whether a pin made on a real desktop picks up
-the rewritten shortcut without the one unpin and pin again. That is a real computer's check.
+What CI cannot show is File Explorer's own taskbar: whether a pin on a real desktop redraws its
+picture after its shortcut is rewritten, without the one unpin and pin again. That is a real
+computer's check.
 
 ### Which version is installed (0.4.3)
 

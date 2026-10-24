@@ -37,11 +37,10 @@ $arguments = @('pack',
     '--packAuthors', 'IDEA, Don Bosco Tech',
     '--icon', $icon,
     '--shortcuts', 'StartMenuRoot',
-    # 0.4.3: the one AppUserModelID Armory gives its process and its notifications
-    # (ShellIdentity.AppId). Without it Velopack stamps velopack.IDEAArmory on the Start menu
-    # shortcut, and every update rewrote that shortcut and any taskbar pin of it with an
-    # identity the running window does not have, which left the pin blank (docs/agent/INSTALL.md,
-    # "Taskbar pins").
+    # 0.4.3: the one AppUserModelID Armory gives its process, its notifications and its shortcuts
+    # (ShellIdentity.AppId), in Velopack's manifest too, which named its own fallback
+    # (velopack.IDEAArmory) in 0.4.0 to 0.4.2. CI measured no shortcut or pin taking that value,
+    # so this is consistency, not the pin fix (docs/agent/INSTALL.md, "Taskbar pins").
     '--aumid', 'IdeaBosco.Armory',
     '--delta', 'None',
     '--noPortable',

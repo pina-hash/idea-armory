@@ -5,17 +5,18 @@ namespace Armory.Agent;
 
 // Taskbar pins that survive an update (0.4.3, Mr. Pina's "the pin turned into a blank page
 // instead of the Armory icon, and I had to repin the Armory"; docs/agent/INSTALL.md, "Taskbar
-// pins"). Two things broke a pin. Velopack stamped its own identity, velopack.IDEAArmory, on the
-// Start menu shortcut and, at every update, on each pin of Armory it found under User Pinned,
-// while the running window is IdeaBosco.Armory, so the pin and the window stopped being one app.
-// And moving onto the install that updates itself (0.4.0 and 0.4.1) deleted the older copy a
-// pin could point at. tools/package-velopack.ps1 now gives Velopack Armory's own identity; this
-// class puts right a pin made before that: every pin of Armory points at this IdeaArmory.exe
-// with IdeaBosco.Armory, and the person is told once, in one sentence, how to pin it again,
-// because File Explorer can keep showing a blank picture it saved for the old pin.
+// pins"). An update in place keeps a pin working: CI applied 0.4.3 over the published 0.4.2 with
+// Velopack's own Update.exe and the pin kept its target (current\IdeaArmory.exe, the same path)
+// and its identity. What broke a pin was the move onto the install that updates itself (0.4.0
+// and 0.4.1): it deletes %LOCALAPPDATA%\Programs\IDEA Armory, the folder a pin of the older copy
+// points at. So every pin of Armory is pointed at this IdeaArmory.exe with IdeaBosco.Armory, in
+// the install step before the older copy goes and at every start, and the person is told once,
+// in one sentence, how to pin it again, because File Explorer can keep showing a blank picture
+// it saved for the old pin.
 internal static class TaskbarPins
 {
-    // Velopack's identity for this app before 0.4.3 ("velopack." and the packId).
+    // Velopack's own fallback identity for this app ("velopack." and the packId), which the
+    // 0.4.2 package's manifest named; a pin carrying it is Armory's too.
     internal const string VelopackAppId = "velopack." + Updates.PackId;
 
     internal const string RepinWords =

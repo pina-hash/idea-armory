@@ -52,3 +52,4 @@ if ($out -notmatch 'cannot be a computer name') { Fail 'a name longer than 15 ch
 
 Remove-Item -LiteralPath $work -Recurse -Force
 Write-Output 'Lab names: listed, found by serial and by address, a taken name and a bad name refused; nothing renamed.'
+exit 0
