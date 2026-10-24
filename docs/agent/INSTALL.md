@@ -479,6 +479,78 @@ keeps the vault).
 
 How Mr. Pina publishes a release is in the README, "Publishing a release".
 
+### Taskbar pins (0.4.3)
+
+**What broke (Mr. Pina, 2026-10-23: "the pin turned into a blank page instead of the Armory
+icon, and I had to repin the Armory").** Velopack's install lives at
+`%LOCALAPPDATA%\IDEAArmory\current\IdeaArmory.exe`, and that path is the same before and after
+every update: an update replaces what is inside `current\`, never the folder's name. So the
+path was not what changed. The identity was. 0.4.0 to 0.4.2 were packed with no `--aumid`, so
+Velopack's manifest said `shortcutAumid` = `velopack.IDEAArmory` (read from the published
+`IDEAArmory-0.4.2-full.nupkg`), while Armory runs its process as `IdeaBosco.Armory`
+(`ShellIdentity.SetProcessAppId`) and stamps that on the Start menu shortcut at start. Velopack's
+`Update.exe`, at every update, searches the Start menu, the desktop and `User Pinned` for
+shortcuts into its folder and rewrites each one's target, icon and AppUserModelID from the
+manifest: the pin came back as `velopack.IDEAArmory`, an app the running window is not, and the
+taskbar showed a blank button beside the real one. A copy installed the old way (0.4.0's flash
+drive or setup.exe) had a second cause: moving onto the updating install deletes
+`%LOCALAPPDATA%\Programs\IDEA Armory`, the folder a pin of it pointed at.
+
+**What 0.4.3 does.**
+
+- `tools/package-velopack.ps1` packs with `--aumid IdeaBosco.Armory`, so Velopack's own shortcut,
+  the pins it rewrites at each update and the window are one app (`VersionAndPinsTests` holds
+  the flag to `ShellIdentity.AppId`).
+- At every start of the installed copy, and in Velopack's install and update step before the
+  older copy is retired, `TaskbarPins.Repair` reads every `.lnk` in
+  `%APPDATA%\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar` and points each pin of
+  Armory at this `IdeaArmory.exe` with `IdeaBosco.Armory`. A pin is Armory's by either identity,
+  or by a target named `IdeaArmory.exe` in one of the two install folders or one that is gone. No
+  other program's pin is read past its target or written.
+- File Explorer can keep a blank picture it saved for an old pin, so when Armory rewrote a pin it
+  says once, in the window's foot line or a notification: "If Armory's taskbar button shows a
+  blank picture, right-click it, choose Unpin from taskbar, then find IDEA Armory in Start,
+  right-click it and choose Pin to taskbar." `install.json` (`pinNoticeShown`) keeps it to once.
+- CI (`tools/test-velopack-update.ps1`, in agent.yml and release.yml) installs the published
+  v0.4.2, pins it the way Windows does (a copy of its Start menu shortcut) beside a pin of a copy
+  that is gone and another program's pin, applies this build's full package with Velopack's own
+  `Update.exe apply`, and checks the app answers the new version at the same path, the Start menu
+  shortcut and both pins point at it as `IdeaBosco.Armory`, the other pin is byte for byte
+  unchanged, and the first start records the update.
+
+What CI cannot show is File Explorer's own taskbar: whether a pin made on a real desktop picks up
+the rewritten shortcut without the one unpin and pin again. That is a real computer's check.
+
+### Which version is installed (0.4.3)
+
+`%LOCALAPPDATA%\IDEA Armory\install.json` (`InstallRecord`) holds the version, when it first ran
+here, the version before it and whether it was an update. Settings shows "About this Armory":
+"Version 0.4.3, updated Oct 23, 2026", and "This computer: IDEA-06, device 3f9c". The tray icon's
+hover text has a second line, "Armory 0.4.3, updated Oct 23". After an update the first start
+says "Armory updated from 0.4.2 to 0.4.3." once (from 0.4.2, which kept no record: "Armory
+updated to 0.4.3."). A first install says nothing.
+
+### Computers that share a name (0.4.3)
+
+Lab computers copied from one image all report one Windows name (several said IDEA-06). Nothing
+in Armory depends on that name being unique:
+
+- Every sign-in registers a device of its own with a server-made id (`armory_register_device`),
+  and check outs, take backs and "your other computer" are decided by that id and the ids this
+  computer synced under before (`FormerDevices`), never by a name.
+- Where two computers share a name, the app's check-out rows and the website add the first four
+  characters of the device id: "IDEA-06 (3f9c)". Settings' "About this Armory" shows this
+  computer's tag, so a person can match a computer to a row.
+- A problem report's `machineId` hashes Windows' install id (`MachineGuid`) and, from 0.4.3, the
+  computer's own wired network address (its wireless one when it has none), because an image
+  copied without Sysprep copies `MachineGuid` too. With no such address it is the id 0.3.3 gave.
+
+One place still reads the name: the website's Team view shows a member's devices one line per
+computer name (`presenceDevices`, ledger 0430), so one member signed in on two copied computers
+both named IDEA-06 shows as one line. Telling those apart needs a stable per-computer key the
+server does not have; the app sends none today, and adding one is a website change. Renaming the
+lab computers (docs/LAB_COMPUTER_NAMES.md) removes the case.
+
 Before 0.4.0, updating meant running the new release's Install from the flash drive (or the
 new setup.exe) over the old one; the settings and the sign-in file keep every byte, the new
 version loads that sign-in and opens the old vault, as the upgrade cycle above checks on

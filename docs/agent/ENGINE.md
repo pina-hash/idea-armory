@@ -1062,8 +1062,11 @@ them is still this computer's (see "Every lock this computer holds is its check 
 under those locks use the holding id. Check outs name the computer by its name ("on IDEA-06"),
 with the first characters of the id only when two computers known here share a name. Team status
 (`armory_heartbeat`) beats under the current device only; a former device simply stops beating and
-reads offline. Incidents also carry `MachineId` (from Windows' own install id), which is the same
-for a computer across sign-ins and accounts.
+reads offline. Incidents also carry `MachineId` (from Windows' own install id and, from 0.4.3, the
+computer's own network address), which is the same for a computer across sign-ins and accounts.
+Nothing here reads the Windows computer name to decide anything; it is only the words a person
+sees. Settings' "About this Armory" (0.4.3) shows this sign-in's tag beside the name
+(docs/agent/INSTALL.md, "Computers that share a name").
 
 ## The SolidWorks year (0.3.3)
 

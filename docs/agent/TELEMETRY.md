@@ -148,6 +148,11 @@ incident carries the first 16 hex characters of the SHA-256 of Windows' own inst
 (`HKLM\SOFTWARE\Microsoft\Cryptography`, `MachineGuid`, under Armory's own prefix), never the
 id itself: the same for a computer across accounts and reinstalls of Armory, and different for
 two computers with one name. Null where there is no such id (`MachineId`, `MachineIdTests`).
+From 0.4.3 the hash also takes the computer's own wired network address (its wireless one when
+it has no wired adapter; virtual, tunnel and Bluetooth adapters left out), because a lab image
+copied without Sysprep copies `MachineGuid` too; with no such address the id is the one 0.3.3
+gave (`MachineId.FromParts`, `VersionAndPinsTests`). Neither the address nor the install id is
+ever sent, only the hash.
 
 **The last flight.** A stack overflow ends the process with no chance to write anything. So
 while passes run, the last 500 events are written to `incidents\last-flight.json.gz` at most
