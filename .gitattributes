@@ -4,3 +4,6 @@
 installer/**/*.txt text eol=crlf
 installer/**/*.ps1 text eol=crlf
 installer/**/*.iss text eol=crlf
+
+tools/lab-names/*.ps1 text eol=crlf
+tools/lab-names/*.csv text eol=crlf

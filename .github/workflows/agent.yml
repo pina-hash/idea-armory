@@ -64,6 +64,10 @@ jobs:
       - name: Taskbar pins survive an update from the published v0.4.2
         run: ./tools/test-velopack-update.ps1 -Version '${{ steps.package.outputs.version }}' -From 0.4.2 -ReleaseDir '${{ steps.package.outputs.velopack-dir }}'
 
+      # 0.4.3: docs/LAB_COMPUTER_NAMES.md's script, which renames nothing here (-ListOnly and -DryRun).
+      - name: The lab computer rename script finds the runner and refuses a taken name (renames nothing)
+        run: ./tools/test-lab-names.ps1
+
       # Last: it installs for the whole computer (the runner's steps run as an administrator).
       - name: The optional badges setup (status on file icons), for the whole computer
         run: ./tools/test-agent-install.ps1 -Kind Badges
