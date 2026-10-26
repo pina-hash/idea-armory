@@ -152,7 +152,9 @@ From 0.4.3 the hash also takes the computer's own wired network address (its wir
 it has no wired adapter; virtual, tunnel and Bluetooth adapters left out), because a lab image
 copied without Sysprep copies `MachineGuid` too; with no such address the id is the one 0.3.3
 gave (`MachineId.FromParts`, `VersionAndPinsTests`). Neither the address nor the install id is
-ever sent, only the hash.
+ever sent, only the hash. Since 0.5.1 the same hash also goes with every team heartbeat
+(`TeamHeartbeat`, idea-app 0310), and the website shows each project a different token made
+from it, never the hash itself.
 
 **The last flight.** A stack overflow ends the process with no chance to write anything. So
 while passes run, the last 500 events are written to `incidents\last-flight.json.gz` at most

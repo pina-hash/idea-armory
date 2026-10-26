@@ -192,6 +192,15 @@ public sealed class ArmoryApi(PostgrestClient rest)
     public async Task HeartbeatAsync(Guid device, string? appVersion, string? state, CancellationToken ct = default)
         => await rest.CallAsync("armory_heartbeat", Args(("p_device", device), ("p_app_version", appVersion), ("p_state", state)), ct);
 
+    // v0.5.1 (idea-app 0310, ledger 0441). The same heartbeat, also saying which computer this is:
+    // computerKey is the app's per-computer hash (MachineId, the incident machineId), so the
+    // website can show one lab computer that many people sign in to as one computer. The server
+    // stores a key of 1 to 64 letters, digits, dashes or underscores and ignores any other (it
+    // never refuses a beat for it); null keeps what it has. A site without 0310 answers 404
+    // PGRST202 (ArmoryRpcException.IsFunctionMissing) and the three-argument form still answers.
+    public async Task HeartbeatAsync(Guid device, string? appVersion, string? state, string computerKey, CancellationToken ct = default)
+        => await rest.CallAsync("armory_heartbeat", Args(("p_device", device), ("p_app_version", appVersion), ("p_state", state), ("p_computer_key", computerKey)), ct);
+
     // v0.3 (0233, 0234): at most this many distinct files per armory_lock_files, armory_release_locks
     // or armory_break_locks.
     public const int MaximumBatchFiles = 500;

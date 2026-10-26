@@ -1082,7 +1082,9 @@ under those locks use the holding id. Check outs name the computer by its name (
 with the first characters of the id only when two computers known here share a name. Team status
 (`armory_heartbeat`) beats under the current device only; a former device simply stops beating and
 reads offline. Incidents also carry `MachineId` (from Windows' own install id and, from 0.4.3, the
-computer's own network address), which is the same for a computer across sign-ins and accounts.
+computer's own network address), which is the same for a computer across sign-ins and accounts,
+and since 0.5.1 every heartbeat carries it too, so the website groups the sign-ins of one
+computer as one computer (idea-app 0310). The app still labels a check out by its device.
 Nothing here reads the Windows computer name to decide anything; it is only the words a person
 sees. Settings' "About this Armory" (0.4.3) shows this sign-in's tag beside the name
 (docs/agent/INSTALL.md, "Computers that share a name").

@@ -349,7 +349,7 @@
 	var SETTINGS = { vaultRoot: 'C:\\IDEA\\Armory', startAtSignIn: true, theme: 'system' };
 	// Armory's status on file icons (the badges): not installed on this computer yet.
 	// 0.4.3: Settings' "About this Armory".
-	var ABOUT = { version: '0.5.0', words: 'Version 0.5.0, updated Oct 26, 2026', since: '2026-10-26T15:04:00.0000000+00:00', computerName: 'IDEA-06', deviceTag: '3f9c' };
+	var ABOUT = { version: '0.5.1', words: 'Version 0.5.1, updated Oct 26, 2026', since: '2026-10-26T15:04:00.0000000+00:00', computerName: 'IDEA-06', deviceTag: '3f9c' };
 	function badgesOff() {
 		return { state: 'off', line: 'Armory\'s status isn\'t shown on file icons on this computer. Turning it on needs an administrator once.' };
 	}

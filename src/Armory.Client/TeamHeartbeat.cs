@@ -6,6 +6,12 @@ namespace Armory.Client;
 // stop. The server writes nothing for a call within 20 seconds that changes nothing, so there is
 // no suppression here.
 //
+// Since 0.5.1 each beat also carries this computer's key (MachineId, idea-app 0310), so the
+// website shows one lab computer that many people sign in to as one computer. A site without
+// 0310 answers that form 404 PGRST202: the same beat goes again at once without the key, and
+// no beat sends it again until KeylessRetry has passed, so a site that never gets 0310 costs
+// one extra call every six hours and never a missed beat.
+//
 // It runs on its own task with its own deadline: a heartbeat that fails, hangs or is refused is
 // logged (once per kind of failure until one goes through) and never blocks or slows a sync pass.
 public sealed class TeamHeartbeat
@@ -15,6 +21,12 @@ public sealed class TeamHeartbeat
     public static readonly TimeSpan CallTimeout = TimeSpan.FromSeconds(15);
     // A site without armory_heartbeat (404 PGRST202) is asked again after this long.
     public static readonly TimeSpan NotLiveRetry = TimeSpan.FromHours(6);
+    // A site without the four-argument armory_heartbeat (404 PGRST202 before idea-app 0310) is
+    // sent beats without the computer key, and offered the key again after this long.
+    public static readonly TimeSpan KeylessRetry = TimeSpan.FromHours(6);
+    // The key the server keeps: 1 to 64 letters, digits, dashes or underscores (0310's rule). A
+    // key outside it is never sent, since the server would only ignore it.
+    public const int MaximumComputerKeyCharacters = 64;
     // armory_heartbeat refuses an app_version longer than this (22023), while feedback and
     // incidents take 64 (ARMORY.md item 5, "The two version limits do not match"). A longer
     // version is cut to it here, so a heartbeat is never refused for it.
@@ -22,6 +34,8 @@ public sealed class TeamHeartbeat
     private readonly ArmoryApi api;
     private readonly SessionManager sessions;
     private readonly string appVersion;
+    private readonly string? computerKey;
+    private DateTimeOffset keylessUntil = DateTimeOffset.MinValue;
     // False once the server refused the version anyway (22023, field app_version): from then on
     // every beat sends none (null keeps what the server has), so one refusal never repeats.
     private volatile bool sendVersion = true;
@@ -33,11 +47,12 @@ public sealed class TeamHeartbeat
     private string? lastProblem;
     private DateTimeOffset notLiveUntil = DateTimeOffset.MinValue;
 
-    public TeamHeartbeat(ArmoryApi api, SessionManager sessions, string appVersion, TimeProvider? clock = null, Action<string>? log = null)
+    public TeamHeartbeat(ArmoryApi api, SessionManager sessions, string appVersion, TimeProvider? clock = null, Action<string>? log = null, string? computerKey = null)
     {
         this.api = api;
         this.sessions = sessions;
         this.appVersion = VersionFor(appVersion);
+        this.computerKey = KeyFor(computerKey);
         this.clock = clock ?? TimeProvider.System;
         this.log = log;
     }
@@ -53,6 +68,20 @@ public sealed class TeamHeartbeat
         return v.Length <= MaximumVersionCharacters ? v : v[..MaximumVersionCharacters].TrimEnd();
     }
     public int Sent { get; private set; }
+
+    // The key each beat carries, or null for none (no key on this computer, or one the server
+    // would not keep).
+    public string? ComputerKey => computerKey;
+
+    // A key the server keeps, trimmed, or null.
+    public static string? KeyFor(string? key)
+    {
+        var k = key?.Trim();
+        if (string.IsNullOrEmpty(k) || k.Length > MaximumComputerKeyCharacters) return null;
+        foreach (var c in k)
+            if (!(char.IsAsciiLetterOrDigit(c) || c is '-' or '_')) return null;
+        return k;
+    }
 
     // "syncing" while files move, "idle" otherwise.
     public static string StateFor(bool moving) => moving ? Syncing : Idle;
@@ -96,14 +125,14 @@ public sealed class TeamHeartbeat
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeout.CancelAfter(CallTimeout);
-            try { await api.HeartbeatAsync(session.DeviceId, sendVersion ? appVersion : null, beat, timeout.Token); }
+            try { await SendAsync(session.DeviceId, sendVersion ? appVersion : null, beat, timeout.Token); }
             catch (ArmoryRpcException error) when (sendVersion && error.SqlState == ArmoryRpcException.InvalidValueState && error.Detail?.Field == "app_version")
             {
                 // Never expected (the version is cut to the limit above). This beat goes again at
                 // once without a version, and so does every later one: never the same refusal twice.
                 sendVersion = false;
                 Problem($"refused the version ({error.Reason}): {error.Message}; beats go on without it");
-                await api.HeartbeatAsync(session.DeviceId, null, beat, timeout.Token);
+                await SendAsync(session.DeviceId, null, beat, timeout.Token);
             }
             Sent++;
             lastProblem = null;
@@ -127,6 +156,28 @@ public sealed class TeamHeartbeat
         }
         finally { sending.Release(); }
         return false;
+    }
+
+    // One beat: with the computer key while the site takes it, else the three-argument form. A
+    // 404 PGRST202 for the keyed form means the site does not have idea-app 0310 yet, not that
+    // it has no heartbeat: the beat goes again at once without the key. A PGRST202 from the
+    // three-argument form is the site with no heartbeat at all, and is BeatAsync's to handle.
+    private async Task SendAsync(Guid device, string? version, string beat, CancellationToken ct)
+    {
+        if (computerKey is { } key && clock.GetUtcNow() >= keylessUntil)
+        {
+            try
+            {
+                await api.HeartbeatAsync(device, version, beat, key, ct);
+                return;
+            }
+            catch (ArmoryRpcException error) when (error.IsFunctionMissing)
+            {
+                keylessUntil = clock.GetUtcNow() + KeylessRetry;
+                Problem($"the site does not take a computer key yet; beats go on without it, offered again in {KeylessRetry.TotalHours:0} hours");
+            }
+        }
+        await api.HeartbeatAsync(device, version, beat, ct);
     }
 
     private void Problem(string what)

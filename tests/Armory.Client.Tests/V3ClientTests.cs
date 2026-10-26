@@ -266,6 +266,89 @@ public sealed class V3ClientTests
         Assert.Single(missing.Calls); // not asked again for hours
     }
 
+    // ---- The computer key (0.5.1, idea-app 0310) ------------------------------------------
+
+    private const string LabKey = "3fa1c0de9b7e2a41";
+
+    [Fact]
+    public async Task A_heartbeat_carries_the_computer_key_on_every_beat_when_the_site_takes_it()
+    {
+        var recorded = new Recorded().Answer("armory_heartbeat", 204, "");
+        var (api, sessions) = Client(recorded);
+        var heartbeat = new TeamHeartbeat(api, sessions, "0.5.1", computerKey: LabKey);
+        Assert.Equal(LabKey, heartbeat.ComputerKey);
+        Assert.True(await heartbeat.BeatAsync(TeamHeartbeat.Idle, default));
+        Assert.True(await heartbeat.BeatAsync(TeamHeartbeat.Syncing, default));
+        Assert.True(await heartbeat.SayGoodbyeAsync(TimeSpan.FromSeconds(5)));
+        var beats = recorded.BodiesOf("armory_heartbeat").ToList();
+        Assert.Equal(3, beats.Count);
+        Assert.All(beats, b => Assert.Equal(LabKey, b["p_computer_key"]!.GetValue<string>()));
+        Assert.All(beats, b => Assert.Equal(["p_app_version", "p_computer_key", "p_device", "p_state"], b.Select(p => p.Key).Order(StringComparer.Ordinal)));
+    }
+
+    [Fact]
+    public async Task A_site_without_the_key_gets_the_same_beat_again_without_it_and_is_offered_the_key_again_after_six_hours()
+    {
+        // 0.5.0's database: the four-argument form answers 404 PGRST202, the three-argument form 204.
+        // Recorded answers per function name, so the queue is the server's answers in order.
+        var recorded = new Recorded()
+            .Answer("armory_heartbeat", 404, """{"code":"PGRST202","message":"Could not find the function public.armory_heartbeat(p_app_version, p_computer_key, p_device, p_state)","details":null,"hint":null}""")
+            .Answer("armory_heartbeat", 204, "");
+        var (api, sessions) = Client(recorded);
+        var clock = new TestClock();
+        var log = new List<string>();
+        var heartbeat = new TeamHeartbeat(api, sessions, "0.5.1", clock, log.Add, LabKey);
+
+        Assert.True(await heartbeat.BeatAsync(TeamHeartbeat.Idle, default));
+        Assert.True(await heartbeat.BeatAsync(TeamHeartbeat.Idle, default));
+        Assert.True(await heartbeat.BeatAsync(TeamHeartbeat.Syncing, default));
+        var keyed = recorded.BodiesOf("armory_heartbeat").Select(b => b.ContainsKey("p_computer_key")).ToList();
+        // One keyed try, its keyless repeat, then two keyless beats: never a missed beat, never a second try.
+        Assert.Equal([true, false, false, false], keyed);
+        Assert.Equal(3, heartbeat.Sent);
+        Assert.Single(log, l => l.Contains("does not take a computer key", StringComparison.Ordinal));
+
+        clock.Advance(TeamHeartbeat.KeylessRetry + TimeSpan.FromSeconds(1));
+        Assert.True(await heartbeat.BeatAsync(TeamHeartbeat.Idle, default));
+        Assert.True(recorded.BodiesOf("armory_heartbeat").Last().ContainsKey("p_computer_key"));
+    }
+
+    [Fact]
+    public async Task A_site_with_no_heartbeat_at_all_is_still_left_alone_for_hours_with_a_key()
+    {
+        var missing = new Recorded(); // 404 PGRST202 for everything
+        var (api, sessions) = Client(missing);
+        var heartbeat = new TeamHeartbeat(api, sessions, "0.5.1", computerKey: LabKey);
+        Assert.False(await heartbeat.BeatAsync(TeamHeartbeat.Idle, default));
+        Assert.False(await heartbeat.BeatAsync(TeamHeartbeat.Idle, default));
+        // The keyed try and the keyless one, then nothing for hours.
+        Assert.Equal([true, false], missing.Calls.Select(c => c.Body.ContainsKey("p_computer_key")));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("has space")]
+    [InlineData("dot.ted")]
+    [InlineData("é")]
+    public async Task A_key_the_server_would_not_keep_is_never_sent(string? key)
+    {
+        Assert.Null(TeamHeartbeat.KeyFor(key));
+        var recorded = new Recorded().Answer("armory_heartbeat", 204, "");
+        var (api, sessions) = Client(recorded);
+        Assert.True(await new TeamHeartbeat(api, sessions, "0.5.1", computerKey: key).BeatAsync(TeamHeartbeat.Idle, default));
+        Assert.False(recorded.BodiesOf("armory_heartbeat").Single().ContainsKey("p_computer_key"));
+    }
+
+    [Fact]
+    public void The_key_rule_is_the_servers_one_to_sixty_four_letters_digits_dashes_or_underscores()
+    {
+        Assert.Equal(LabKey, TeamHeartbeat.KeyFor("  " + LabKey + " "));
+        Assert.Equal("A-z_0" + new string('9', 59), TeamHeartbeat.KeyFor("A-z_0" + new string('9', 59)));
+        Assert.Null(TeamHeartbeat.KeyFor(new string('a', 65)));
+    }
+
     private static async Task Until(Func<bool> condition)
     {
         for (var i = 0; i < 200 && !condition(); i++) await Task.Delay(25);

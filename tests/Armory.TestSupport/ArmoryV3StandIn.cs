@@ -39,6 +39,17 @@ public static class ArmoryV3StandIn
     }
 
     /// <summary>
+    /// idea-app 0310 (<c>armory_v5_computer_key.sql</c>, ledger 0441), after the core stand-in
+    /// (applied here first): armory_devices.computer_key and the four-argument armory_heartbeat
+    /// with 0310's rules, beside the three-argument form.
+    /// </summary>
+    public static async Task ApplyComputerKeyAsync(ArmoryTestDatabase database)
+    {
+        await ApplyCoreAsync(database);
+        await ApplyAsync(database, "armory_v5_computer_key.sql");
+    }
+
+    /// <summary>
     /// idea-app 0235 (<c>armory_v3_feedback_v2.sql</c>), after the reports stand-in (applied here
     /// first): the eight-argument armory_submit_app_feedback, the five-argument wrapper and
     /// armory_my_app_feedback with 0235's bodies as they are, plus auth.uid(), the storage tables

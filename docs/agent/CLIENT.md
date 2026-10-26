@@ -168,6 +168,7 @@ added. The binding spec is that section of idea-app `docs/ARMORY.md`.
 | `MyProjectsAsync` | `armory_my_projects` | `RemoteProject` gains `bool? CanTakeBack` (mentor, CAD lead, or site admin); null from a server older than 0233 |
 | `ProjectPurgedAsync(project)` | `armory_project_purged` | when it was deleted forever, or null (it exists, or this person was only removed) |
 | `HeartbeatAsync(device, appVersion, state)` | `armory_heartbeat` | nothing; a null or empty version or state keeps the stored one |
+| `HeartbeatAsync(device, appVersion, state, computerKey)` | `armory_heartbeat` (0310, four arguments) | nothing; a key outside the rule is ignored, never refused; 404 PGRST202 before 0310 |
 | `LockFilesAsync(files, device, op)` | `armory_lock_files` | `BatchResult(Total, Succeeded, Refused, Results)`, each `BatchFileResult(FileId, Ok, Done, Code, Message)`: `Done` is `acquired` |
 | `ReleaseLocksAsync(files, device, op)` | `armory_release_locks` | the same; `Done` is `released` |
 
@@ -218,6 +219,12 @@ at once when the state changes (`idle`, `syncing` while files move), and `offlin
 clean stop within 3 seconds. No suppression here: the server writes nothing for a call within
 20 seconds that changes nothing. It runs on its own task with a 15-second deadline per call,
 logs a failure once per kind, and waits 6 hours after a 404 PGRST202; it never touches a pass.
+Since 0.5.1 each beat also carries `p_computer_key`, this computer's `MachineId` (idea-app 0310,
+ledger 0441), so the website shows a lab computer many people sign in to as one computer. A
+404 PGRST202 for that four-argument form is a site without 0310: the same beat goes again at
+once without the key, and beats go without it for `KeylessRetry` (6 hours). A key outside the
+server's rule (1 to 64 letters, digits, dashes or underscores, `TeamHeartbeat.KeyFor`) is never
+sent.
 
 ## 7. Contract v3.1 and v3.2 calls (idea-app 0234 and 0235, Armory 0.3.3)
 

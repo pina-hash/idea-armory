@@ -208,7 +208,7 @@ internal sealed class ProfileClients
         var api = new ArmoryApi(new PostgrestClient(http.Rest, sessions, telemetry.Recorder));
         var blobs = new BlobClient(http.Site, http.Storage, site, sessions, telemetry.Recorder);
         var connector = new ConnectFlow(http.Site, site, browser, sessions);
-        var heartbeat = new TeamHeartbeat(api, sessions, AgentPaths.Version, log: log.Info);
+        var heartbeat = new TeamHeartbeat(api, sessions, AgentPaths.Version, log: log.Info, computerKey: MachineId.Current);
         // Send feedback, the same as the website's (v0.3.2): the window's one entry point, and the
         // path the saved notes go through too, sharing the uploader's waits.
         var feedback = new FeedbackSender(api, new FeedbackScreenshots(http.Rest, sessions, telemetry.Recorder), sessions, AgentPaths.Version,

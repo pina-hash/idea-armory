@@ -44,6 +44,38 @@ public sealed partial class ClientTests
     }
 
     [PostgresFact]
+    public async Task A_keyed_heartbeat_stores_the_computer_key_and_a_site_without_0310_still_takes_the_beat()
+    {
+        // A site without 0310: PostgREST finds no four-argument form (404 PGRST202 from the real
+        // catalog), the beat goes again without the key, and the row is stamped all the same.
+        await using (var older = await Env.StartAsync())
+        {
+            await ArmoryV3StandIn.ApplyCoreAsync(older.Db);
+            var (sessions, api, _) = await WithDeviceAsync(older, "alex.kim@students.test");
+            var log = new List<string>();
+            var heartbeat = new TeamHeartbeat(api, sessions, "0.5.1", log: log.Add, computerKey: "3fa1c0de9b7e2a41");
+            Assert.True(await heartbeat.BeatAsync(TeamHeartbeat.Idle, default));
+            Assert.Equal(new object?[] { "0.5.1", "idle", 1 }, (await RowsAsync(older, "select app_version, state, heartbeat_writes from public.armory_devices"))[0]);
+            Assert.Single(log, l => l.Contains("does not take a computer key", StringComparison.Ordinal));
+        }
+
+        // A site with 0310: the key is stored, a bare beat keeps it, and two people on one
+        // computer carry the same key on their own devices.
+        await using var env = await Env.StartAsync();
+        await ArmoryV3StandIn.ApplyComputerKeyAsync(env.Db);
+        var (alex, alexApi, alexDevice) = await WithDeviceAsync(env, "alex.kim@students.test");
+        var (maria, mariaApi, mariaDevice) = await WithDeviceAsync(env, "maria.lopez@students.test");
+        var quiet = new List<string>();
+        Assert.True(await new TeamHeartbeat(alexApi, alex, "0.5.1", log: quiet.Add, computerKey: "3fa1c0de9b7e2a41").BeatAsync(TeamHeartbeat.Idle, default));
+        Assert.True(await new TeamHeartbeat(mariaApi, maria, "0.5.1", log: quiet.Add, computerKey: "3fa1c0de9b7e2a41").BeatAsync(TeamHeartbeat.Idle, default));
+        await alexApi.HeartbeatAsync(alexDevice, null, null);
+        var rows = await RowsAsync(env, "select id, computer_key, app_version from public.armory_devices order by owner_email");
+        Assert.Equal([alexDevice, mariaDevice], rows.Select(r => (Guid)r[0]!));
+        Assert.All(rows, r => Assert.Equal(new object?[] { "3fa1c0de9b7e2a41", "0.5.1" }, r[1..]));
+        Assert.Empty(quiet);
+    }
+
+    [PostgresFact]
     public async Task The_sites_limits_answer_PT429_and_too_large_as_sent_and_the_uploader_stays_under_them()
     {
         await using var env = await Env.StartAsync();
