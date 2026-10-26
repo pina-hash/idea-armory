@@ -1,11 +1,11 @@
-using System.Text;
-
 namespace Armory.Core;
 
-// Several students taking turns on one computer with one shared Windows login (0.3.3, part F;
-// docs/agent/PROFILES.md). Each student keeps a profile of their own (their own sign-in), the
-// window opens on a picker, and one Armory folder is handed from student to student by the
-// 0.3.2 rule. These are the rules the host follows; none of them touches a disk or a network.
+// Several people taking turns on one computer with one shared Windows login (0.3.3, part F; 0.5.0,
+// ledger 0437; docs/agent/PROFILES.md). Each person keeps a profile of their own (their own
+// sign-in), the window opens on the faces of the people who use the computer, and everyone works
+// in the computer's one Armory folder: whoever is picked works there, and what someone else left
+// waiting stays theirs (the engine holds it for them). These are the rules the host follows; none
+// of them touches a disk or a network.
 
 // Why the window is asking whether to show the picker (PROFILES.md, "When the picker shows").
 public enum PickerTrigger
@@ -25,40 +25,6 @@ public enum PickerTrigger
     Minimized,
     // The student in use's sign-in ended (a refused refresh).
     SignInEnded,
-}
-
-// How a student gets a folder (PROFILES.md, "The shared folder").
-public enum FolderStep
-{
-    // The shared folder is free or already theirs: stop whoever runs, start them there.
-    UseShared,
-    // The shared folder belongs to the student running on it now: ask that student's engine what
-    // waits; nothing waits, so it is handed over; something waits, so it stays theirs.
-    AskRunningOwner,
-    // The shared folder belongs to someone not running on it (a student not in use, or an address
-    // with no profile here): a stopped engine for the new student looks first, and takes it over
-    // only when nothing of the owner's waits. Whoever runs keeps running until then.
-    ProbeShared,
-    // The student's own folder: their work waits there, or the shared folder can't be had.
-    UseOwn,
-}
-
-// What the host knows before a switch. SharedOwner is the address the shared folder is bound
-// to (null: nobody's yet). RunningEmail and RunningFolder are the student Armory runs for now
-// and their folder (null: nobody). TargetFolder is the folder the student's profile names, the
-// shared one or their own; TargetWaiting is what they had waiting there when they last stopped.
-public sealed record FolderFacts(
-    string TargetEmail, string SharedRoot, string? SharedOwner,
-    string? RunningEmail, string? RunningFolder,
-    string TargetFolder, int TargetWaiting, bool TargetFolderOpenInSolidWorks);
-
-// Folder: where the student goes. OwnFolderIfBusy: for a student coming back from a folder of
-// their own, where they stay when the shared folder can't be had (no question asked); null for
-// a student whose folder is the shared one (the picker offers Wait or a folder of their own).
-public sealed record FolderPlan(FolderStep Step, string Folder, string? OwnFolderIfBusy = null)
-{
-    // A student in their own folder goes back to the shared one, if it can be had.
-    public bool MovesBack => Step != FolderStep.UseOwn && OwnFolderIfBusy is not null;
 }
 
 public static class SharedComputer
@@ -106,51 +72,55 @@ public static class SharedComputer
     public static int PinTriesLeft(int wrongTries) => Math.Max(0, FreePinTries - wrongTries);
 
     // Whether the window opens on the picker. lastPicked: the local day someone last picked a
-    // student here (null: never). A student continuing after their own X goes through the picker
-    // too: nothing tells them apart from the next student.
-    public static bool ShowPicker(PickerTrigger trigger, DateOnly? lastPicked, DateOnly today) => trigger switch
+    // person here (null: never). people: how many people use this computer. With fewer than two
+    // there is nobody to switch to, so the window never opens on the picker (0.5.0: "one click or
+    // none"); only a sign-in that ended still shows it, on that person's Sign in again. A person
+    // continuing after their own X goes through the picker too: nothing tells them apart from the
+    // next person.
+    public static bool ShowPicker(PickerTrigger trigger, DateOnly? lastPicked, DateOnly today, int people) => trigger switch
     {
-        PickerTrigger.ShownFromHidden or PickerTrigger.WindowsLocked or PickerTrigger.SwitchStudent or PickerTrigger.SignInEnded => true,
+        PickerTrigger.SignInEnded => true,
+        _ when people < 2 => false,
+        PickerTrigger.ShownFromHidden or PickerTrigger.WindowsLocked or PickerTrigger.SwitchStudent => true,
         // The first open of the day, a window left open overnight included.
         PickerTrigger.Activated => lastPicked is not { } day || day < today,
         _ => false,
     };
 
-    // The hand-over table (PROFILES.md, "The shared folder"). The engine's own answer (what waits,
-    // the take-over) is always the authority; this only says which question to ask.
-    public static FolderPlan PlanFolder(FolderFacts facts)
+    // A computer becomes shared by itself (0.5.0, no setup step): a sign-in arrives for an address
+    // that is neither the one signed in here now nor, when nobody is, the one the Armory folder was
+    // last used by. The same person signing in again (a renewed sign-in, a new device id) never
+    // makes a computer shared.
+    public static bool BecomesShared(string? signedIn, string? folderOwner, string arriving)
     {
-        var own = !SameFolder(facts.TargetFolder, facts.SharedRoot);
-        if (own && (facts.TargetWaiting > 0 || facts.TargetFolderOpenInSolidWorks)) return new(FolderStep.UseOwn, facts.TargetFolder);
-        var stay = own ? facts.TargetFolder : null;
-        if (facts.SharedOwner is not { } owner || SameEmail(owner, facts.TargetEmail)) return new(FolderStep.UseShared, facts.SharedRoot, stay);
-        if (facts.RunningEmail is { } running && SameEmail(owner, running) && facts.RunningFolder is { } folder && SameFolder(folder, facts.SharedRoot))
-            return new(FolderStep.AskRunningOwner, facts.SharedRoot, stay);
-        return new(FolderStep.ProbeShared, facts.SharedRoot, stay);
+        var here = signedIn ?? folderOwner;
+        return here is not null && !SameEmail(here, arriving);
     }
 
-    // A folder of the student's own beside the shared one: C:\IDEA\Armory-alex for
-    // alex.kim@boscotech.edu (the first part of the address, letters and digits only), then -2,
-    // -3 while that name is taken (another profile's folder, or a folder bound to someone else).
-    // Never longer than MaximumFolderPath.
-    public static string OwnFolder(string sharedRoot, string email, IReadOnlyCollection<string> taken)
+    // Whether a computer set up by Armory 0.3.3 to 0.4.x keeps asking for PINs after the update.
+    // There PINs were on by default the moment shared mode was turned on, and each student chose
+    // their own; 0.5.0 asks for none by default, and a mentor may turn them on for a computer. A
+    // mentor's deliberate choice is the one thing the old index can show: only a mentor in use
+    // could change the setting, and the index recorded who (PinsChangedBy). So PINs stay on only
+    // where a mentor's last change turned them on; a student-chosen PIN under the old default never
+    // starts blocking switches. The PIN records themselves are kept either way.
+    public static bool PinsKeptAfterUpdate(bool pinsRequired, string? pinsChangedBy) => pinsRequired && !string.IsNullOrWhiteSpace(pinsChangedBy);
+
+    // A folder of one's own from Armory 0.3.3 to 0.4.x (C:\IDEA\Armory-alex beside C:\IDEA\Armory,
+    // then -2, -3): the shared folder's own name, a dash, letters and digits, and at most one more
+    // dash and a number. 0.5.0 folds every such folder back into the shared one (FolderFold).
+    public static bool IsOwnFolder(string sharedRoot, string candidate)
     {
-        var root = sharedRoot.TrimEnd('\\', '/');
-        var at = email.IndexOf('@', StringComparison.Ordinal);
-        var local = at >= 0 ? email[..at] : email;
-        var first = local.Split(['.', '_', '-', '+'], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "";
-        var name = new StringBuilder();
-        // Accents go (José is jose); anything else that is not a letter or digit of A to Z goes too.
-        foreach (var c in first.Normalize(NormalizationForm.FormD).ToLowerInvariant()) if (c is >= 'a' and <= 'z' or >= '0' and <= '9') name.Append(c);
-        if (name.Length == 0) name.Append("student");
-        for (var n = 1; ; n++)
-        {
-            var suffix = n == 1 ? "" : "-" + n.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            var room = Math.Max(1, MaximumFolderPath - root.Length - 1 - suffix.Length);
-            var candidate = root + "-" + name.ToString(0, Math.Min(name.Length, room)) + suffix;
-            if (!taken.Any(t => SameFolder(t, candidate))) return candidate;
-        }
+        var shared = sharedRoot.Replace('/', '\\').TrimEnd('\\');
+        var folder = candidate.Replace('/', '\\').TrimEnd('\\');
+        if (folder.Length <= shared.Length + 1 || !folder.StartsWith(shared + "-", StringComparison.OrdinalIgnoreCase)) return false;
+        var rest = folder[(shared.Length + 1)..];
+        if (rest.Contains('\\')) return false;
+        var parts = rest.Split('-');
+        if (parts.Length > 2 || parts[0].Length == 0 || !parts[0].All(char.IsAsciiLetterOrDigit)) return false;
+        return parts.Length == 1 || (parts[1].Length > 0 && parts[1].All(char.IsAsciiDigit));
     }
+
 
     // The name a tile shows (the name the website shows when Armory knows it, else the address's
     // words: "alex.kim" is "Alex Kim"), its initials (first and last word, a title like "Mr."

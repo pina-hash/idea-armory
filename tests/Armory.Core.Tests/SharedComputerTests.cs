@@ -2,10 +2,11 @@ using Armory.Core;
 
 namespace Armory.Core.Tests;
 
-// Several students on one computer (docs/agent/PROFILES.md): the PIN's format and its waits,
-// when the picker shows, the hand-over table, the folder of a student's own, names and
-// initials, and who may remove a student, turn shared mode off or change whether PINs are asked.
-// One test per rule in SharedComputer and PinHash.
+// Several people on one computer (docs/agent/PROFILES.md): the PIN's format and its waits, when
+// the picker shows, when a computer becomes shared by itself, the folders of one's own that 0.5.0
+// folds back, whether PINs stay on after the update, names and initials, and who may remove a
+// person, turn shared mode off or change whether PINs are asked. One test per rule in
+// SharedComputer and PinHash.
 public sealed class SharedComputerTests
 {
     private const string Shared = @"C:\IDEA\Armory";
@@ -99,69 +100,66 @@ public sealed class SharedComputerTests
     {
         var today = new DateOnly(2026, 10, 9);
         var yesterday = today.AddDays(-1);
-        Assert.True(SharedComputer.ShowPicker(PickerTrigger.ShownFromHidden, today, today));
-        Assert.True(SharedComputer.ShowPicker(PickerTrigger.WindowsLocked, today, today));
-        Assert.True(SharedComputer.ShowPicker(PickerTrigger.SwitchStudent, today, today));
-        Assert.True(SharedComputer.ShowPicker(PickerTrigger.SignInEnded, today, today));
-        Assert.True(SharedComputer.ShowPicker(PickerTrigger.Activated, yesterday, today));
-        Assert.True(SharedComputer.ShowPicker(PickerTrigger.Activated, null, today));
-        Assert.False(SharedComputer.ShowPicker(PickerTrigger.Activated, today, today));
-        Assert.False(SharedComputer.ShowPicker(PickerTrigger.Minimized, yesterday, today));
-        Assert.False(SharedComputer.ShowPicker(PickerTrigger.Start, null, today));
+        Assert.True(SharedComputer.ShowPicker(PickerTrigger.ShownFromHidden, today, today, 2));
+        Assert.True(SharedComputer.ShowPicker(PickerTrigger.WindowsLocked, today, today, 2));
+        Assert.True(SharedComputer.ShowPicker(PickerTrigger.SwitchStudent, today, today, 3));
+        Assert.True(SharedComputer.ShowPicker(PickerTrigger.SignInEnded, today, today, 2));
+        Assert.True(SharedComputer.ShowPicker(PickerTrigger.Activated, yesterday, today, 2));
+        Assert.True(SharedComputer.ShowPicker(PickerTrigger.Activated, null, today, 2));
+        Assert.False(SharedComputer.ShowPicker(PickerTrigger.Activated, today, today, 2));
+        Assert.False(SharedComputer.ShowPicker(PickerTrigger.Minimized, yesterday, today, 2));
+        Assert.False(SharedComputer.ShowPicker(PickerTrigger.Start, null, today, 2));
     }
 
     [Fact]
-    public void Folder_plan_follows_the_hand_over_table()
+    public void One_person_on_a_computer_never_gets_the_picker_except_to_sign_in_again()
     {
-        var own = @"C:\IDEA\Armory-jordan";
-        FolderPlan Plan(string? owner, string? running, string? runningFolder, string folder = Shared, int waiting = 0, bool open = false)
-            => SharedComputer.PlanFolder(new FolderFacts(Jordan, Shared, owner, running, runningFolder, folder, waiting, open));
+        var today = new DateOnly(2026, 10, 26);
+        foreach (var people in new[] { 0, 1 })
+        {
+            foreach (var trigger in new[] { PickerTrigger.ShownFromHidden, PickerTrigger.WindowsLocked, PickerTrigger.SwitchStudent, PickerTrigger.Activated, PickerTrigger.Start, PickerTrigger.Minimized })
+                Assert.False(SharedComputer.ShowPicker(trigger, null, today, people), $"{trigger} with {people}");
+            Assert.True(SharedComputer.ShowPicker(PickerTrigger.SignInEnded, today, today, people));
+        }
+    }
 
-        // The shared folder is nobody's yet, or already Jordan's.
-        Assert.Equal(new FolderPlan(FolderStep.UseShared, Shared), Plan(null, Alex, Shared));
-        Assert.Equal(new FolderPlan(FolderStep.UseShared, Shared), Plan("JORDAN.reyes@boscotech.edu", Alex, @"C:\IDEA\Armory-alex"));
-        // It is Alex's and Alex runs on it: ask Alex's engine what waits.
-        Assert.Equal(new FolderPlan(FolderStep.AskRunningOwner, Shared), Plan(Alex, Alex, Shared + "\\"));
-        // It is Alex's and Alex is not running on it (Sam runs elsewhere, nobody runs, or Alex
-        // runs in a folder of his own): look with a stopped engine first.
-        Assert.Equal(new FolderPlan(FolderStep.ProbeShared, Shared), Plan(Alex, Sam, @"C:\IDEA\Armory-sam"));
-        Assert.Equal(new FolderPlan(FolderStep.ProbeShared, Shared), Plan(Alex, null, null));
-        Assert.Equal(new FolderPlan(FolderStep.ProbeShared, Shared), Plan(Alex, Alex, @"C:\IDEA\Armory-alex"));
-        // An address with no profile here (a 0.3.2 folder) is probed the same way.
-        Assert.Equal(FolderStep.ProbeShared, Plan("apina@boscotech.edu", Sam, Shared).Step);
+    // Replaces Folder_plan_follows_the_hand_over_table (0.5.0, ledger 0437): there is no hand-over
+    // any more. A computer becomes shared by itself when a second person signs in, and the folders
+    // of one's own that 0.3.3 to 0.4.x made are recognized so they can be folded back.
+    [Fact]
+    public void A_computer_becomes_shared_when_someone_else_signs_in_and_own_folders_are_recognized()
+    {
+        // Nobody here yet, or the same person again in any case: still one person's computer.
+        Assert.False(SharedComputer.BecomesShared(null, null, Alex));
+        Assert.False(SharedComputer.BecomesShared(Alex, null, " ALEX.kim@boscotech.edu"));
+        Assert.False(SharedComputer.BecomesShared(null, Alex, Alex));
+        // Someone else signs in, while Alex is signed in or after Alex signed out of a folder he used.
+        Assert.True(SharedComputer.BecomesShared(Alex, null, Jordan));
+        Assert.True(SharedComputer.BecomesShared(null, Alex, Jordan));
+        // The person signed in now decides when there is one, not an older folder binding.
+        Assert.False(SharedComputer.BecomesShared(Jordan, Alex, Jordan));
 
-        // Jordan's own folder with work waiting there, or open in SolidWorks: Jordan stays.
-        Assert.Equal(new FolderPlan(FolderStep.UseOwn, own), Plan(Alex, Alex, Shared, own, waiting: 2));
-        Assert.Equal(new FolderPlan(FolderStep.UseOwn, own), Plan(null, null, null, own, open: true));
-        // Nothing waits in it: back to the shared folder when it can be had, else stay, unasked.
-        var back = Plan(null, Alex, @"C:\IDEA\Armory-alex", own);
-        Assert.Equal(new FolderPlan(FolderStep.UseShared, Shared, own), back);
-        Assert.True(back.MovesBack);
-        Assert.Equal(new FolderPlan(FolderStep.AskRunningOwner, Shared, own), Plan(Alex, Alex, Shared, own));
-        Assert.Equal(new FolderPlan(FolderStep.ProbeShared, Shared, own), Plan(Alex, null, null, own));
-        Assert.False(Plan(null, null, null).MovesBack);
-        Assert.False(Plan(Alex, Alex, Shared, own, waiting: 1).MovesBack);
+        Assert.True(SharedComputer.IsOwnFolder(Shared, @"C:\IDEA\Armory-alex"));
+        Assert.True(SharedComputer.IsOwnFolder(Shared + "\\", @"c:\idea\armory-JORDAN\"));
+        Assert.True(SharedComputer.IsOwnFolder(Shared, @"C:\IDEA\Armory-alex-2"));
+        Assert.True(SharedComputer.IsOwnFolder(Shared, "C:/IDEA/Armory-jsmith2"));
+        Assert.True(SharedComputer.IsOwnFolder(Shared, @"C:\IDEA\Armory-student"));
+        foreach (var not in new[] { Shared, @"C:\IDEA\Armory-", @"C:\IDEA\Armory2", @"C:\IDEA\Armory-alex\Robot", @"C:\IDEA\Armory-alex-x",
+                     @"C:\IDEA\Armory-al ex", @"C:\IDEA\Armory-alex-2-3", @"C:\IDEA\Other-alex", @"D:\IDEA\Armory-alex", "C:\\IDEA\\Armory-jos\u00e9" })
+            Assert.False(SharedComputer.IsOwnFolder(Shared, not), not);
     }
 
     [Fact]
-    public void Own_folder_names_take_the_first_name_and_never_collide()
+    public void Pins_stay_on_after_the_update_only_where_a_mentor_turned_them_on()
     {
-        Assert.Equal(@"C:\IDEA\Armory-alex", SharedComputer.OwnFolder(Shared, Alex, []));
-        Assert.Equal(@"C:\IDEA\Armory-alex", SharedComputer.OwnFolder(Shared + "\\", "Alex_Kim@boscotech.edu", []));
-        Assert.Equal(@"C:\IDEA\Armory-jsmith2", SharedComputer.OwnFolder(Shared, "jsmith2@boscotech.edu", []));
-        Assert.Equal(@"C:\IDEA\Armory-jose", SharedComputer.OwnFolder(Shared, "josé.núñez@boscotech.edu", []));
-        Assert.Equal(@"C:\IDEA\Armory-student", SharedComputer.OwnFolder(Shared, "...@boscotech.edu", []));
-        Assert.Equal(@"C:\IDEA\Armory-student", SharedComputer.OwnFolder(Shared, "李@boscotech.edu", []));
-        Assert.Equal(@"C:\IDEA\Armory-alex-2", SharedComputer.OwnFolder(Shared, Alex, [@"c:\idea\armory-ALEX"]));
-        Assert.Equal(@"C:\IDEA\Armory-alex-3", SharedComputer.OwnFolder(Shared, "alex.reyes@boscotech.edu", [@"C:\IDEA\Armory-alex", @"C:\IDEA\Armory-alex-2\"]));
-        // A deep shared folder (111 characters): the name gives way, never the limit.
-        var deep = @"C:\" + string.Join('\\', Enumerable.Repeat("Folder", 15)) + @"\Arm";
-        var fitted = SharedComputer.OwnFolder(deep, "maximiliano.rodriguez@boscotech.edu", []);
-        Assert.True(fitted.Length <= SharedComputer.MaximumFolderPath, fitted);
-        Assert.Equal(deep + "-maximili", fitted);
-        var last = fitted[(fitted.LastIndexOf('\\') + 1)..];
-        Assert.True(VaultPath.TryValidateName(last, out var why), why);
-        Assert.Equal(deep + "-maximi-2", SharedComputer.OwnFolder(deep, "maximiliano.rodriguez@boscotech.edu", [fitted]));
+        // 0.3.3 to 0.4.x: on by default, nobody recorded. Students chose their own PINs; off now.
+        Assert.False(SharedComputer.PinsKeptAfterUpdate(pinsRequired: true, pinsChangedBy: null));
+        Assert.False(SharedComputer.PinsKeptAfterUpdate(pinsRequired: true, pinsChangedBy: "  "));
+        // A mentor turned them off: off.
+        Assert.False(SharedComputer.PinsKeptAfterUpdate(pinsRequired: false, pinsChangedBy: "apina@boscotech.edu"));
+        // A mentor turned them (back) on deliberately: on.
+        Assert.True(SharedComputer.PinsKeptAfterUpdate(pinsRequired: true, pinsChangedBy: "apina@boscotech.edu"));
+        Assert.False(SharedComputer.PinsKeptAfterUpdate(pinsRequired: false, pinsChangedBy: null));
     }
 
     [Fact]
