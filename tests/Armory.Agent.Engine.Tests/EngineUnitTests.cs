@@ -224,7 +224,7 @@ public sealed class EngineUnitTests
         Assert.Equal("view", json.RootElement.GetProperty("type").GetString());
         var v = json.RootElement.GetProperty("view");
         Assert.Equal(["connection", "connect", "account", "sync", "activity", "vaultRoot", "notices", "prompt", "myFiles", "projects", "settings", "effectiveTheme",
-                "folderOwner", "profiles", "solidWorks", "heldForOthers"],
+                "folderOwner", "profiles", "solidWorks", "heldForOthers", "updateNote"],
             v.EnumerateObject().Select(p => p.Name).ToArray());
         // 0.3.3: a computer one student uses sends no folder owner, no profiles, and sharedComputer false.
         Assert.Equal(JsonValueKind.Null, v.GetProperty("folderOwner").ValueKind);
