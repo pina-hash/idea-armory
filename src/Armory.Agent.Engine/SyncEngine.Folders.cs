@@ -1213,6 +1213,9 @@ public sealed partial class SyncEngine
             if (ProjectFor(projectId) is not { } ps) return NoProject;
             if (ps.Archived) return ArchivedAnswer(ps);
             if (string.IsNullOrEmpty(folder)) return new(false, "A project's top folder can't be deleted here. A mentor archives a project on ideabosco.com.");
+            // Someone else's work waits in it on this computer (0.5.0): the folder stays.
+            if (state.Held.Where(h => !SameEmail(h.Key, state.Email)).SelectMany(h => h.Value.Files.Keys).FirstOrDefault(k => Inside(k, Join(ps.Folder, folder))) is { } heldPath)
+                return HeldRefusal(heldPath);
             var path = Join(ps.Folder, folder);
             var name = Leaf(path);
             if (!FolderOnDisk(path) && !remoteByPath.Keys.Any(k => Inside(k, path))) return new(false, $"{name} isn't there any more.");
@@ -1433,6 +1436,7 @@ public sealed partial class SyncEngine
             };
         }
         for (var i = 0; i < createdThisPass.Count; i++) if (Inside(createdThisPass[i], from)) createdThisPass[i] = Map(createdThisPass[i]);
+        RekeyHeld(from, to);
         RekeyDisk(from, to, moveLocal);
 
         void Remap(HashSet<string> set)

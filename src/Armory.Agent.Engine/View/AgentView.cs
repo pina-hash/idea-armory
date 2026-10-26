@@ -23,7 +23,14 @@ public sealed record AgentView(
     string EffectiveTheme,
     FolderOwnerView? FolderOwner = null,
     ProfilesView? Profiles = null,
-    SolidWorksView? SolidWorks = null);
+    SolidWorksView? SolidWorks = null,
+    IReadOnlyList<HeldView>? HeldForOthers = null);
+
+// Work someone else left waiting in this folder (0.5.0, docs/agent/PROFILES.md): their address and
+// name, how many of their files wait (read-only for the person in use), the words for all of it
+// ("2 files and 1 folder change"), and since when. It goes to Armory under their own sign-in when
+// they pick their name here.
+public sealed record HeldView(string Email, string Name, int Files, string Words, string Since);
 
 public sealed record ConnectView(string Phase, string? Message);
 public sealed record AccountView(string Email, string DeviceName);

@@ -35,7 +35,8 @@ public sealed partial class SyncEngine
         var session = deps.Sessions.Current;
         var connection = session is null
             ? (connectPhase is "waitingForBrowser" or "finishing" ? Connections.Connecting : Connections.SignedOut)
-            : state.Email is not null && !string.Equals(state.Email, session.Email, StringComparison.OrdinalIgnoreCase) ? Connections.VaultOwnedByOther
+            // 0.5.0: a folder someone else used last is handed to whoever is signed in by the
+            // first pass, with their waiting work held for them, so it is never "someone else's".
             : Connections.SignedIn;
         var account = session is null ? null : new AccountView(session.Email, session.DeviceName);
         // A record of something deleted forever (v0.3) is on its way out: never shown.
@@ -62,7 +63,8 @@ public sealed partial class SyncEngine
         if (quietLook) sync = sync with { Detail = LastChecked() };
         sync = sync with { Now = NowLine(session is not null, moving.Line, quietLook) };
         return new AgentView(connection, new ConnectView(connectPhase, connectMessage), account, sync, moving, options.VaultRoot,
-            notices, Prompt(), MyFiles(files), Projects(), settings, effectiveTheme, FolderOwner(connection), SolidWorks: SolidWorksStatus());
+            notices, Prompt(), MyFiles(files), Projects(), settings, effectiveTheme, FolderOwner(connection), SolidWorks: SolidWorksStatus(),
+            HeldForOthers: session is null ? [] : HeldViews());
     }
 
     // Files waiting for SolidWorks (or another program) to let go of them, this pass.
@@ -558,7 +560,8 @@ public sealed partial class SyncEngine
                 // The file as this computer knows it now (its own lock changes since the read included).
                 if (listed.Deleted || !remoteById.TryGetValue(listed.Id, out var known)) continue;
                 var remote = known.File;
-                state.Files.TryGetValue(known.Path.Value, out var st);
+                // A file held here for someone else (0.5.0) reads as their record says.
+                if (!state.Files.TryGetValue(known.Path.Value, out var st)) st = HeldRecord(known.Path.Value)?.Record;
                 TryLocal(known.Path.Value, out var file);
                 var ownership = OwnershipOf(remote.Lock);
                 var year = TeamRelease(remote, known.Path, st);
@@ -573,7 +576,7 @@ public sealed partial class SyncEngine
             {
                 if (shown.Contains(key) || ProjectOf(file.Path)?.Id != project.Id) continue;
                 if (HomeOf(key) is { } home && shown.Contains(home)) continue; // shown where it goes back to
-                state.Files.TryGetValue(key, out var st);
+                if (!state.Files.TryGetValue(key, out var st)) st = HeldRecord(key)?.Record;
                 RemoteFile? gone = null;
                 if (st?.FileId is { } id && remoteById.TryGetValue(id, out var elsewhere))
                 {

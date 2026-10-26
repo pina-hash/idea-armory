@@ -44,9 +44,12 @@ public sealed partial class SyncEngine
         await EnsureKnownForActionAsync(cancellationToken);
         if (Unready() is { } stillWhy) return stillWhy;
         var targets = new List<(FileState State, VaultPath Path)>();
+        string? heldFor = null;
         foreach (var (file, project, path) in remoteById.Values.OrderBy(r => r.Path.Value, StringComparer.OrdinalIgnoreCase))
         {
             if (file.Deleted || file.Current is null || !Under(path.Value, paths)) continue;
+            // Someone else's work waits in it on this computer (0.5.0): left as it is, theirs.
+            if (HeldForOther(path.Value) || HeldIdForOther(file.Id)) { heldFor ??= path.Value; continue; }
             var st = state.Files.Values.FirstOrDefault(f => f.FileId == file.Id) ?? FileFor(project, path.Value);
             st.FileId ??= file.Id;
             // Checking out again a file this computer is checking in or undoing, added while
@@ -61,6 +64,7 @@ public sealed partial class SyncEngine
         }
         if (targets.Count == 0)
         {
+            if (heldFor is not null) return HeldRefusal(heldFor);
             if (online != true) return Offline("Files can be checked out once this computer is back online.");
             return new(false, paths.Count == 1 && !IsFolder(paths[0]) ? $"{NameOf(paths[0])} isn't in Armory yet." : "There are no files there to check out.");
         }
@@ -550,6 +554,7 @@ public sealed partial class SyncEngine
         var slash = from.Value.LastIndexOf('/');
         if (!VaultPath.TryCreate(from.Value[..(slash + 1)] + newName, out var to, out var tooLong, options.VaultRoot)) return new(false, tooLong ?? "That name can't be used here.");
         if (string.Equals(from.Value, to.Value, StringComparison.Ordinal)) return new(false, "That is already its name.");
+        if (HeldForOther(from.Value)) return HeldRefusal(from.Value);
         Guid operation;
         Forced? forced = null;
         RemoteLock? over = null;

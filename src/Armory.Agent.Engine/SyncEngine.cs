@@ -535,15 +535,27 @@ public sealed partial class SyncEngine : IAsyncDisposable
         PruneStamps();
         var session = deps.Sessions.Current;
         if (session is null) { deps.Live?.SetProjects([]); return Report(false); }
-        if (state.Email is not null && !string.Equals(state.Email, session.Email, StringComparison.OrdinalIgnoreCase)) { deps.Live?.SetProjects([]); LookAtOwnersWork(); return Report(true); }
-        if (state.Email is null || state.DeviceId != session.DeviceId)
+        // Identity (0.5.0, SyncEngine.People.cs). Someone else used this folder last: it is handed
+        // to the person signed in now once this pass has looked at the disk, with what the last
+        // person left waiting held for them. The same person: a reconnect registers a new device,
+        // and its work and the locks it holds (its check outs) stay this computer's.
+        var handing = state.Email is not null && !SameEmail(state.Email, session.Email);
+        var (priorMoves, priorFolderOps, priorForce) = (state.Moves.Count, state.FolderOps.Count, state.ForceCheckIns.Count);
+        if (!handing)
         {
-            // A reconnect of the same person registers a new device; its work and the locks
-            // it holds (its check outs) stay this computer's.
-            if (state.DeviceId is { } former && !state.FormerDevices.Contains(former)) state.FormerDevices.Add(former);
-            state.Email = session.Email;
-            state.DeviceId = session.DeviceId;
-            SaveNow();
+            if (state.Email is null || state.DeviceId != session.DeviceId)
+            {
+                if (state.DeviceId is { } former && !state.FormerDevices.Contains(former)) state.FormerDevices.Add(former);
+                // A folder bound to nobody (new, or handed over by 0.3.2 to 0.4.x): this person's
+                // earlier devices here are theirs again.
+                if (state.Email is null && state.People.TryGetValue(session.Email, out var known))
+                    foreach (var device in known.Devices) if (device != session.DeviceId && !state.FormerDevices.Contains(device)) state.FormerDevices.Add(device);
+                state.Email = session.Email;
+                state.DeviceId = session.DeviceId;
+                state.RememberPerson(session.Email);
+                SaveNow();
+            }
+            if (state.Held.ContainsKey(session.Email)) ReturnHeld(session.Email);
         }
 
         if (!recovered)
@@ -616,6 +628,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
             // its files for removed ones (SyncEngine.Folders.cs).
             DetectFolderChanges(scan);
         }
+        if (handing) HandOver(session, scan, priorMoves, priorFolderOps, priorForce);
 
         // Saves are captured before any network step, so nothing on the server side can stop
         // this computer from keeping every save.
@@ -1117,6 +1130,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
         foreach (var (key, remote) in remoteByPath)
         {
             if (remote.File.Deleted || remote.File.Current is not { } current || !local.TryGetValue(key, out var file) || current.Hash != file.Hash) continue;
+            if (HeldForOther(key) || HeldIdForOther(remote.File.Id)) continue;
             // A carried unit's file is taken in by a pass that saw it land.
             if (Fenced(key)) continue;
             state.Files.TryGetValue(key, out var st);
@@ -1140,6 +1154,8 @@ public sealed partial class SyncEngine : IAsyncDisposable
         foreach (var file in local.Values.OrderBy(f => f.Path))
         {
             var key = file.Path.Value;
+            // Someone else's work that waits here (0.5.0): never captured as the person in use's.
+            if (HeldForOther(key)) continue;
             // SolidWorks is writing it: kept once it says it saved (with the stamp of its bytes).
             if (SavingHeld(key)) continue;
             // A carried unit is writing it (or wrote it after this scan): never a save.
@@ -1168,6 +1184,8 @@ public sealed partial class SyncEngine : IAsyncDisposable
             if (known && existing!.Purged) continue;
             // Archived (decision D8): only this computer's own check outs there are kept up.
             if (project.Archived && !MineToFinish(existing)) continue;
+            // A held file someone renamed in File Explorer is still the held file, never a new one.
+            if (!known && FollowHeldRename(file)) continue;
             if (!known) createdThisPass.Add(key);
             CaptureSave(session, known ? existing! : FileFor(project, key), file, file.Path);
         }
@@ -1206,6 +1224,9 @@ public sealed partial class SyncEngine : IAsyncDisposable
         var changed = false;
         foreach (var entry in all.Values.Where(e => e.Kind == IntentKind.Upload && !state.Completed.Contains(e.Id) && !attached.Contains(e.Id)))
         {
+            // A save is only ever attached to its own author's records (0.5.0): someone else's
+            // stays theirs, held, and is sent under their sign-in.
+            if (!SavedBy(entry, state.Email) || HeldForOther(entry.Path) || HeldEntry(entry.Id)) continue;
             if (!VaultPath.TryCreate(entry.Path, out var path, out _, options.VaultRoot)) continue;
             var project = ProjectOf(path);
             if (project is null) continue;
@@ -1220,9 +1241,10 @@ public sealed partial class SyncEngine : IAsyncDisposable
 
     // ---- Planning ------------------------------------------------------------------
 
+    // Never a path held for someone else (0.5.0): nothing is planned there, not even a download.
     private string[] AllPaths()
         => local.Keys.Concat(state.Files.Keys).Concat(remoteByPath.Keys).Distinct(StringComparer.OrdinalIgnoreCase)
-            .Order(StringComparer.OrdinalIgnoreCase).ToArray();
+            .Where(key => !HeldForOther(key)).Order(StringComparer.OrdinalIgnoreCase).ToArray();
 
     // The paths phase B plans: every path, or for a window action's pass the paths its scope holds
     // and the files sharing a name with them in their project (they are one unit), so a click on
@@ -1394,6 +1416,8 @@ public sealed partial class SyncEngine : IAsyncDisposable
         else if (remoteByPath.TryGetValue(key, out var byPath))
         {
             if (state.FirstWithFileId(byPath.File.Id, except: st) is not null) return null;
+            // A team file held for someone else at another path here (the team renamed it): theirs.
+            if (HeldIdForOther(byPath.File.Id)) return null;
             remote = byPath;
         }
         if (st is null && localFile is null && remote.File is null) return null;

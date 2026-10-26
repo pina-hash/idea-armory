@@ -103,6 +103,62 @@ public sealed class StateAndActivityTests
         Assert.Null(state.FirstWithFileId(gone));
     }
 
+    // 0.5.0: what a person left waiting is held in the document under their address, whole, never
+    // among the file records (nothing finds it by FileId or path there), and it comes back exactly.
+    // A 0.3.2 to 0.4.x document (schema 2) loads with its one person and their devices remembered.
+    [Fact]
+    public void Held_work_and_people_are_kept_whole_outside_the_file_records()
+    {
+        var state = Sample();
+        var maria = "maria.lopez@students.test";
+        var former = Guid.NewGuid();
+        state.FormerDevices.Add(former);
+        state.RememberPerson(state.Email!);
+        var held = new HeldWork { Since = DateTimeOffset.UnixEpoch };
+        foreach (var path in state.Files.Keys.Take(3).ToArray())
+        {
+            var st = state.Files[path];
+            state.Files.Remove(path);
+            held.Files[path] = st;
+            held.Hashes[path] = new string('d', 64);
+        }
+        held.FolderOps.Add(new PendingFolderOp("rename", Guid.NewGuid(), Project, "Robot 2027/Gearbox", "Robot 2027/Gears"));
+        state.Held[maria] = held;
+        SameDocument(state);
+        var heldId = held.Files.Values.First().FileId!.Value;
+        Assert.Null(state.FirstWithFileId(heldId));
+        // A change to held work is written with the next save.
+        Assert.Null(state.SerializeParts(whole: false));
+        held.Hashes["Robot 2027/Gearbox/Part-000.SLDPRT"] = null;
+        Assert.NotNull(state.SerializeParts(whole: false));
+        SameDocument(state);
+
+        var store = new Store();
+        store.Save(state.Serialize());
+        var loaded = EngineState.Load(store);
+        var back = loaded.Held["MARIA.LOPEZ@students.test"];
+        Assert.Equal(3, back.Files.Count);
+        Assert.True(back.Files.ContainsKey("robot 2027/gearbox/part-001.sldprt"));
+        Assert.Equal(held.Files.Values.Select(f => f.Entries.Single()), back.Files.Values.Select(f => f.Entries.Single()));
+        Assert.Null(back.Hashes["Robot 2027/Gearbox/Part-000.SLDPRT"]);
+        Assert.Single(back.FolderOps);
+        Assert.Null(loaded.FirstWithFileId(heldId));
+        Assert.Equal([state.DeviceId!.Value, former], loaded.People[state.Email!].Devices);
+        Assert.True(JsonNode.DeepEquals(JsonNode.Parse(loaded.SerializeWhole()), JsonNode.Parse(state.SerializeWhole())));
+
+        // A schema 2 document (Armory 0.3.2 to 0.4.x) loads as schema 3 with its person remembered.
+        var old = Sample();
+        old.Schema = 2;
+        old.FormerDevices.Add(former);
+        var oldStore = new Store();
+        oldStore.Save(old.SerializeWhole());
+        var upgraded = EngineState.Load(oldStore);
+        Assert.Equal(3, upgraded.Schema);
+        Assert.Equal([old.DeviceId!.Value, former], upgraded.People[old.Email!].Devices);
+        Assert.Empty(upgraded.Held);
+        Assert.Equal(old.Files.Count, upgraded.Files.Count);
+    }
+
     // A field added to FileState and forgotten by its change tracking would be saved late (or
     // never, until another field of the same record changed): every public property is set here.
     [Fact]

@@ -27,6 +27,9 @@ public sealed record FolderWaiting(string? Owner, int CheckedOut, int Unsent, in
 // engine, and SealCheckOutsAsync when the next student moves to a folder of their own.
 public sealed partial class SyncEngine
 {
+    // Takes the folder for the person signed in now (0.5.0): what the last person left waiting is
+    // held for them, never a reason to refuse (SyncEngine.People.cs). A pass does the same by itself
+    // when it finds the folder was someone else's; this is that step on its own, from a fresh scan.
     public async Task<ActionResult> TakeOverFolderAsync(CancellationToken cancellationToken = default)
     {
         if (!engineThread.IsCurrent) return await engineThread.InvokeAsync(() => TakeOverFolderAsync(cancellationToken));
@@ -35,42 +38,18 @@ public sealed partial class SyncEngine
         {
             var session = deps.Sessions.Current;
             if (session is null) return new(false, "Connect this computer first.");
-            if (state.Email is not { } owner || string.Equals(owner, session.Email, StringComparison.OrdinalIgnoreCase))
+            if (state.Email is not { } owner || SameEmail(owner, session.Email))
                 return new(true, "This Armory folder is already yours.");
             VaultScan scan;
             try { scan = fs.Scan(); }
             catch (IOException) { return new(false, "Armory can't look through this folder right now. Try again in a moment."); }
-            var waiting = WaitingIn(scan);
-            ownerWaiting = (owner, waiting.Parts, deps.Clock.GetTimestamp());
-            var who = DisplayName(owner);
-            var first = who.Split(' ')[0];
-            if (waiting.Any)
-            {
-                RequestPublish();
-                return new(false, $"{who} still has {waiting.Words} in this folder. {first} can sign in to Armory here to finish them, or you can use a folder of your own.");
-            }
-            // Nothing of theirs is waiting: the folder's files are the team's versions, the same for
-            // anyone in the project. The next pass binds it to this account and this device; a
-            // project this account isn't in stays on disk as it is and stops syncing.
-            state.Email = null;
-            state.DeviceId = null;
-            state.FormerDevices.Clear();
-            state.Remembered.Clear();
-            state.Dismissed.Clear();
-            state.Imports.Clear();
-            foreach (var st in state.Files.Values)
-            {
-                st.Sides.Clear(); // their kept copies are in each file's history, not news for this account
-                st.BreakNotice = false;
-                st.Refusal = null;
-                st.RefusalKind = null;
-            }
-            MarkDirty();
-            SaveNow();
-            ownerWaiting = null;
-            deps.Log?.Invoke("folder: handed over by its account to the one signed in now");
-            activity.Log($"This Armory folder is yours now. It was {first}'s.");
-            return new(true, $"This Armory folder is yours now. {who}'s files here were all saved to Armory, so nothing of theirs changes.");
+            HandOver(session, scan, state.Moves.Count, state.FolderOps.Count, state.ForceCheckIns.Count);
+            var first = DisplayName(owner).Split(' ')[0];
+            var held = state.Held.TryGetValue(owner, out var work) ? work.Files.Count : 0;
+            RequestPublish();
+            return new(true, held == 0
+                ? $"This Armory folder is yours now. {first}'s files here were all saved to Armory, so nothing of theirs changes."
+                : $"This Armory folder is yours now. {first}'s work in {Count(held, "file", "files")} waits here for {first}, read-only for you.");
         }
         finally { LeaveAction(); }
     }
@@ -140,15 +119,6 @@ public sealed partial class SyncEngine
     private (string Owner, IReadOnlyList<string> Parts, long At)? ownerWaiting;
     private static readonly TimeSpan OwnerWaitingFor = TimeSpan.FromMinutes(1);
 
-    private void LookAtOwnersWork()
-    {
-        if (state.Email is not { } owner) return;
-        if (ownerWaiting is { } known && string.Equals(known.Owner, owner, StringComparison.OrdinalIgnoreCase) && deps.Clock.GetElapsedTime(known.At) < OwnerWaitingFor) return;
-        try { ownerWaiting = (owner, WaitingIn(fs.Scan()).Parts, deps.Clock.GetTimestamp()); }
-        catch (IOException) { return; }
-        RequestPublish();
-    }
-
     // The folder's owner for the view: who, and what waits (null: not looked at yet).
     private FolderOwnerView? FolderOwner(string connection)
     {
@@ -175,11 +145,12 @@ public sealed partial class SyncEngine
                 changed++;
         }
         foreach (var file in scan.Files)
-            if (!state.Files.ContainsKey(file.Path.Value) && ProjectOf(file.Path) is not null) added++;
+            if (!state.Files.ContainsKey(file.Path.Value) && !HeldForOther(file.Path.Value) && ProjectOf(file.Path) is not null) added++;
         // A journaled save no file record holds yet (a capture a crash left out of the state document).
         var held = state.Files.Values.SelectMany(f => f.Entries.Concat(f.Drafts).Concat(new[] { f.CreateEntry, f.DeleteEntry, f.MarkerEntry }.OfType<string>()))
             .ToHashSet(StringComparer.Ordinal);
-        unsent += journal.Read().Entries.Count(e => e.Kind == IntentKind.Upload && !state.Completed.Contains(e.Id) && !held.Contains(e.Id));
+        unsent += journal.Read().Entries.Count(e => e.Kind == IntentKind.Upload && !state.Completed.Contains(e.Id) && !held.Contains(e.Id) &&
+            SavedBy(e, state.Email) && !HeldEntry(e.Id) && !HeldForOther(e.Path));
         var folderWork = state.Moves.Count + state.FolderOps.Count + state.MovingFolders.Count;
         List<string> waiting = [];
         if (checkedOut > 0) waiting.Add(Count(checkedOut, "file checked out", "files checked out"));

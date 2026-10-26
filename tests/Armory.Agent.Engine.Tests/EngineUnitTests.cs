@@ -80,9 +80,11 @@ public sealed class EngineUnitTests
         Assert.Equal(state.DeviceId, loaded.DeviceId);
         Assert.Equal(("Robot", "cad_lead", true, true), (loaded.Projects[project].Folder, loaded.Projects[project].Role, loaded.Projects[project].Archived, loaded.Projects[project].CanTakeBack));
 
-        // The upgrade (decision D15): state.json exactly as 0.1.0 wrote it loads as schema 2.
+        // The upgrade (decision D15): state.json exactly as 0.1.0 wrote it loads as today's schema
+        // (2 was v2 check out; 3 is 0.5.0's computer-bound document, its one person remembered).
         var migrated = EngineState.Load(new MemoryState(File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "Fixtures", "state-0.1.0.json"))));
-        Assert.Equal(2, migrated.Schema);
+        Assert.Equal(3, migrated.Schema);
+        Assert.Equal([migrated.DeviceId!.Value], migrated.People["ALEX.KIM@students.test"].Devices);
         Assert.Equal(2, migrated.Files.Count);
         // What 0.1.0 last knew of who holds each file stays, so the v2 rule holds offline too.
         Assert.Equal(Armory.Core.LockOwnership.ThisDevice, migrated.Files["Robot 2027/Drivetrain/Bracket.SLDPRT"].AppliedOwnership);
@@ -94,7 +96,7 @@ public sealed class EngineUnitTests
     // it offline. Everything it knew is kept, the ownership it last applied too: the v2 rule reads
     // it as who holds each file, so it applies even when the first 0.2.0 start is offline.
     [Fact]
-    public void A_0_1_0_state_loads_as_schema_2_and_keeps_the_vault()
+    public void A_0_1_0_state_loads_as_the_current_schema_and_keeps_the_vault()
     {
         var bytes = File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "Fixtures", "state-0.1.0.json"));
         using (var raw = JsonDocument.Parse(bytes))
@@ -129,9 +131,9 @@ public sealed class EngineUnitTests
         Assert.Contains("b5428ca9-a0f6-4efb-9de6-64f0b6a535f9:open:3", state.Completed);
         Assert.Equal(Armory.Core.CheckoutRequest.None, bracket.Request);
         Assert.False(bracket.AutoCheckIn);
-        // Saved again, it is a schema 2 document with nothing of the 0.1.0 marker left.
+        // Saved again, it is a schema 3 document with nothing of the 0.1.0 marker left.
         var again = Encoding.UTF8.GetString(state.Serialize());
-        Assert.Contains("\"schema\":2", again, StringComparison.Ordinal);
+        Assert.Contains("\"schema\":3", again, StringComparison.Ordinal);
         Assert.DoesNotContain("markerEntry", again, StringComparison.Ordinal);
         Assert.Contains("\"folder\":\"Robot 2027\"", again, StringComparison.Ordinal);
     }
@@ -222,7 +224,7 @@ public sealed class EngineUnitTests
         Assert.Equal("view", json.RootElement.GetProperty("type").GetString());
         var v = json.RootElement.GetProperty("view");
         Assert.Equal(["connection", "connect", "account", "sync", "activity", "vaultRoot", "notices", "prompt", "myFiles", "projects", "settings", "effectiveTheme",
-                "folderOwner", "profiles", "solidWorks"],
+                "folderOwner", "profiles", "solidWorks", "heldForOthers"],
             v.EnumerateObject().Select(p => p.Name).ToArray());
         // 0.3.3: a computer one student uses sends no folder owner, no profiles, and sharedComputer false.
         Assert.Equal(JsonValueKind.Null, v.GetProperty("folderOwner").ValueKind);

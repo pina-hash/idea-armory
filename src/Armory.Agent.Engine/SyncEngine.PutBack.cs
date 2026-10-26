@@ -30,6 +30,7 @@ public sealed partial class SyncEngine
             await EnsureKnownAsync(cancellationToken);
             if (online != true) return Offline("A kept copy can be put back once this computer is back online.");
             if (!remoteById.TryGetValue(fileId, out var remote) || remote.File.Deleted || remote.File.Current is null) return new(false, "That file isn't in your projects.");
+            if (HeldForOther(remote.Path.Value) || HeldIdForOther(fileId)) return HeldRefusal(remote.Path.Value);
             name = remote.File.Name;
             path = remote.Path.Value;
             var found = await KeptCopyAsync(fileId, versionId, cancellationToken);

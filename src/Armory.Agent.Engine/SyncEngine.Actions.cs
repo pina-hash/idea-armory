@@ -1097,6 +1097,21 @@ public sealed partial class SyncEngine
             batch.Add((file.Path, desired));
             changed.Add(st);
         }
+        // Work held here for someone else is read-only for the person in use (0.5.0).
+        List<(VaultPath Path, LockOwnership Ownership)> sealedHeld = [];
+        SealHeld(sealedHeld);
+        if (sealedHeld.Count > 0)
+        {
+            try
+            {
+                fs.ApplyLockAttributes(sealedHeld);
+                foreach (var (path, _) in sealedHeld) local[path.Value] = local[path.Value] with { ReadOnly = true };
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                Problem(NoticeKinds.CantRead, null, "Armory couldn't set which files can be saved on this computer. It tries again by itself.", error.Message);
+            }
+        }
         if (batch.Count == 0) return;
         try
         {

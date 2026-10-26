@@ -28,11 +28,23 @@ public static class OperationIds
 // (StateSerializer).
 internal sealed class EngineState
 {
-    // 1 is 0.1.0. 2 is v2 check out (decision D15): see Migrate.
-    internal const int CurrentSchema = 2;
+    // 1 is 0.1.0. 2 is v2 check out (decision D15): see Migrate. 3 is 0.5.0 (ledger 0437): the
+    // document is the computer's, Email and DeviceId are the person Armory acts for now, and what
+    // anyone else left waiting here is in Held under their address (SyncEngine.People.cs).
+    internal const int CurrentSchema = 3;
     public int Schema { get; set; } = CurrentSchema;
+    // The person Armory acts for in this folder now, and the device their sign-in registered.
     public string? Email { get; set; }
     public Guid? DeviceId { get; set; }
+    // Everyone who has used this folder here (0.5.0), by address: the device ids their sign-ins
+    // registered on this computer, so their check outs stay theirs when they come back.
+    public Dictionary<string, PersonState> People { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    // What each person other than the one in use left waiting here (0.5.0): their file records
+    // with check outs, saves not sent, changes and new files, and their folder changes not sent.
+    // Nothing of it is planned, captured, sent or written over while someone else uses the
+    // folder; it goes back to its person's records when they are in use again, and is sent under
+    // their own sign-in.
+    public Dictionary<string, HeldWork> Held { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public long Sequence { get; set; }
     public Dictionary<Guid, ProjectState> Projects { get; set; } = [];
     private FileTable files = new();
@@ -98,6 +110,14 @@ internal sealed class EngineState
     public Dictionary<string, StampRecord> ReleaseStamps { get; set; } = new(StringComparer.Ordinal);
 
     internal bool IsMine(Guid device) => device == DeviceId || FormerDevices.Contains(device);
+
+    // The person in use's devices, kept with them (People) so they are theirs again after a switch.
+    internal void RememberPerson(string email)
+    {
+        if (!People.TryGetValue(email, out var person)) People[email] = person = new PersonState();
+        if (DeviceId is { } device && !person.Devices.Contains(device)) person.Devices.Add(device);
+        foreach (var former in FormerDevices) if (!person.Devices.Contains(former)) person.Devices.Add(former);
+    }
 
     // Ids (captures, removals, check outs, folder operations) are handed out from blocks:
     // Sequence, as saved, is the end of the block in use, and it is saved before any id of a new
@@ -215,6 +235,9 @@ internal sealed class EngineState
         state.Imports ??= [];
         state.ForceCheckIns ??= [];
         state.ReleaseStamps = new(state.ReleaseStamps ?? [], StringComparer.Ordinal);
+        state.People = new(state.People ?? [], StringComparer.OrdinalIgnoreCase);
+        state.Held = new(state.Held ?? [], StringComparer.OrdinalIgnoreCase);
+        foreach (var held in state.Held.Values) held.Normalize();
         state.Migrate();
         return state;
     }
@@ -230,6 +253,16 @@ internal sealed class EngineState
     internal void Migrate()
     {
         if (Schema >= CurrentSchema) return;
+        // 2 to 3 (0.5.0): the person a 0.3.2 to 0.4.x folder was bound to is its first person, with
+        // every device id it was synced under; nothing else changes (their waiting work is theirs
+        // and stays in the records, as the person in use's always is).
+        if (Schema == 2)
+        {
+            if (Email is { Length: > 0 } email) RememberPerson(email);
+            Schema = CurrentSchema;
+            return;
+        }
+        if (Email is { Length: > 0 } first) RememberPerson(first);
         foreach (var file in Files.Values)
         {
             if (file.MarkerEntry is { } marker) Completed.Add(marker);
@@ -449,6 +482,39 @@ internal sealed class FileState
 }
 
 internal sealed record KnownLock(string Email, Guid Device, string? DeviceName, DateTimeOffset Since);
+
+// One person who has used this folder on this computer (EngineState.People, 0.5.0).
+internal sealed class PersonState
+{
+    public List<Guid> Devices { get; set; } = [];
+}
+
+// What one person left waiting in the folder while someone else uses it (EngineState.Held, 0.5.0).
+// Files: their records, by vault path, exactly as they were (a held record belongs to no FileTable,
+// so nothing tracks or serializes it piecewise; the document writes it whole). Hashes: each held
+// file's bytes on disk when it was held (null: not on disk), so a held file someone renames in
+// File Explorer is still known by its bytes. Since: when the first of it was held.
+internal sealed class HeldWork
+{
+    public Dictionary<string, FileState> Files { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, string?> Hashes { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public List<PendingMove> Moves { get; set; } = [];
+    public List<PendingFolderOp> FolderOps { get; set; } = [];
+    public List<PendingForceCheckIn> ForceCheckIns { get; set; } = [];
+    public DateTimeOffset Since { get; set; }
+
+    [JsonIgnore] internal bool Empty => Files.Count == 0 && Moves.Count == 0 && FolderOps.Count == 0 && ForceCheckIns.Count == 0;
+
+    internal void Normalize()
+    {
+        Files = new(Files ?? [], StringComparer.OrdinalIgnoreCase);
+        Hashes = new(Hashes ?? [], StringComparer.OrdinalIgnoreCase);
+        Moves ??= [];
+        FolderOps ??= [];
+        ForceCheckIns ??= [];
+        foreach (var (key, st) in Files) if (string.IsNullOrEmpty(st.Path)) st.Path = key;
+    }
+}
 
 // The file records by vault path, compared as Windows compares paths. Every record added,
 // replaced or removed is told to the state document (EngineState.FileAdded, FileRemoved).

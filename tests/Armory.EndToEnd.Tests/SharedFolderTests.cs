@@ -155,7 +155,7 @@ public sealed class SharedFolderTests
     }
 
     [PostgresFact]
-    public async Task Waiting_names_what_the_take_over_refuses_with_and_the_folder_names_its_owner()
+    public async Task Waiting_names_what_waits_and_the_next_person_sees_it_held_for_its_owner()
     {
         await using var t = await TeamAsync();
         Assert.Null(SyncEngine.OwnerOf(new MemoryStateStore()));
@@ -176,25 +176,28 @@ public sealed class SharedFolderTests
         Assert.Equal(["1 file checked out", "1 new file not in Armory yet"], waiting.Parts);
         Assert.Equal("1 file checked out and 1 new file not in Armory yet", waiting.Words);
 
-        // Maria signs in here: the take-over refuses with the same words, and the window names
-        // the folder's owner and what waits (never parsed from a sentence: X-owner-name).
+        // Maria signs in here (0.5.0): the folder is hers by her first pass, and what waits is Alex's,
+        // held for him and named in the window (never parsed from a sentence: X-owner-name).
         await t.A.ConnectAsync(Maria);
         await t.A.SyncAsync();
-        Assert.Equal(Connections.VaultOwnedByOther, t.A.Engine.View.Connection);
-        var owner = t.A.Engine.View.FolderOwner!;
-        Assert.Equal((Alex, "Alex Kim"), (owner.Email, owner.Name));
-        Assert.Equal(waiting.Parts, owner.Waiting);
-        var refused = await t.A.Engine.TakeOverFolderAsync();
-        Assert.Equal($"Alex Kim still has {waiting.Words} in this folder. Alex can sign in to Armory here to finish them, or you can use a folder of your own.", refused.Message);
-        Assert.Equal(Alex, SyncEngine.OwnerOf(t.A.State));
-        // A folder that is the student's own names nobody.
+        Assert.Equal(Connections.SignedIn, t.A.Engine.View.Connection);
+        Assert.Null(t.A.Engine.View.FolderOwner);
+        var held = Assert.Single(t.A.Engine.View.HeldForOthers!);
+        Assert.Equal((Alex, "Alex Kim", 2, "2 files"), (held.Email, held.Name, held.Files, held.Words));
+        Assert.Equal(Maria, SyncEngine.OwnerOf(t.A.State));
+        Assert.Equal(2, SyncEngine.HeldOf(t.A.State)[Alex]);
+        // Nothing of Alex's is Maria's to finish.
+        Assert.False((await t.A.Engine.WaitingAsync()).Any);
+        // Alex is back: nothing is held for anyone, and the folder names nobody else.
         await t.A.ConnectAsync(Alex);
         await t.A.SyncAsync();
         Assert.Null(t.A.Engine.View.FolderOwner);
+        Assert.Empty(t.A.Engine.View.HeldForOthers!);
+        Assert.Empty(SyncEngine.HeldOf(t.A.State));
     }
 
     [PostgresFact]
-    public async Task A_stopped_engine_for_the_next_student_looks_and_writes_nothing_until_the_take_over()
+    public async Task A_stopped_engine_for_the_next_person_holds_the_last_ones_work_and_writes_none_of_it()
     {
         await using var t = await TeamAsync();
         t.A.Write(Plate, "v1");
@@ -203,30 +206,36 @@ public sealed class SharedFolderTests
         t.A.Save(Plate, "Alex, not checked in");
         await t.A.Engine.StopForGoodAsync();
         var maria = await SignInAsync(t, t.A, Maria);
-        var before = Take(t.A);
+        var journal = Convert.ToHexStringLower(SHA256.HashData(t.A.Journal.ReadAll()));
+        var snapshots = t.A.Snapshots.Enumerate().Count;
 
-        // Maria's engine on Alex's folder, never started: it sees Alex's work and leaves it be.
+        // Maria's engine on Alex's folder, never started: it sees Alex's work, and taking the folder
+        // holds it for him rather than refusing.
         await using (var probe = EngineFor(t, t.A, maria))
         {
             var waiting = await probe.WaitingAsync();
             Assert.Equal((Alex, "1 file checked out"), (waiting.Owner, waiting.Words));
-            Assert.False((await probe.TakeOverFolderAsync()).Ok);
+            var taken = await probe.TakeOverFolderAsync();
+            Assert.Equal((true, "This Armory folder is yours now. Alex's work in 1 file waits here for Alex, read-only for you."), (taken.Ok, taken.Message));
+            Assert.False((await probe.WaitingAsync()).Any);
+            var first = await probe.SyncOnceAsync();
+            Assert.Equal((0, 0), (first.Downloaded, first.Uploaded));
         }
-        Assert.Equal(before, Take(t.A));
+        // His bytes, his journal and his kept saves are as he left them; only who the folder is for changed.
         Assert.Equal("Alex, not checked in", t.A.Text(Plate));
-
-        // Alex comes back and checks in; a fresh look finds nothing of his, and the folder is Maria's.
-        t.A.Restart();
-        Assert.Equal("Checked in Plate.SLDPRT.", (await t.A.CheckInAsync(Plate)).Message);
-        await t.A.Engine.StopForGoodAsync();
-        var probe2 = EngineFor(t, t.A, maria);
-        Assert.False((await probe2.WaitingAsync()).Any);
-        Assert.True((await probe2.TakeOverFolderAsync()).Ok);
-        Assert.Null(SyncEngine.OwnerOf(t.A.State));
-        var first = await probe2.SyncOnceAsync();
-        Assert.Equal((0, 0), (first.Downloaded, first.Uploaded));
+        Assert.True(t.A.Disk.IsReadOnly(Plate));
+        Assert.Equal(journal, Convert.ToHexStringLower(SHA256.HashData(t.A.Journal.ReadAll())));
+        Assert.Equal(snapshots, t.A.Snapshots.Enumerate().Count);
         Assert.Equal(Maria, SyncEngine.OwnerOf(t.A.State));
-        await probe2.DisposeAsync();
+        Assert.Equal(1, SyncEngine.HeldOf(t.A.State)[Alex]);
+
+        // Alex comes back (his sign-in is the computer's): his check out is his, and he checks in.
+        t.A.Restart();
+        await t.A.SyncAsync();
+        Assert.False(t.A.Disk.IsReadOnly(Plate));
+        Assert.Equal("Checked in Plate.SLDPRT.", (await t.A.CheckInAsync(Plate)).Message);
+        Assert.Equal(Hash("Alex, not checked in"), await t.CurrentHash(await t.FileId("Plate.SLDPRT")));
+        Assert.Equal(Alex, SyncEngine.OwnerOf(t.A.State));
         NoViolations(t.A);
     }
 
