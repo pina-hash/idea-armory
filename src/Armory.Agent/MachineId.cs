@@ -11,9 +11,10 @@ namespace Armory.Agent;
 // accounts and reinstalls of Armory, and is never sent as it is: only the first 16 hex
 // characters of its SHA-256, under Armory's own prefix, which tells computers apart and names
 // nothing else. Null where there is no such id (another operating system, a locked-down key).
-// The id is only ever used to tell computers apart in an incident; nothing about a sign-in, a
-// check out or the team depends on it, and nothing anywhere depends on the computer's name being
-// unique (docs/agent/INSTALL.md, "Computers that share a name").
+// The id tells computers apart in an incident and, since 0.5.1, on the website's Team, Files and
+// Checked out views (each team heartbeat carries it as the computer key, idea-app 0310). Nothing
+// about a sign-in or a check out depends on it, and nothing anywhere depends on the computer's
+// name being unique (docs/agent/INSTALL.md, "Computers that share a name").
 internal static class MachineId
 {
     private static readonly Lazy<string?> Here = new(() => OperatingSystem.IsWindows() ? FromParts(ReadWindows(), ReadHardware()) : null);
