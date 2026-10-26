@@ -143,9 +143,8 @@ public sealed class SharedComputerHostTests
             ("setPin", $$"""{"type":"setPin","profileId":"{{Id}}","pin":"2580","requestId":"r3"}"""),
             ("addProfile", """{"type":"addProfile","requestId":"r4"}"""),
             ("forgotPin", $$"""{"type":"forgotPin","profileId":"{{Id}}","requestId":"r5"}"""),
-            ("chooseFolder", $$"""{"type":"chooseFolder","profileId":"{{Id}}","choice":"own","requestId":"r6"}"""),
-            ("removeProfile", $$"""{"type":"removeProfile","profileId":"{{Id}}","requestId":"r7"}"""),
-            ("setPinsRequired", """{"type":"setPinsRequired","on":false,"requestId":"r8"}"""),
+            ("removeProfile", $$"""{"type":"removeProfile","profileId":"{{Id}}","requestId":"r6"}"""),
+            ("setPinsRequired", """{"type":"setPinsRequired","on":false,"requestId":"r7"}"""),
         };
         foreach (var (_, json) in sent) await bridge.HandleAsync(json);
         await bridge.HandleAsync("""{"type":"showPicker"}""");
@@ -231,7 +230,8 @@ public sealed class SharedComputerHostTests
         await bridge.HandleAsync($$"""{"type":"enterPin","profileId":"{{Id}}","pin":"12a4","requestId":"c"}""");
         await bridge.HandleAsync($$"""{"type":"enterPin","profileId":"{{Id}}","pin":"１２３４","requestId":"d"}""");
         await bridge.HandleAsync($$"""{"type":"setPin","profileId":"{{Id}}","pin":"123","requestId":"e"}""");
-        await bridge.HandleAsync($$"""{"type":"chooseFolder","profileId":"{{Id}}","choice":"C:\\Windows","requestId":"f"}""");
+        // 0.5.0: "wait or a folder of your own" is gone; the message is not a bridge message any more.
+        await bridge.HandleAsync($$"""{"type":"chooseFolder","profileId":"{{Id}}","choice":"own","requestId":"f"}""");
         await bridge.HandleAsync($$"""{"type":"pickProfile","profileId":"{{Id}}","requestId":"g"}""");
         await bridge.HandleAsync("""{"type":"setSharedComputer","on":true,"pin":"12","requestId":"h"}""");
         Assert.Equal((false, "That student isn't on this computer."), window.Answer("a"));
@@ -239,7 +239,7 @@ public sealed class SharedComputerHostTests
         Assert.Equal((false, "Type 4 digits."), window.Answer("c"));
         Assert.Equal((false, "Type 4 digits."), window.Answer("d"));
         Assert.Equal((false, "Type 4 digits."), window.Answer("e"));
-        Assert.Equal((false, "Choose Wait or a folder of your own."), window.Answer("f"));
+        Assert.DoesNotContain(window.Posted, p => p.TryGetProperty("requestId", out var r) && r.GetString() == "f");
         Assert.Equal((false, "That student isn't on this computer any more."), window.Answer("g"));
         Assert.Equal((false, "Type 4 digits."), window.Answer("h"));
         // A PIN is never written to the log, not even a refused one.
@@ -295,11 +295,11 @@ public sealed class SharedComputerHostTests
         Assert.Equal(ProfileIndex.Empty, store.Load());
         Assert.Single(problems);
         Assert.False(store.TooNew);
-        File.WriteAllText(store.IndexFile, "{\"version\":2,\"current\":null,\"profiles\":[]}");
+        File.WriteAllText(store.IndexFile, "{\"version\":3,\"current\":null,\"profiles\":[]}");
         Assert.Empty(store.Load().Profiles);
         Assert.True(store.TooNew);
         Assert.Throws<InvalidOperationException>(() => store.Save(ProfileIndex.Empty));
-        Assert.Contains("\"version\":2", File.ReadAllText(store.IndexFile));
+        Assert.Contains("\"version\":3", File.ReadAllText(store.IndexFile));
     }
 
     [Fact]

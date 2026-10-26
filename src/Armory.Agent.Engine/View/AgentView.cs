@@ -24,7 +24,8 @@ public sealed record AgentView(
     FolderOwnerView? FolderOwner = null,
     ProfilesView? Profiles = null,
     SolidWorksView? SolidWorks = null,
-    IReadOnlyList<HeldView>? HeldForOthers = null);
+    IReadOnlyList<HeldView>? HeldForOthers = null,
+    string? UpdateNote = null);
 
 // Work someone else left waiting in this folder (0.5.0, docs/agent/PROFILES.md): their address and
 // name, how many of their files wait (read-only for the person in use), the words for all of it
@@ -240,7 +241,7 @@ public static class BridgeMessages
     public const string ReadNoticeItems = "readNoticeItems", NoticeItems = "noticeItems";
     // A computer shared by several students (docs/agent/PROFILES.md).
     public const string ShowPicker = "showPicker", PickProfile = "pickProfile", EnterPin = "enterPin", SetPin = "setPin", AddProfile = "addProfile",
-        ForgotPin = "forgotPin", CancelPicker = "cancelPicker", ChooseFolder = "chooseFolder", RemoveProfile = "removeProfile",
+        ForgotPin = "forgotPin", CancelPicker = "cancelPicker", RemoveProfile = "removeProfile",
         SetSharedComputer = "setSharedComputer", SetPinsRequired = "setPinsRequired";
     // The SolidWorks link's save down (docs/agent/SOLIDWORKS.md).
     public const string KeepLocal = "keepLocal", SaveDown = "saveDown";
@@ -248,7 +249,7 @@ public static class BridgeMessages
         CheckOut, CheckIn, UndoCheckOut, TakeBack, CreateFolder, RenameFolder, DeleteFolder, RenameFile, AddFiles, DropFiles, DismissNotice, SaveSettings, ChooseVaultRoot,
         ReportProblem, OpenIncidents, SendFeedback, TakeBackAll, TakeOverFolder, SwitchAccount, PutBackKeptCopy, TurnOnBadges, RepairVaultRoot,
         CaptureWindow, ReadMyFeedback, ReadNoticeItems,
-        ShowPicker, PickProfile, EnterPin, SetPin, AddProfile, ForgotPin, CancelPicker, ChooseFolder, RemoveProfile, SetSharedComputer, SetPinsRequired,
+        ShowPicker, PickProfile, EnterPin, SetPin, AddProfile, ForgotPin, CancelPicker, RemoveProfile, SetSharedComputer, SetPinsRequired,
         KeepLocal, SaveDown];
 
     public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)

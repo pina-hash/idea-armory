@@ -481,7 +481,6 @@
 	 *   setPin: { profileId, pin }            (a new student's PIN, or a new one after Forgot your PIN)
 	 *   addProfile: none                      (Add a student: the browser sign-in, once)
 	 *   forgotPin: { profileId }              (the browser sign-in as that same student)
-	 *   chooseFolder: { profileId, choice }   (choice: wait, or own: a folder of their own)
 	 *   removeProfile: { profileId }          (forgets their sign-in and PIN; no file is deleted)
 	 *   setSharedComputer: { on, pin }        (pin: the student in use's first PIN when turning on, else "")
 	 *   setPinsRequired: { on }               (a mentor only)
@@ -494,7 +493,7 @@
 	 *   | 'reportProblem' | 'openIncidents' | 'sendFeedback' | 'takeBackAll' | 'takeOverFolder' | 'switchAccount'
 	 *   | 'putBackKeptCopy' | 'captureWindow' | 'readMyFeedback' | 'turnOnBadges' | 'repairVaultRoot' | 'readNoticeItems'
 	 *   | 'showPicker' | 'pickProfile' | 'enterPin' | 'setPin' | 'addProfile' | 'forgotPin' | 'cancelPicker'
-	 *   | 'chooseFolder' | 'removeProfile' | 'setSharedComputer' | 'setPinsRequired'
+	 *   | 'removeProfile' | 'setSharedComputer' | 'setPinsRequired'
 	 *   | 'keepLocal' | 'saveDown'} PageMessageType
 	 */
 
@@ -519,7 +518,7 @@
 	/* ------------------------------------------------------- Message lists */
 
 	/** Page to host message types (BRIDGE.md, "Page to host"). */
-	var PAGE_TO_HOST = ['ready', 'connect', 'cancelConnect', 'signOut', 'pause', 'resume', 'openVault', 'openFile', 'launchFile', 'showInFolder', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'dismissNotice', 'saveSettings', 'chooseVaultRoot', 'reportProblem', 'openIncidents', 'sendFeedback', 'takeBackAll', 'takeOverFolder', 'switchAccount', 'putBackKeptCopy', 'captureWindow', 'readMyFeedback', 'turnOnBadges', 'repairVaultRoot', 'readNoticeItems', 'showPicker', 'pickProfile', 'enterPin', 'setPin', 'addProfile', 'forgotPin', 'cancelPicker', 'chooseFolder', 'removeProfile', 'setSharedComputer', 'setPinsRequired', 'keepLocal', 'saveDown'];
+	var PAGE_TO_HOST = ['ready', 'connect', 'cancelConnect', 'signOut', 'pause', 'resume', 'openVault', 'openFile', 'launchFile', 'showInFolder', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'dismissNotice', 'saveSettings', 'chooseVaultRoot', 'reportProblem', 'openIncidents', 'sendFeedback', 'takeBackAll', 'takeOverFolder', 'switchAccount', 'putBackKeptCopy', 'captureWindow', 'readMyFeedback', 'turnOnBadges', 'repairVaultRoot', 'readNoticeItems', 'showPicker', 'pickProfile', 'enterPin', 'setPin', 'addProfile', 'forgotPin', 'cancelPicker', 'removeProfile', 'setSharedComputer', 'setPinsRequired', 'keepLocal', 'saveDown'];
 
 	/** Host to page message types (BRIDGE.md, "Host to page"). */
 	var HOST_TO_PAGE = ['view', 'fileDetail', 'activity', 'actionResult', 'windowShot', 'myFeedback', 'reveal', 'noticeItems'];
@@ -550,7 +549,6 @@
 		enterPin: ['profileId', 'pin'],
 		setPin: ['profileId', 'pin'],
 		forgotPin: ['profileId'],
-		chooseFolder: ['profileId', 'choice'],
 		removeProfile: ['profileId'],
 		setSharedComputer: ['on', 'pin'],
 		setPinsRequired: ['on'],
@@ -560,7 +558,7 @@
 	};
 
 	/** Actions: each carries a requestId, and the host answers it with one actionResult. */
-	var ACTIONS = ['launchFile', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'reportProblem', 'sendFeedback', 'takeBackAll', 'takeOverFolder', 'putBackKeptCopy', 'turnOnBadges', 'pickProfile', 'enterPin', 'setPin', 'addProfile', 'forgotPin', 'chooseFolder', 'removeProfile', 'setSharedComputer', 'setPinsRequired', 'keepLocal', 'saveDown', 'repairVaultRoot'];
+	var ACTIONS = ['launchFile', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'reportProblem', 'sendFeedback', 'takeBackAll', 'takeOverFolder', 'putBackKeptCopy', 'turnOnBadges', 'pickProfile', 'enterPin', 'setPin', 'addProfile', 'forgotPin', 'removeProfile', 'setSharedComputer', 'setPinsRequired', 'keepLocal', 'saveDown', 'repairVaultRoot'];
 
 	/** Asks: each carries a requestId too, and the host answers it with a message of its own
 	 *  (windowShot, myFeedback, noticeItems), never actionResult. */
@@ -1114,7 +1112,6 @@
 				case 'addProfile':
 				case 'forgotPin':
 				case 'cancelPicker':
-				case 'chooseFolder':
 				case 'removeProfile':
 				case 'setSharedComputer':
 				case 'setPinsRequired':
@@ -1195,12 +1192,6 @@
 					later(function () {
 						view = shared.step(view, 'newPin', { profileId: id });
 					});
-					break;
-				case 'chooseFolder':
-					if (message.choice === 'own') {
-						view = shared.use(view, id, shared.ownFolder);
-						view.profiles.note = "You're in your own folder, " + shared.ownFolder + ", while " + (view.profiles.step.ownerName || 'Alex Kim').split(' ')[0] + "'s work waits in " + view.profiles.sharedFolder + '.';
-					} else view = shared.step(view, 'choose');
 					break;
 				case 'removeProfile':
 					var gone = shared.remove(view, id);

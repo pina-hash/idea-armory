@@ -91,7 +91,8 @@ public sealed partial class SyncEngine
         ownerWaiting = null;
         var first = DisplayName(last).Split(' ')[0];
         deps.Log?.Invoke($"folder: handed from {last} to {session.Email}; {held} of {last}'s files held for them");
-        if (held > 0) activity.Log($"{first}'s work waits here for {first}: {Count(held, "file", "files")}, read-only for you.");
+        activity.Log(held == 0 ? $"This Armory folder is yours now. It was {first}'s."
+            : $"This Armory folder is yours now. {first}'s work waits here for {first}: {Count(held, "file", "files")}, read-only for you.");
         ReturnHeld(session.Email);
     }
 

@@ -180,7 +180,8 @@ internal sealed class Lab : IAsyncDisposable
     public VaultRepairResult RepairAnswer { get; set; } = new(3, 2, 0, null, null);
     private static readonly string Sep = Path.DirectorySeparatorChar.ToString();
 
-    public static async Task<Lab> StartAsync(bool shared)
+    // pins: a computer where a mentor turned PINs on (0.5.0: off unless a mentor does).
+    public static async Task<Lab> StartAsync(bool shared, bool pins = false, Action<Lab>? before = null)
     {
         var heavy = await HeavyRunLock.SharedAsync();
         try
@@ -197,6 +198,13 @@ internal sealed class Lab : IAsyncDisposable
             var lab = new Lab(heavy, database, supabase, s3, site);
             await lab.MakeTeamAsync();
             if (shared) File.WriteAllText(lab.Paths.SettingsFile, "{\"vaultRoot\":\"C:\\\\IDEA\\\\Armory\",\"startAtSignIn\":true,\"theme\":\"system\",\"sharedComputer\":true}");
+            if (pins)
+            {
+                Directory.CreateDirectory(lab.Paths.ProfilesFolder);
+                File.WriteAllText(Path.Combine(lab.Paths.ProfilesFolder, "profiles.json"),
+                    "{\"version\":2,\"pinsRequired\":true,\"pinsChangedBy\":\"" + Mentor + "\",\"pinsChangedAt\":\"2026-10-01T15:00:00+00:00\",\"profiles\":[]}");
+            }
+            before?.Invoke(lab);
             await lab.StartHostAsync();
             return lab;
         }
@@ -238,7 +246,15 @@ internal sealed class Lab : IAsyncDisposable
         PinIterations = 1000,
         StopPatience = TimeSpan.FromSeconds(20),
         StillFinishingAfter = TimeSpan.FromSeconds(2),
+        FlushPatience = TimeSpan.FromSeconds(5),
+        DiskFolder = root => Folder(root).Disk.Root,
+        FoldersBeside = _ => { lock (folders) return folders.Keys.ToList(); },
+        RetryEvery = TimeSpan.FromMilliseconds(300),
     };
+
+    // A runtime that can't be made yet (another Windows user's Armory holds the folder): the
+    // exception to throw for the next runtimes of a folder, until it answers null.
+    public Func<string, Exception?>? RuntimeRefusal { get; set; }
 
     public LabFolder Folder(string root)
     {
@@ -252,6 +268,7 @@ internal sealed class Lab : IAsyncDisposable
 
     private VaultRuntime MakeRuntime(string root, ProfileClients clients)
     {
+        if (RuntimeRefusal?.Invoke(root) is { } refused) throw refused;
         var folder = Folder(root);
         var closing = new Closing("the runtime made for " + (clients.Sessions.Current?.Email ?? "nobody") + " in " + root + " (" + (++RuntimesMade) + ")", Violations);
         var files = new GuardedFiles(folder.Disk, closing);

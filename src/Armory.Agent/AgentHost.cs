@@ -126,7 +126,12 @@ internal sealed partial class AgentHost : IAsyncDisposable
         try { StartupRegistrationApply(settings, startup: true); }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.Security.SecurityException)
         { log.Error("could not update the sign-in start entry", error); }
-        await RestartRuntimeAsync(settings);
+        // 0.5.0: folders of one's own fold into the computer's one Armory folder before any engine runs.
+        await lifecycle.WaitAsync();
+        try { await Task.Run(FoldOwnFolders); }
+        catch (Exception error) when (error is not OutOfMemoryException) { log.Error("fold: the folders of one's own could not be looked at now", error); }
+        finally { lifecycle.Release(); }
+        await RestartRuntimeAsync(Settings);
         hintTimer.Change(HintPoll, HintPoll);
         // Beats until a clean stop; a failed beat is logged and never touches a sync pass.
         StartBeating();
@@ -292,12 +297,12 @@ internal sealed partial class AgentHost : IAsyncDisposable
         RaiseView();
     }
 
-    // Switch account: this person signs out and the next one signs in at once, in the browser
-    // (the Armory folder stays; it is handed over when the last person has nothing waiting).
+    // Switch account: the next person signs in at once, in the browser. Someone else (0.5.0) makes
+    // the computer shared by itself, and this person keeps their sign-in here to switch back with one
+    // click (BecomeSharedAsync); the same person again simply renews their sign-in.
     internal async Task SwitchAccountAsync()
     {
         if (SharedComputer) { ShowPicker(Armory.Core.PickerTrigger.SwitchStudent); return; }
-        SignOut();
         await ConnectAsync();
     }
 
@@ -343,8 +348,19 @@ internal sealed partial class AgentHost : IAsyncDisposable
         {
             SetConnect("waitingForBrowser", "Finish signing in with your school Google account in the browser. This window updates by itself.");
             log.Info("connect: waiting for the browser");
-            var session = await Connector.ConnectAsync(Environment.MachineName, cancel.Token);
+            // Into a sign-in of its own first: until it is known whose it is, nobody's sign-in here changes.
+            var arriving = ProfileClients.Create(null, new InMemorySecretStore(), HostClients, site, parts.Browser, Telemetry, log);
+            var session = await arriving.Connector.ConnectAsync(Environment.MachineName, cancel.Token);
             log.Info("connect: signed in, " + session);
+            if (Armory.Core.SharedComputer.BecomesShared(Sessions.Current?.Email, OwnerOf(Settings.VaultRoot), session.Email))
+            {
+                // A second person on this computer (0.5.0): it becomes shared by itself, no setup.
+                SetConnect("finishing", "Signed in as " + session.Email + ". Adding you on this computer.");
+                var shared = await BecomeSharedAsync(session);
+                SetConnect(shared.Ok ? "idle" : "failed", shared.Ok ? null : shared.Message);
+                return;
+            }
+            Sessions.SignIn(session);
             var settled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             lock (gate) firstSignedInView = settled;
             SetConnect("finishing", "Signed in as " + session.Email + ". Getting your files list.");
@@ -463,10 +479,35 @@ internal sealed partial class AgentHost : IAsyncDisposable
 
     private Task? stopped;
 
+    // A folder's records held open by another process: on Windows a sharing violation (32) or a
+    // lock violation (33) from the stores' lock files, which only another Armory takes.
+    internal static bool HeldByAnotherWindowsUser(Exception error) => error is IOException io && (io.HResult & 0xFFFF) is 32 or 33;
+
+    // Tries the folder again every HostParts.RetryEvery while another Windows user's Armory holds it.
+    private System.Threading.Timer? retryTimer;
+    private void RetryStartSoon()
+    {
+        lock (gate)
+        {
+            if (disposed || running.IsCancellationRequested) return;
+            retryTimer ??= new System.Threading.Timer(_ => _ = RetryStartAsync(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+            retryTimer.Change(parts.RetryEvery, Timeout.InfiniteTimeSpan);
+        }
+    }
+
+    private async Task RetryStartAsync()
+    {
+        if (Volatile.Read(ref runtime) is not null || running.IsCancellationRequested) return;
+        log.Info("vault runtime: trying the folder again (another Windows user's Armory held it)");
+        try { await RestartRuntimeAsync(Settings); }
+        catch (Exception error) when (error is not OutOfMemoryException) { log.Error("vault runtime: the retry failed", error); }
+    }
+
     private async Task StopOnceAsync()
     {
         StopShell();
         hintTimer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        lock (gate) retryTimer?.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         CancelConnect();
         // A clean stop says so to the team ("offline-soon"), within a few seconds at most, while
         // the engine stops (0.3.3: one after the other, a quit took up to 3 seconds longer).
@@ -541,6 +582,15 @@ internal sealed partial class AgentHost : IAsyncDisposable
         {
             log.Error("vault runtime could not start at " + folder, error);
             if (created is not null) await StopRuntimeAsync(created);
+            if (HeldByAnotherWindowsUser(error))
+            {
+                // Fast User Switching (0.5.0): another Windows user's Armory is running in this very
+                // folder. Nothing is wrong and nothing is lost; never another folder, and this Armory
+                // starts here by itself once that one quits.
+                runtimeProblem = $"Armory is already open for another Windows user on this computer, in {folder}. Switch to that user and quit Armory there (right-click the Armory icon by the clock, then Quit). Armory then starts here by itself. Your files are safe.";
+                RetryStartSoon();
+                return false;
+            }
             runtimeProblem = error switch
             {
                 NotImplementedException => "Armory's sync engine is not running on this computer yet.",
@@ -718,6 +768,9 @@ internal sealed partial class AgentHost : IAsyncDisposable
         await StopAsync();
         disposed = true;
         await hintTimer.DisposeAsync();
+        System.Threading.Timer? retry;
+        lock (gate) retry = retryTimer;
+        if (retry is not null) await retry.DisposeAsync();
         thumbnails.Dispose();
         running.Dispose();
         restHttp.Dispose();

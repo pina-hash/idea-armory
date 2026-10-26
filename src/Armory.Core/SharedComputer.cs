@@ -73,15 +73,15 @@ public static class SharedComputer
 
     // Whether the window opens on the picker. lastPicked: the local day someone last picked a
     // person here (null: never). people: how many people use this computer. With fewer than two
-    // there is nobody to switch to, so the window never opens on the picker (0.5.0: "one click or
-    // none"); only a sign-in that ended still shows it, on that person's Sign in again. A person
-    // continuing after their own X goes through the picker too: nothing tells them apart from the
-    // next person.
+    // there is nobody to switch to, so the window never opens on the picker by itself (0.5.0: "one
+    // click or none"); Switch (which is where someone new adds themselves) and a sign-in that ended
+    // still show it. A person continuing after their own X goes through the picker too: nothing
+    // tells them apart from the next person.
     public static bool ShowPicker(PickerTrigger trigger, DateOnly? lastPicked, DateOnly today, int people) => trigger switch
     {
-        PickerTrigger.SignInEnded => true,
+        PickerTrigger.SignInEnded or PickerTrigger.SwitchStudent => true,
         _ when people < 2 => false,
-        PickerTrigger.ShownFromHidden or PickerTrigger.WindowsLocked or PickerTrigger.SwitchStudent => true,
+        PickerTrigger.ShownFromHidden or PickerTrigger.WindowsLocked => true,
         // The first open of the day, a window left open overnight included.
         PickerTrigger.Activated => lastPicked is not { } day || day < today,
         _ => false,

@@ -126,7 +126,6 @@ internal sealed partial class Bridge(AgentHost host, IBridgeWindow window, Agent
         [BridgeMessages.AddProfile] = typeof(AddProfileMessage),
         [BridgeMessages.ForgotPin] = typeof(ForgotPinMessage),
         [BridgeMessages.CancelPicker] = null,
-        [BridgeMessages.ChooseFolder] = typeof(ChooseFolderMessage),
         [BridgeMessages.RemoveProfile] = typeof(RemoveProfileMessage),
         [BridgeMessages.SetSharedComputer] = typeof(SetSharedComputerMessage),
         [BridgeMessages.SetPinsRequired] = typeof(SetPinsRequiredMessage),
@@ -382,7 +381,6 @@ internal sealed partial class Bridge(AgentHost host, IBridgeWindow window, Agent
                 case BridgeMessages.AddProfile:
                 case BridgeMessages.ForgotPin:
                 case BridgeMessages.CancelPicker:
-                case BridgeMessages.ChooseFolder:
                 case BridgeMessages.RemoveProfile:
                 case BridgeMessages.SetSharedComputer:
                 case BridgeMessages.SetPinsRequired:

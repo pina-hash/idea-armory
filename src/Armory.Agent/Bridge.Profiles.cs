@@ -11,8 +11,6 @@ internal sealed record EnterPinMessage(string? ProfileId, string? Pin, string? R
 internal sealed record SetPinMessage(string? ProfileId, string? Pin, string? RequestId);
 internal sealed record AddProfileMessage(string? RequestId);
 internal sealed record ForgotPinMessage(string? ProfileId, string? RequestId);
-// choice: "wait" (for the student whose work is in the shared folder) or "own" (a folder of one's own).
-internal sealed record ChooseFolderMessage(string? ProfileId, string? Choice, string? RequestId);
 internal sealed record RemoveProfileMessage(string? ProfileId, string? RequestId);
 // pin: the first student's PIN when turning on while someone is signed in; "" otherwise.
 internal sealed record SetSharedComputerMessage(bool? On, string? Pin, string? RequestId);
@@ -57,13 +55,6 @@ internal sealed partial class Bridge
             case BridgeMessages.ForgotPin:
                 var forgot = Read<ForgotPinMessage>(message);
                 await AnswerAsync(type, 1, asked, forgot?.RequestId, ProfileStore.IsId(forgot?.ProfileId) ? host.ForgotPinAsync(forgot!.ProfileId!) : Refuse(NotAStudent));
-                break;
-            case BridgeMessages.ChooseFolder:
-                var choose = Read<ChooseFolderMessage>(message);
-                await AnswerAsync(type, 1, asked, choose?.RequestId,
-                    !ProfileStore.IsId(choose?.ProfileId) ? Refuse(NotAStudent)
-                    : choose!.Choice is not ("wait" or "own") ? Refuse(new ActionResult(false, "Choose Wait or a folder of your own."))
-                    : host.ChooseFolderAsync(choose.ProfileId!, choose.Choice));
                 break;
             case BridgeMessages.RemoveProfile:
                 var remove = Read<RemoveProfileMessage>(message);

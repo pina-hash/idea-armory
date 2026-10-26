@@ -7,20 +7,22 @@ using Rules = Armory.Core.SharedComputer;
 
 namespace Armory.Agent;
 
-// Several students taking turns on one computer with one shared Windows login (0.3.3 part F,
-// docs/agent/PROFILES.md). Off by default (settings.json "sharedComputer"): then nothing here is
-// made or read, the host builds exactly the objects it always built, and every picker message is
-// answered "This computer isn't set up for several students." On:
+// Several people taking turns on one computer with one shared Windows login (0.3.3 part F; 0.5.0,
+// ledger 0437; docs/agent/PROFILES.md). A computer becomes shared by itself the first time a second
+// person signs in on it (BecomeSharedAsync), with no setting and no PIN to choose:
 //
-//   - each student has a profile with their own sign-in (ProfileClients over their own secrets);
+//   - each person has a profile with their own sign-in (ProfileClients over their own secrets);
 //     the host swaps one pointer, clients, never the session inside a SessionManager (F2);
-//   - the window opens on a picker ("Who's using Armory?") when it is shown from hidden, on the
-//     first open of the day, after Windows is locked, and on Switch student (F6); while it shows,
-//     Armory goes on working for the student in use and the page gets none of their files (F7);
-//   - a 4-digit PIN guards each switch unless a mentor turned PINs off on this computer (F4, F5);
-//   - one Armory folder for the computer, handed from student to student by the 0.3.2 rule; a
-//     student whose work waits keeps it, and the next one may use a folder of their own (F9);
-//   - a switch stops the last student's engine for good before the next one's starts (F8).
+//   - the window opens on the faces of the people who use the computer, most recent first, when it
+//     is shown from hidden, on the first open of the day and after Windows is locked, and only when
+//     two or more people use it (F6); while it shows, Armory goes on working for the person in use
+//     and the page gets none of their files (F7);
+//   - one click on a face switches; a mentor may turn PINs on for a computer (F4, F5);
+//   - one Armory folder for everyone: whoever is in use works in it, and what the last person left
+//     waiting stays theirs, held in the folder for them by the engine (SyncEngine.People.cs);
+//   - a switch lets the last person's engine send what it can, then stops it for good before the
+//     next person's starts (F8). It changes who Armory acts for, never what is on disk: a document
+//     SolidWorks has open stays open where it is.
 internal sealed partial class AgentHost
 {
     internal const string NotShared = "This computer isn't set up for several students.";
@@ -49,7 +51,6 @@ internal sealed partial class AgentHost
     private Picker picker = new(false, PickerSteps.Choose);
     private CancellationTokenSource? signingIn;
     private PendingAdd? pendingAdd;
-    private string? homeNote;
     private ProfileClients? nobody;
 
     // On a computer shared by several students.
@@ -100,10 +101,12 @@ internal sealed partial class AgentHost
         var current = index.Find(index.Current);
         log.Info($"profiles: shared computer on, {index.Profiles.Count} {(index.Profiles.Count == 1 ? "student" : "students")}, current {current?.Email ?? "nobody"}" +
             (profiles.TooNew ? ", set up by a newer Armory" : ""));
-        if (current is not null)
+        if (profiles.Upgraded)
         {
-            var owner = OwnerOf(Settings.VaultRoot);
-            homeNote = FolderNote(current, current.Folder, Settings.VaultRoot, owner, movedBack: false);
+            // From 0.3.3 to 0.4.x: saved at once as version 2 (an older Armory then runs nobody from it).
+            log.Info($"profiles: carried forward from an older Armory; PINs {(index.PinsRequired ? "stay on, a mentor turned them on" : "are off")}");
+            try { profiles.Save(index); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { log.Error("could not save profiles.json", error); }
         }
         return current is null || profiles.TooNew ? Nobody() : ClientsOf(current.Id);
     }
@@ -223,12 +226,14 @@ internal sealed partial class AgentHost
     // student in use's files (decision F7).
     private AgentView WithProfiles(AgentView view)
     {
+        // The update's one sentence about folders folded in (AgentHost.Fold.cs), for a week.
+        if (foldNote is { } note) view = view with { UpdateNote = note };
         if (profiles is null) return view;
         var shown = ProfilesNow(view);
         if (!shown.Showing) return view with { Profiles = shown };
         return view with
         {
-            Account = null, Notices = [], Prompt = null, MyFiles = [], Projects = [], FolderOwner = null,
+            Account = null, Notices = [], Prompt = null, MyFiles = [], Projects = [], FolderOwner = null, HeldForOthers = [], UpdateNote = null,
             Activity = Unnamed(view.Activity), Profiles = shown,
         };
     }
@@ -240,8 +245,7 @@ internal sealed partial class AgentHost
     {
         Picker p;
         ProfileIndex ix;
-        string? note;
-        lock (profileGate) { p = picker; ix = index; note = homeNote; }
+        lock (profileGate) { p = picker; ix = index; }
         var mentor = MentorIn(view);
         var current = ix.Find(ix.Current);
         var tooNew = profiles!.TooNew;
@@ -256,7 +260,7 @@ internal sealed partial class AgentHost
                 Rules.CanRemove(r.Id == ix.Current, mentor, ix.PinsRequired));
         }).ToList();
         return new ProfilesView(showing, current?.Id, shared, ix.PinsRequired, Rules.CanChangePins(mentor), PinsNote(ix),
-            Rules.CanTurnOff(ix.Profiles.Count, mentor, ix.PinsRequired), showing ? null : note, rows, StepView(showing ? p : new Picker(false, PickerSteps.Choose), tooNew));
+            Rules.CanTurnOff(ix.Profiles.Count, mentor, ix.PinsRequired), null, rows, StepView(showing ? p : new Picker(false, PickerSteps.Choose), tooNew));
     }
 
     private PickerStepView StepView(Picker p, bool tooNew)
@@ -325,16 +329,6 @@ internal sealed partial class AgentHost
 
     private static string? Iso(DateTimeOffset? at) => at?.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
 
-    // Home's one line about the folder the student in use is in.
-    private static string? FolderNote(ProfileRecord who, string folder, string shared, string? owner, bool movedBack)
-    {
-        if (movedBack) return $"You're back in {shared}. Armory doesn't use {who.Folder} any more; you can delete it in File Explorer.";
-        if (Rules.SameFolder(folder, shared)) return null;
-        if (owner is not null && !Rules.SameEmail(owner, who.Email))
-            return $"You're in your own folder, {folder}, while {FirstOf(Rules.NameFromEmail(owner))}'s work waits in {shared}.";
-        return $"You're in your own folder, {folder}, until your work there is done. Then Armory moves you back to {shared}.";
-    }
-
     // ---- The picker --------------------------------------------------------------------------
 
     // The window asks whether to show the picker (MainWindow, the tray, Windows locked).
@@ -343,7 +337,7 @@ internal sealed partial class AgentHost
         if (profiles is null) return;
         lock (profileGate)
         {
-            if (!Rules.ShowPicker(why, index.LastPicked, Today)) return;
+            if (!Rules.ShowPicker(why, index.LastPicked, Today, index.Profiles.Count)) return;
             // A browser sign-in or a switch under way keeps its step; anything else starts over at the tiles.
             if (picker.Showing && (picker.Kind == PickerSteps.Switching || (signingIn is not null && picker.Kind is PickerSteps.Adding or PickerSteps.SignInAgain))) return;
             picker = new Picker(true, PickerSteps.Choose);
@@ -689,33 +683,16 @@ internal sealed partial class AgentHost
         log.Info("picker: a student being added was not kept");
     }
 
-    // The shared folder holds another student's work: wait for them, or a folder of one's own.
-    internal async Task<ActionResult> ChooseFolderAsync(string profileId, string choice)
-    {
-        if (profiles is null) return new(false, NotShared);
-        var p = CurrentPicker;
-        if (p.Kind != PickerSteps.FolderBusy || p.ProfileId != profileId || Find(profileId) is not { } target) return new(false, "Pick your name first.");
-        if (choice == "wait")
-        {
-            SetPicker(new Picker(true, PickerSteps.Choose));
-            return new(true, "");
-        }
-        if (p.OwnFolder is not { } own || !AgentSettings.TryNormalizeVaultRoot(own, out var folder, out var problem))
-            return new(false, "Armory can't make a folder of your own next to this one. Ask your teacher.");
-        _ = problem;
-        return await SwitchToAsync(target with { Folder = folder! }, ownChosen: true);
-    }
-
     // ---- Switching (decision F8) -------------------------------------------------------------
 
-    private async Task<ActionResult> SwitchToAsync(ProfileRecord target, bool ownChosen = false)
+    private async Task<ActionResult> SwitchToAsync(ProfileRecord target)
     {
         await lifecycle.WaitAsync();
-        try { return await SwitchLockedAsync(target, ownChosen); }
+        try { return await SwitchLockedAsync(target); }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
             log.Error("profiles: the switch to " + target.Email + " failed", error);
-            SetPicker(new Picker(true, PickerSteps.Choose, Message: "Armory couldn't switch students. Try again in a moment."));
+            SetPicker(new Picker(true, PickerSteps.Choose, Message: "Armory couldn't switch. Try again in a moment."));
             return new(false, "");
         }
         finally
@@ -725,22 +702,20 @@ internal sealed partial class AgentHost
         }
     }
 
-    private async Task<ActionResult> SwitchLockedAsync(ProfileRecord target, bool ownChosen)
+    // One folder for everyone (0.5.0): the next person always goes straight into the computer's
+    // Armory folder. Nothing is asked and nothing waits for anyone: the next person's engine hands
+    // the folder over by itself on its first pass, and what the last person left waiting is held
+    // for them there, read-only for the next one (SyncEngine.People.cs).
+    private async Task<ActionResult> SwitchLockedAsync(ProfileRecord target)
     {
         var shared = Settings.VaultRoot;
         var running = Volatile.Read(ref runtime);
         ProfileRecord? from;
         lock (profileGate) from = index.Find(index.Current);
-        var waitingThere = target.Waiting is { } w && Rules.SameFolder(w.Folder, target.Folder) ? w.Total : 0;
-        var own = !Rules.SameFolder(target.Folder, shared);
-        var plan = Rules.PlanFolder(new FolderFacts(target.Email, shared, OwnerOf(shared), running is null ? null : from?.Email, running?.Root,
-            target.Folder, waitingThere, own && parts.OpenInSolidWorks(target.Folder)));
-        // A folder of their own just chosen because the shared one is busy: straight there.
-        if (ownChosen) plan = new FolderPlan(FolderStep.UseOwn, target.Folder);
-        log.Info($"profiles: switching to {target.Email}: {plan.Step} {plan.Folder}");
+        log.Info($"profiles: switching to {target.Email} in {shared}");
 
-        // The same student, already running there: the picker goes, nothing restarts.
-        if (from?.Id == target.Id && running is not null && Rules.SameFolder(running.Root, plan.Folder))
+        // The same person, already running there: the picker goes, nothing restarts.
+        if (from?.Id == target.Id && running is not null && Rules.SameFolder(running.Root, shared))
         {
             Picked(target, running.Root);
             lock (profileGate) picker = new Picker(false, PickerSteps.Choose);
@@ -748,127 +723,32 @@ internal sealed partial class AgentHost
         }
         lock (profileGate) picker = new Picker(true, PickerSteps.Switching, target.Id, FromName: from is null || running is null ? null : NameOf(from));
         RaiseView();
-
-        if (plan.Step == FolderStep.UseOwn) return await MoveLockedAsync(from, target, plan.Folder, null, sealShared: ownChosen);
-
-        // The shared folder. Whoever runs on it stops first; the student it belongs to is asked
-        // first what waits (their own engine knows best), and nothing is handed over while it does.
-        var theirs = ClientsOf(target.Id);
-        var stoppedOwner = false;
-        if (running is not null && Rules.SameFolder(running.Root, shared))
-        {
-            if (plan.Step == FolderStep.AskRunningOwner)
-            {
-                FolderWaiting asked;
-                try { asked = await running.Engine.WaitingAsync(); }
-                catch (Exception error) when (error is IOException or EngineStoppedException)
-                {
-                    log.Error("profiles: could not ask what waits in " + shared, error);
-                    return await BusyLockedAsync(from, target, OwnerOf(shared) ?? "", "work Armory couldn't look through just now", plan);
-                }
-                if (from is not null) RecordWaiting(from, running.Root, asked);
-                if (asked.Any) return await BusyLockedAsync(from, target, asked.Owner ?? OwnerOf(shared) ?? "", asked.Words, plan);
-            }
-            if (!await StopCurrentLockedAsync(from, running, shared)) return Parked(from);
-            stoppedOwner = true;
-        }
-
-        // Whose the folder is now that nothing runs on it (a first pass may have bound it a moment
-        // ago): nobody's or the student's own, they go straight in; someone else's, an engine for
-        // the student looks first and takes it over only when nothing of the owner's waits
-        // (SyncEngine.TakeOverFolderAsync, the 0.3.2 rule). Whoever runs elsewhere keeps running
-        // until then.
-        var owner = OwnerOf(shared);
-        if (owner is null || Rules.SameEmail(owner, target.Email))
-            return await MoveLockedAsync(from, target, shared, null, sealShared: false, movedBack: plan.MovesBack);
-        VaultRuntime probe;
-        try { probe = await CreateRuntimeAsync(shared, theirs); }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
-        {
-            log.Error("profiles: could not open " + shared + " to look at it", error);
-            if (stoppedOwner) await RestartFormerLockedAsync(from, shared);
-            return await BusyLockedAsync(from, target, owner, "work Armory couldn't look through just now", plan);
-        }
-        string? refused = null;
-        try
-        {
-            var look = await probe.Engine.WaitingAsync();
-            if (look.Any) refused = look.Words;
-            else
-            {
-                var taken = await probe.Engine.TakeOverFolderAsync();
-                if (!taken.Ok) refused = "work still waiting";
-            }
-        }
-        catch (Exception error) when (error is IOException or EngineStoppedException)
-        {
-            log.Error("profiles: could not look at " + shared, error);
-            refused = "work Armory couldn't look through just now";
-        }
-        if (refused is not null)
-        {
-            await probe.DisposeAsync(log, StopTimeout);
-            // Their work is there: whoever was running on the folder goes on there.
-            if (stoppedOwner) await RestartFormerLockedAsync(from, shared);
-            return await BusyLockedAsync(from, target, owner, refused, plan);
-        }
-        log.Info("profiles: " + shared + " handed over to " + target.Email);
-        return await MoveLockedAsync(from, target, shared, probe, sealShared: false, movedBack: plan.MovesBack);
+        // The last person's own engine sends what it can first, under their own sign-in.
+        if (running is not null && from is not null && from.Id != target.Id) await FlushLockedAsync(from, running);
+        return await MoveLockedAsync(from, target, shared);
     }
 
-    // The shared folder can't be had: a student coming back from a folder of their own stays
-    // there; anyone else is asked (wait, or a folder of their own).
-    private async Task<ActionResult> BusyLockedAsync(ProfileRecord? from, ProfileRecord target, string owner, string words, FolderPlan plan)
+    // One pass of the last person's engine before it stops, at most FlushPatience long: their saves
+    // go to Armory now under their own sign-in when they can. Whatever is left (offline, a check out,
+    // a file SolidWorks has open) is held for them by the next person's engine. A pass cut short is
+    // stopped between two steps, as every stop is.
+    private async Task FlushLockedAsync(ProfileRecord from, VaultRuntime running)
     {
-        if (plan.OwnFolderIfBusy is { } stay) return await MoveLockedAsync(from, target, stay, null, sealShared: true);
-        var ownerName = Find(OwnerProfileId(owner) ?? "") is { } known ? NameOf(known) : Rules.NameFromEmail(owner);
-        SetPicker(new Picker(true, PickerSteps.FolderBusy, target.Id, OwnFolder: OwnFolderFor(target), OwnerName: ownerName, OwnerWaiting: words));
-        log.Info($"profiles: {Settings.VaultRoot} stays {owner}'s ({words}); {target.Email} is asked to wait or use a folder of their own");
-        return new(true, "");
+        using var patience = new CancellationTokenSource(parts.FlushPatience);
+        try { await running.Engine.SyncOnceAsync(patience.Token); }
+        catch (OperationCanceledException) { log.Info("profiles: " + from.Email + "'s last pass was cut short; what is left waits for them"); }
+        catch (Exception error) when (error is not OutOfMemoryException) { log.Error("profiles: " + from.Email + "'s last pass failed; what is left waits for them", error); }
     }
 
-    private string? OwnerProfileId(string owner)
+    // The last person stops (their engine for good, their heartbeat with a goodbye), what they leave
+    // waiting is kept for their face on the picker, and the next person starts in the folder.
+    private async Task<ActionResult> MoveLockedAsync(ProfileRecord? from, ProfileRecord target, string folder)
     {
-        lock (profileGate) return index.FindEmail(owner)?.Id;
-    }
-
-    // C:\IDEA\Armory-jordan: not another student's folder, nor a folder bound to someone else.
-    private string OwnFolderFor(ProfileRecord target)
-    {
-        var shared = Settings.VaultRoot;
-        List<string> taken;
-        lock (profileGate) taken = index.Profiles.Where(p => p.Id != target.Id).Select(p => p.Folder).ToList();
-        for (var i = 0; i < 20; i++)
-        {
-            var candidate = Rules.OwnFolder(shared, target.Email, taken);
-            var owner = OwnerOf(candidate);
-            if (owner is null || Rules.SameEmail(owner, target.Email)) return candidate;
-            taken.Add(candidate);
-        }
-        return Rules.OwnFolder(shared, target.Email, taken);
-    }
-
-    // The last student stops (their engine for good, their heartbeat with a goodbye), what they
-    // leave waiting is kept for their tile, and the next student starts in the folder. made: the
-    // runtime that looked at the folder for them, started now.
-    private async Task<ActionResult> MoveLockedAsync(ProfileRecord? from, ProfileRecord target, string folder, VaultRuntime? made, bool sealShared, bool movedBack = false)
-    {
-        var shared = Settings.VaultRoot;
         var running = Volatile.Read(ref runtime);
-        if (running is not null && !await StopCurrentLockedAsync(from, running, folder))
-        {
-            if (made is not null) await made.DisposeAsync(log, StopTimeout);
-            return Parked(from);
-        }
-        // The next student works in a folder of their own because the last one's work waits in the
-        // shared one: the last one's check outs there are made read-only until they are back. Only
-        // once their engine has stopped for good, or its next pass would make them writable again.
-        if (sealShared) await SealSharedLockedAsync(shared);
-        var owner = OwnerOf(shared);
-        Picked(target with { Folder = folder }, folder);
+        if (running is not null && !await StopCurrentLockedAsync(from, running, folder)) return Parked(from);
+        Picked(target, folder);
         clients = ClientsOf(target.Id);
-        lock (profileGate) homeNote = FolderNote(target, folder, shared, owner, movedBack && Rules.SameFolder(folder, shared));
-        var started = await StartRuntimeAsync(folder, made);
+        var started = await StartRuntimeAsync(folder);
         StartBeating();
         Telemetry.UseAccount(Api, Feedback, () => Sessions.Current?.Email);
         lock (profileGate) picker = new Picker(false, PickerSteps.Choose);
@@ -877,8 +757,8 @@ internal sealed partial class AgentHost
         return started ? new(true, "") : new(false, runtimeProblem ?? "Armory couldn't start for you. Try again in a moment.");
     }
 
-    // Stops the student in use's runtime for good. False when its engine did not stop in time and
-    // was parked, and the next student's folder is the one it holds.
+    // Stops the person in use's runtime for good. False when its engine did not stop in time and
+    // was parked, and the next person's folder is the one it holds.
     private async Task<bool> StopCurrentLockedAsync(ProfileRecord? from, VaultRuntime running, string nextFolder)
     {
         if (from is not null)
@@ -893,54 +773,86 @@ internal sealed partial class AgentHost
             SetPicker(CurrentPicker with { Message = $"Still finishing {FirstOf(NameOf(from))}'s last file..." });
         var stopped = await stopping;
         if (!stopped) log.Error("profiles: the engine for " + (from?.Email ?? "nobody") + " did not stop; " + running.Root + " stays closed until it does");
-        // A parked engine holds its folder: a student for another folder may go on.
+        // A parked engine holds its folder: a person for another folder may go on.
         return stopped || !Rules.SameFolder(running.Root, nextFolder);
     }
 
     private ActionResult Parked(ProfileRecord? from)
     {
-        var first = from is null ? "the last student" : FirstOf(NameOf(from));
+        var first = from is null ? "the last person" : FirstOf(NameOf(from));
         SetPicker(new Picker(true, PickerSteps.Choose, Message: $"Armory couldn't finish {first}'s last step. Restart Armory, then pick again."));
         return new(false, "");
-    }
-
-    // The student who was running on the shared folder goes on there (a look after them found
-    // new work of theirs on the disk).
-    private async Task RestartFormerLockedAsync(ProfileRecord? from, string shared)
-    {
-        if (from is null) return;
-        await StartRuntimeAsync(shared);
-        StartBeating();
-    }
-
-    // Nobody runs on the shared folder now: an engine that is never started makes the check outs
-    // there read-only (the read-only rule as the next student sees it).
-    private async Task SealSharedLockedAsync(string shared)
-    {
-        try
-        {
-            var probe = await CreateRuntimeAsync(shared, clients);
-            int made;
-            try { made = await probe.Engine.SealCheckOutsAsync(); }
-            finally { await probe.DisposeAsync(log, StopTimeout); }
-            log.Info($"profiles: {made} files in {shared} made read-only while their student is away");
-        }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or EngineStoppedException)
-        {
-            log.Error("profiles: could not make the last student's check outs read-only", error);
-        }
     }
 
     private void RecordWaiting(ProfileRecord who, string folder, FolderWaiting waiting)
         => SaveIndex(ix => ix.Find(who.Id) is { } r ? ix.With(r with { Waiting = waiting.Any ? WaitingRecord.Of(folder, waiting, Now) : null }) : ix);
 
-    // The student in use is this one, in this folder, as of now.
+    // The person in use is this one, in this folder, as of now; what waited for them is theirs again.
     private void Picked(ProfileRecord target, string folder)
     {
         var now = Now;
         var today = Today;
-        SaveIndex(ix => (ix.Find(target.Id) is { } r ? ix.With(r with { Folder = folder, LastUsedAt = now }) : ix.With(target with { Folder = folder, LastUsedAt = now }))
+        SaveIndex(ix => (ix.Find(target.Id) is { } r ? ix.With(r with { Folder = folder, LastUsedAt = now, Waiting = null }) : ix.With(target with { Folder = folder, LastUsedAt = now, Waiting = null }))
             with { Current = target.Id, LastPicked = today });
+    }
+
+    // ---- A computer becomes shared by itself (0.5.0) ------------------------------------------
+
+    // Someone else signed in on a computer one person used (SharedComputer.BecomesShared): that
+    // person (signed in here, or the one the folder was last used by) becomes the first profile,
+    // with their sign-in moved into it (never copied), and the person who just signed in the
+    // second, in use at once. No PIN is chosen; PINs stay off unless a mentor turns them on.
+    internal async Task<ActionResult> BecomeSharedAsync(ArmorySession arriving)
+    {
+        await lifecycle.WaitAsync();
+        try
+        {
+            var store = new ProfileStore(paths.ProfilesFolder, parts.SecretsIn, problem => log.Error(problem));
+            store.Load();
+            if (store.TooNew) return new(false, TooNewWords);
+            var signedIn = Sessions.Current;
+            var firstEmail = signedIn?.Email ?? OwnerOf(Settings.VaultRoot);
+            var first = firstEmail is null ? null : new ProfileRecord(ProfileStore.NewId(), firstEmail, Rules.NameFor(firstEmail, null).Name, Now, Now, Settings.VaultRoot, null);
+            var ix = ProfileIndex.Empty with { Current = null, Migrating = signedIn is null ? null : "on", LastPicked = Today, Profiles = first is null ? [] : [first] };
+            try { store.Save(ix); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                log.Error("could not start profiles.json", error);
+                return new(false, "Armory couldn't add you on this computer. Try again.");
+            }
+            log.Info($"profiles: {arriving.Email} signed in where {firstEmail} works; this computer is shared now");
+            // The first person's engine sends what it can, then stops: the switch below starts the next one's.
+            var old = Volatile.Read(ref runtime);
+            if (old is not null && first is not null) await FlushLockedAsync(first, old);
+            await StopBeatingAsync();
+            old = Interlocked.Exchange(ref runtime, null);
+            if (old is not null) await StopRuntimeAsync(old, parts.StopPatience);
+            SaveSettingsValue(settings with { SharedComputer = true });
+            clients = Nobody();
+            lock (profileGate)
+            {
+                profiles = store;
+                index = ix;
+                byProfile.Clear();
+                hasPin.Clear();
+                picker = new Picker(true, PickerSteps.Switching);
+            }
+            if (signedIn is not null && first is not null)
+            {
+                if (!MoveSecret(paths.SecretsFolder, store.SecretsFolderOf(first.Id)) || ClientsOf(first.Id).Sessions.Current?.Email is not { } moved || !Rules.SameEmail(moved, first.Email))
+                    log.Error("profiles: the first person's sign-in could not be moved; they sign in again when they pick their name");
+            }
+            SaveIndex(i => i with { Migrating = null });
+            var record = new ProfileRecord(ProfileStore.NewId(), arriving.Email, Rules.NameFor(arriving.Email, null).Name, Now, null, Settings.VaultRoot, null);
+            ClientsOf(record.Id).Sessions.SignIn(arriving);
+            SaveIndex(i => i.With(record));
+            return await SwitchLockedAsync(record);
+        }
+        finally
+        {
+            lifecycle.Release();
+            RaiseView();
+        }
     }
 
     // ---- Remove, PINs, shared mode on and off ------------------------------------------------
@@ -965,7 +877,7 @@ internal sealed partial class AgentHost
                 clients = Nobody();
                 SaveIndex(ix => ix with { Current = null });
                 Telemetry.UseAccount(Api, Feedback, () => Sessions.Current?.Email);
-                lock (profileGate) { picker = new Picker(true, PickerSteps.Choose); homeNote = null; }
+                lock (profileGate) picker = new Picker(true, PickerSteps.Choose);
             }
             finally { lifecycle.Release(); }
         }
@@ -1051,7 +963,6 @@ internal sealed partial class AgentHost
             byProfile.Clear();
             hasPin.Clear();
             picker = new Picker(record is null, PickerSteps.Choose);
-            homeNote = null;
         }
         if (record is not null)
         {
@@ -1128,7 +1039,6 @@ internal sealed partial class AgentHost
             byProfile.Clear();
             hasPin.Clear();
             pendingAdd = null;
-            homeNote = null;
         }
     }
 

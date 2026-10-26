@@ -37,11 +37,16 @@ internal sealed record ProfileRecord(string Id, string Email, string Name, DateT
 // PIN when switching students", with who changed it and when. Migrating: "on" or "off" while
 // shared mode is being turned on or off (finished at the next start). LastPicked: the local day
 // someone last picked a student, for the first open of the day.
+//
+// Version 2 is 0.5.0 (ledger 0437): a computer is shared by itself, PINs are off unless a mentor
+// turned them on, and everyone uses the one Armory folder. Written as 2 the first time 0.5.0 reads a
+// version 1 index, which is also what keeps an older Armory (it runs nobody from an index newer than
+// it knows, TooNew) from ever acting on a folder that holds people's work for them (EngineState.Held).
 internal sealed record ProfileIndex(int Version, string? Current, bool PinsRequired, string? PinsChangedBy, DateTimeOffset? PinsChangedAt,
     string? Migrating, DateOnly? LastPicked, IReadOnlyList<ProfileRecord> Profiles)
 {
-    internal const int CurrentVersion = 1;
-    internal static ProfileIndex Empty { get; } = new(CurrentVersion, null, true, null, null, null, null, []);
+    internal const int CurrentVersion = 2;
+    internal static ProfileIndex Empty { get; } = new(CurrentVersion, null, false, null, null, null, null, []);
     internal ProfileRecord? Find(string? id) => id is null ? null : Profiles.FirstOrDefault(p => p.Id == id);
     internal ProfileRecord? FindEmail(string email) => Profiles.FirstOrDefault(p => SharedComputer.SameEmail(p.Email, email));
     internal ProfileIndex With(ProfileRecord record)
@@ -70,6 +75,8 @@ internal sealed class ProfileStore
     internal string IndexFile => Path.Combine(Folder, "profiles.json");
     // A newer Armory set this computer's students up: this one runs nobody and never rewrites it.
     internal bool TooNew { get; private set; }
+    // The index read was an older version, carried forward by Load: the host saves it once.
+    internal bool Upgraded { get; private set; }
 
     // A missing index is no students yet; an unreadable one too (said in the log); a newer one is
     // TooNew. Never throws for what the file holds.
@@ -93,7 +100,16 @@ internal sealed class ProfileStore
             var index = JsonSerializer.Deserialize<ProfileIndex>(bytes, Options) ?? ProfileIndex.Empty;
             // Only well-formed records: an id of the right shape and an address.
             var kept = (index.Profiles ?? []).Where(p => p is not null && IsId(p.Id) && !string.IsNullOrWhiteSpace(p.Email) && !string.IsNullOrWhiteSpace(p.Folder)).ToList();
-            return index with { Profiles = kept, Current = kept.Any(p => p.Id == index.Current) ? index.Current : null };
+            index = index with { Profiles = kept, Current = kept.Any(p => p.Id == index.Current) ? index.Current : null };
+            if (index.Version < ProfileIndex.CurrentVersion)
+            {
+                // From 0.3.3 to 0.4.x (SharedComputer.PinsKeptAfterUpdate): PINs stay on only where a
+                // mentor's own change turned them on. Saved at once as version 2.
+                var pins = SharedComputer.PinsKeptAfterUpdate(index.PinsRequired, index.PinsChangedBy);
+                index = index with { Version = ProfileIndex.CurrentVersion, PinsRequired = pins };
+                Upgraded = true;
+            }
+            return index;
         }
         catch (JsonException error)
         {
@@ -250,6 +266,16 @@ internal sealed class HostParts
     internal int PinIterations { get; init; } = PinHash.Iterations;
     // How long a switch waits for the last student's engine to stop before it parks it.
     internal TimeSpan StopPatience { get; init; } = TimeSpan.FromSeconds(60);
+    // How long the last person's engine may spend sending what it can before a switch (0.5.0).
+    internal TimeSpan FlushPatience { get; init; } = TimeSpan.FromSeconds(15);
+    // Folding folders of one's own back into the shared one (0.5.0, AgentHost.Fold.cs): the real
+    // folder an Armory folder's name is on this disk (the same on Windows; a test maps its names),
+    // the disk the fold works on, and the folders beside the shared one.
+    internal Func<string, string> DiskFolder { get; init; } = root => root;
+    internal IFoldDisk FoldDisk { get; init; } = new FoldDisk();
+    internal Func<string, IReadOnlyList<string>> FoldersBeside { get; init; } = DirectoriesBeside;
+    // How often a folder another Windows user's Armory holds is tried again (AgentHost.RetryStartSoon).
+    internal TimeSpan RetryEvery { get; init; } = TimeSpan.FromSeconds(30);
     internal TimeSpan StillFinishingAfter { get; init; } = TimeSpan.FromSeconds(15);
 
     // solidWorksFile: where the SolidWorks link keeps the student's own Save to Version setting
@@ -263,6 +289,17 @@ internal sealed class HostParts
         StateOf = root => new FileStateStore(Path.Combine(root, ".armory", "state.json")),
         OpenInSolidWorks = AnyMarkerIn,
     };
+
+    // The folders in the same parent folder as root (C:\IDEA\Armory-alex beside C:\IDEA\Armory).
+    private static IReadOnlyList<string> DirectoriesBeside(string root)
+    {
+        try
+        {
+            var parent = Path.GetDirectoryName(root.TrimEnd('\\', '/'));
+            return parent is null || !Directory.Exists(parent) ? [] : Directory.EnumerateDirectories(parent).ToList();
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return []; }
+    }
 
     // A SolidWorks "~$" marker anywhere in the folder (outside .armory): a document is open from it.
     private static bool AnyMarkerIn(string root)

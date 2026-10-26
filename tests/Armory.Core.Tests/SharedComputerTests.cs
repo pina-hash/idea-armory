@@ -112,14 +112,16 @@ public sealed class SharedComputerTests
     }
 
     [Fact]
-    public void One_person_on_a_computer_never_gets_the_picker_except_to_sign_in_again()
+    public void One_person_on_a_computer_never_gets_the_picker_by_itself_only_on_switch_or_to_sign_in_again()
     {
         var today = new DateOnly(2026, 10, 26);
         foreach (var people in new[] { 0, 1 })
         {
-            foreach (var trigger in new[] { PickerTrigger.ShownFromHidden, PickerTrigger.WindowsLocked, PickerTrigger.SwitchStudent, PickerTrigger.Activated, PickerTrigger.Start, PickerTrigger.Minimized })
+            foreach (var trigger in new[] { PickerTrigger.ShownFromHidden, PickerTrigger.WindowsLocked, PickerTrigger.Activated, PickerTrigger.Start, PickerTrigger.Minimized })
                 Assert.False(SharedComputer.ShowPicker(trigger, null, today, people), $"{trigger} with {people}");
             Assert.True(SharedComputer.ShowPicker(PickerTrigger.SignInEnded, today, today, people));
+            // Switch is where someone new adds themselves: it always shows.
+            Assert.True(SharedComputer.ShowPicker(PickerTrigger.SwitchStudent, today, today, people));
         }
     }
 

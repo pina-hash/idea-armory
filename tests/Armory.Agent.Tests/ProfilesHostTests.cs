@@ -8,12 +8,14 @@ using static Armory.Agent.Tests.Lab;
 
 namespace Armory.Agent.Tests;
 
-// Several students on one computer, through the real AgentHost (docs/agent/PROFILES.md, 0.3.3
-// part F): shared mode on and off (the sign-in moves, never copied), the PIN and its waits, the
-// picker, switching with and without work waiting (the last student's engine stopped for good
-// before the next one's starts), a folder of one's own and the way back, adding and removing
-// students, and who may turn PINs off. The host runs over portable folders, plain secrets and the
-// fake site and Supabase (PostgreSQL); the window's part is in tools/agent-ui.
+// Several people on one computer, through the real AgentHost (docs/agent/PROFILES.md, 0.3.3 part F
+// and 0.5.0): a computer that becomes shared by itself when a second person signs in (the sign-in
+// moves, never copied), shared mode on and off, the PIN and its waits where a mentor turned PINs on,
+// the picker, switching with and without work waiting (the last person's engine stopped for good
+// before the next one's starts, their waiting work held for them in the one folder), folders of
+// one's own from an older Armory folded in at start, adding and removing people, and who may turn
+// PINs off. The host runs over portable folders, plain secrets and the fake site and Supabase
+// (PostgreSQL); the window's part is in tools/agent-ui.
 public sealed class ProfilesHostTests
 {
     private static void Write(LabFolder folder, string path, string text)
@@ -77,13 +79,15 @@ public sealed class ProfilesHostTests
         Assert.DoesNotContain(refresh, index);
         Assert.Contains(Alex, index);
 
-        // The next start finds Alex in use, with his PIN.
+        // The next start finds Alex in use. One person on the computer: the window never opens on
+        // the picker (0.5.0), and with PINs off (nobody's mentor turned them on) a pick switches at once.
         await lab.RestartAsync();
         await lab.UntilRunningAsync(Alex, Shared);
         Assert.Contains("profiles: shared computer on, 1 student, current " + Alex, lab.LogText);
-        Assert.Equal((false, ""), Pair(await lab.PickAsync(Alex, "1111")));
-        Assert.Equal("That PIN isn't right. 4 more tries, then a short wait.", lab.Step.Message);
-        Assert.True((await lab.Host.EnterPinAsync(lab.IdOf(Alex), "2580")).Ok);
+        lab.Host.ShowPicker(PickerTrigger.ShownFromHidden);
+        Assert.False(lab.Profiles.Showing);
+        Assert.False(lab.Profiles.PinsRequired);
+        Assert.True((await lab.PickAsync(Alex)).Ok);
         await lab.UntilRunningAsync(Alex, Shared);
 
         // Off again: Alex stays, signed in as before, his sign-in back in secrets\ and only there.
@@ -105,7 +109,7 @@ public sealed class ProfilesHostTests
     [PostgresFact]
     public async Task Right_pin_switches_wrong_pin_counts_fifth_wrong_pin_waits_and_the_wait_survives_a_restart()
     {
-        await using var lab = await StartAsync(shared: true);
+        await using var lab = await StartAsync(shared: true, pins: true);
         // Nobody yet: the picker, with only Add a student.
         Assert.True(lab.Profiles.Showing);
         Assert.Empty(lab.Profiles.Profiles);
@@ -153,7 +157,7 @@ public sealed class ProfilesHostTests
     [PostgresFact]
     public async Task Forgot_pin_with_another_account_is_refused_and_with_the_same_account_sets_a_new_pin()
     {
-        await using var lab = await StartAsync(shared: true);
+        await using var lab = await StartAsync(shared: true, pins: true);
         await lab.AddAsync(Alex, "2580");
         await lab.AddAsync(Jordan, "1357");
         await lab.UntilRunningAsync(Jordan, Shared);
@@ -181,7 +185,7 @@ public sealed class ProfilesHostTests
     [PostgresFact]
     public async Task Switching_with_nothing_waiting_hands_the_shared_folder_over_and_downloads_nothing_again()
     {
-        await using var lab = await StartAsync(shared: true);
+        await using var lab = await StartAsync(shared: true, pins: true);
         var shared = lab.Folder(Shared);
         await lab.AddAsync(Alex, "2580");
         await lab.UntilRunningAsync(Alex, Shared);
@@ -246,7 +250,7 @@ public sealed class ProfilesHostTests
     [PostgresFact]
     public async Task Switching_while_a_pass_runs_stops_it_cleanly_and_nothing_of_the_old_student_is_written_after()
     {
-        await using var lab = await StartAsync(shared: true);
+        await using var lab = await StartAsync(shared: true, pins: true);
         var shared = lab.Folder(Shared);
         // The team has 60 files; Alex's engine downloads them, then Jordan's takes the folder over
         // (nothing of Alex's waited), and Alex comes back.
@@ -313,79 +317,111 @@ public sealed class ProfilesHostTests
         return uploader;
     }
 
+    // Replaces Work_waiting_offers_wait_or_own_folder_and_wait_changes_nothing (0.5.0): nothing is
+    // offered and nobody waits. Alex's check out stays his, read-only for Jordan, in the one folder.
     [PostgresFact]
-    public async Task Work_waiting_offers_wait_or_own_folder_and_wait_changes_nothing()
+    public async Task Work_waiting_stays_with_its_person_and_the_next_one_goes_straight_in()
     {
         await using var lab = await StartAsync(shared: true);
         var shared = lab.Folder(Shared);
-        await lab.AddAsync(Alex, "2580");
+        await lab.AddAsync(Alex, null);
         await lab.UntilRunningAsync(Alex, Shared);
         Write(shared, Plate, "v1");
         await UntilOnServer(lab, "Plate.SLDPRT", "v1");
         await Until(() => shared.Disk.IsReadOnly(Plate), "Plate read-only");
         Assert.True((await lab.Host.CheckOutAsync([Plate], false)).Ok);
         Save(shared, Plate, "Alex, not checked in");
-        await lab.AddAsync(Jordan, "1357");
+        var gets = lab.Network.StorageGets;
 
-        // Jordan picked (and typed his PIN): Alex's work waits in the folder, so it stays his.
-        await Until(() => lab.Step.Kind == PickerSteps.FolderBusy, "the folder busy step");
-        Assert.Equal((Alex, "Alex Kim", "1 file checked out", @"C:\IDEA\Armory-jordan"), (lab.InUse, lab.Step.OwnerName, lab.Step.OwnerWaiting, lab.Step.OwnFolder));
-        Assert.Equal(Alex, lab.Host.Sessions.Current!.Email);
-        // Wait: nothing changes; Alex's engine keeps working, his check out and his bytes intact.
-        Assert.True((await lab.Host.ChooseFolderAsync(lab.IdOf(Jordan), "wait")).Ok);
+        // Jordan signs in: one step, straight into the same folder, nothing downloaded again.
+        await lab.AddAsync(Jordan, null);
+        await lab.UntilRunningAsync(Jordan, Shared);
+        await Until(() => lab.View.HeldForOthers is [{ Files: 1 }], "Alex's work held for him");
+        Assert.Equal(("Alex Kim", "1 file"), (lab.View.HeldForOthers![0].Name, lab.View.HeldForOthers[0].Words));
         Assert.Equal(PickerSteps.Choose, lab.Step.Kind);
-        Assert.Equal(Alex, lab.InUse);
+        Assert.Equal(gets, lab.Network.StorageGets);
         Assert.Equal("Alex, not checked in", shared.Text(Plate));
-        Assert.False(shared.Disk.IsReadOnly(Plate));
+        await Until(() => shared.Disk.IsReadOnly(Plate), "Alex's check out read-only for Jordan");
+        Assert.Throws<IOException>(() => Save(shared, Plate, "Jordan's save in Alex's file"));
         Assert.Equal(Alex, (await OnServer(lab, "Plate.SLDPRT"))!.Lock!.HolderEmail);
+        Assert.Equal("1 file checked out", lab.Tile(Alex).Waiting);
+        Assert.False(lab.Tile(Alex).OwnFolder);
+
+        // One click on Alex's face: his work is his again, writable, and he checks in under his name.
+        Assert.True((await lab.PickAsync(Alex)).Ok);
+        await lab.UntilRunningAsync(Alex, Shared);
+        await Until(() => !shared.Disk.IsReadOnly(Plate), "Alex's check out writable again");
+        Assert.Null(lab.Tile(Alex).Waiting);
+        Save(shared, Plate, "Alex v2");
+        Assert.Equal("Checked in Plate.SLDPRT.", (await lab.Host.CheckInAsync([Plate])).Message);
+        Assert.Equal(Alex, (await lab.MentorApi.FileHistoryAsync((await OnServer(lab, "Plate.SLDPRT"))!.Id)).First().Author);
         Assert.Empty(lab.Violations);
+        Assert.Empty(shared.Disk.OpenWriteViolations);
+        Assert.Empty(shared.Disk.UnpreservedOverwrites);
     }
 
+    // Replaces Own_folder_keeps_the_last_students_work_theirs_and_they_finish_it_later (0.5.0): a
+    // computer that 0.4.x left with C:\IDEA\Armory-jordan is folded at the update's first start;
+    // Jordan's waiting work comes into the one folder held for him, the next person sees one
+    // sentence about it on Home, and Jordan finishes it under his own sign-in.
     [PostgresFact]
-    public async Task Own_folder_keeps_the_last_students_work_theirs_and_they_finish_it_later()
+    public async Task A_folder_of_ones_own_from_an_older_Armory_is_folded_in_at_start_and_its_work_stays_its_owners()
     {
         await using var lab = await StartAsync(shared: true);
         var shared = lab.Folder(Shared);
         var own = lab.Folder(@"C:\IDEA\Armory-jordan");
-        await lab.AddAsync(Alex, "2580");
+        await lab.AddAsync(Alex, null);
+        await lab.UntilRunningAsync(Alex, Shared);
         Write(shared, Plate, "v1");
         await UntilOnServer(lab, "Plate.SLDPRT", "v1");
+        await lab.AddAsync(Jordan, null);
+        await lab.UntilRunningAsync(Jordan, Shared);
         await Until(() => shared.Disk.IsReadOnly(Plate), "Plate read-only");
         Assert.True((await lab.Host.CheckOutAsync([Plate], false)).Ok);
-        Save(shared, Plate, "Alex, not checked in");
-        await lab.AddAsync(Jordan, "1357");
-        await Until(() => lab.Step.Kind == PickerSteps.FolderBusy, "the folder busy step");
+        await lab.Host.DisposeAsync();
+        await lab.Telemetry.DisposeAsync();
 
-        // Jordan uses a folder of his own: Alex's check out is read-only while he is away.
-        Assert.True((await lab.Host.ChooseFolderAsync(lab.IdOf(Jordan), "own")).Ok);
-        await lab.UntilRunningAsync(Jordan, @"C:\IDEA\Armory-jordan");
-        await Until(() => own.Has(Plate), "the team's files in Jordan's folder");
-        Assert.Equal("v1", own.Text(Plate));
-        Assert.True(shared.Disk.IsReadOnly(Plate));
-        Assert.Throws<IOException>(() => Save(shared, Plate, "Jordan's save in Alex's file"));
-        Assert.Equal("Alex, not checked in", shared.Text(Plate));
-        Assert.Equal("1 file checked out", lab.Tile(Alex).Waiting);
-        Assert.Equal($"You're in your own folder, C:\\IDEA\\Armory-jordan, while Alex's work waits in {Shared}.", lab.Profiles.Note);
+        // What 0.4.x left: Jordan's own folder holds his check out with his change (the same file,
+        // made his own folder's way), and its records say it is his.
+        Directory.CreateDirectory(Path.GetDirectoryName(own.Disk.Full(Plate))!);
+        File.WriteAllText(own.Disk.Full(Plate), "Jordan's change in his own folder");
+        var held = Armory.Agent.Engine.SyncEngine.HeldOf(shared.State);
+        Assert.Empty(held);
+        var sharedState = System.Text.Json.Nodes.JsonNode.Parse(shared.State.Load())!.AsObject();
+        var record = sharedState["files"]![Plate]!.DeepClone().AsObject();
+        var ownState = new System.Text.Json.Nodes.JsonObject
+        {
+            ["schema"] = 2, ["email"] = Jordan, ["deviceId"] = sharedState["deviceId"]!.GetValue<string>(), ["sequence"] = 2048,
+            ["files"] = new System.Text.Json.Nodes.JsonObject { [Plate] = record },
+        };
+        own.State.Save(Encoding.UTF8.GetBytes(ownState.ToJsonString()));
+        // In the shared folder Jordan's check out is undone by hand (the team's copy, nobody's work).
+        var shareRecord = sharedState["files"]![Plate]!.AsObject();
+        shareRecord.Remove("checkOut");
+        shareRecord["appliedOwnership"] = 0;
+        shared.State.Save(Encoding.UTF8.GetBytes(sharedState.ToJsonString()));
+        shared.Disk.ForgetReadOnly(Plate);
+        File.WriteAllText(shared.Disk.Full(Plate), "v1");
+        var profilesFile = Path.Combine(lab.Paths.ProfilesFolder, "profiles.json");
+        var profilesJson = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(profilesFile))!.AsObject();
+        foreach (var p in profilesJson["profiles"]!.AsArray()) if (p!["email"]!.GetValue<string>() == Jordan) p["folder"] = @"C:\IDEA\Armory-jordan";
+        File.WriteAllText(profilesFile, profilesJson.ToJsonString());
 
-        // Alex comes back: the shared folder is his, his check out writable again, and he checks in.
-        Assert.True((await lab.PickAsync(Alex, "2580")).Ok);
-        await lab.UntilRunningAsync(Alex, Shared);
-        await Until(() => !shared.Disk.IsReadOnly(Plate), "Alex's check out writable again");
-        Save(shared, Plate, "Alex v2");
-        Assert.Equal("Checked in Plate.SLDPRT.", (await lab.Host.CheckInAsync([Plate])).Message);
-        Assert.Equal(Alex, (await lab.MentorApi.FileHistoryAsync((await OnServer(lab, "Plate.SLDPRT"))!.Id)).First().Author);
-
-        // Jordan's next pick moves him back to the shared folder by itself; his own folder is left as it is.
-        var ownFiles = Directory.EnumerateFiles(own.Disk.Root, "*", SearchOption.AllDirectories).Where(f => !f.Contains(Path.DirectorySeparatorChar + ".armory" + Path.DirectorySeparatorChar)).Count();
-        Assert.True((await lab.PickAsync(Jordan, "1357")).Ok);
+        // The update starts: Jordan's folder is folded in before any engine runs.
+        await lab.StartHostAsync();
         await lab.UntilRunningAsync(Jordan, Shared);
-        Assert.Equal($"You're back in {Shared}. Armory doesn't use C:\\IDEA\\Armory-jordan any more; you can delete it in File Explorer.", lab.Profiles.Note);
+        Assert.False(Directory.Exists(own.Disk.Root));
+        Assert.Equal("Jordan's change in his own folder", shared.Text(Plate));
         Assert.Equal(Shared, lab.Tile(Jordan).Folder);
-        Assert.Equal("Alex v2", shared.Text(Plate));
-        Assert.Equal(ownFiles, Directory.EnumerateFiles(own.Disk.Root, "*", SearchOption.AllDirectories).Where(f => !f.Contains(Path.DirectorySeparatorChar + ".armory" + Path.DirectorySeparatorChar)).Count());
+        Assert.Contains("fold: " + own.Disk.Root + " (1 files, " + Jordan + "'s) into " + shared.Disk.Root, lab.LogText);
+        Assert.Equal($"Moved 1 project into {Shared}, kept 1 file waiting for Jordan. Each person's work goes to Armory under their own sign-in when they pick their name.",
+            lab.View.UpdateNote);
+        // Jordan in use: his work is his, and his check in goes up under his name.
+        await Until(() => !shared.Disk.IsReadOnly(Plate), "Jordan's check out writable");
+        Assert.Equal("Checked in Plate.SLDPRT.", (await lab.Host.CheckInAsync([Plate])).Message);
+        await UntilOnServer(lab, "Plate.SLDPRT", "Jordan's change in his own folder");
+        Assert.Equal(Jordan, (await lab.MentorApi.FileHistoryAsync((await OnServer(lab, "Plate.SLDPRT"))!.Id)).First().Author);
         Assert.Empty(lab.Violations);
-        Assert.Empty(shared.Disk.OpenWriteViolations);
-        Assert.Empty(own.Disk.UnpreservedOverwrites);
     }
 
     // ---- Adding and removing -----------------------------------------------------------------
@@ -393,7 +429,7 @@ public sealed class ProfilesHostTests
     [PostgresFact]
     public async Task Adding_a_student_signs_into_a_new_profile_and_cancel_or_the_same_address_leaves_no_second_one()
     {
-        await using var lab = await StartAsync(shared: true);
+        await using var lab = await StartAsync(shared: true, pins: true);
         // Add, then Cancel while the browser waits: nothing is kept.
         lab.Browser.Next = null;
         Assert.True((await lab.Host.AddProfileAsync()).Ok);
@@ -439,7 +475,7 @@ public sealed class ProfilesHostTests
     [PostgresFact]
     public async Task Removing_a_profile_forgets_its_sign_in_and_pin_and_deletes_no_file()
     {
-        await using var lab = await StartAsync(shared: true);
+        await using var lab = await StartAsync(shared: true, pins: true);
         var shared = lab.Folder(Shared);
         await lab.AddAsync(Alex, "2580");
         await lab.UntilRunningAsync(Alex, Shared);
@@ -471,12 +507,13 @@ public sealed class ProfilesHostTests
     [PostgresFact]
     public async Task Pins_can_be_turned_off_only_by_a_mentor_in_use_and_who_and_when_are_kept()
     {
-        await using var lab = await StartAsync(shared: true);
+        await using var lab = await StartAsync(shared: true, pins: true);
         await lab.AddAsync(Alex, "2580");
         await lab.UntilRunningAsync(Alex, Shared);
         Assert.False(lab.Profiles.CanChangePins);
         Assert.Equal((false, "Only a mentor can change this."), Pair(await lab.Host.SetPinsRequiredAsync(false)));
         Assert.True(lab.Profiles.PinsRequired);
+        Assert.Equal("Turned on by Pina on Oct 1.", lab.Profiles.PinsNote);
 
         // Mr. Pina adds himself and, as a mentor in use, turns PINs off on this computer.
         await lab.AddAsync(Mentor, "8642");
@@ -498,7 +535,7 @@ public sealed class ProfilesHostTests
     [PostgresFact]
     public async Task A_note_is_sent_only_while_its_writer_is_in_use()
     {
-        await using var lab = await StartAsync(shared: true);
+        await using var lab = await StartAsync(shared: true, pins: true);
         await ArmoryV3StandIn.ApplyReportsAsync(lab.Database);
         await lab.AddAsync(Alex, "2580");
         await lab.UntilRunningAsync(Alex, Shared);
