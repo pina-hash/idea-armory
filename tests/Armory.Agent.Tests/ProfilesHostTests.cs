@@ -383,10 +383,13 @@ public sealed class ProfilesHostTests
     public async Task Adding_a_student_signs_into_a_new_profile_and_cancel_or_the_same_address_leaves_no_second_one()
     {
         await using var lab = await StartAsync(shared: true, pins: true);
-        // Add, then Cancel while the browser waits: nothing is kept.
+        // Add, then Cancel while the browser waits: nothing is kept. (The browser opens a moment
+        // after the step shows; cancelling only once it has keeps the count below exact.)
         lab.Browser.Next = null;
+        var start = Volatile.Read(ref lab.Browser.Opened);
         Assert.True((await lab.Host.AddProfileAsync()).Ok);
         Assert.Equal((PickerSteps.Adding, "waitingForBrowser"), (lab.Step.Kind, lab.Step.ConnectPhase));
+        await Until(() => Volatile.Read(ref lab.Browser.Opened) == start + 1, "the browser opened for the first add");
         lab.Host.CancelPicker();
         Assert.Equal(PickerSteps.Choose, lab.Step.Kind);
         await Until(() => !Directory.Exists(lab.Paths.ProfilesFolder) || Directory.GetDirectories(lab.Paths.ProfilesFolder).Length == 0, "no profile folder left");
