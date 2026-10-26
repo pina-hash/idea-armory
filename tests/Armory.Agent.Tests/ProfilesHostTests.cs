@@ -166,7 +166,8 @@ public sealed class ProfilesHostTests
         Assert.Equal("plate v1 by Alex", shared.Text(Plate));
         Assert.True(shared.Disk.IsReadOnly(Plate));
         Assert.Equal(gets, lab.Network.StorageGets);
-        Assert.Contains("This Armory folder is yours now. It was Alex's.", lab.View.Activity.Log.Select(l => l.Line));
+        // The line can reach the window a moment after the folder changes hands: wait for it too.
+        await Until(() => lab.View.Activity.Log.Any(l => l.Line == "This Armory folder is yours now. It was Alex's."), "the hand-over line");
         Assert.Empty(lab.Violations);
         // Alex's computer said goodbye with his own device; Jordan beats with his.
         Assert.Equal("offline-soon", await lab.DeviceState(Alex));
