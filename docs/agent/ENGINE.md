@@ -106,19 +106,28 @@ A pass has four phases. A, B and D run one step at a time; C moves files several
 
 **Phase A, in order.**
 
-1. **Identity.** No session: the view says signed out. The state document is bound to the
-   first email and device that sync into it; another account sees "this vault belongs to
-   someone else" and nothing syncs. Since 0.3.2 that account can take the folder over
-   (`TakeOverFolderAsync`, SyncEngine.Accounts.cs) when the account it belongs to has nothing
-   waiting in it: no file checked out here, no save not completed, no file on disk that
-   differs from its base, no new file not in Armory yet, no move or folder change not sent.
-   The state document then forgets its email, device, former devices, notices and kept-copy
-   records, and the next pass binds it to the new account; the files are the team's versions,
-   so nothing is downloaded again. Anything waiting keeps the folder with its account (it is
-   that person's work). Two accounts in one folder at once is never allowed. Since 0.3.3
-   the view names the folder's owner (`AgentView.FolderOwner`: their address, a name from it,
-   and what of theirs waits, looked at by a scan at most once a minute), and the window's
-   folder-taken screen reads it rather than picking an address out of a sentence.
+1. **Identity.** No session: the view says signed out. The state document is the computer's
+   (schema 3, 0.5.0): `Email` and `DeviceId` are the person Armory acts for now, and `People`
+   keeps every device id each person's sign-ins registered here (so a check out taken under any of
+   them is theirs again when they are back). The same person with a new device id keeps its work
+   and its locks (`FormerDevices`). Someone else signed in now: this pass hands the folder to them
+   once it has looked at the disk (step 2), with no question and nothing refused
+   (`SyncEngine.HandOver`, SyncEngine.People.cs): what the last person left waiting (a file
+   checked out, a check in or undo asked, a save not sent, a write in flight, an Explorer rename
+   being sent, a file changed or new that Armory hasn't kept, a folder change from before this
+   pass) moves out of the records into `Held` under their address, exactly as it was, and the next
+   person's own held work, if any, comes back (`ReturnHeld`, also at the start of every pass of the
+   person it belongs to). The rest is the team's version, the same for everyone in the project, so
+   it stays in the records and nothing is downloaded again. A held file is never captured, planned
+   (not even a download), adopted, moved or sent while someone else is in use; a journaled save is
+   attached only to its own author's records (`SavedBy`); held files are kept read-only
+   (`SealHeld`, in the read-only rule); a held file renamed in Explorer is found by its bytes
+   (`FollowHeldRename`) and a folder renamed here carries held paths with it (`RekeyHeld`); and the
+   window's Check out, Rename, Delete folder and Put back refuse a held file in one sentence. The
+   view says whose work waits (`AgentView.HeldForOthers`) and the connection is never
+   `vaultOwnedByOther` any more. Until 0.5.0 the folder stayed with whoever had work waiting in it
+   (0.3.2's `TakeOverFolderAsync` refused); `TakeOverFolderAsync` is now that hand-over, run at once
+   from a fresh scan.
 2. **Scan, folders, capture.** The platform scan (ignore list applied) gives every file's hash,
    its read-only bit, the folders, the folder moves it proved and SolidWorks' `~$` markers.
    It runs off the engine thread and stops between files when the engine stops (0.3.3). The
@@ -923,9 +932,10 @@ with the wrong words.
   reconnect's ids are one computer), check-out lines and refusals name each with the first four
   characters of its device id: "Checked out by Alex Kim on IDEA-06 (a030)".
 
-## Upgrade from 0.1.0 (D15)
+## Upgrade from 0.1.0 (D15), and to 0.5.0
 
-`EngineState` is schema 2. Loading schema 1 keeps the ownership 0.1.0 last applied as this
+`EngineState` is schema 3 since 0.5.0: schema 2 (0.2.0 to 0.4.x) loads with its one person and
+their devices in `People` and nothing else changed. Schema 2 was v2 check out: loading schema 1 keeps the ownership 0.1.0 last applied as this
 computer's last knowledge of who holds each file: the v2 rule reads it (Free and someone
 else are read-only now, this computer stays writable), and the first pass, online or
 offline, sets the bit on every file whose bit differs (0.1.0 left a file nobody held
@@ -1565,6 +1575,11 @@ writes any more. `SharedFolderTests` hold it byte for byte: a stop in the middle
 pass and in the middle of a check in, with every store wrapped to fail on a write after the stop.
 `DisposeAsync` is `StopForGoodAsync`; the host's `VaultRuntime` closes the stores only after it
 returns, and parks (keeps open, never reuses) a runtime whose engine did not stop in time.
+
+Since 0.5.0 a switch hands the folder over by itself (Phase A, Identity): nothing waits for anyone
+and there is no folder of one's own. The host lets the last person's engine run one more pass (at
+most 15 seconds) before stopping it for good, so what can go goes under their own sign-in; the next
+person's engine holds the rest for them.
 
 `WaitingAsync` answers what of the folder owner's waits here (`FolderWaiting`: check outs, saves
 not sent, changed files, new files, folder changes, and the words "2 files checked out"), the

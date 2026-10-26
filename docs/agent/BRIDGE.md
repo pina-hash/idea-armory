@@ -127,6 +127,8 @@ AgentView {
   folderOwner: FolderOwnerView | null  // 0.3.3: connection vaultOwnedByOther: whose the folder is
   profiles: ProfilesView | null        // 0.3.3: a shared computer's students and picker; null otherwise
   solidWorks: SolidWorksView | null // 0.3.3: the SolidWorks link's line for Settings; null on a computer with no link
+  heldForOthers: HeldView[] | null  // 0.5.0: work other people left waiting in this folder (see "Several people on one computer")
+  updateNote: string | null         // 0.5.0: the update's sentence about folders of one's own it folded in, for a week
 }
 ConnectView { phase: "idle" | "waitingForBrowser" | "finishing" | "failed", message: string | null }
 AccountView { email: string, deviceName: string }
@@ -265,7 +267,7 @@ FileStatus = "synced" | "changed" | "uploading" | "downloading" | "waiting" | "n
                                             // File detail: "Added without its first version"), never "uploading"
 SettingsView { vaultRoot: string, startAtSignIn: boolean, theme: "system" | "idea" | "spaceWhite",
                badges: BadgesView | null,     // 0.3.3; null until the host has checked
-               sharedComputer: boolean,       // 0.3.3; false unless Settings turned it on
+               sharedComputer: boolean,       // 0.3.3; 0.5.0: true once a second person signed in here (no switch)
                about: AboutView | null }      // 0.4.3; null until the host has read install.json
 AboutView {                         // 0.4.3: Settings' "About this Armory" (InstallRecord, AgentHost.About.cs)
   version: string                   // "0.4.3"
@@ -279,7 +281,9 @@ BadgesView {                        // 0.3.3: Armory's status on file icons (doc
   line: string                      // Settings' sentence, e.g. "Armory's status shows on file icons."
 }                                   // Settings draws the row with Turn on (turnOnBadges) for off and broken
 
-FolderOwnerView {                   // 0.3.3: read from the folder by the engine, never from connect.message
+FolderOwnerView {                   // 0.3.3: read from the folder by the engine, never from connect.message;
+                                    // 0.5.0 never sends it (a folder is handed over by itself, connection
+                                    // is never vaultOwnedByOther), so the folder-taken screen is unreachable
   email: string, name: string,
   waiting: string[] | null          // what of theirs waits there ("1 file checked out"); null when not looked at yet
 }
@@ -290,7 +294,7 @@ ProfilesView {                      // 0.3.3: see "Several students on one compu
   pinsRequired: boolean, canChangePins: boolean,  // canChangePins: the student in use is a mentor (the server says)
   pinsNote: string | null,          // "Turned off by Mr. Pina on Oct 9."
   canTurnOff: boolean,
-  note: string | null,              // one sentence for Home: a folder of their own, or back in the shared one
+  note: string | null,              // unused since 0.5.0 (one folder for everyone): always null
   profiles: ProfileView[],          // the student in use first, then the most recent
   step: PickerStepView
 }
@@ -299,15 +303,15 @@ ProfileView {
   name: string, email: string, initials: string,
   hue: number,                      // 0 to 7: the picture's color, the same for an address every time
   current: boolean, lastUsedAt: string | null,
-  folder: string, ownFolder: boolean,
-  waiting: string | null,           // "2 files checked out": their work waiting in their folder (never for the student in use)
+  folder: string, ownFolder: boolean,  // 0.5.0: the computer's one folder; ownFolder false once folded in
+  waiting: string | null,           // "2 files checked out": their work waiting here (never for the person in use)
   needsSignIn: boolean, hasPin: boolean, canRemove: boolean
 }
 PickerStepView {
-  kind: "choose" | "pin" | "newPin" | "adding" | "folderBusy" | "switching" | "signInAgain" | "tooNew",
+  kind: "choose" | "pin" | "newPin" | "adding" | "switching" | "signInAgain" | "tooNew",
   profileId: string | null, message: string | null,
   triesLeft: number | null, waitSeconds: number | null,           // pin
-  ownFolder: string | null, ownerName: string | null, ownerWaiting: string | null,  // folderBusy
+  ownFolder: string | null, ownerName: string | null, ownerWaiting: string | null,  // unused since 0.5.0: always null
   fromName: string | null,                                        // switching
   connectPhase: "idle" | "waitingForBrowser" | "finishing" | "failed" | null  // adding, signInAgain
 SolidWorksView {                    // 0.3.3: the SolidWorks link (docs/agent/SOLIDWORKS.md), drawn in Settings
@@ -407,8 +411,8 @@ Plate.SLDPRT.", "Close Plate.SLDPRT in SolidWorks first."). The actions are
 `launchFile`, `checkOut`, `checkIn`, `undoCheckOut`, `takeBack`, `takeBackAll`, `createFolder`,
 `renameFolder`, `deleteFolder`, `renameFile`, `addFiles`, `dropFiles`, `reportProblem`,
 `sendFeedback`, `takeOverFolder`, and (0.3.3) `putBackKeptCopy`, `turnOnBadges`, `pickProfile`,
-`enterPin`, `setPin`, `addProfile`, `forgotPin`, `chooseFolder`, `removeProfile`,
-`setSharedComputer`, `setPinsRequired`, `keepLocal` and `saveDown` (`ACTIONS` in bridge.js). An
+`enterPin`, `setPin`, `addProfile`, `forgotPin`, `removeProfile`, `setPinsRequired`, `keepLocal`
+and `saveDown` (`ACTIONS` in bridge.js; 0.5.0 removed `chooseFolder` and `setSharedComputer`). An
 **ask** (0.3.3, `ASKS` in bridge.js) carries a `requestId` too and is answered by a message of its
 own, never `actionResult`: `captureWindow` by `windowShot`, `readMyFeedback` by `myFeedback`.
 
@@ -474,10 +478,8 @@ replaces it.
 | `setPin` | `profileId`, `pin`, `requestId` | the fourth digit of the second field, when both match | a new student's PIN (they are kept now), or a new one after Forgot your PIN; a PIN too easy to guess is refused in one sentence |
 | `addProfile` | `requestId` | Add a student, Try again, Open the browser again | the browser sign-in, once, into a profile of its own; again while one waits stops that one and starts a new one |
 | `forgotPin` | `profileId`, `requestId` | Forgot your PIN?, Sign in with Google, Open the browser again | the browser sign-in as that same student; another account changes nothing |
-| `chooseFolder` | `profileId`, `choice`, `requestId` | Wait for Alex, Use C:\IDEA\Armory-jordan | `choice` is `wait` (back to the tiles) or `own` (a folder of their own until their work there is done) |
 | `removeProfile` | `profileId`, `requestId` | Remove (Settings), after the small dialog asks | forgets that student's sign-in and PIN here (ending the sign-in on the server when it can); never deletes a file |
-| `setSharedComputer` | `on`, `pin`, `requestId` | the Shared computer switch, after the small dialog asks | on: the student signed in now becomes the first profile with the PIN given (`pin` is "" when nobody is signed in); off: only the student in use stays signed in |
-| `setPinsRequired` | `on`, `requestId` | Ask for a PIN when switching students | a mentor in use only; who and when are kept and shown (`pinsNote`) |
+| `setPinsRequired` | `on`, `requestId` | Ask for a PIN when switching | a mentor in use only; who and when are kept and shown (`pinsNote`); off unless a mentor turns it on (0.5.0) |
 
 ## Send feedback's picture of the window (0.3.3)
 
@@ -521,10 +523,15 @@ status, the first lines of its words, what was tried, and when, from which compu
 with a picture. **There are no replies in Armory**: the site keeps none, and the list's foot says
 "The IDEA team reads every note. There are no replies in Armory: the status shows where yours is."
 
-## Several students on one computer (0.3.3)
+## Several people on one computer (0.3.3, 0.5.0)
 
-docs/agent/PROFILES.md has the rules and why. For the page: when `settings.sharedComputer`
-is true, `profiles` is filled; while `profiles.showing` is true the window draws the
+docs/agent/PROFILES.md has the rules and why. 0.5.0: there is no switch; a computer becomes
+shared by itself when a second person signs in (Connect or Switch account), everyone works in
+the one Armory folder, and the view carries `heldForOthers` (each person's work waiting here,
+read-only for the person in use: `HeldView { email, name, files, words, since }`) and
+`updateNote` (the update's one sentence about folders of one's own it folded in, for a week).
+Home draws both in "On this computer", as quiet cards with no key. For the page: when
+`settings.sharedComputer` is true, `profiles` is filled; while `profiles.showing` is true the window draws the
 picker and nothing else (no header keys, the Settings sheet and the small dialog close).
 The view then carries no account, files, notices, prompt or file names in `activity`, so
 nothing of the student in use's shows to whoever sits down; their files keep moving
@@ -543,9 +550,6 @@ The picker's steps (`profiles.step.kind`):
 - `adding` and `signInAgain`: Connect's steps and status plate for the browser sign-in,
   with the one instruction a shared computer needs: when the browser page shows someone
   else, click "Not you? Use another account" first.
-- `folderBusy`: the shared folder holds another student's work (`ownerName`,
-  `ownerWaiting`): Use `ownFolder` (primary) or Wait for them, and the same-path trade-off
-  in one sentence.
 - `switching`: the status plate while the last student's engine stops and the next one's
   starts.
 - `tooNew`: a newer Armory set this computer's students up; nothing to press.
