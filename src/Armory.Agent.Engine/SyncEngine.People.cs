@@ -30,17 +30,47 @@ public sealed partial class SyncEngine
     {
         if (!state.Held.Remove(email, out var held)) return;
         var back = 0;
+        var overwritten = 0;
         foreach (var (key, st) in held.Files)
         {
+            // Still being read, or not read yet: it waits held until a scan can say what is there.
+            var expected = held.Hashes.GetValueOrDefault(key) is { Length: > 0 } h ? h : null;
+            var now = local.GetValueOrDefault(key);
+            if (now is { Unread: true })
+            {
+                KeepHeld(email, held, key, st);
+                continue;
+            }
+            // Gone from the disk (its fold not finished, or someone removed it): put back from its
+            // person's own save when there is one; otherwise it stays held, never replaced by the
+            // team's version and never taken for a removal.
+            if (now is null && expected is not null && SaveWithHash(email, key, st, expected) is null)
+            {
+                KeepHeld(email, held, key, st);
+                deps.Log?.Invoke($"held: {key} is not on this disk; it stays held for {email}");
+                continue;
+            }
+            // Bytes that are not the ones held: someone else wrote over this file while its person
+            // was away. Never this person's save: set aside, and their own version put back.
+            if (!string.Equals(now?.Hash, expected, StringComparison.Ordinal))
+            {
+                state.Aside[key] = new AsideFile
+                {
+                    Hash = now?.Hash, For = email, Since = deps.Clock.GetUtcNow(),
+                    Restore = expected is null ? null : SaveWithHash(email, key, st, expected),
+                };
+                // Nothing of theirs to bring back (their file was not on disk): it stays gone.
+                if (expected is null) state.Aside[key].Gone = true;
+                deps.Log?.Invoke($"held: {key} changed on this disk while {email} was away ({expected ?? "none"} to {now?.Hash ?? "none"}); those bytes go aside");
+                overwritten++;
+            }
             if (state.Files.TryGetValue(key, out var occupant))
             {
                 // Nothing should have made a record at a held path; one with work of its own keeps
                 // its place and the held one waits (logged, never dropped).
                 if (HasWork(occupant))
                 {
-                    if (!state.Held.TryGetValue(email, out var still)) state.Held[email] = still = new HeldWork { Since = held.Since };
-                    still.Files[key] = st;
-                    still.Hashes[key] = held.Hashes.GetValueOrDefault(key);
+                    KeepHeld(email, held, key, st);
                     deps.Log?.Invoke($"held: {key} stays held for {email}; the record there has work of its own");
                     continue;
                 }
@@ -58,6 +88,96 @@ public sealed partial class SyncEngine
         if (back + held.Moves.Count + held.FolderOps.Count + held.ForceCheckIns.Count == 0) return;
         deps.Log?.Invoke($"held: {back} files and {held.Moves.Count + held.FolderOps.Count + held.ForceCheckIns.Count} folder changes back with their person");
         activity.Log($"Your work that waited on this computer is back: {Count(back, "file", "files")}. Armory sends it now.");
+        if (overwritten > 0)
+            activity.Log($"Someone changed {(overwritten == 1 ? "one" : overwritten.ToString(System.Globalization.CultureInfo.InvariantCulture))} of your waiting files while you were away. Armory put your own version back and kept theirs in {RecoveryWords}.");
+    }
+
+    private const string RecoveryWords = "the .armory\\recovery folder";
+
+    // A held file that can't go back yet stays held for its person (never captured meanwhile).
+    private void KeepHeld(string email, HeldWork from, string key, FileState st)
+    {
+        if (!state.Held.TryGetValue(email, out var still)) state.Held[email] = still = new HeldWork { Since = from.Since };
+        still.Files[key] = st;
+        still.Hashes[key] = from.Hashes.GetValueOrDefault(key);
+    }
+
+    // A save of exactly these bytes that its person made (this record's own, or any save of theirs
+    // at this path kept here, sent already or not): the copy to put back. Null when there is none.
+    private string? SaveWithHash(string email, string key, FileState st, string hash)
+    {
+        var mine = st.Entries.Concat(st.Drafts).ToHashSet(StringComparer.Ordinal);
+        return journal.Read().Entries.LastOrDefault(e => e.Hash == hash && e.SnapshotId is not null && e.Kind == IntentKind.Upload &&
+            (mine.Contains(e.Id) || SameEmail(e.Author, email) && string.Equals(e.Path, key, StringComparison.OrdinalIgnoreCase)))?.Id;
+    }
+
+    // Whether this person's own sign-in, at its last read here, listed the project: false only
+    // when it is known they are not in it.
+    private bool NotIn(string email, Guid project)
+        => state.People.TryGetValue(email, out var person) && person.Projects is { } listed && !listed.Contains(project);
+
+    // Each pass, right after the scan: bytes set aside go to Armory's recovery folder once nothing
+    // has them open, and the file's own version comes back (its person's last save, written back
+    // here, or the team's version, downloaded by whoever is in that project). Until then the path
+    // is nobody's: never captured, planned or sent, and read-only.
+    private void SetAsideNow()
+    {
+        foreach (var (key, aside) in state.Aside.ToArray())
+        {
+            var file = local.GetValueOrDefault(key);
+            if (aside.Restored is { } restored)
+            {
+                // Put back last pass: done once a scan sees exactly those bytes there.
+                if (file is { Unread: true }) continue;
+                if (file is not null && file.Hash == restored) { state.Aside.Remove(key); MarkDirty(); continue; }
+                // Changed or gone again before a scan saw it back: set aside (or put back) again.
+                aside.Hash = file?.Hash;
+                aside.Restored = null;
+                MarkDirty();
+            }
+            if (file is not null)
+            {
+                if (file.Unread || IsOpenNow(file.Path)) continue;
+                var moved = fs.MoveToRecovery(file.Path, file.Hash);
+                if (!moved.Succeeded)
+                {
+                    deps.Log?.Invoke($"aside: {key} stays for now ({moved.Problem})");
+                    continue;
+                }
+                local.Remove(key);
+                deps.Log?.Invoke($"aside: {key} ({file.Hash}) moved to the recovery folder");
+            }
+            MarkDirty();
+            // Its person had removed it: it stays removed, as they left it.
+            if (aside.Gone) { state.Aside.Remove(key); continue; }
+            var record = state.Files.GetValueOrDefault(key);
+            if (record is not null && aside.Restore is { } save && journal.Read().Entries.FirstOrDefault(e => e.Id == save) is { SnapshotId: { } snapshot } entry
+                && VaultPath.TryCreate(key, out var path, out _, options.VaultRoot))
+            {
+                try
+                {
+                    using var bytes = deps.Snapshots.OpenRead(snapshot);
+                    var put = fs.Replace(path, null, bytes, readOnly: record.AppliedOwnership != LockOwnership.ThisDevice);
+                    if (put.Succeeded) { aside.Restored = entry.Hash; continue; }
+                    deps.Log?.Invoke($"aside: {key} couldn't be put back yet ({put.Problem})");
+                    continue;
+                }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+                {
+                    deps.Log?.Invoke($"aside: {key} couldn't be put back yet ({error.Message})");
+                    continue;
+                }
+            }
+            // No save of theirs to put back: the team's version comes back, downloaded by whoever
+            // is in the project (its record forgets its base, as when a project folder is removed).
+            if (record is { FileId: not null })
+            {
+                record.SetBase(null);
+                record.AbsentScans = 0;
+                record.DeleteEntry = null;
+            }
+            state.Aside.Remove(key);
+        }
     }
 
     // The folder goes to the person signed in now (session), from the last person (state.Email):
@@ -104,11 +224,21 @@ public sealed partial class SyncEngine
         var onDisk = scan.Files.ToDictionary(f => f.Path.Value, StringComparer.OrdinalIgnoreCase);
         if (!state.Held.TryGetValue(email, out var held)) held = new HeldWork { Since = deps.Clock.GetUtcNow() };
         var count = 0;
+        var aside = 0;
         foreach (var (key, st) in state.Files.ToArray())
         {
-            if (st.Purged) continue;
+            if (st.Purged || state.Aside.ContainsKey(key)) continue;
             var file = onDisk.GetValueOrDefault(key);
             if (!HasWork(st) && !ChangedOnDisk(st, file)) continue;
+            // A change by someone not in this project: nobody's to send, never held for them (they
+            // could never send it) and never the next person's. It goes aside, and the team's
+            // version comes back.
+            if (!HasWork(st) && NotIn(email, st.ProjectId))
+            {
+                state.Aside[key] = new AsideFile { Hash = file?.Hash, Of = email, Since = deps.Clock.GetUtcNow() };
+                aside++;
+                continue;
+            }
             state.Files.Remove(key);
             held.Files[key] = st;
             held.Hashes[key] = file?.Hash;
@@ -117,7 +247,15 @@ public sealed partial class SyncEngine
         foreach (var file in scan.Files)
         {
             var key = file.Path.Value;
-            if (state.Files.ContainsKey(key) || held.Files.ContainsKey(key) || HeldForOther(key) || ProjectOf(file.Path) is not { } project) continue;
+            // (Any project the folder belongs to: the flags of who can work in it are the last
+            // person's read of the server, not the next one's.)
+            if (state.Files.ContainsKey(key) || held.Files.ContainsKey(key) || HeldForOther(key) || (ProjectOf(file.Path) ?? KnownProjectOf(file.Path)) is not { } project) continue;
+            if (NotIn(email, project.Id))
+            {
+                state.Aside[key] = new AsideFile { Hash = file.Hash, Of = email, Since = deps.Clock.GetUtcNow() };
+                aside++;
+                continue;
+            }
             // A new file of theirs that Armory doesn't have yet: theirs to add when they are back.
             held.Files[key] = new FileState { Path = key, ProjectId = project.Id };
             held.Hashes[key] = file.Hash;
@@ -136,6 +274,12 @@ public sealed partial class SyncEngine
         held.ForceCheckIns.AddRange(state.ForceCheckIns.Take(priorForce));
         state.ForceCheckIns.RemoveRange(0, Math.Min(priorForce, state.ForceCheckIns.Count));
         if (!held.Empty) state.Held[email] = held;
+        if (aside > 0)
+        {
+            var first = DisplayName(email).Split(' ')[0];
+            deps.Log?.Invoke($"aside: {aside} files {email} changed or added in projects they are not in");
+            activity.Log($"{first} changed {Count(aside, "file", "files")} in a project {first} isn't in. Nothing of it was sent: Armory keeps it in {RecoveryWords} and puts the team's version back.");
+        }
         MarkDirty();
         return count;
     }
@@ -153,18 +297,20 @@ public sealed partial class SyncEngine
         => file is not null ? file.Hash != st.BaseHash && file.Hash != st.LastCaptured : st.BaseHash is not null && st.FileId is not null && !RemovedForTeam(st);
 
     // Held for someone other than the person in use: never captured, planned, downloaded over or sent.
+    // (Anything still in Held is outside the records, the person in use's own included until it
+    // goes back to them, and bytes set aside are nobody's.)
     private bool HeldForOther(string key)
     {
-        foreach (var (email, held) in state.Held)
-            if (!SameEmail(email, state.Email) && held.Files.ContainsKey(key)) return true;
+        if (state.Aside.ContainsKey(key)) return true;
+        foreach (var held in state.Held.Values)
+            if (held.Files.ContainsKey(key)) return true;
         return false;
     }
 
     private bool HeldIdForOther(Guid id)
     {
-        foreach (var (email, held) in state.Held)
-            if (!SameEmail(email, state.Email))
-                foreach (var st in held.Files.Values) if (st.FileId == id) return true;
+        foreach (var held in state.Held.Values)
+            foreach (var st in held.Files.Values) if (st.FileId == id) return true;
         return false;
     }
 
@@ -184,8 +330,7 @@ public sealed partial class SyncEngine
     // A journal entry a held record of someone else's carries.
     private bool HeldEntry(string id)
     {
-        foreach (var (email, held) in state.Held)
-            if (!SameEmail(email, state.Email))
+        foreach (var held in state.Held.Values)
                 foreach (var st in held.Files.Values)
                     if (st.Entries.Contains(id) || st.Drafts.Contains(id) || st.CreateEntry == id || st.DeleteEntry == id) return true;
         return false;
@@ -247,12 +392,8 @@ public sealed partial class SyncEngine
     // Held files on disk are read-only for whoever is in use (the read-only rule as they see it).
     private void SealHeld(List<(VaultPath Path, LockOwnership Ownership)> batch)
     {
-        foreach (var (email, held) in state.Held)
-        {
-            if (SameEmail(email, state.Email)) continue;
-            foreach (var key in held.Files.Keys)
-                if (local.TryGetValue(key, out var file) && !file.ReadOnly && !file.Unread && !Fenced(key)) batch.Add((file.Path, LockOwnership.OtherPerson));
-        }
+        foreach (var key in state.Held.Values.SelectMany(h => h.Files.Keys).Concat(state.Aside.Keys))
+            if (local.TryGetValue(key, out var file) && !file.ReadOnly && !file.Unread && !Fenced(key)) batch.Add((file.Path, LockOwnership.OtherPerson));
     }
 
     // What the window says about work held here for other people: each person's name and how many

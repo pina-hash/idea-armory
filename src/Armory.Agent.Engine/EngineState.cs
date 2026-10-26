@@ -45,6 +45,11 @@ internal sealed class EngineState
     // folder; it goes back to its person's records when they are in use again, and is sent under
     // their own sign-in.
     public Dictionary<string, HeldWork> Held { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    // Bytes on disk that are nobody's to send (0.5.0): a change or a new file someone made in a
+    // project they are not in, or a held file someone other than its person wrote over. Never
+    // captured, planned or sent; read-only; moved to Armory's recovery folder once nothing has it
+    // open, then the file's own version is put back (its person's last save, or the team's).
+    public Dictionary<string, AsideFile> Aside { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public long Sequence { get; set; }
     public Dictionary<Guid, ProjectState> Projects { get; set; } = [];
     private FileTable files = new();
@@ -238,6 +243,7 @@ internal sealed class EngineState
         state.People = new(state.People ?? [], StringComparer.OrdinalIgnoreCase);
         state.Held = new(state.Held ?? [], StringComparer.OrdinalIgnoreCase);
         foreach (var held in state.Held.Values) held.Normalize();
+        state.Aside = new(state.Aside ?? [], StringComparer.OrdinalIgnoreCase);
         state.Migrate();
         return state;
     }
@@ -487,6 +493,25 @@ internal sealed record KnownLock(string Email, Guid Device, string? DeviceName, 
 internal sealed class PersonState
 {
     public List<Guid> Devices { get; set; } = [];
+    // The projects their own sign-in listed at its last read of the server (null: never read
+    // here yet). A change they make in a project not listed is never theirs to send, nor anyone's.
+    public List<Guid>? Projects { get; set; }
+}
+
+// Bytes set aside (EngineState.Aside, 0.5.0). Hash: the bytes on disk when they were found (null:
+// none). Of: whose they were, when known. Restore: the journal save to put back once they are moved
+// (its person's last save), or null for the team's version. Restored: the hash put back, kept until
+// a scan sees it there, so nothing plans the path while it is missing.
+internal sealed class AsideFile
+{
+    public string? Hash { get; set; }
+    public string? Of { get; set; }
+    public string? For { get; set; }
+    public string? Restore { get; set; }
+    public string? Restored { get; set; }
+    // Its person had removed the file: once these bytes are aside, it stays removed.
+    public bool Gone { get; set; }
+    public DateTimeOffset Since { get; set; }
 }
 
 // What one person left waiting in the folder while someone else uses it (EngineState.Held, 0.5.0).

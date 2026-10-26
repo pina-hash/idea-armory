@@ -116,8 +116,8 @@ A pass has four phases. A, B and D run one step at a time; C moves files several
    checked out, a check in or undo asked, a save not sent, a write in flight, an Explorer rename
    being sent, a file changed or new that Armory hasn't kept, a folder change from before this
    pass) moves out of the records into `Held` under their address, exactly as it was, and the next
-   person's own held work, if any, comes back (`ReturnHeld`, also at the start of every pass of the
-   person it belongs to). The rest is the team's version, the same for everyone in the project, so
+   person's own held work, if any, comes back (`ReturnHeld`, also in every pass of the person it
+   belongs to, right after the scan, so it goes back only as the bytes it was held as). The rest is the team's version, the same for everyone in the project, so
    it stays in the records and nothing is downloaded again. A held file is never captured, planned
    (not even a download), adopted, moved or sent while someone else is in use; a journaled save is
    attached only to its own author's records (`SavedBy`); held files are kept read-only
@@ -128,6 +128,15 @@ A pass has four phases. A, B and D run one step at a time; C moves files several
    `vaultOwnedByOther` any more. Until 0.5.0 the folder stayed with whoever had work waiting in it
    (0.3.2's `TakeOverFolderAsync` refused); `TakeOverFolderAsync` is now that hand-over, run at once
    from a fresh scan.
+   **Nobody's bytes (`EngineState.Aside`).** Each person's own project list is kept with them
+   (`PersonState.Projects`, from their sign-in's last read). A change or new file the last person
+   made in a project they are not in is never held for them and never the next person's; a held
+   file whose bytes are no longer the ones held (someone else wrote over it) is not its person's
+   either. Such a path is nobody's: never captured, planned or sent, and read-only. Each pass, once
+   nothing has it open, it moves to the folder's `.armory\recovery` (`SetAsideNow`), and the
+   file's own version comes back: its person's save of exactly the held bytes, from the journal, or
+   else the team's version (its record forgets its base, so whoever is in the project downloads
+   it). A held file missing from the disk stays held unless its person's save can put it back.
 2. **Scan, folders, capture.** The platform scan (ignore list applied) gives every file's hash,
    its read-only bit, the folders, the folder moves it proved and SolidWorks' `~$` markers.
    It runs off the engine thread and stops between files when the engine stops (0.3.3). The

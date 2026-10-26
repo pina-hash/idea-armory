@@ -555,7 +555,6 @@ public sealed partial class SyncEngine : IAsyncDisposable
                 state.RememberPerson(session.Email);
                 SaveNow();
             }
-            if (state.Held.ContainsKey(session.Email)) ReturnHeld(session.Email);
         }
 
         if (!recovered)
@@ -628,7 +627,11 @@ public sealed partial class SyncEngine : IAsyncDisposable
             // its files for removed ones (SyncEngine.Folders.cs).
             DetectFolderChanges(scan);
         }
+        // After the scan, so held work goes back only as the bytes it was held as (SyncEngine.People.cs).
         if (handing) HandOver(session, scan, priorMoves, priorFolderOps, priorForce);
+        else if (state.Held.ContainsKey(session.Email)) ReturnHeld(session.Email);
+        // Bytes nobody may send go to the recovery folder, and each file's own version comes back.
+        SetAsideNow();
 
         // Saves are captured before any network step, so nothing on the server side can stop
         // this computer from keeping every save.
@@ -899,6 +902,14 @@ public sealed partial class SyncEngine : IAsyncDisposable
             var names = projects.GroupBy(p => p.Name, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
             // Gone from the list (v0.3): deleted forever, or this person removed? Asked below.
             var listed = projects.Select(p => p.Id).ToHashSet();
+            // Which projects the person in use is in, kept with them (0.5.0): what they change in
+            // any other project here is never theirs to send, nor anyone else's (SyncEngine.People.cs).
+            if (state.Email is { } me)
+            {
+                state.RememberPerson(me);
+                var mine = state.People[me];
+                if (mine.Projects is null || !mine.Projects.ToHashSet().SetEquals(listed)) { mine.Projects = [.. listed.Order()]; MarkDirty(); }
+            }
             var unlisted = state.Projects.Values.Where(p => !listed.Contains(p.Id)).ToList();
             foreach (var ps in unlisted) ps.Usable = false;
             // A "not a project member" answer is asked about through this read: a project still
@@ -1831,6 +1842,16 @@ public sealed partial class SyncEngine : IAsyncDisposable
         if (slash <= 0) return null;
         var name = path.Value[..slash];
         return state.Projects.Values.FirstOrDefault(p => p.Usable && string.Equals(p.Folder, name, StringComparison.OrdinalIgnoreCase));
+    }
+
+    // The project whose folder holds this path, whether or not the person in use can work in it now
+    // (never one deleted forever): for deciding whose a file is (SyncEngine.People.cs).
+    private ProjectState? KnownProjectOf(VaultPath path)
+    {
+        var slash = path.Value.IndexOf('/', StringComparison.Ordinal);
+        if (slash <= 0) return null;
+        var name = path.Value[..slash];
+        return state.Projects.Values.FirstOrDefault(p => p.PurgedAt is null && p.Folder.Length > 0 && string.Equals(p.Folder, name, StringComparison.OrdinalIgnoreCase));
     }
 
     private FileState FileFor(ProjectState project, string key)
