@@ -57,7 +57,7 @@
 	 * @typedef {'system' | 'idea' | 'spaceWhite'} ThemeSetting
 	 * @typedef {'idea' | 'spaceWhite'} EffectiveTheme
 	 * @typedef {'off' | 'on' | 'afterSignIn' | 'crowded' | 'partial' | 'broken'} BadgesState
-	 * @typedef {'choose' | 'pin' | 'newPin' | 'adding' | 'folderBusy' | 'switching' | 'signInAgain' | 'tooNew'} PickerStep
+	 * @typedef {'choose' | 'pin' | 'newPin' | 'adding' | 'switching' | 'signInAgain' | 'tooNew'} PickerStep
 	 * @typedef {'none' | 'attached' | 'cantSaveDown' | 'administrator'} SolidWorksState
 	 */
 
@@ -288,7 +288,7 @@
 	 * @property {boolean} canChangePins     the student in use is a mentor
 	 * @property {string | null} pinsNote    who turned PINs on or off, and when ("Turned off by Mr. Pina on Oct 1.")
 	 * @property {boolean} canTurnOff        the student in use may turn shared mode off
-	 * @property {string | null} note        one sentence for Home: a folder of their own, or back in the shared one
+	 * @property {string | null} note        unused since 0.5.0 (one folder for everyone); always null
 	 * @property {ProfileView[]} profiles    the student in use first, then the most recent
 	 * @property {PickerStepView} step
 	 */
@@ -303,8 +303,8 @@
 	 * @property {number} hue              0 to 7, the picture's color, the same for an address every time
 	 * @property {boolean} current
 	 * @property {string | null} lastUsedAt  ISO-8601
-	 * @property {string} folder           their Armory folder (the shared one, or C:\IDEA\Armory-<name>)
-	 * @property {boolean} ownFolder       a folder of their own, not the shared one
+	 * @property {string} folder           their Armory folder (the computer's one folder since 0.5.0)
+	 * @property {boolean} ownFolder       a folder of their own from before 0.5.0 (false once it is folded in)
 	 * @property {string | null} waiting   their work waiting in their folder ("2 files checked out"); never for the student in use
 	 * @property {boolean} needsSignIn     their sign-in here ended: picking them opens the browser
 	 * @property {boolean} hasPin
@@ -319,9 +319,9 @@
 	 * @property {string | null} message       one sentence to show (a wrong PIN, a wait, a refusal)
 	 * @property {number | null} triesLeft     pin: wrong tries left before a wait
 	 * @property {number | null} waitSeconds   pin: seconds before another try
-	 * @property {string | null} ownFolder     folderBusy: the folder of their own Armory would use
-	 * @property {string | null} ownerName     folderBusy: whose work waits in the shared folder
-	 * @property {string | null} ownerWaiting  folderBusy: what of theirs waits ("2 files checked out")
+	 * @property {string | null} ownFolder     unused since 0.5.0 (there is no folderBusy step); always null
+	 * @property {string | null} ownerName     unused since 0.5.0; always null
+	 * @property {string | null} ownerWaiting  unused since 0.5.0; always null
 	 * @property {string | null} fromName      switching: the student whose last file finishes first
 	 * @property {ConnectPhase | null} connectPhase  adding and signInAgain: where the browser sign-in is
 	 */
@@ -351,6 +351,19 @@
 	 * @property {FolderOwnerView | null} folderOwner  connection vaultOwnedByOther: whose the folder is
 	 * @property {ProfilesView | null} profiles        a shared computer's students and picker
 	 * @property {SolidWorksView | null} solidWorks  null on a computer with no SolidWorks link
+	 * @property {HeldView[] | null} heldForOthers   0.5.0: work other people left waiting in this folder, read-only for the person in use
+	 * @property {string | null} updateNote          0.5.0: one sentence about folders of one's own the update brought in, for a week
+	 */
+
+	/**
+	 * Work someone else left waiting in this folder (0.5.0): it opens read-only for the person
+	 * in use, and goes to Armory under its owner's own sign-in when they pick their name here.
+	 * @typedef {object} HeldView
+	 * @property {string} email
+	 * @property {string} name
+	 * @property {number} files      how many of their files wait here
+	 * @property {string} words      all of it in words ("2 files and 1 folder change")
+	 * @property {string} since      ISO-8601, when the first of it began to wait
 	 */
 
 	/**
@@ -482,7 +495,6 @@
 	 *   addProfile: none                      (Add a student: the browser sign-in, once)
 	 *   forgotPin: { profileId }              (the browser sign-in as that same student)
 	 *   removeProfile: { profileId }          (forgets their sign-in and PIN; no file is deleted)
-	 *   setSharedComputer: { on, pin }        (pin: the student in use's first PIN when turning on, else "")
 	 *   setPinsRequired: { on }               (a mentor only)
 	 *   keepLocal: { paths }                  (a solidWorks notice's "Keep this file on this computer only")
 	 *   saveDown: { paths }                   (a solidWorks notice's "Save it in 2025 now": saved again in the project's year)
@@ -493,7 +505,7 @@
 	 *   | 'reportProblem' | 'openIncidents' | 'sendFeedback' | 'takeBackAll' | 'takeOverFolder' | 'switchAccount'
 	 *   | 'putBackKeptCopy' | 'captureWindow' | 'readMyFeedback' | 'turnOnBadges' | 'repairVaultRoot' | 'readNoticeItems'
 	 *   | 'showPicker' | 'pickProfile' | 'enterPin' | 'setPin' | 'addProfile' | 'forgotPin' | 'cancelPicker'
-	 *   | 'removeProfile' | 'setSharedComputer' | 'setPinsRequired'
+	 *   | 'removeProfile' | 'setPinsRequired'
 	 *   | 'keepLocal' | 'saveDown'} PageMessageType
 	 */
 
@@ -518,7 +530,7 @@
 	/* ------------------------------------------------------- Message lists */
 
 	/** Page to host message types (BRIDGE.md, "Page to host"). */
-	var PAGE_TO_HOST = ['ready', 'connect', 'cancelConnect', 'signOut', 'pause', 'resume', 'openVault', 'openFile', 'launchFile', 'showInFolder', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'dismissNotice', 'saveSettings', 'chooseVaultRoot', 'reportProblem', 'openIncidents', 'sendFeedback', 'takeBackAll', 'takeOverFolder', 'switchAccount', 'putBackKeptCopy', 'captureWindow', 'readMyFeedback', 'turnOnBadges', 'repairVaultRoot', 'readNoticeItems', 'showPicker', 'pickProfile', 'enterPin', 'setPin', 'addProfile', 'forgotPin', 'cancelPicker', 'removeProfile', 'setSharedComputer', 'setPinsRequired', 'keepLocal', 'saveDown'];
+	var PAGE_TO_HOST = ['ready', 'connect', 'cancelConnect', 'signOut', 'pause', 'resume', 'openVault', 'openFile', 'launchFile', 'showInFolder', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'dismissNotice', 'saveSettings', 'chooseVaultRoot', 'reportProblem', 'openIncidents', 'sendFeedback', 'takeBackAll', 'takeOverFolder', 'switchAccount', 'putBackKeptCopy', 'captureWindow', 'readMyFeedback', 'turnOnBadges', 'repairVaultRoot', 'readNoticeItems', 'showPicker', 'pickProfile', 'enterPin', 'setPin', 'addProfile', 'forgotPin', 'cancelPicker', 'removeProfile', 'setPinsRequired', 'keepLocal', 'saveDown'];
 
 	/** Host to page message types (BRIDGE.md, "Host to page"). */
 	var HOST_TO_PAGE = ['view', 'fileDetail', 'activity', 'actionResult', 'windowShot', 'myFeedback', 'reveal', 'noticeItems'];
@@ -550,7 +562,6 @@
 		setPin: ['profileId', 'pin'],
 		forgotPin: ['profileId'],
 		removeProfile: ['profileId'],
-		setSharedComputer: ['on', 'pin'],
 		setPinsRequired: ['on'],
 		keepLocal: ['paths'],
 		saveDown: ['paths'],
@@ -558,7 +569,7 @@
 	};
 
 	/** Actions: each carries a requestId, and the host answers it with one actionResult. */
-	var ACTIONS = ['launchFile', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'reportProblem', 'sendFeedback', 'takeBackAll', 'takeOverFolder', 'putBackKeptCopy', 'turnOnBadges', 'pickProfile', 'enterPin', 'setPin', 'addProfile', 'forgotPin', 'removeProfile', 'setSharedComputer', 'setPinsRequired', 'keepLocal', 'saveDown', 'repairVaultRoot'];
+	var ACTIONS = ['launchFile', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'reportProblem', 'sendFeedback', 'takeBackAll', 'takeOverFolder', 'putBackKeptCopy', 'turnOnBadges', 'pickProfile', 'enterPin', 'setPin', 'addProfile', 'forgotPin', 'removeProfile', 'setPinsRequired', 'keepLocal', 'saveDown', 'repairVaultRoot'];
 
 	/** Asks: each carries a requestId too, and the host answers it with a message of its own
 	 *  (windowShot, myFeedback, noticeItems), never actionResult. */
@@ -1113,7 +1124,6 @@
 				case 'forgotPin':
 				case 'cancelPicker':
 				case 'removeProfile':
-				case 'setSharedComputer':
 				case 'setPinsRequired':
 					handleShared(message);
 					break;
@@ -1141,17 +1151,6 @@
 					postView();
 				}, 3000);
 			};
-			if (message.type === 'setSharedComputer') {
-				if (message.on) {
-					view = view.account ? shared.turnedOn(view) : shared.step(shared.turnedOn(view), 'choose');
-					if (!view.account) view.profiles.profiles = [];
-				} else {
-					view.settings.sharedComputer = false;
-					view.profiles = null;
-				}
-				postView();
-				return result(message, true, message.on ? 'This computer is shared now. Other students add themselves with Add a student.' : 'This computer is used by one student now. Nothing in any Armory folder changed.');
-			}
 			if (!view.profiles) return result(message, false, "This computer isn't set up for several students.");
 			var id = message.profileId;
 			var ok = true;

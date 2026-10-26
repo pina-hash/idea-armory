@@ -49,58 +49,10 @@ public sealed class ProfilesHostTests
 
     // ---- Shared mode on and off --------------------------------------------------------------
 
-    [PostgresFact]
-    public async Task Turning_shared_mode_on_moves_the_sign_in_and_never_leaves_two_copies()
-    {
-        await using var lab = await StartAsync(shared: false);
-        lab.Browser.Next = Alex;
-        await lab.Host.ConnectAsync();
-        await Until(() => lab.View.Connection == Connections.SignedIn, "Alex signed in");
-        var refresh = lab.Host.Sessions.Current!.RefreshToken;
-        Assert.Equal(["secrets/armory-session.secret"], lab.Secrets().Select(s => s.File.Replace('\\', '/')));
-        Assert.False(Directory.Exists(lab.Paths.ProfilesFolder));
-
-        // Turning it on asks Alex for a PIN first; an easy one is refused and nothing changes.
-        Assert.Equal((false, "Choose a 4-digit PIN for yourself first."), Pair(await lab.Host.SetSharedComputerAsync(true, null)));
-        Assert.Equal((false, SharedComputer.TooEasyPin), Pair(await lab.Host.SetSharedComputerAsync(true, "1234")));
-        Assert.False(Directory.Exists(lab.Paths.ProfilesFolder));
-        Assert.True((await lab.Host.SetSharedComputerAsync(true, "2580")).Ok);
-        await lab.UntilRunningAsync(Alex, Shared);
-
-        // The sign-in moved: exactly one file holds the refresh token, in Alex's profile.
-        var holding = lab.Secrets().Where(s => s.Text.Contains(lab.Host.Sessions.Current!.RefreshToken, StringComparison.Ordinal)).ToList();
-        var moved = Assert.Single(holding);
-        Assert.StartsWith("profiles/", moved.File.Replace('\\', '/'));
-        Assert.Equal(refresh, lab.Host.Sessions.Current!.RefreshToken);
-        Assert.DoesNotContain(lab.Secrets(), s => s.File.Replace('\\', '/').StartsWith("secrets/", StringComparison.Ordinal));
-        Assert.Contains("\"sharedComputer\": true", File.ReadAllText(lab.Paths.SettingsFile));
-        Assert.True(lab.View.Settings.SharedComputer);
-        var index = File.ReadAllText(Path.Combine(lab.Paths.ProfilesFolder, "profiles.json"));
-        Assert.DoesNotContain(refresh, index);
-        Assert.Contains(Alex, index);
-
-        // The next start finds Alex in use. One person on the computer: the window never opens on
-        // the picker (0.5.0), and with PINs off (nobody's mentor turned them on) a pick switches at once.
-        await lab.RestartAsync();
-        await lab.UntilRunningAsync(Alex, Shared);
-        Assert.Contains("profiles: shared computer on, 1 student, current " + Alex, lab.LogText);
-        lab.Host.ShowPicker(PickerTrigger.ShownFromHidden);
-        Assert.False(lab.Profiles.Showing);
-        Assert.False(lab.Profiles.PinsRequired);
-        Assert.True((await lab.PickAsync(Alex)).Ok);
-        await lab.UntilRunningAsync(Alex, Shared);
-
-        // Off again: Alex stays, signed in as before, his sign-in back in secrets\ and only there.
-        var now = lab.Host.Sessions.Current!.RefreshToken;
-        Assert.True((await lab.Host.SetSharedComputerAsync(false, null)).Ok);
-        await Until(() => lab.View.Connection == Connections.SignedIn && lab.View.Profiles is null, "one student again");
-        Assert.Equal(["secrets/armory-session.secret"], lab.Secrets().Select(s => s.File.Replace('\\', '/')));
-        Assert.Contains(now, Assert.Single(lab.Secrets()).Text);
-        Assert.False(Directory.Exists(lab.Paths.ProfilesFolder));
-        Assert.DoesNotContain("sharedComputer", File.ReadAllText(lab.Paths.SettingsFile));
-        Assert.Equal(Alex, lab.Host.Sessions.Current!.Email);
-        Assert.Empty(lab.Violations);
-    }
+    // Turning_shared_mode_on_moves_the_sign_in_and_never_leaves_two_copies was replaced by
+    // LabComputerTests.A_second_person_signing_in_makes_the_computer_shared_with_no_setup_and_the_first_sign_in_moves
+    // (0.5.0): there is no switch to turn on any more; a second sign-in makes a computer shared,
+    // and the first person's sign-in moves into their profile, never copied.
 
     private static (bool, string) Pair(ActionResult result) => (result.Ok, result.Message);
 

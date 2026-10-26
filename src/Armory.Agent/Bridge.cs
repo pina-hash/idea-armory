@@ -127,7 +127,6 @@ internal sealed partial class Bridge(AgentHost host, IBridgeWindow window, Agent
         [BridgeMessages.ForgotPin] = typeof(ForgotPinMessage),
         [BridgeMessages.CancelPicker] = null,
         [BridgeMessages.RemoveProfile] = typeof(RemoveProfileMessage),
-        [BridgeMessages.SetSharedComputer] = typeof(SetSharedComputerMessage),
         [BridgeMessages.SetPinsRequired] = typeof(SetPinsRequiredMessage),
         [BridgeMessages.KeepLocal] = typeof(KeepLocalMessage),
         [BridgeMessages.SaveDown] = typeof(SaveDownMessage),
@@ -382,7 +381,6 @@ internal sealed partial class Bridge(AgentHost host, IBridgeWindow window, Agent
                 case BridgeMessages.ForgotPin:
                 case BridgeMessages.CancelPicker:
                 case BridgeMessages.RemoveProfile:
-                case BridgeMessages.SetSharedComputer:
                 case BridgeMessages.SetPinsRequired:
                     await HandleProfilesAsync(type, message, asked);
                     break;

@@ -1281,7 +1281,7 @@ for (const size of SIZES) {
 		expect(await page.evaluate(() => document.getElementById('settings').open), 'Settings did not open');
 		// A theme pad says its name and, under it, what it is ("Dark", "Light"); the name is the setting.
 		const keys = await page.$$eval('#settings button', (b) => b.map((x) => (x.querySelector('.seg-name') || x).textContent.trim()));
-		expect(keys.join('|') === 'Done|Change|On|Match Windows|IDEA|Space White|Turn on|Off|Report a problem|Send feedback|Your feedback (3)|Open incidents folder', `sheet holds ${keys.join(', ')}`);
+		expect(keys.join('|') === 'Done|Change|On|Match Windows|IDEA|Space White|Turn on|Report a problem|Send feedback|Your feedback (3)|Open incidents folder', `sheet holds ${keys.join(', ')}`);
 		await page.click('[data-key="set-theme-spaceWhite"]');
 		await settle(page);
 		expect((await page.getAttribute('html', 'data-theme')) === 'spaceWhite', 'Space White did not apply');
@@ -1400,21 +1400,39 @@ for (const size of SIZES) {
 		await settle(page);
 		expect((await where(page)).screen === 'home', 'a new PIN did not open Home');
 	}, 'picker');
-	await flow('picker busy folder', size, 'pickerFolderBusy', async (page, expect) => {
-		expect(/Alex Kim has 2 files checked out/.test(await text(page, '.picker-inner')), 'the busy folder does not say what of Alex\'s waits');
-		expect(/different path/.test(await text(page, '.picker-inner .connect-foot')), 'the busy folder does not say what a folder of one\'s own changes');
-		await page.click('[data-key="fb-own"]');
-		await settle(page);
-		expect((await where(page)).screen === 'home', 'a folder of my own did not open Home');
-		expect(/own folder, C:\\IDEA\\Armory-jordan/.test(await text(page, '.acct-panel')), `Home says "${await text(page, '.acct-panel')}"`);
-	}, 'picker');
+	await flow('file kind icons', size, 'fileKinds', async (page, expect) => {
+		// 0.5.0: every kind of file in the lab has its own drawing; a name the window doesn't know, the plain page.
+		const want = {
+			'Plate-Left.DXF': 'i-k-vector', 'Wheel-Hub.STL': 'i-k-mesh', 'Bumper.3MF': 'i-k-mesh', 'Gearbox.STEP': 'i-k-cad', 'Drivetrain.pdf': 'i-k-pdf',
+			'Cut-List.xlsx': 'i-k-sheet', 'Bumper-Logo.lbrn2': 'i-k-laser', 'Hub.gcode': 'i-k-print', 'Assembly-Notes.docx': 'i-k-doc', 'Build-Photo.jpg': 'i-k-image',
+			'Test-Run.mp4': 'i-k-video', 'Robot-Viewer.EASM': 'i-k-edrawing', 'Title-Block.SLDDRT': 'i-k-template', 'Shop-Files.zip': 'i-k-archive', 'README.md': 'i-k-text',
+			'Settings.qqq': 'i-file'
+		};
+		const drawn = await page.$$eval('.row-name', (names) => names.map((n) => {
+			const row = n.closest('.row-main');
+			const use = row && row.querySelector('.row-icon use, .thumb-glyph use');
+			return [n.textContent.trim(), use ? use.getAttribute('href') : null, !!(use && document.querySelector(use.getAttribute('href')))];
+		}));
+		for (const [name, id] of Object.entries(want)) {
+			const row = drawn.find((d) => d[0] === name);
+			expect(!!row, `the Fabrication folder has no row for ${name}`);
+			if (row) expect(row[1] === '#' + id && row[2], `${name} draws ${row[1]} (want #${id}, defined: ${row[2]})`);
+		}
+	}, 'home');
+	await flow('work held for others', size, 'sharedHeldForOthers', async (page, expect) => {
+		const held = await text(page, '[data-part="held"]');
+		expect(/Alex's work waits here: 2 files/.test(held), `Home says "${held}" about Alex's waiting work`);
+		expect(/read-only for you/.test(held) && /own sign-in/.test(held), 'the held card does not say it is read-only and goes under its owner\'s sign-in');
+		expect(/Moved 1 project into C:\\IDEA\\Armory, kept 2 files waiting for Alex/.test(held), 'Home does not show the update\'s note');
+		expect(!(await page.$('[data-part="held"] button')), 'the held card asks something; it never does');
+	}, 'home');
 	await flow('shared settings', size, 'sharedSettings', async (page, expect) => {
 		expect(await page.evaluate(() => document.getElementById('settings').open), 'Settings did not open');
 		// A switch the student can't change is off (aria-disabled, so its tooltip says who can).
 		const keys = await page.$$eval('#settings button:not(:disabled):not([aria-disabled="true"])', (b) => b.map((x) => (x.querySelector('.seg-name') || x).textContent.trim()));
 		expect(keys.join('|') === 'Done|On|Match Windows|IDEA|Space White|Turn on|Remove|Report a problem|Send feedback|Your feedback (3)|Open incidents folder', `the sheet holds ${keys.join(', ')}`);
 		expect(await page.$eval('[data-key="set-pins"]', (b) => b.getAttribute('aria-disabled') === 'true'), 'a student can change the PIN switch');
-		expect(await page.$eval('[data-key="set-shared"]', (b) => b.getAttribute('aria-disabled') === 'true'), 'a student can turn shared mode off while others use the computer');
+		expect(!(await page.$('[data-key="set-shared"]')), 'Settings still offers a shared-computer switch; 0.5.0 shares a computer by itself');
 		expect(/Only a mentor can/.test(await page.getAttribute('[data-key="set-pins"]', 'data-tip')), 'the PIN switch does not say who can change it');
 		const before = await page.getAttribute('[data-key="set-pins"]', 'aria-pressed');
 		await page.click('[data-key="set-pins"]', { force: true });
@@ -1729,9 +1747,7 @@ const CONTRACT = {
 	addProfile: [...ACT],
 	forgotPin: ['profileId', ...ACT],
 	cancelPicker: [],
-	chooseFolder: ['profileId', 'choice', ...ACT],
 	removeProfile: ['profileId', ...ACT],
-	setSharedComputer: ['on', 'pin', ...ACT],
 	setPinsRequired: ['on', ...ACT],
 	// 0.3.3: the SolidWorks link's notice buttons (Keep this file on this computer only, Save it in
 	// 2025 now), pressed in solidWorksBridge.
@@ -1838,11 +1854,6 @@ async function profilesBridge({ page, host, click, take, view, expect, all }) {
 	sent = await typed('#pin-new-2', '1357');
 	m = sent[0] || {};
 	expect(m.type === 'setPin' && m.profileId === SAM && m.pin === '1357', 'a new PIN sent ' + JSON.stringify(m));
-	await host({ type: 'view', view: view('pickerFolderBusy') });
-	m = await click('[data-key="fb-wait"]');
-	expect(m.type === 'chooseFolder' && m.profileId === JORDAN && m.choice === 'wait', 'Wait sent ' + JSON.stringify(m));
-	m = await click('[data-key="fb-own"]');
-	expect(m.type === 'chooseFolder' && m.profileId === JORDAN && m.choice === 'own', 'a folder of my own sent ' + JSON.stringify(m));
 	await host({ type: 'view', view: view('sharedSettingsMentor') });
 	await click('[data-key="hdr-settings"]');
 	m = await click('[data-key="set-pins"]');
@@ -1851,18 +1862,6 @@ async function profilesBridge({ page, host, click, take, view, expect, all }) {
 	expect(!m.type && (await page.evaluate(() => document.getElementById('ask').open)), 'Remove did not ask first: ' + JSON.stringify(m));
 	m = await click('[data-key="ask-ok"]');
 	expect(m.type === 'removeProfile' && m.profileId === MARIA, 'Remove sent ' + JSON.stringify(m));
-	m = await click('[data-key="set-shared"]');
-	expect(!m.type && (await page.evaluate(() => document.getElementById('ask').open)), 'turning shared mode off did not ask first: ' + JSON.stringify(m));
-	m = await click('[data-key="ask-ok"]');
-	expect(m.type === 'setSharedComputer' && m.on === false && m.pin === '', 'turning shared mode off sent ' + JSON.stringify(m));
-	await host({ type: 'actionResult', requestId: m.requestId, ok: true, message: 'This computer is used by one student now: Mr. Pina. Nothing in any Armory folder changed.' });
-	await host({ type: 'view', view: view('synced') });
-	m = await click('[data-key="set-shared"]');
-	expect(!m.type && !!(await page.$('#ask-pin-1')), 'turning shared mode on did not ask for a PIN first: ' + JSON.stringify(m));
-	await page.fill('#ask-pin-1', '4826');
-	await page.fill('#ask-pin-2', '4826');
-	m = await click('[data-key="ask-ok"]');
-	expect(m.type === 'setSharedComputer' && m.on === true && m.pin === '4826', 'turning shared mode on sent ' + JSON.stringify(m));
 	await page.keyboard.press('Escape');
 	await page.waitForTimeout(40);
 	// The folder-taken screen names the folder's owner from FolderOwnerView, not the message.

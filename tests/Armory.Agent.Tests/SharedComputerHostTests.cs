@@ -150,8 +150,6 @@ public sealed class SharedComputerHostTests
         await bridge.HandleAsync("""{"type":"showPicker"}""");
         await bridge.HandleAsync("""{"type":"cancelPicker"}""");
         for (var i = 1; i <= sent.Length; i++) Assert.Equal((false, AgentHost.NotShared), window.Answer("r" + i));
-        await bridge.HandleAsync("""{"type":"setSharedComputer","on":false,"pin":"","requestId":"r9"}""");
-        Assert.Equal((true, "This computer is used by one student."), window.Answer("r9"));
         Assert.False(Directory.Exists(lab.Paths.ProfilesFolder));
         Assert.False(File.Exists(lab.Paths.SettingsFile));
         Assert.Null(lab.Host.View.Profiles);
@@ -233,7 +231,6 @@ public sealed class SharedComputerHostTests
         // 0.5.0: "wait or a folder of your own" is gone; the message is not a bridge message any more.
         await bridge.HandleAsync($$"""{"type":"chooseFolder","profileId":"{{Id}}","choice":"own","requestId":"f"}""");
         await bridge.HandleAsync($$"""{"type":"pickProfile","profileId":"{{Id}}","requestId":"g"}""");
-        await bridge.HandleAsync("""{"type":"setSharedComputer","on":true,"pin":"12","requestId":"h"}""");
         Assert.Equal((false, "That student isn't on this computer."), window.Answer("a"));
         Assert.Equal((false, "That student isn't on this computer."), window.Answer("b"));
         Assert.Equal((false, "Type 4 digits."), window.Answer("c"));
@@ -241,7 +238,6 @@ public sealed class SharedComputerHostTests
         Assert.Equal((false, "Type 4 digits."), window.Answer("e"));
         Assert.DoesNotContain(window.Posted, p => p.TryGetProperty("requestId", out var r) && r.GetString() == "f");
         Assert.Equal((false, "That student isn't on this computer any more."), window.Answer("g"));
-        Assert.Equal((false, "Type 4 digits."), window.Answer("h"));
         // A PIN is never written to the log, not even a refused one.
         Assert.DoesNotContain("12a4", lab.LogText);
         // Without anyone in use, nothing runs and the window stays on the picker.

@@ -146,8 +146,16 @@
 		});
 		return changes;
 	}
+	// 0.5.0: a fabrication folder with every kind of file the lab uses besides SolidWorks's own,
+	// for the file kind icons (and one name the window doesn't know).
+	var FABRICATION = [
+		'Plate-Left.DXF', 'Wheel-Hub.STL', 'Bumper.3MF', 'Gearbox.STEP', 'Drivetrain.pdf', 'Cut-List.xlsx', 'Bumper-Logo.lbrn2', 'Hub.gcode',
+		'Assembly-Notes.docx', 'Build-Photo.jpg', 'Test-Run.mp4', 'Robot-Viewer.EASM', 'Title-Block.SLDDRT', 'Shop-Files.zip', 'README.md', 'Settings.qqq'
+	].map(function (name, i) {
+		return ['f-fab-' + pad4(i + 1), 'proj-robot-2027', 'Fabrication', name, i % 2 ? MARIA : ALEX, 1 * DAY + i * 20, 20000 + i * 7300];
+	});
 	var EXTRA = {};
-	BIG.concat(IMPORTED, ARM, SHOOTER, PRACTICE).forEach(function (e) {
+	BIG.concat(IMPORTED, ARM, SHOOTER, PRACTICE, FABRICATION).forEach(function (e) {
 		EXTRA[e[0]] = e;
 	});
 
@@ -362,7 +370,9 @@
 			effectiveTheme: 'idea',
 			folderOwner: null,
 			profiles: null,
-			solidWorks: parts.solidWorks || null
+			solidWorks: parts.solidWorks || null,
+			heldForOthers: [],
+			updateNote: null
 		};
 		view.myFiles = myFilesOf(view, parts.notes);
 		return view;
@@ -384,7 +394,9 @@
 			effectiveTheme: 'idea',
 			folderOwner: null,
 			profiles: null,
-			solidWorks: null
+			solidWorks: null,
+			heldForOthers: [],
+			updateNote: null
 		};
 	}
 
@@ -890,6 +902,13 @@
 			})()
 		},
 
+		fileKinds: {
+			label: 'A fabrication folder with every kind of file the lab uses: each row has its own icon, and an unknown one the plain page',
+			screens: ['home'],
+			params: { folder: 'Fabrication', at: 'browser' },
+			view: signedIn({ sync: SYNCED, changes: shared({}), opts: { files: FABRICATION, folders: { 'proj-robot-2027': ['Fabrication'] } } })
+		},
+
 		myOtherComputer: {
 			label: 'A file checked out on my other computer: amber, and how to get it here',
 			screens: ['home', 'detail'],
@@ -1305,7 +1324,6 @@
 		sam: { id: '3c4d5e6f708192a3b4c5d6e7f8091a23', hue: 6, person: SAM },
 		pina: { id: '4d5e6f708192a3b4c5d6e7f8091a2b34', hue: 2, person: PINA }
 	};
-	var OWN_FOLDER = 'C:\\IDEA\\Armory-jordan';
 
 	function initialsOf(name) {
 		var words = String(name).replace(/^(Mr|Mrs|Ms|Dr|Mx)\.?\s+/i, '').split(/\s+/);
@@ -1458,23 +1476,6 @@
 		view: picking(profilesOf({ showing: true, tiles: labTiles(), step: pickerStep('newPin', { profileId: PROFILE.sam.id }) }))
 	};
 
-	states.pickerFolderBusy = {
-		label: "Shared computer: Jordan picked their own tile; Alex's 2 check outs are in the folder: wait, or a folder of Jordan's own",
-		screens: ['picker'],
-		view: picking(
-			profilesOf({
-				showing: true,
-				tiles: [
-					profileTile('alex', { current: true }),
-					profileTile('me', { lastUsedAt: ago(3 * HOUR) }),
-					profileTile('maria', { lastUsedAt: ago(1 * DAY) }),
-					profileTile('sam', { lastUsedAt: ago(3 * DAY) })
-				],
-				step: pickerStep('folderBusy', { profileId: PROFILE.me.id, ownFolder: OWN_FOLDER, ownerName: ALEX.name, ownerWaiting: ALEX_WAITS })
-			})
-		)
-	};
-
 	states.pickerSwitching = {
 		label: 'Shared computer: switching from Alex to Jordan',
 		screens: ['picker'],
@@ -1514,23 +1515,23 @@
 		view: sharedHome(signedIn({ sync: SYNCED, changes: shared({}) }), profilesOf({ tiles: labTiles() }))
 	};
 
-	states.sharedOwnFolder = {
-		label: "Shared computer: Jordan in a folder of their own while Alex's work waits in the shared one",
+	states.sharedHeldForOthers = {
+		label: "Shared computer (0.5.0): Home for Jordan in the one folder, with Alex's check outs waiting for Alex and the update's note about a folder it brought in",
 		screens: ['home'],
 		view: (function () {
 			var v = sharedHome(
 				signedIn({ sync: SYNCED, changes: shared({}) }),
 				profilesOf({
 					tiles: [
-						profileTile('me', { current: true, folder: OWN_FOLDER, ownFolder: true, canRemove: true }),
+						profileTile('me', { current: true, canRemove: true }),
 						profileTile('alex', { lastUsedAt: ago(40 * MIN), waiting: ALEX_WAITS }),
 						profileTile('maria'),
 						profileTile('sam')
-					],
-					note: "You're in your own folder, " + OWN_FOLDER + ", while Alex's work waits in " + SETTINGS.vaultRoot + '.'
+					]
 				})
 			);
-			v.vaultRoot = OWN_FOLDER;
+			v.heldForOthers = [{ email: ALEX.email, name: ALEX.name, files: 2, words: '2 files', since: ago(40 * MIN) }];
+			v.updateNote = 'Moved 1 project into ' + SETTINGS.vaultRoot + ', kept 2 files waiting for Alex. Each person\'s work goes to Armory under their own sign-in when they pick their name.';
 			return v;
 		})()
 	};
@@ -1642,11 +1643,6 @@
 			v.profiles = p;
 			if (gone && gone.current) return { name: gone.name, view: sharedDemo.step(v, 'choose') };
 			return { name: gone ? gone.name : 'That student', view: v };
-		},
-		ownFolder: OWN_FOLDER,
-		/** Shared mode just turned on: Jordan is the first student. */
-		turnedOn: function (v) {
-			return sharedHome(v, profilesOf({ canTurnOff: true, tiles: [profileTile('me', { current: true, canRemove: true })] }));
 		}
 	};
 

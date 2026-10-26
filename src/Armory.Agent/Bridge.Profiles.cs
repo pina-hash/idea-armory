@@ -12,8 +12,6 @@ internal sealed record SetPinMessage(string? ProfileId, string? Pin, string? Req
 internal sealed record AddProfileMessage(string? RequestId);
 internal sealed record ForgotPinMessage(string? ProfileId, string? RequestId);
 internal sealed record RemoveProfileMessage(string? ProfileId, string? RequestId);
-// pin: the first student's PIN when turning on while someone is signed in; "" otherwise.
-internal sealed record SetSharedComputerMessage(bool? On, string? Pin, string? RequestId);
 internal sealed record SetPinsRequiredMessage(bool? On, string? RequestId);
 
 internal sealed partial class Bridge
@@ -59,12 +57,6 @@ internal sealed partial class Bridge
             case BridgeMessages.RemoveProfile:
                 var remove = Read<RemoveProfileMessage>(message);
                 await AnswerAsync(type, 1, asked, remove?.RequestId, ProfileStore.IsId(remove?.ProfileId) ? host.RemoveProfileAsync(remove!.ProfileId!) : Refuse(NotAStudent));
-                break;
-            case BridgeMessages.SetSharedComputer:
-                var shared = Read<SetSharedComputerMessage>(message);
-                await AnswerAsync(type, 0, asked, shared?.RequestId,
-                    shared?.On is not { } on ? Refuse(new ActionResult(false, "")) : shared.Pin is { Length: > 0 } pin && !SharedComputer.IsPin(pin) ? Refuse(NotAPin)
-                    : host.SetSharedComputerAsync(on, shared.Pin is { Length: > 0 } ? shared.Pin : null));
                 break;
             case BridgeMessages.SetPinsRequired:
                 var pins = Read<SetPinsRequiredMessage>(message);

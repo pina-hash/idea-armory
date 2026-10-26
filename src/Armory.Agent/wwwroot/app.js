@@ -153,7 +153,35 @@
 		move: { word: 'Moving', glyph: 'move' }
 	};
 
-	var KIND_WORD = { part: 'Part', asm: 'Assembly', drw: 'Drawing', file: 'File' };
+	/** What kind of file a name is, by its extension (0.5.0): the same table as Armory.Core's
+	 *  FileKinds, which a test holds this one to. Each kind has its own drawing in index.html
+	 *  (i-part, i-asm, i-drw, i-file, and i-k-<kind> for the rest; tools/agent-icon/make_file_icons.py),
+	 *  and a picture Windows makes of the file still wins over it. */
+	var FILE_KINDS = {
+		'.sldprt': 'part', '.sldasm': 'asm', '.slddrw': 'drw',
+		'.slddrt': 'template', '.drwdot': 'template', '.prtdot': 'template', '.asmdot': 'template',
+		'.sldlfp': 'feature', '.sldblk': 'block',
+		'.eprt': 'edrawing', '.easm': 'edrawing', '.edrw': 'edrawing',
+		'.step': 'cad', '.stp': 'cad', '.iges': 'cad', '.igs': 'cad', '.x_t': 'cad', '.x_b': 'cad', '.sat': 'cad', '.parasolid': 'cad',
+		'.stl': 'mesh', '.3mf': 'mesh', '.obj': 'mesh', '.ply': 'mesh', '.amf': 'mesh',
+		'.gcode': 'print', '.bgcode': 'print', '.ufp': 'print',
+		'.dxf': 'vector', '.dwg': 'vector', '.svg': 'vector', '.ai': 'vector', '.eps': 'vector',
+		'.lbrn': 'laser', '.lbrn2': 'laser', '.xcs': 'laser',
+		'.pdf': 'pdf',
+		'.docx': 'doc', '.doc': 'doc', '.rtf': 'doc', '.odt': 'doc',
+		'.xlsx': 'sheet', '.xls': 'sheet', '.csv': 'sheet', '.ods': 'sheet',
+		'.pptx': 'slides', '.ppt': 'slides', '.odp': 'slides',
+		'.txt': 'text', '.md': 'text', '.log': 'text', '.json': 'text', '.ini': 'text', '.html': 'text', '.htm': 'text',
+		'.py': 'code', '.cpp': 'code', '.h': 'code', '.java': 'code', '.ino': 'code', '.cs': 'code', '.js': 'code',
+		'.png': 'image', '.jpg': 'image', '.jpeg': 'image', '.gif': 'image', '.bmp': 'image', '.webp': 'image', '.tif': 'image', '.tiff': 'image', '.heic': 'image',
+		'.mp4': 'video', '.mov': 'video', '.avi': 'video', '.mkv': 'video', '.wmv': 'video',
+		'.zip': 'archive', '.7z': 'archive', '.rar': 'archive'
+	};
+	var KIND_WORD = {
+		part: 'Part', asm: 'Assembly', drw: 'Drawing', template: 'Drawing template', feature: 'Library feature', block: 'Block', edrawing: 'eDrawings',
+		cad: 'CAD exchange', mesh: 'Mesh', print: 'Print file', vector: 'Drawing for cutting', laser: 'Laser job', pdf: 'PDF', doc: 'Document',
+		sheet: 'Spreadsheet', slides: 'Slides', text: 'Text', code: 'Code', image: 'Picture', video: 'Video', archive: 'Archive', file: 'File'
+	};
 
 	/** Files whose team version is the one on this computer. */
 	var UP_TO_DATE = { synced: true, changed: true, uploading: true, waiting: true, keptCopy: true, checkingInWhenClosed: true };
@@ -330,11 +358,21 @@
 	}
 
 	function kindOf(name) {
-		var ext = String(name).split('.').pop().toUpperCase();
-		if (ext === 'SLDPRT') return 'part';
-		if (ext === 'SLDASM') return 'asm';
-		if (ext === 'SLDDRW') return 'drw';
-		return 'file';
+		var leaf = String(name).split(/[\\/]/).pop();
+		var dot = leaf.lastIndexOf('.');
+		if (dot <= 0 || dot === leaf.length - 1) return 'file';
+		return FILE_KINDS[leaf.slice(dot).toLowerCase()] || 'file';
+	}
+
+	/** A SolidWorks part, assembly or drawing (the files Armory checks out and SolidWorks opens). */
+	function isCad(name) {
+		var k = kindOf(name);
+		return k === 'part' || k === 'asm' || k === 'drw';
+	}
+
+	/** The drawing for a kind: the four the window always had keep their names. */
+	function kindIcon(kind) {
+		return kind === 'part' || kind === 'asm' || kind === 'drw' || kind === 'file' ? kind : 'k-' + kind;
 	}
 
 	function chip(words, tone, extra) {
@@ -344,7 +382,7 @@
 
 	/** What kind of file it is, in words a student knows: Part, Assembly, Drawing. */
 	function kindChip(name) {
-		return '<span class="chip kind">' + esc(KIND_WORD[kindOf(name)]) + '</span>';
+		return '<span class="chip kind">' + esc(KIND_WORD[kindOf(name)] || 'File') + '</span>';
 	}
 
 	/** Who has it checked out, always shown: their initials in a disc and the engine's
@@ -470,8 +508,6 @@
 		addCancel: 'Stop adding a student and go back to the list.',
 		signInCancel: 'Stop signing in and go back to the list of students.',
 		signInGo: function (c) { return 'Open your browser to sign in as ' + c.name + ' with your school Google account.'; },
-		useOwnFolder: function (c) { return 'Work in a folder of your own, ' + c.path + ', until ' + c.first + ' finishes the work waiting in the shared one.'; },
-		waitFor: function (c) { return 'Go back to the list and use Armory once ' + c.first + ' is done.'; },
 		// Home: status and this computer.
 		pause: 'Stop uploading and downloading for now. Your work stays safe on this computer.',
 		resume: 'Start uploading and downloading again.',
@@ -588,13 +624,9 @@
 		themeIdea: 'The dark IDEA colors.',
 		themeSpaceWhite: 'The light Space White colors.',
 		turnOnBadges: 'Show Armory\'s status on file icons in File Explorer. Windows asks for an administrator\'s password once.',
-		sharedSwitch: function (c) {
-			if (c.off) return 'Only a mentor can turn this off while other students use this computer.';
-			return c.on ? 'On: several students take turns here. Click to go back to one student on this computer.' : 'Off: one student uses Armory here. Click when several students take turns on this computer.';
-		},
 		pinsSwitch: function (c) {
 			if (c.off) return 'Only a mentor can change this, for this computer.';
-			return c.on ? 'On: each student types their PIN to switch. Click to switch with one click.' : 'Off: picking a name switches at once. Click to ask for a PIN.';
+			return c.on ? 'On: each person types their PIN to switch. Click to switch with one click.' : 'Off: picking a name switches at once. Click to ask for a PIN.';
 		},
 		removeStudent: function (c) { return 'Remove ' + c.name + ' from this computer. No files are deleted.'; },
 		report: 'Tell the IDEA team what went wrong. A short record of what Armory was doing goes with your words.',
@@ -621,10 +653,6 @@
 					return 'Delete the folder for everyone on the team. The history of its files is kept.';
 				case 'feedback':
 					return c.withoutPicture ? 'Send your note without the picture.' : 'Send your note to the IDEA team.';
-				case 'sharedOn':
-					return 'Set this computer up for several students.';
-				case 'sharedOff':
-					return 'Go back to one student on this computer. No files change.';
 				case 'removeProfile':
 					return 'Remove this student from this computer. No files are deleted.';
 			}
@@ -1132,7 +1160,7 @@
 	function tileLine(p) {
 		if (p.current) return 'Using Armory now';
 		if (p.needsSignIn) return 'Sign in again to continue';
-		if (p.waiting) return firstName(p.name) + ' has ' + p.waiting + (p.ownFolder ? ' in ' + p.folder : ' here');
+		if (p.waiting) return firstName(p.name) + ' has ' + p.waiting + ' here';
 		if (p.lastUsedAt) return 'Last here ' + ago(p.lastUsedAt);
 		return 'New on this computer';
 	}
@@ -1147,7 +1175,6 @@
 		newPin: 'Choose your PIN',
 		adding: 'Add a student',
 		signInAgain: 'Sign in again',
-		folderBusy: 'Choose your folder',
 		switching: 'Switching students'
 	};
 
@@ -1171,7 +1198,6 @@
 		else if (s.kind === 'newPin') html += newPinStepHtml(v, s);
 		else if (s.kind === 'adding') html += addingStepHtml(v, s);
 		else if (s.kind === 'signInAgain') html += signInStepHtml(v, s);
-		else if (s.kind === 'folderBusy') html += folderBusyStepHtml(v, s);
 		else if (s.kind === 'switching') html += switchingStepHtml(v, s);
 		else if (s.kind === 'tooNew') html += lcdPlate('bad', 'Update Armory', s.message, false);
 		else html += chooseStepHtml(v, s);
@@ -1313,35 +1339,6 @@
 		return html + '</div>';
 	}
 
-	/** The shared folder holds the last student's work: they keep it, and the next student
-	 *  waits or works in a folder of their own for now. */
-	function folderBusyStepHtml(v, s) {
-		var owner = s.ownerName || 'Another student';
-		var first = firstName(owner);
-		var shared = v.profiles.sharedFolder;
-		var html = studentHtml(profileOf(v, s.profileId));
-		html += lcdPlate('look', first + '\'s work is in this folder', null, false);
-		html +=
-			'<p class="lead">' + esc(owner) + ' has ' + esc(s.ownerWaiting || 'work waiting') + ' in <span class="mono-inline">' + esc(shared) + '</span>. ' +
-			'It stays ' + esc(first) + '\'s until ' + esc(first) + ' finishes it here. Wait for ' + esc(first) + ', or work in a folder of your own for now.</p>';
-		html += '<div class="connect-actions">';
-		if (s.ownFolder)
-			html += pickerKey({ action: 'chooseFolder', key: 'fb-own', profileId: s.profileId, choice: 'own', primary: true, html: 'Use <span class="key-path">' + esc(s.ownFolder) + '</span>', tip: tipText('useOwnFolder', { path: s.ownFolder, first: first }) });
-		html += pickerKey({ action: 'chooseFolder', key: 'fb-wait', profileId: s.profileId, choice: 'wait', html: 'Wait for ' + esc(first), tip: tipText('waitFor', { first: first }) });
-		html += '</div>';
-		if (s.ownFolder)
-			html +=
-				'<p class="connect-foot">' +
-				esc(
-					glue(
-						'In your own folder your files have a different path than in ' + shared + ', so an assembly can look for its parts in the other folder: open your work from ' +
-							s.ownFolder + '. Once nothing of yours waits there, Armory moves you back to ' + shared + '.'
-					)
-				) +
-				'</p>';
-		return html;
-	}
-
 	function switchingStepHtml(v, s) {
 		var p = profileOf(v, s.profileId);
 		var words = s.message || (s.fromName ? 'Armory finishes what it was doing for ' + firstName(s.fromName) + ' first. This takes a moment.' : 'This takes a moment.');
@@ -1457,19 +1454,10 @@
 			case 'forgotPin':
 				act('forgotPin', { profileId: id }, { key: from });
 				return true;
-			case 'chooseFolder':
-				act('chooseFolder', { profileId: id, choice: el.getAttribute('data-choice') }, { key: from });
-				return true;
 			case 'cancelPicker':
 			case 'showPicker':
 				if (sheet.open) sheet.close();
 				bridge.send(action);
-				return true;
-			case 'sharedComputer':
-				var v = ui.view;
-				var now = v.profiles ? profileOf(v, v.profiles.currentId) : null;
-				if (v.settings.sharedComputer) openAsk('sharedOff', { name: now ? now.name : null, others: v.profiles ? v.profiles.profiles.length - (now ? 1 : 0) : 0 }, from);
-				else openAsk('sharedOn', { signedIn: !!v.account }, from);
 				return true;
 			case 'pinsRequired':
 				act('setPinsRequired', { on: !ui.view.profiles.pinsRequired }, { key: from });
@@ -1482,29 +1470,22 @@
 		return false;
 	}
 
-	/** Settings > Shared computer. Off by default: a computer one student uses is exactly as
-	 *  before. On: who is using Armory now, the PIN switch (a mentor's), and every student. */
+	/** Settings > Shared computer (0.5.0). Nothing to set up: a computer becomes shared by itself
+	 *  the first time someone else signs in to Armory on it. Shared: who is using Armory now, the
+	 *  PIN switch (a mentor's; off unless a mentor turns it on), and everyone on this computer. */
 	function sharedSettingsHtml(v) {
-		var on = !!v.settings.sharedComputer;
-		var pr = on ? v.profiles : null;
+		var pr = v.settings.sharedComputer ? v.profiles : null;
 		var html = '<section class="setting" aria-labelledby="set-shared-label">';
 		html += '<h3 class="section-label" id="set-shared-label">Shared computer</h3>';
-		html += '<div class="setting-line"><p class="setting-name" id="set-shared-name">This computer is shared by several students</p>';
-		html +=
-			'<button class="switch" type="button" data-action="sharedComputer" data-key="set-shared" aria-pressed="' + on + '" aria-labelledby="set-shared-name set-shared-word"' +
-			(on && pr && !pr.canTurnOff ? offAttrs(busyKey('set-shared')) : '') + busyAttrs('set-shared') + tipAttr('sharedSwitch', { on: on, off: !!(on && pr && !pr.canTurnOff) }) + '>' +
-			'<span class="ts-glyph" aria-hidden="true"></span><span class="ts-word" id="set-shared-word">' + (on ? 'On' : 'Off') + '</span></button></div>';
-		if (!on) {
+		if (!pr) {
 			html +=
-				'<p class="setting-help">Turn this on when several students take turns on this computer with one Windows sign-in. Each student gets their own sign-in to Armory and a 4\u2011digit PIN, and picks their name when they sit down.</p>';
+				'<p class="setting-help">When someone else signs in to Armory on this computer, it becomes shared by itself. Everyone works in the same Armory folder, and each person picks their name to switch.</p>';
 			return html + '</section>';
 		}
-		if (!pr) return html + '</section>';
 		var now = profileOf(v, pr.currentId);
-		if (!pr.canTurnOff) html += '<p class="setting-help">Only a mentor can turn this off while other students use this computer.</p>';
 		html += '<dl class="acct shared-now"><div><dt class="label">Using Armory now</dt><dd class="acct-email">' + esc(now ? now.name + ' (' + now.email + ')' : 'Nobody yet') + '</dd></div></dl>';
 
-		html += '<div class="setting-line"><p class="setting-name" id="set-pins-name">Ask for a PIN when switching students</p>';
+		html += '<div class="setting-line"><p class="setting-name" id="set-pins-name">Ask for a PIN when switching</p>';
 		html +=
 			'<button class="switch" type="button" data-action="pinsRequired" data-key="set-pins" aria-pressed="' + !!pr.pinsRequired + '" aria-labelledby="set-pins-name set-pins-word"' +
 			(pr.canChangePins ? '' : offAttrs(busyKey('set-pins'))) + busyAttrs('set-pins') + tipAttr('pinsSwitch', { on: !!pr.pinsRequired, off: !pr.canChangePins }) + '>' +
@@ -1513,17 +1494,17 @@
 			'<p class="setting-help">' +
 			esc(
 				(pr.pinsRequired
-					? 'Each student types their PIN to switch to themselves, so nobody uses another student\'s sign-in by accident. '
+					? 'Each person types their PIN to switch to themselves, so nobody uses another person\'s sign-in by accident. '
 					: 'Picking a name switches at once. ') +
-					(pr.canChangePins ? 'Only mentors can change this, for this computer.' : 'A mentor can change this for this computer.') +
+					(pr.canChangePins ? 'Only mentors can change this, for this computer.' : 'A mentor can turn PINs on for this computer.') +
 					(pr.pinsNote ? ' ' + pr.pinsNote : '')
 			) +
 			'</p>';
 
-		html += '<h4 class="label student-label" id="set-students-label">Students on this computer</h4>';
+		html += '<h4 class="label student-label" id="set-students-label">People on this computer</h4>';
 		html += '<ul class="list-well student-list" aria-labelledby="set-students-label">';
 		pr.profiles.forEach(function (p) {
-			var line = p.current ? 'Using Armory now' : p.waiting ? 'Has ' + p.waiting + (p.ownFolder ? ' in ' + p.folder : ' in ' + pr.sharedFolder) : p.lastUsedAt ? 'Last here ' + ago(p.lastUsedAt) : 'Not here yet';
+			var line = p.current ? 'Using Armory now' : p.waiting ? 'Has ' + p.waiting + ' waiting here' : p.lastUsedAt ? 'Last here ' + ago(p.lastUsedAt) : 'Not here yet';
 			html +=
 				'<li class="student-row">' + faceHtml(p, 'big') +
 				'<span class="student-words"><span class="student-name">' + esc(p.name) + '</span><span class="student-line">' + esc(glue(p.email + ' · ' + line)) + '</span></span>' +
@@ -1534,7 +1515,7 @@
 				'</li>';
 		});
 		html += '</ul>';
-		html += '<p class="setting-help">Removing a student forgets their sign-in and PIN on this computer. No files are deleted.</p>';
+		html += '<p class="setting-help">Removing someone forgets their sign-in and PIN on this computer. No files are deleted.</p>';
 		return html + '</section>';
 	}
 
@@ -1563,27 +1544,7 @@
 		var field = '';
 		var ok;
 		var danger = false;
-		if (kind === 'sharedOn') {
-			title = 'Share this computer';
-			body =
-				'Several students can then take turns here with one Windows sign-in. Each adds themselves once with Add a student and picks their name when they sit down. ' +
-				(c.signedIn ? 'You stay signed in: choose your 4\u2011digit PIN first.' : '');
-			if (c.signedIn)
-				field =
-					'<div class="pin-pair">' +
-					'<div class="pin-box"><label class="field-label label" for="ask-pin-1">Your PIN</label>' + pinField('ask-pin-1', false, 'ask-words ask-error') + '</div>' +
-					'<div class="pin-box"><label class="field-label label" for="ask-pin-2">Type it again</label>' + pinField('ask-pin-2', false, 'ask-words ask-error') + '</div>' +
-					'</div><p class="field-error" id="ask-error" aria-live="polite"></p>';
-			ok = 'Share this computer';
-		} else if (kind === 'sharedOff') {
-			title = 'Stop sharing this computer';
-			body =
-				(c.name ? c.name + ' stays signed in here, in the same folder. ' : '') +
-				(c.others > 0 ? 'Everyone else\'s sign-in and PIN are forgotten on this computer. ' : '') +
-				'No files are deleted or changed.';
-			ok = 'Stop sharing';
-			danger = true;
-		} else if (kind === 'removeProfile') {
+		if (kind === 'removeProfile') {
 			title = 'Remove ' + c.name;
 			body =
 				'Remove ' + c.name + ' from this computer? Their sign-in and PIN are forgotten here. No files are deleted' +
@@ -1606,25 +1567,7 @@
 
 	/** Answers one of those questions. True when it was one of them. */
 	function sharedAskOk(a) {
-		if (a.kind === 'sharedOn') {
-			var pin = '';
-			if (a.ctx.signedIn) {
-				var one = ask.querySelector('#ask-pin-1');
-				var two = ask.querySelector('#ask-pin-2');
-				var wrong = one.value.length !== PIN_DIGITS ? 'Type 4 digits.' : two.value !== one.value ? 'Those PINs don\'t match. Type them again.' : null;
-				if (wrong) {
-					ask.querySelector('#ask-error').textContent = wrong;
-					one.setAttribute('aria-invalid', 'true');
-					one.value = '';
-					two.value = '';
-					one.focus();
-					return true;
-				}
-				pin = one.value;
-			}
-			act('setSharedComputer', { on: true, pin: pin }, { key: a.returnKey });
-		} else if (a.kind === 'sharedOff') act('setSharedComputer', { on: false, pin: '' }, { key: a.returnKey });
-		else if (a.kind === 'removeProfile') act('removeProfile', { profileId: a.ctx.id }, { key: a.returnKey, words: 'Removing ' + a.ctx.name + ' from this computer...' });
+		if (a.kind === 'removeProfile') act('removeProfile', { profileId: a.ctx.id }, { key: a.returnKey, words: 'Removing ' + a.ctx.name + ' from this computer...' });
 		else return false;
 		ask.close();
 		return true;
@@ -1653,6 +1596,7 @@
 			promptHtml(v) +
 			activityHtml(v.activity) +
 			noticesHtml(v) +
+			heldHtml(v) +
 			myFilesHtml(v) +
 			browserHtml(v) +
 			'</div>' +
@@ -2104,6 +2048,28 @@
 	/** Notices under their own lit strip ("2 things to look at" in amber, "to fix" in red
 	 *  when something can't be uploaded). One card per kind, its count in the title, one
 	 *  action key, and a key that opens the list of its files inside the card. */
+	/** Work someone else left waiting in this folder (0.5.0), and the update's one sentence about
+	 *  folders of one's own it brought in: quiet cards, never a question. Nothing to say: nothing drawn. */
+	function heldHtml(v) {
+		var held = v.heldForOthers || [];
+		if (!held.length && !v.updateNote) return '';
+		var html = '<section class="group top held-group" aria-labelledby="held-label" data-part="held">';
+		html += '<h2 class="section-label" id="held-label">On this computer</h2>';
+		html += '<ul class="attn-list">';
+		if (v.updateNote)
+			html +=
+				'<li class="attn-card panel" data-tone="ok" data-kind="updateNote"><span class="attn-glyph">' + icon('folder') + '</span><div class="attn-body">' +
+				'<h3 class="attn-title">One Armory folder for everyone</h3><p class="attn-detail">' + esc(glue(v.updateNote)) + '</p></div></li>';
+		held.forEach(function (h) {
+			var first = firstName(h.name);
+			html +=
+				'<li class="attn-card panel" data-tone="ok" data-kind="held"><span class="attn-glyph">' + icon('person') + '</span><div class="attn-body">' +
+				'<h3 class="attn-title">' + esc(glue(first + '\'s work waits here: ' + h.words)) + '</h3>' +
+				'<p class="attn-detail">' + esc(glue('It opens read-only for you. It goes to Armory under ' + first + '\'s own sign-in when ' + first + ' picks their name on this computer.')) + '</p></div></li>';
+		});
+		return html + '</ul></section>';
+	}
+
 	function noticesHtml(v) {
 		var items = v.notices || [];
 		// Nothing to say: the group is not drawn at all. The status display already says
@@ -2271,7 +2237,7 @@
 			' data-key="row-' + esc(o.k) + '" aria-labelledby="n-' + esc(o.k) + '"' + (hit.tip ? ' data-tip="' + esc(hit.tip) + '"' : '') + '></button>';
 		if (o.select !== undefined) html += o.select ? o.select.replace('data-rove="sel"', 'data-rove="sel" tabindex="' + t + '"') : '<span class="sel-slot" aria-hidden="true"></span>';
 		html +=
-			(o.thumb ? '<span class="row-icon thumb-slot">' + icon(o.glyph || kindOf(o.name), 'thumb-glyph') + (thumbMissing(o.thumb) ? '' : thumbImg(o.thumb)) + '</span>' : icon(o.glyph || kindOf(o.name), 'row-icon')) +
+			(o.thumb ? '<span class="row-icon thumb-slot">' + icon(o.glyph || kindIcon(kindOf(o.name)), 'thumb-glyph') + (thumbMissing(o.thumb) ? '' : thumbImg(o.thumb)) + '</span>' : icon(o.glyph || kindIcon(kindOf(o.name)), 'row-icon')) +
 			'<span class="row-body">' +
 			'<span class="row-name" id="n-' + esc(o.k) + '">' + nameHtml(o.name, o.glyph === 'folder') + '</span>' +
 			'<span class="row-line">' + (o.line || '') + '</span>' +
@@ -2285,15 +2251,18 @@
 	/* ---- Thumbnails: File Explorer's own picture of a file ---- */
 
 	// Only inside the app: the host answers /thumb/<vault path> on its own page address with the
-	// picture Windows has for the file (SolidWorks draws its parts', assemblies' and
-	// drawings'), or 404. The demo and the check pages have none, and ask for nothing.
+	// picture Windows has for the file (SolidWorks draws its parts', assemblies' and drawings',
+	// eDrawings and slicers theirs, Windows its pictures', videos' and documents'), or 404, and the
+	// kind's icon stays. Text, code, archives, CAD exchange files and laser jobs have no picture
+	// Windows makes, so they are never asked about (0.5.0). The demo and the check pages have none,
+	// and ask for nothing.
 	var THUMBS = location.protocol === 'https:' && location.hostname === 'armory.local';
-	var THUMB_KINDS = /\.(sldprt|sldasm|slddrw|png|jpe?g|bmp|gif|webp|tiff?)$/i;
+	var THUMB_KINDS = { part: 1, asm: 1, drw: 1, template: 1, feature: 1, block: 1, edrawing: 1, mesh: 1, print: 1, vector: 1, pdf: 1, doc: 1, sheet: 1, slides: 1, image: 1, video: 1 };
 
 	/** The picture's address for a file on this computer, or null. Its version is in the
 	 *  query, so a file checked in or saved since gets its new picture. */
 	function thumbAddress(r) {
-		if (!THUMBS || !r || !r.path || r.status === 'notOnThisComputer' || !THUMB_KINDS.test(r.name || r.path)) return null;
+		if (!THUMBS || !r || !r.path || r.status === 'notOnThisComputer' || !THUMB_KINDS[kindOf(r.name || r.path)]) return null;
 		return (
 			'/thumb/' + String(r.path).split('/').map(encodeURIComponent).join('/') +
 			'?v=' + encodeURIComponent((r.updatedAt || '') + (r.changed || r.status === 'changed' ? '-' + (r.status || '') : ''))
@@ -2361,7 +2330,7 @@
 	/** What Open says: SolidWorks for a part, assembly or drawing; to look, unless it is mine. */
 	function openTipOf(name, c) {
 		c = c || AVAILABLE;
-		return { name: name, cad: kindOf(name) !== 'file', state: c.state, holder: firstName(c.name || 'Someone'), device: c.device || 'your other computer' };
+		return { name: name, cad: isCad(name), state: c.state, holder: firstName(c.name || 'Someone'), device: c.device || 'your other computer' };
 	}
 
 	/** A file row's one state key, beside Open: Check out while nobody has it, Check in
@@ -2826,7 +2795,7 @@
 		var c = d.checkout || { state: 'available' };
 		var here = d.status !== 'notOnThisComputer';
 		var html = '<div class="detail-act">';
-		var about = { name: d.name, cad: kindOf(d.name) !== 'file', holder: c.name || 'the person who has it' };
+		var about = { name: d.name, cad: isCad(d.name), holder: c.name || 'the person who has it' };
 		if (here) html += key({ action: 'launch', key: 'd-open', cls: 'primary side-key', glyph: 'open', word: 'Open', path: d.path, tip: tipText('detailOpen', openTipOf(d.name, c)) });
 		var keys = '';
 		if (c.state === 'available' && d.fileId) {
@@ -2974,7 +2943,7 @@
 		if (!s.sharedComputer) html += '<button class="key" type="button" data-action="chooseVaultRoot" data-key="set-root" aria-describedby="set-root-label set-root-value"' + tipAttr('changeRoot') + '>Change</button>';
 		html += '</div>';
 		html += s.sharedComputer
-			? '<p class="setting-help">The students on this computer take turns in this folder. Armory hands it to the next student once nothing of the last one\'s waits in it.</p>'
+			? '<p class="setting-help">Everyone who uses Armory on this computer works in this folder, one folder per project. Work someone leaves waiting stays theirs: it opens read-only for the next person.</p>'
 			: '<p class="setting-help">Armory keeps a copy of your team\'s files in this folder. Most people never change it.</p>';
 		html += '</section>';
 
@@ -4024,8 +3993,6 @@
 				return { line: 'Waiting for an administrator\'s password...', row: null };
 			case 'enterPin':
 				return { line: 'Checking your PIN...', row: null };
-			case 'setSharedComputer':
-				return { line: f.on ? 'Setting this computer up for several students...' : 'Setting this computer up for one student...', row: null };
 			case 'setPinsRequired':
 				return { line: f.on ? 'Turning PINs on...' : 'Turning PINs off...', row: null };
 		}

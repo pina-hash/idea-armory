@@ -85,7 +85,7 @@ public sealed record ProfileView(string Id, string Name, string Email, string In
     string Folder, bool OwnFolder, string? Waiting, bool NeedsSignIn, bool HasPin, bool CanRemove);
 // Where the picker is (PickerSteps). ProfileId: whose step it is. Message: one sentence for it
 // (a wrong PIN, a sign-in that didn't finish). WaitSeconds: until another PIN may be tried.
-// OwnFolder, OwnerName and OwnerWaiting: the folderBusy step's own folder and whose work waits.
+// OwnFolder, OwnerName and OwnerWaiting: unused since 0.5.0 (one folder for everyone, no folderBusy step); always null.
 // FromName: the student Armory is finishing for while switching. ConnectPhase: the browser
 // sign-in of the adding and signInAgain steps (ConnectView's phases).
 public sealed record PickerStepView(string Kind, string? ProfileId, string? Message, int? TriesLeft, int? WaitSeconds,
@@ -160,7 +160,7 @@ public static class Connections
 }
 public static class PickerSteps
 {
-    public const string Choose = "choose", Pin = "pin", NewPin = "newPin", Adding = "adding", FolderBusy = "folderBusy", Switching = "switching",
+    public const string Choose = "choose", Pin = "pin", NewPin = "newPin", Adding = "adding", Switching = "switching",
         SignInAgain = "signInAgain", TooNew = "tooNew";
 }
 public static class SyncStates
@@ -242,14 +242,14 @@ public static class BridgeMessages
     // A computer shared by several students (docs/agent/PROFILES.md).
     public const string ShowPicker = "showPicker", PickProfile = "pickProfile", EnterPin = "enterPin", SetPin = "setPin", AddProfile = "addProfile",
         ForgotPin = "forgotPin", CancelPicker = "cancelPicker", RemoveProfile = "removeProfile",
-        SetSharedComputer = "setSharedComputer", SetPinsRequired = "setPinsRequired";
+        SetPinsRequired = "setPinsRequired";
     // The SolidWorks link's save down (docs/agent/SOLIDWORKS.md).
     public const string KeepLocal = "keepLocal", SaveDown = "saveDown";
     public static readonly IReadOnlyList<string> PageToHost = [Ready, Connect, CancelConnect, SignOut, Pause, Resume, OpenVault, OpenFile, LaunchFile, ShowInFolder,
         CheckOut, CheckIn, UndoCheckOut, TakeBack, CreateFolder, RenameFolder, DeleteFolder, RenameFile, AddFiles, DropFiles, DismissNotice, SaveSettings, ChooseVaultRoot,
         ReportProblem, OpenIncidents, SendFeedback, TakeBackAll, TakeOverFolder, SwitchAccount, PutBackKeptCopy, TurnOnBadges, RepairVaultRoot,
         CaptureWindow, ReadMyFeedback, ReadNoticeItems,
-        ShowPicker, PickProfile, EnterPin, SetPin, AddProfile, ForgotPin, CancelPicker, RemoveProfile, SetSharedComputer, SetPinsRequired,
+        ShowPicker, PickProfile, EnterPin, SetPin, AddProfile, ForgotPin, CancelPicker, RemoveProfile, SetPinsRequired,
         KeepLocal, SaveDown];
 
     public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
