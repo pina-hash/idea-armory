@@ -127,6 +127,28 @@ public sealed class V3ClientTests
     }
 
     [Fact]
+    public async Task PT403_is_a_class_folder_that_is_someone_elses_never_a_membership_that_ended()
+    {
+        // idea-app 0316 (ledger 0463): a student saving into a classmate's own folder.
+        const words = "This is Ana's folder. Save your work in your own folder.";
+        var recorded = new Recorded()
+            .Refuse("armory_create_file", 403, "PT403", words, new { reason = "not_your_folder", folder = "Reyes_Ana", kind = "personal", owner = "Ana" })
+            .Refuse("armory_move_file", 403, "42501", "not a project member");
+        var (api, _) = Client(recorded);
+        var device = Guid.NewGuid();
+        var folder = await Assert.ThrowsAsync<ArmoryRpcException>(() => api.CreateFileAsync(Project, "Reyes_Ana", "Plate.SLDPRT", device, Guid.NewGuid()));
+        Assert.True(folder.IsNotYourFolder);
+        Assert.False(folder.IsNotMember);
+        Assert.False(folder.IsForbidden);
+        Assert.Equal(words, folder.Message);
+        Assert.Equal("not_your_folder", folder.Reason);
+        // Control: the membership refusal is still read as one, and is not a folder refusal.
+        var member = await Assert.ThrowsAsync<ArmoryRpcException>(() => api.MoveFileAsync(File1, "", "Plate2.SLDPRT", device, Guid.NewGuid()));
+        Assert.True(member.IsNotMember);
+        Assert.False(member.IsNotYourFolder);
+    }
+
+    [Fact]
     public async Task PT429_is_an_answer_with_its_wait_and_a_gateway_429_is_a_busy_site()
     {
         var recorded = new Recorded()

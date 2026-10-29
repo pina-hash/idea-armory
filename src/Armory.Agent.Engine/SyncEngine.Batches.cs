@@ -233,12 +233,14 @@ public sealed partial class SyncEngine
 
     // A refused file in the window's words: plainer words for what the server is known to say,
     // else the server's own message (ARMORY.md item 6: report per file, using its message).
-    private string BatchRefusalWords(FileState st, string? code, string? message) => message switch
+    private string BatchRefusalWords(FileState st, string? code, string? message) => (code, message) switch
     {
-        ArmoryRpcException.NotMemberMessage => $"You may no longer be in {state.Projects.GetValueOrDefault(st.ProjectId)?.Name ?? "this project"}. Ask your CAD lead.",
-        "device is not registered to caller" => "This computer's sign-in changed. Connect it again in Settings.",
-        null or "" => $"The server refused it ({code ?? "no code"}).",
-        _ => $"The server said: {message.TrimEnd('.')}.",
+        // idea-app 0316: a classmate's or another team's folder, in the server's own words.
+        (ArmoryRpcException.FolderRefusalState, { Length: > 0 } words) => words.Trim(),
+        (_, ArmoryRpcException.NotMemberMessage) => $"You may no longer be in {state.Projects.GetValueOrDefault(st.ProjectId)?.Name ?? "this project"}. Ask your CAD lead.",
+        (_, "device is not registered to caller") => "This computer's sign-in changed. Connect it again in Settings.",
+        (_, null or "") => $"The server refused it ({code ?? "no code"}).",
+        _ => $"The server said: {message!.TrimEnd('.')}.",
     };
 
     // The refused check outs of a batch, for the action's one sentence: " Plate.SLDPRT and Gear.SLDPRT

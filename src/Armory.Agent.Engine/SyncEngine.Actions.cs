@@ -458,6 +458,8 @@ public sealed partial class SyncEngine
     {
         BlobRefusedException { Status: 403 } => "Armory wouldn't take this file: you may no longer be in this project. Ask your CAD lead.",
         BlobRefusedException => "Armory wouldn't take this file. It stays on this computer.",
+        // idea-app 0316: a classmate's or another team's folder, said in the server's own words.
+        ArmoryRpcException { IsNotYourFolder: true } rpc => FolderRefusalWords(rpc),
         ArmoryRpcException { IsNotMember: true } or ArmoryRpcException { IsForbidden: true } => "Armory wouldn't take this file: you may no longer be in this project. Ask your CAD lead.",
         ArmoryRpcException rpc when rpc.Message.Contains("SolidWorks", StringComparison.Ordinal) && project is not null =>
             $"It was saved in a SolidWorks year {project.Name} can't take. It stays on this computer only until it is saved in SolidWorks {project.PinnedRelease}.",
@@ -467,6 +469,10 @@ public sealed partial class SyncEngine
         ArmoryRpcException => "The server didn't take it this time. It stays on this computer, and Armory tries again by itself.",
         _ => "This save couldn't be read back from this computer's safe copy. It stays on this computer.",
     };
+
+    // The PT403 text is written for the student and carries no address; a blank one gets the rule in words.
+    internal static string FolderRefusalWords(ArmoryRpcException error)
+        => string.IsNullOrWhiteSpace(error.Message) ? "This folder is someone else's. Save your work in your own folder." : error.Message.Trim();
 
     // Every answer is applied only while the pass goes on (Proceed right after each call): after
     // a crash elsewhere, an answer that arrives is dropped with its in-flight record kept, exactly
