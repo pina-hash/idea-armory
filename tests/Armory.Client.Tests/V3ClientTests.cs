@@ -130,7 +130,7 @@ public sealed class V3ClientTests
     public async Task PT403_is_a_class_folder_that_is_someone_elses_never_a_membership_that_ended()
     {
         // idea-app 0316 (ledger 0463): a student saving into a classmate's own folder.
-        const words = "This is Ana's folder. Save your work in your own folder.";
+        const string words = "This is Ana's folder. Save your work in your own folder.";
         var recorded = new Recorded()
             .Refuse("armory_create_file", 403, "PT403", words, new { reason = "not_your_folder", folder = "Reyes_Ana", kind = "personal", owner = "Ana" })
             .Refuse("armory_move_file", 403, "42501", "not a project member");
