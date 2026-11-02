@@ -17,6 +17,9 @@ public sealed class PassWatchTests
         await t.A.SyncAsync();
         t.A.StallLimit = TimeSpan.FromSeconds(1);
         t.A.WatchEvery = TimeSpan.FromMilliseconds(200);
+        // The app's own disk hints wake the loop at a save (AgentHost.PollHints); this world has
+        // none, so it looks every second (0.5.3's quiet look is 30 seconds).
+        t.A.Poll = TimeSpan.FromSeconds(1);
         t.A.Restart();
         var stuck = true;
         t.A.Network.RpcDelay = _ => Volatile.Read(ref stuck) ? TimeSpan.FromMinutes(30) : TimeSpan.Zero;
