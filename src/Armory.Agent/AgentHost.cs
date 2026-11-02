@@ -143,6 +143,19 @@ internal sealed partial class AgentHost : IAsyncDisposable
     internal void Resume() => OnEngine("resume", e => e.Resume());
     internal void Wake() => OnEngine("wake", e => e.Wake());
 
+    // Whether anyone can see the window: shown, not minimized, and Windows unlocked (TrayApp). A
+    // hidden window or a locked computer looks for the team's changes every 120 seconds instead of
+    // every 30 (SyncEngine.Schedule.cs); coming back into view looks at once. False until the tray
+    // says otherwise: a start in the background (every sign-in) has no window up.
+    private bool looking;
+    internal void SetAttention(bool lookingNow)
+    {
+        if (Volatile.Read(ref looking) == lookingNow) return;
+        Volatile.Write(ref looking, lookingNow);
+        log.Info(lookingNow ? "attention: the window is in view" : "attention: nobody can see the window (looks every 120 s)");
+        OnEngine("attention", e => e.SetAttention(lookingNow));
+    }
+
     // The window's actions (docs/agent/BRIDGE.md, "Page to host"; v2-design.md 4.2 and 4.3).
     // Paths are vault-relative and already checked by the Bridge; a folder means every file
     // under it. Each one goes to the engine, which answers with one plain sentence, so no
@@ -570,6 +583,8 @@ internal sealed partial class AgentHost : IAsyncDisposable
             created.Engine.ActivityChanged += OnEngineActivity;
             created.Engine.OpenPromptsChanged += OnOpenPrompts;
             ApplySettingsTo(created.Engine);
+            // The engine looks for changes less often while nobody can see the window (0.5.3).
+            created.Engine.SetAttention(Volatile.Read(ref looking));
             lock (gate) { if (connectPhase != "idle") created.Engine.SetConnectState(connectPhase, connectMessage); }
             created.Engine.Start();
             // The SolidWorks link looks for SolidWorks once the engine takes its records.

@@ -129,6 +129,13 @@ public sealed partial class SyncEngine
             ["purgedRecords"] = state.Files.Values.Count(f => f.Purged),
             // v0.3 live updates: events that woke the loop, and the channels joined now.
             ["live"] = deps.Live is { } live ? new JsonObject { ["events"] = liveEvents, ["connections"] = live.Connections, ["joined"] = live.Joined.Count } : null,
+            // 0.5.3 schedule: whether the window is in view, loop passes and project list reads
+            // this start, offline passes in a row, and the wait the loop takes now.
+            ["schedule"] = new JsonObject
+            {
+                ["looking"] = looking, ["loopPasses"] = LoopPasses, ["listReads"] = ListReads, ["offlinePasses"] = offlinePasses,
+                ["nextPollSeconds"] = (int)NextPollNow().TotalSeconds,
+            },
             ["batchesMissingUntil"] = batchesMissingUntil > DateTimeOffset.MinValue ? FlightJson.Time(batchesMissingUntil) : null,
             // The SolidWorks year (SyncEngine.Releases.cs): the SolidWorks the link says runs here,
             // the link's stamps kept, and the content hashes read this start.

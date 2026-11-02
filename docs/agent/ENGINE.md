@@ -1364,16 +1364,46 @@ hold the new paths; the client half is in docs/agent/CLIENT.md section 6.
 
 ## Schedule (contract section 4)
 
-The loop looks for the team's changes every 2 seconds while online and active
-(`ActivePollInterval`), and every 10 seconds after two minutes with no local or remote
-change (`IdlePollInterval`). It was 5 and 60 seconds until v0.2.1; students saw a check out
-or a new version take up to a minute to reach another computer, and the requirement now is
-no dead zones. A look that finds nothing new costs two small server calls
-(`armory_my_projects` and one `armory_list_changes` per project); a project's files are read
-again only when its change feed moved. Since v0.3 Supabase Realtime on the change feed wakes
-the loop the moment a row is written (see v0.3 above); the poll stays as the floor. A disk hint
-(`Wake`) runs a pass at once. Offline, it retries on the idle
-interval. While paused, no pass runs and the window's actions say so.
+Since 0.5.3 (`SyncEngine.Schedule.cs`). On 2026-11-02 the lab's apps made about 324 server
+requests a minute, about 74% of every request the shared website database answered: every app
+looked every 2 seconds for two minutes after anyone's change and every 10 seconds otherwise,
+hidden window, locked Windows and site outage alike, read the project list every pass, and read
+every project's whole file list again every minute. Now the loop waits, after each pass:
+
+- 10 seconds (`ActivePollInterval`) only while the window is up and this computer did something
+  of its own in the last two minutes (a save captured, a file sent, a folder changed, a window
+  action). A teammate's change, or downloading it, never puts a computer on the fast look.
+- 30 seconds (`IdlePollInterval`) while the window is up.
+- 120 seconds (`HiddenPollInterval`) while the window is hidden or minimized or Windows is
+  locked (the tray tells the host every 2 seconds: `TrayApp.TellAttention`, `SetAttention`).
+- At least 120 seconds (`LivePollInterval`) with live updates joined for every project.
+- Offline or the site failing (unreachable, 5xx, a cut answer): 30, 60, 120, 240, then 300
+  seconds (`OfflinePollLongest`) until an answer comes.
+
+Any wake ends a wait at once: a window action, the window coming into view (which also reads
+the project list and every project's feed), Windows unlocked, a disk hint, a SolidWorks save, a
+live event. A loop pass reads `armory_my_projects` at most every 5 minutes
+(`ProjectListEvery`) and otherwise goes on from the list it read; a "not a member" answer, the
+window shown, a whole pass and a window action's pass always read it. A project whose change
+feed has not moved for 10 minutes (`QuietAfter`) is a quiet one: a loop pass reads its feed at
+most every 120 seconds (`QuietProjectEvery`) until it moves. A project's files
+(`armory_project_files`) are read again only when its feed moved, this computer wrote there, or
+15 minutes went by (`FilesSafetyRefresh`). The change cursor (`p_after`) only moves forward.
+
+`PollLoadTests` runs the real loop, turn by turn, against a counting fake server on a simulated
+clock and reports requests a minute for one app (4 projects) under each condition, for the
+0.5.2 schedule and this one (2026-11-02, Linux):
+
+| One app | 0.5.2 (no pass time: its ceiling) | 0.5.3 |
+|---|---|---|
+| In view, idle | 33.9 | 3.4 |
+| In view, its own work moving | 153.9 | 6.1 |
+| Hidden or locked | 33.9 | 2.4 |
+| Site failing (503) | 6.0 | 0.2 |
+
+A lab of 20 (14 hidden, 5 in view, 1 working), each pass taking 8 seconds: 0.5.2 about 413 a
+minute (324 was measured), 0.5.3 about 49. One batched read per pass on the website (still to
+come) would take it to about 15.
 
 ## The loop and the window's actions (v0.2.1)
 

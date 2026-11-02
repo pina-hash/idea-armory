@@ -32,6 +32,8 @@ public sealed partial class SyncEngine
     {
         if (error is not ArmoryRpcException { IsNotMember: true } refusal || project is not { } id || id == Guid.Empty) return;
         if (!notMember.Add(id)) return;
+        // The project list is read from the server by the next pass, never taken from the last one.
+        ListAgain();
         deps.Log?.Invoke($"membership: {state.Projects.GetValueOrDefault(id)?.Name ?? id.ToString()} answered \"{refusal.Message}\" ({refusal.SqlState}); the next read asks whether it was deleted forever");
         wake.Release();
     }

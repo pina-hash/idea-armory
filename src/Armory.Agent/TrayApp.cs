@@ -75,6 +75,10 @@ internal sealed partial class TrayApp : ApplicationContext
         SystemEvents.SessionSwitch += OnSessionSwitch;
         SystemEvents.SessionEnded += OnSessionEnded;
         SystemEvents.PowerModeChanged += OnPowerModeChanged;
+        // 0.5.3: the engine looks for changes less often while nobody can see the window.
+        attentionTimer = new System.Windows.Forms.Timer { Interval = 2000 };
+        attentionTimer.Tick += (_, _) => TellAttention();
+        attentionTimer.Start();
         showWait = ThreadPool.RegisterWaitForSingleObject(instance.ShowSignal, (_, _) => Post(OpenWindow), null, Timeout.Infinite, executeOnlyOnce: false);
         quitWait = ThreadPool.RegisterWaitForSingleObject(instance.QuitSignal, (_, _) => Post(Quit), null, Timeout.Infinite, executeOnlyOnce: false);
 
@@ -133,7 +137,22 @@ internal sealed partial class TrayApp : ApplicationContext
     // Windows locked: on a shared computer the window is on the picker when it is unlocked.
     private void OnSessionSwitch(object? sender, SessionSwitchEventArgs e)
     {
+        if (e.Reason is SessionSwitchReason.SessionLock or SessionSwitchReason.ConsoleDisconnect or SessionSwitchReason.RemoteDisconnect) locked = true;
+        if (e.Reason is SessionSwitchReason.SessionUnlock or SessionSwitchReason.ConsoleConnect or SessionSwitchReason.RemoteConnect) locked = false;
         if (e.Reason == SessionSwitchReason.SessionLock) host.ShowPicker(Armory.Core.PickerTrigger.WindowsLocked);
+        Post(TellAttention);
+    }
+
+    // Windows is locked (or this session is not on the screen).
+    private volatile bool locked;
+    private readonly System.Windows.Forms.Timer attentionTimer;
+
+    // The window is up, not minimized, and Windows is unlocked: the engine looks every 30 seconds;
+    // otherwise every 120 (AgentHost.SetAttention). Looked at every 2 seconds on the UI thread.
+    private void TellAttention()
+    {
+        if (quitting) return;
+        host.SetAttention(WindowShowing && !locked);
     }
 
     // Windows ends this process as soon as this returns (0.3.3: a quit still under way was cut off
@@ -244,6 +263,7 @@ internal sealed partial class TrayApp : ApplicationContext
             SystemEvents.SessionSwitch -= OnSessionSwitch;
             SystemEvents.SessionEnded -= OnSessionEnded;
             SystemEvents.PowerModeChanged -= OnPowerModeChanged;
+            attentionTimer.Dispose();
             showWait.Unregister(null);
             quitWait.Unregister(null);
             host.ViewChanged -= OnViewChanged;

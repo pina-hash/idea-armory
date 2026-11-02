@@ -12,11 +12,30 @@ namespace Armory.Agent.Engine;
 public sealed record EngineOptions
 {
     public required string VaultRoot { get; init; }
-    // How often the loop looks for the team's changes: every 2 seconds while anything moved in the
-    // last IdleAfter, every 10 seconds otherwise (docs/agent/ENGINE.md, "The loop"). A look that
-    // finds nothing new is two small server calls, and students asked for no dead zones.
-    public TimeSpan ActivePollInterval { get; init; } = TimeSpan.FromSeconds(2);
-    public TimeSpan IdlePollInterval { get; init; } = TimeSpan.FromSeconds(10);
+    // How often the loop looks for the team's changes (0.5.3, SyncEngine.Schedule.cs): every 10
+    // seconds while the window is up and this computer did something in the last IdleAfter, every
+    // 30 seconds while the window is up, every 120 seconds while it is hidden or Windows is locked,
+    // and backing off from 30 seconds to OfflinePollLongest while the site is unreachable or
+    // failing. Any wake (a click, a disk change, a live event, the window shown) looks at once.
+    // Until 0.5.2 it was 2 and 10 seconds whatever happened: about 324 requests a minute across
+    // the lab, three quarters of the shared website database's load (2026-11-02).
+    public TimeSpan ActivePollInterval { get; init; } = TimeSpan.FromSeconds(10);
+    public TimeSpan IdlePollInterval { get; init; } = TimeSpan.FromSeconds(30);
+    public TimeSpan HiddenPollInterval { get; init; } = TimeSpan.FromSeconds(120);
+    public TimeSpan OfflinePollLongest { get; init; } = TimeSpan.FromMinutes(5);
+    // With live updates joined for every project the poll is a safety net only.
+    public TimeSpan LivePollInterval { get; init; } = TimeSpan.FromSeconds(120);
+    // A loop pass reads the project list (armory_my_projects) at most this often, unless the
+    // window was just shown or a project answered "not a member".
+    public TimeSpan ProjectListEvery { get; init; } = TimeSpan.FromMinutes(5);
+    // A project's whole file list is read again when its change feed moved, this computer wrote
+    // there, or this long went by (0.5.2: one minute; one FRC list is about 640 KB).
+    public TimeSpan FilesSafetyRefresh { get; init; } = TimeSpan.FromMinutes(15);
+    // A project whose change feed has not moved for QuietAfter is a quiet one: a loop pass reads
+    // its feed at most every QuietProjectEvery (the hidden window's pace) until it moves again.
+    // Showing the window, a click, or a live event for it reads it at once.
+    public TimeSpan QuietAfter { get; init; } = TimeSpan.FromMinutes(10);
+    public TimeSpan QuietProjectEvery { get; init; } = TimeSpan.FromSeconds(120);
     // A loop pass starts no new transfer after this long moving files (phase C): the ones in
     // flight go on in the transfer queue (0.3.3), it runs its phase D, and the loop starts the next
     // pass at once, so the team's changes are read again at least this often during a long
@@ -230,6 +249,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
     private void OnLiveChange(Guid project) => engineThread.Enqueue(() =>
     {
         liveEvents++;
+        FeedDue(project);
         QueueChanged();
         wake.Release();
     });
@@ -266,44 +286,61 @@ public sealed partial class SyncEngine : IAsyncDisposable
     {
         while (!ct.IsCancellationRequested)
         {
-            if (!paused)
+            TimeSpan? delay;
+            try { delay = await LoopTurnAsync(ct); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { return true; }
+            if (delay is { } wait)
             {
-                try { await LoopPassAsync(ct); }
-                catch (OperationCanceledException) when (ct.IsCancellationRequested) { return true; }
-                catch (Exception error)
-                {
-                    // Nothing in the pass handled it: a crash incident, though the loop goes on.
-                    flight?.Exception("engine loop", error, fatal: true);
-                    lastLoopError = "Sync stopped for a moment: " + error.GetType().Name;
-                    RequestPublish();
-                }
+                try { await wake.WaitAsync(wait, ct); }
+                catch (OperationCanceledException) { return true; }
             }
-            if (cutShort && !paused)
-            {
-                cutShort = false;
-                while (wake.CurrentCount > 0) await wake.WaitAsync(0, ct);
-                continue;
-            }
-            if (paused)
-            {
-                // Paused with files left: nothing more moves until the student resumes. Once the
-                // files in flight have ended (the last one wakes the loop), the running lines say
-                // how far it got.
-                cutShort = false;
-                if (CarriedCount == 0)
-                {
-                    if (continuing) EndRun(paused: true);
-                    activity.Reset();
-                }
-            }
-            var idle = online != true || deps.Clock.GetUtcNow() - lastActivity > options.IdleAfter;
-            var delay = idle ? options.IdlePollInterval : options.ActivePollInterval;
-            try { await wake.WaitAsync(delay, ct); }
-            catch (OperationCanceledException) { return true; }
             while (wake.CurrentCount > 0) await wake.WaitAsync(0, ct);
         }
         return true;
     }
+
+    // One turn of the loop: its pass (unless paused), then how long it waits before the next one
+    // (SyncEngine.Schedule.cs), or null to start the next at once (a pass cut short).
+    private async Task<TimeSpan?> LoopTurnAsync(CancellationToken ct)
+    {
+        if (!paused)
+        {
+            try { await LoopPassAsync(ct); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception error)
+            {
+                // Nothing in the pass handled it: a crash incident, though the loop goes on.
+                flight?.Exception("engine loop", error, fatal: true);
+                lastLoopError = "Sync stopped for a moment: " + error.GetType().Name;
+                RequestPublish();
+            }
+            LoopPassEnded();
+        }
+        if (cutShort && !paused)
+        {
+            cutShort = false;
+            return null;
+        }
+        if (paused)
+        {
+            // Paused with files left: nothing more moves until the student resumes. Once the
+            // files in flight have ended (the last one wakes the loop), the running lines say
+            // how far it got.
+            cutShort = false;
+            if (CarriedCount == 0)
+            {
+                if (continuing) EndRun(paused: true);
+                activity.Reset();
+            }
+        }
+        return NextPollNow();
+    }
+
+    // Tests and the load harness: one turn of the loop as the loop takes it, on the engine thread,
+    // without its wait. Returns the wait the loop would take (null: none).
+    internal Task<TimeSpan?> LoopTurnForTestAsync(CancellationToken ct = default) => engineThread.InvokeAsync(() => LoopTurnAsync(ct));
+    // Tests: this computer did something of its own just now (a save, a send).
+    internal void OwnWorkForTest() => engineThread.Enqueue(() => lastActivity = deps.Clock.GetUtcNow());
 
     // The loop's own pass: it gives way to a window action (phase C starts no new file while one
     // waits) and stops starting files after PassSlice.
@@ -877,13 +914,12 @@ public sealed partial class SyncEngine : IAsyncDisposable
     private readonly Dictionary<Guid, ProjectRead> projectReads = [];
     // Projects this computer wrote to since their files were last read.
     private readonly HashSet<Guid> projectsWritten = [];
-    // Read again at least this often even when the change feed says nothing moved.
-    private static readonly TimeSpan SafetyRefresh = TimeSpan.FromSeconds(60);
     private int refreshesThisPass;
     private bool refreshing;
 
-    // armory_my_projects, then per project its change feed and, when the feed moved (or this
-    // computer wrote there, or a minute went by), its files. Every write emits a change, so a
+    // armory_my_projects (or, for a loop pass, the list read in the last ProjectListEvery), then
+    // per project its change feed and, when the feed moved (or this computer wrote there, or
+    // FilesSafetyRefresh went by), its files. Every write emits a change, so a
     // quiet feed means the files as last read are still the files; this computer's own lock
     // changes are known without reading (KnowLock).
     // mayGiveWay: the loop pass's first read, which stops between projects when a window action
@@ -892,7 +928,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
     {
         refreshCut = false;
         IReadOnlyList<RemoteProject> projects;
-        try { projects = await deps.Api.MyProjectsAsync(ct); }
+        try { projects = await ProjectListAsync(ct); }
         catch (ArmoryOfflineException) { return false; }
         catch (ArmorySignedOutException) { return false; }
         if (inPass) refreshesThisPass++;
@@ -965,6 +1001,9 @@ public sealed partial class SyncEngine : IAsyncDisposable
                     // An archived project is not read, unless this computer still has check outs
                     // there to check in (addendum 7); its change cursor stays for when it is restored.
                     if (ps.Archived && !state.Files.Values.Any(f => f.ProjectId == ps.Id && MineToFinish(f))) continue;
+                    // A quiet project (0.5.3): a loop pass reads its feed at most every
+                    // QuietProjectEvery until it moves again (SyncEngine.Schedule.cs).
+                    if (!ps.Archived && QuietForNow(ps)) { read.Add(ps.Id); continue; }
                     var moved = ps.Archived;
                     if (!ps.Archived)
                     {
@@ -973,6 +1012,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
                         catch (ArmoryRpcException error) when (error.IsNotMember)
                         {
                             // P0001 "not a project member" (v0.3): no longer this person's.
+                            ListAgain();
                             await CheckGoneAsync(ps, ct);
                             continue;
                         }
@@ -998,8 +1038,10 @@ public sealed partial class SyncEngine : IAsyncDisposable
                                 MovedOverMyCheckOuts(ps, change);
                             ps.Cursor = Math.Max(ps.Cursor, change.Cursor);
                         }
-                        if (changes.Count > 0) lastActivity = deps.Clock.GetUtcNow();
+                        // A teammate's change is read now, but it is not this computer's work: it
+                        // never puts the loop on the fast look (0.5.3).
                         moved = changes.Count > 0;
+                        FeedRead(ps.Id, moved);
                     }
                     if (!moved && FilesStillKnown(ps)) { read.Add(ps.Id); continue; }
                     IReadOnlyList<RemoteFile> files;
@@ -1007,6 +1049,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
                     catch (ArmoryRpcException error) when (error.IsNotMember)
                     {
                         // 42501 "not a project member" (v0.3): treated as the P0001 above.
+                        ListAgain();
                         await CheckGoneAsync(ps, ct);
                         continue;
                     }
@@ -1039,11 +1082,11 @@ public sealed partial class SyncEngine : IAsyncDisposable
     }
 
     // The project's files as last read are still the files: nothing moved in its change feed,
-    // this computer wrote nothing there, its folder is the same, and they were read in the last minute.
+    // this computer wrote nothing there, its folder is the same, and they were read within FilesSafetyRefresh.
     private bool FilesStillKnown(ProjectState ps)
         => remoteProjects.ContainsKey(ps.Id) && !projectsWritten.Contains(ps.Id) && !staleProjects.Contains(ps.Id) &&
            projectReads.TryGetValue(ps.Id, out var last) && string.Equals(last.Folder, ps.Folder, StringComparison.Ordinal) &&
-           deps.Clock.GetElapsedTime(last.At) < SafetyRefresh;
+           deps.Clock.GetElapsedTime(last.At) < options.FilesSafetyRefresh;
 
     // A project's files as just read replace what was known of it.
     private void KnowProject(ProjectState ps, IReadOnlyList<RemoteFile> files)

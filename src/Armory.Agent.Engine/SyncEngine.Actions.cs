@@ -155,7 +155,7 @@ public sealed partial class SyncEngine
         Complete(st, current.Hash);
         downloaded++;
         runDownloaded++;
-        lastActivity = deps.Clock.GetUtcNow();
+        // A download is the team's work arriving, not this computer's: no fast look for it (0.5.3).
         MarkDirty();
         Checkpoint("after-download", ct);
         return true;
