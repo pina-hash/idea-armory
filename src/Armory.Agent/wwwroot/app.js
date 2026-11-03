@@ -18,6 +18,7 @@
 	'use strict';
 
 	var bridge = window.ArmoryBridge;
+	var fileSearch = null;
 	var main = document.getElementById('main');
 	var headerKeys = document.getElementById('header-keys');
 	var scroller = document.getElementById('scroller');
@@ -39,6 +40,7 @@
 		/** @type {any} */ detail: null,
 		projectId: null,
 		folders: {}, // project id -> the folder open in the browser ("" for its top)
+		fileSearch: { text: '', applied: '', checkout: 0, changed: false, type: 0, timer: 0 },
 		selected: {}, // vault-relative path -> true, files picked in the open folder
 		anchor: null, // the last file picked, for a Shift range
 		expanded: {}, // notice key -> its list is open
@@ -481,6 +483,13 @@
 	 * follow the copy rule (no jargon) and name the file, folder or person the control is about.
 	 */
 	var TIPS = {
+		fileSearch: 'Find a file by any part of its name or folder path in this folder and the folders inside it. Ctrl+F focuses this box; Escape clears it.',
+		searchClear: 'Clear the search words and keep the quick filters.',
+		searchReset: 'Clear the search words and every quick filter to show all files again.',
+		searchMe: 'Show files checked out by you, including on your other computers.',
+		searchOthers: 'Show files checked out by other people.',
+		searchChanged: 'Show files with changes on this computer.',
+		selectMatching: function (c) { return c.all ? 'Let go of every matching file selected here.' : 'Select all ' + plural(c.count, 'matching file', 'matching files') + ' shown here.'; },
 		// The header.
 		vault: function (c) { return 'Open your Armory folder, ' + c.root + ', in File Explorer.'; },
 		feedback: 'Tell the IDEA team what got in your way, an idea you have, or something you like.',
@@ -1350,6 +1359,7 @@
 	/** The picker forgets the page's place, so nothing of the last student's stays open for
 	 *  the next one: File detail, picked files, open lists, where Home was scrolled. */
 	function leaveForPicker() {
+		resetFileSearch();
 		ui.screen = 'home';
 		ui.detail = null;
 		ui.selected = {};
@@ -2502,11 +2512,14 @@
 		var folder = place.folder;
 		html += '<div class="list-well project-card browser" id="project-panel" role="tabpanel" aria-labelledby="tab-' + esc(p.id) + '" data-drop="true">';
 		html += '<div class="browser-head">' + crumbsHtml(p, pi, folder) + folderKeysHtml(p, pi, folder) + '</div>';
+		html += fileSearchHtml(pi, folder);
 		// The cue lies over the list only, so where you are and the folder's keys stay in sight.
 		html += '<div class="browser-body">';
 		html += '<div class="drop-cue" aria-hidden="true"><span class="drop-word">' + icon('addfile') + '<span>' + esc('Drop to add to ' + crumbWords(p, folder)) + '</span></span></div>';
 		var items = browserItems(pi, folder);
-		if (!items.length) html += '<p class="group-help browser-empty">This folder is empty. Add files, or drag them here from File Explorer.</p>';
+		if (!items.length) html += '<p class="group-help browser-empty">' + (fileSearchActive()
+			? 'No files match. Clear the search, turn off a quick filter, choose All types, or open a folder above this one.'
+			: 'This folder is empty. Add files, or drag them here from File Explorer.') + '</p>';
 		else
 			html += listHeadHtml(pi, folder) + registerList({
 				id: 'vl-browser',
@@ -2580,8 +2593,81 @@
 		return html + '</div>';
 	}
 
-	/** The open folder's rows: its folders first, then its files. */
+	function fileSearchActive() {
+		var s = ui.fileSearch;
+		return !!(s.applied.trim() || s.checkout || s.changed || s.type);
+	}
+
+	function resetFileSearch() {
+		clearTimeout(ui.fileSearch.timer);
+		ui.fileSearch = { text: '', applied: '', checkout: 0, changed: false, type: 0, timer: 0 };
+	}
+
+	/** Prepare once per inventory and folder; subsequent renders reuse the matches. */
+	function fileSearchResult(pi, folder) {
+		var s = ui.fileSearch;
+		var cache = pi.fileSearch;
+		if (!cache || cache.folder !== folder) {
+			var rows = [];
+			Object.keys(pi.folders).forEach(function (path) {
+				if (!folder || path === folder || path.indexOf(folder + '/') === 0)
+					(pi.folders[path].files || []).forEach(function (r) { rows.push(r); });
+			});
+			rows.sort(function (a, b) { return byName(a.path, b.path); });
+			cache = pi.fileSearch = { folder: folder, rows: rows, index: fileSearch.create(rows.map(function (r) {
+				var state = checkoutOf(r).state;
+				return { name: r.name, path: r.path, checkout: state, changed: !!r.changed || r.status === 'changed' };
+			})), key: null, matches: [] };
+		}
+		var cacheKey = JSON.stringify([s.applied, s.checkout, s.changed, s.type]);
+		if (cache.key !== cacheKey) {
+			cache.key = cacheKey;
+			cache.matches = cache.index.filter({ text: s.applied, checkout: s.checkout, changed: s.changed, type: s.type })
+				.map(function (i) { return cache.rows[i]; });
+		}
+		return cache.matches;
+	}
+
+	function fileSearchHtml(pi, folder) {
+		var s = ui.fileSearch;
+		var total = pi.under[folder] || 0;
+		var shown = fileSearchActive() ? fileSearchResult(pi, folder).length : total;
+		var html = '<div class="group" data-part="file-search">';
+		html += '<div class="folder-keys"><label class="label" for="file-search">Search files</label>';
+		html += '<span class="label" id="file-search-count" role="status" aria-live="polite">' + num(shown) + ' of ' + num(total) + ' files</span></div>';
+		html += '<input class="field" id="file-search" data-key="file-search" type="search" value="' + esc(s.text) + '" autocomplete="off" spellcheck="false" aria-describedby="file-search-scope"' + tipAttr('fileSearch') + '>';
+		html += '<p class="group-help" id="file-search-scope">Search this folder and the folders inside it. Folder actions still include every file.</p>';
+		html += '<div class="folder-keys" role="group" aria-label="Quick filters">';
+		[['searchMe', 'Checked out by me', !!(s.checkout & 1)], ['searchOthers', 'Checked out by others', !!(s.checkout & 2)], ['searchChanged', 'Changed locally', s.changed]].forEach(function (f) {
+			html += '<button class="key tool keep-word" type="button" data-action="' + f[0] + '" data-key="' + f[0] + '" aria-pressed="' + f[2] + '"' + tipAttr(f[0]) + '>' + f[1] + '</button>';
+		});
+		html += '</div><label class="label" for="file-search-type">File type</label><select class="field" id="file-search-type" data-key="file-search-type">';
+		['All types', 'Part', 'Assembly', 'Drawing', 'Other'].forEach(function (name, i) {
+			html += '<option value="' + i + '"' + (s.type === i ? ' selected' : '') + '>' + name + '</option>';
+		});
+		html += '</select><div class="folder-keys">';
+		html += key({ action: 'searchClear', key: 'search-clear', word: 'Clear search', tip: tipText('searchClear') });
+		html += key({ action: 'searchReset', key: 'search-reset', word: 'Reset filters', tip: tipText('searchReset') });
+		html += '</div>';
+		return html + '</div>';
+	}
+
+	function applyFileSearch() {
+		clearTimeout(ui.fileSearch.timer);
+		ui.fileSearch.applied = ui.fileSearch.text;
+		clearPicked();
+		ui.vrange['vl-browser'] = null;
+		ui.active['vl-browser'] = null;
+		render();
+		var input = document.getElementById('file-search');
+		if (input && input.value !== ui.fileSearch.text) input.value = ui.fileSearch.text;
+		var type = document.getElementById('file-search-type');
+		if (type) type.value = String(ui.fileSearch.type);
+	}
+
+	/** The open folder's rows, or flat matching files from its subtree. */
 	function browserItems(pi, folder) {
+		if (fileSearchActive()) return fileSearchResult(pi, folder).map(function (r) { return { kind: 'file', row: r }; });
 		var out = [];
 		(pi.children[folder] || []).forEach(function (path) {
 			out.push({ kind: 'folder', path: path, name: pi.folders[path].name, files: pi.under[path] || 0, folders: (pi.children[path] || []).length });
@@ -2630,7 +2716,7 @@
 			hit: r.fileId ? { action: 'openFile', fileId: r.fileId, tip: tipText('fileRow', { name: r.name }) } : { action: 'showInFolder', path: r.path, tip: tipText('localRow', { name: r.name }) },
 			k: k,
 			name: r.name,
-			line: fileLine(r),
+			line: fileLine(r) + (fileSearchActive() ? '<span class="row-meta">' + esc(whereIs(r.path)) + '</span>' : ''),
 			// The state key first, so Open keeps one column down the list. A file that isn't on this
 			// computer (not here yet, or no first version) has nothing to open.
 			extra: stateKey(r, k) + (r.status === 'notOnThisComputer' || r.status === 'noVersion' ? '' : openKey(r.path, r.name, k, checkoutOf(r))),
@@ -2677,11 +2763,11 @@
 		return html + '</div>';
 	}
 
-	/** The open folder's files that can be picked (in Armory, directly in the folder). */
+	/** Pickable files in the open list: matching descendants too while filtering. */
 	function folderFiles() {
 		var place = browserPlace();
 		if (!place || place.project.archived) return [];
-		return (place.pi.folders[place.folder].files || [])
+		return (fileSearchActive() ? fileSearchResult(place.pi, place.folder) : place.pi.folders[place.folder].files || [])
 			.filter(function (r) {
 				return r.fileId;
 			})
@@ -2690,10 +2776,9 @@
 			});
 	}
 
-	/** The list's head: one box that picks every file of the folder (or lets go of them all),
-	 *  over the rows' own boxes, with how many files that is. */
+	/** One box picks the list's files, with how many files that is. */
 	function listHeadHtml(pi, folder) {
-		var files = (pi.folders[folder].files || []).filter(function (r) {
+		var files = (fileSearchActive() ? fileSearchResult(pi, folder) : pi.folders[folder].files || []).filter(function (r) {
 			return r.fileId;
 		});
 		if (!files.length) return '';
@@ -2704,9 +2789,9 @@
 		return (
 			'<div class="list-head">' +
 			'<button class="key sel-key sel-all" type="button" role="checkbox" aria-checked="' + state + '" data-action="selectAll" data-key="sel-all" aria-labelledby="sel-all-word"' +
-			tipAttr('selectAll', { count: files.length, all: state === 'true' }) + '>' +
+			tipAttr(fileSearchActive() ? 'selectMatching' : 'selectAll', { count: files.length, all: state === 'true' }) + '>' +
 			'<span class="sel-box" aria-hidden="true">' + icon(state === 'mixed' ? 'dash' : 'check') + '</span></button>' +
-			'<span class="list-head-word" id="sel-all-word">Select all in this folder</span>' +
+			'<span class="list-head-word" id="sel-all-word">' + (fileSearchActive() ? 'Select all matching files' : 'Select all in this folder') + '</span>' +
 			'<span class="list-head-count">' + esc(plural(files.length, 'file', 'files')) + '</span>' +
 			'</div>'
 		);
@@ -4739,8 +4824,8 @@
 			if (!tips.on) return;
 			var shown = tips.shown;
 			hideTip();
-			// Escape closes the card, and only the card.
-			if (e.key === 'Escape' && shown) {
+			// Escape closes the card. An active search also clears its words below.
+			if (e.key === 'Escape' && shown && !(ui.fileSearch.text && document.getElementById('file-search') && !sheet.open && !ask.open)) {
 				e.preventDefault();
 				e.stopImmediatePropagation();
 			}
@@ -4766,6 +4851,26 @@
 		var from = el.getAttribute('data-key');
 		if (pickerClick(action, el, from)) return;
 		switch (action) {
+			case 'searchMe':
+				ui.fileSearch.checkout ^= 1;
+				applyFileSearch();
+				break;
+			case 'searchOthers':
+				ui.fileSearch.checkout ^= 2;
+				applyFileSearch();
+				break;
+			case 'searchChanged':
+				ui.fileSearch.changed = !ui.fileSearch.changed;
+				applyFileSearch();
+				break;
+			case 'searchClear':
+				ui.fileSearch.text = '';
+				applyFileSearch();
+				break;
+			case 'searchReset':
+				resetFileSearch();
+				applyFileSearch();
+				break;
 			case 'openFile':
 				openFile(el.getAttribute('data-file-id'), from);
 				break;
@@ -5012,6 +5117,21 @@
 
 	document.addEventListener('keydown', function (e) {
 		var el = e.target;
+		var search = document.getElementById('file-search');
+		if (search && !sheet.open && !ask.open && !e.isComposing) {
+			if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+				e.preventDefault();
+				search.focus();
+				search.select();
+				return;
+			}
+			if (e.key === 'Escape' && ui.fileSearch.text) {
+				e.preventDefault();
+				ui.fileSearch.text = '';
+				applyFileSearch();
+				return;
+			}
+		}
 		if (e.key === 'Enter' && el && /^ask-pin-/.test(el.id || '')) {
 			e.preventDefault();
 			askOk();
@@ -5070,7 +5190,25 @@
 	});
 
 	document.addEventListener('input', function (e) {
+		if (e.target && e.target.id === 'file-search') {
+			ui.fileSearch.text = e.target.value;
+			clearTimeout(ui.fileSearch.timer);
+			if (!e.isComposing) ui.fileSearch.timer = setTimeout(applyFileSearch, 180);
+		}
 		if (e.target) pickerInput(e.target);
+	});
+	document.addEventListener('compositionend', function (e) {
+		if (e.target && e.target.id === 'file-search') {
+			ui.fileSearch.text = e.target.value;
+			clearTimeout(ui.fileSearch.timer);
+			ui.fileSearch.timer = setTimeout(applyFileSearch, 180);
+		}
+	});
+	document.addEventListener('change', function (e) {
+		if (e.target && e.target.id === 'file-search-type') {
+			ui.fileSearch.type = Number(e.target.value);
+			applyFileSearch();
+		}
 	});
 
 	// Tab into a long list lands on the row it left from.
@@ -5338,7 +5476,16 @@
 			Object.keys(ui.selected).forEach(function (p) {
 				if (!ui.index.byPath[p]) delete ui.selected[p];
 			});
+			// A fresh inventory can stop a selected file matching the active filters.
+			if (fileSearchActive() && fileSearch) {
+				var place = browserPlace();
+				var visible = {};
+				if (place) fileSearchResult(place.pi, place.folder).forEach(function (r) { visible[r.path] = true; });
+				Object.keys(ui.selected).forEach(function (path) { if (!visible[path]) delete ui.selected[path]; });
+				if (!visible[ui.anchor]) ui.anchor = null;
+			}
 			if (ui.view.connection !== 'signedIn') {
+				resetFileSearch();
 				ui.screen = 'home';
 				ui.detail = null;
 			} else if (!wasSignedIn) {
@@ -5383,5 +5530,19 @@
 	}
 	bridge.onMessage(onHost);
 
-	bridge.send('ready');
+	// Load the pure module locally before asking for the first view. A classic script
+	// also works in the file:// demo, without changing index.html or the bridge.
+	var searchScript = document.createElement('script');
+	var searchUrl = new URL('file-search.js', document.currentScript.src);
+	searchUrl.search = new URL(document.currentScript.src).search;
+	searchScript.src = searchUrl.href;
+	searchScript.onload = function () {
+		fileSearch = window.ArmoryFileSearch;
+		bridge.send('ready');
+	};
+	searchScript.onerror = function () {
+		resultWord.textContent = 'Armory could not load file search. Close and reopen Armory.';
+		resultBox.setAttribute('data-on', 'true');
+	};
+	document.head.appendChild(searchScript);
 })();

@@ -235,7 +235,7 @@ public sealed partial class SyncEngine
     // else the server's own message (ARMORY.md item 6: report per file, using its message).
     private string BatchRefusalWords(FileState st, string? code, string? message) => (code, message) switch
     {
-        // idea-app 0316: a classmate's or another team's folder, in the server's own words.
+        // idea-app 0319: a classmate's or another team's folder, in the server's own words.
         (ArmoryRpcException.FolderRefusalState, { Length: > 0 } words) => words.Trim(),
         (_, ArmoryRpcException.NotMemberMessage) => $"You may no longer be in {state.Projects.GetValueOrDefault(st.ProjectId)?.Name ?? "this project"}. Ask your CAD lead.",
         (_, "device is not registered to caller") => "This computer's sign-in changed. Connect it again in Settings.",
