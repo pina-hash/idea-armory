@@ -458,7 +458,7 @@ public sealed partial class SyncEngine
     {
         BlobRefusedException { Status: 403 } => "Armory wouldn't take this file: you may no longer be in this project. Ask your CAD lead.",
         BlobRefusedException => "Armory wouldn't take this file. It stays on this computer.",
-        // idea-app 0316: a classmate's or another team's folder, said in the server's own words.
+        // idea-app 0319: a classmate's or another team's folder, said in the server's own words.
         ArmoryRpcException { IsNotYourFolder: true } rpc => FolderRefusalWords(rpc),
         ArmoryRpcException { IsNotMember: true } or ArmoryRpcException { IsForbidden: true } => "Armory wouldn't take this file: you may no longer be in this project. Ask your CAD lead.",
         ArmoryRpcException rpc when rpc.Message.Contains("SolidWorks", StringComparison.Ordinal) && project is not null =>

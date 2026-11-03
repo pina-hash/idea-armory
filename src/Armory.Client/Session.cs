@@ -74,7 +74,7 @@ public sealed class ArmoryRpcException(int status, string? sqlState, string mess
     // 42501 by SQLSTATE only: a bare 403 with no code (a proxy, a gateway) is not Armory's refusal.
     public bool IsForbidden => SqlState == "42501";
     public bool IsInvalidInput => SqlState is not null && SqlState.StartsWith("22", StringComparison.Ordinal);
-    // idea-app 0316 (ledger 0463): a class folder that is someone else's (a classmate's own folder, or
+    // idea-app 0319 (ledger 0463): a class folder that is someone else's (a classmate's own folder, or
     // another team's). PT403 with DETAIL.reason not_your_folder, or class_folder for renaming or
     // removing a class folder. Its message is written for the student ("This is Ana's folder. Save
     // your work in your own folder.") and names no address, so the window says it as it is.
