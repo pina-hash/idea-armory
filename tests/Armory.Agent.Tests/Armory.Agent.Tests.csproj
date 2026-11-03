@@ -29,6 +29,7 @@
   <ItemGroup>
     <Compile Include="../GuardTests/DocumentedTestGuard.cs" Link="DocumentedTestGuard.cs" />
     <None Include="../GUARDS.txt" Link="GUARDS.txt" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="Previews/Fixtures/**;Previews/Golden/**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
   <!-- Same as src/Armory.Agent: the WebView2 package's WPF control is not used. -->
   <Target Name="DropWebView2Wpf" BeforeTargets="ResolveAssemblyReferences">

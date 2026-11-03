@@ -1,0 +1,7 @@
+<LightBurnProject AppVersion="1.7" FormatVersion="1">
+<Shape Type="Group"><XForm>1 0 0 1 40 30</XForm><Children>
+<Shape Type="Rect" W="70" H="45"><XForm>1 0 0 1 0 0</XForm></Shape>
+<Shape Type="Ellipse" Rx="8" Ry="8"><XForm>1 0 0 1 -20 0</XForm></Shape>
+<Shape Type="Path"><XForm>1 0 0 1 0 0</XForm>
+<VertList>V-5 10c1x0c1y-20V25 10c0x20c0y-20</VertList><PrimList>B0 1L1 0</PrimList>
+</Shape></Children></Shape></LightBurnProject>

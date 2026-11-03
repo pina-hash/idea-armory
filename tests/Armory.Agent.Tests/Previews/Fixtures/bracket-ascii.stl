@@ -1,0 +1,170 @@
+solid original_bracket
+facet normal 0 0 0
+ outer loop
+  vertex 0 0 0
+  vertex 0 24 0
+  vertex 40 24 0
+ endloop
+endfacet
+facet normal 0 0 0
+ outer loop
+  vertex 0 0 0
+  vertex 40 24 0
+  vertex 40 0 0
+ endloop
+endfacet
+facet normal 0 0 0
+ outer loop
+  vertex 0 0 6
+  vertex 40 0 6
+  vertex 40 24 6
+ endloop
+endfacet
+facet normal 0 0 0
+ outer loop
+  vertex 0 0 6
+  vertex 40 24 6
+  vertex 0 24 6
+ endloop
+endfacet
+facet normal 0 0 0
+ outer loop
+  vertex 0 0 0
+  vertex 40 0 0
+  vertex 40 0 6
+ endloop
+endfacet
+facet normal 0 0 0
+ outer loop
+  vertex 0 0 0
+  vertex 40 0 6
+  vertex 0 0 6
+ endloop
+endfacet
+facet normal 0 0 0
+ outer loop
+  vertex 0 24 0
+  vertex 0 24 6
+  vertex 40 24 6
+ endloop
+endfacet
+facet normal 0 0 0
+ outer loop
+  vertex 0 24 0
+  vertex 40 24 6
+  vertex 40 24 0
+ endloop
+endfacet
+facet normal 0 0 0
+ outer loop
+  vertex 0 0 0
+  vertex 0 0 6
+  vertex 0 24 6
+ endloop
+endfacet
+facet normal 0 0 0
+ outer loop
+  vertex 0 0 0
+  vertex 0 24 6
+  vertex 0 24 0
+ endloop
+endfacet
+facet normal 0 0 0
+ outer loop
+  vertex 40 0 0
+  vertex 40 24 0
+  vertex 40 24 6
+ endloop
+endfacet
+facet normal 0 0 0
+ outer loop
+  vertex 40 0 0
+  vertex 40 24 6
+  vertex 40 0 6
+ endloop
+endfacet
+facet normal 0 0 0
+ outer loop
+  vertex 0 0 6
+  vertex 0 24 6
+  vertex 8 24 6
+ endloop
+endfacet
+facet normal 0 0 0
+ outer loop
+  vertex 0 0 6
+  vertex 8 24 6
+  vertex 8 0 6
+ endloop
+endfacet
+facet normal 0 0 0
+ outer loop
+  vertex 0 0 34
+  vertex 8 0 34
+  vertex 8 24 34
+ endloop
+endfacet
+facet normal 0 0 0
+ outer loop
+  vertex 0 0 34
+  vertex 8 24 34
+  vertex 0 24 34
+ endloop
+endfacet
+facet normal 0 0 0
+ outer loop
+  vertex 0 0 6
+  vertex 8 0 6
+  vertex 8 0 34
+ endloop
+endfacet
+facet normal 0 0 0
+ outer loop
+  vertex 0 0 6
+  vertex 8 0 34
+  vertex 0 0 34
+ endloop
+endfacet
+facet normal 0 0 0
+ outer loop
+  vertex 0 24 6
+  vertex 0 24 34
+  vertex 8 24 34
+ endloop
+endfacet
+facet normal 0 0 0
+ outer loop
+  vertex 0 24 6
+  vertex 8 24 34
+  vertex 8 24 6
+ endloop
+endfacet
+facet normal 0 0 0
+ outer loop
+  vertex 0 0 6
+  vertex 0 0 34
+  vertex 0 24 34
+ endloop
+endfacet
+facet normal 0 0 0
+ outer loop
+  vertex 0 0 6
+  vertex 0 24 34
+  vertex 0 24 6
+ endloop
+endfacet
+facet normal 0 0 0
+ outer loop
+  vertex 8 0 6
+  vertex 8 24 6
+  vertex 8 24 34
+ endloop
+endfacet
+facet normal 0 0 0
+ outer loop
+  vertex 8 0 6
+  vertex 8 24 34
+  vertex 8 0 34
+ endloop
+endfacet
+endsolid original_bracket

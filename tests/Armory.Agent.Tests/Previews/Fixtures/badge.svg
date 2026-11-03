@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 80">
+<!-- Original artwork for the Armory preview tests. -->
+<defs><rect x="-1000" y="-1000" width="10" height="10"/></defs>
+<g transform="translate(8 5) rotate(4 40 30)">
+<rect x="0" y="0" width="80" height="60"/>
+<circle cx="10" cy="10" r="4"/><ellipse cx="67" cy="10" rx="6" ry="4"/>
+<polygon points="10,45 20,25 30,45"/><polyline points="35,45 40,25 45,45"/>
+<path d="M10 18 C18 5 22 30 30 18 S45 30 50 18 Q55 4 60 18 T72 18"/>
+<path d="M52 42 a10 8 20 01 20 0 a10 8 20 0 1 -20 0 Z"/>
+<line x1="10" y1="53" x2="70" y2="53"/>
+</g><rect display="none" x="-999" y="0" width="10" height="10"/>
+</svg>
