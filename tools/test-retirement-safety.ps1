@@ -6,7 +6,7 @@ $tokens = $null; $errors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($scriptFile, [ref]$tokens, [ref]$errors)
 if ($errors.Count) { throw ($errors | Out-String) }
 $names = @('Audit', 'Initialize-NativePaths', 'Full', 'Within', 'Linked', 'Binary', 'Protected', 'OverlapsProtected',
-    'Add-Copy', 'Stream-Hash', 'Owned-VelopackTree', 'Unmodified-LegacyPayload')
+    'Add-Copy', 'Stream-Hash', 'Owned-VelopackTree', 'Owned-Updater', 'Unmodified-LegacyPayload')
 foreach ($function in $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false)) {
     if ($function.Name -in $names) { Invoke-Expression $function.Extent.Text }
 }
@@ -38,6 +38,12 @@ try {
     $copy = [pscustomobject]@{ Root = $fakeRoot; Exe = (Join-Path $current 'IdeaArmory.exe'); Kind = 'velopack' }
     Move-Item -LiteralPath $copy.Exe -Destination ($copy.Exe + '.retired')
     Require (Owned-VelopackTree $copy) 'a pristine package-owned tree permits the real updater uninstaller'
+    Require (Owned-Updater $copy) 'the updater bytes match the cached package'
+    $updaterFile = Join-Path $fakeRoot 'Update.exe'
+    $updaterBytes = [IO.File]::ReadAllBytes($updaterFile)
+    [IO.File]::AppendAllText($updaterFile, 'changed')
+    Require (-not (Owned-Updater $copy)) 'an edited updater is never treated as an owned launch entry'
+    [IO.File]::WriteAllBytes($updaterFile, $updaterBytes)
     $studentFile = Join-Path $fakeRoot 'student-work.sldprt'
     [IO.File]::WriteAllText($studentFile, 'never delete this')
     Require (-not (Owned-VelopackTree $copy)) 'an untracked student file prevents recursive updater uninstall'
