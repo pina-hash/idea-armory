@@ -82,6 +82,10 @@ try {
     [IO.File]::WriteAllText((Join-Path $legacy 'scripts\payload.sha256'), $hash + '  ..\data\settings.json')
     Require (-not (Unmodified-LegacyPayload $legacyCopy)) 'a traversal in a manifest cannot reach settings'
     Write-Output 'PASS: retirement safety checks used only a throwaway folder.'
+} catch {
+    $audit = Join-Path $DataFolder 'logs\install-retirement.jsonl'
+    if (Test-Path -LiteralPath $audit) { Get-Content -LiteralPath $audit | Write-Output }
+    throw
 } finally {
     # No junction is followed by cleanup, including when an assertion failed.
     $junction = Join-Path $sandbox 'other-install\linked-data'

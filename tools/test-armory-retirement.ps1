@@ -129,6 +129,8 @@ function Assert-One([string]$phase) {
     foreach ($file in @($menu, $pin)) {
         Require ([ArmoryPinReader]::Target($file) -ieq $launcher) ($phase + ': shortcut uses root launcher ' + $file)
         Require ([ArmoryPinReader]::AppId($file) -ceq $id) ($phase + ': shortcut identity ' + $file)
+        $shell = New-Object -ComObject WScript.Shell
+        Require ($shell.CreateShortcut($file).IconLocation -ieq ($launcher + ',0')) ($phase + ': shortcut icon uses the root launcher ' + $file)
     }
     foreach ($file in $proofs.Keys) { Require ((Test-Path -LiteralPath $file) -and [Convert]::ToBase64String([IO.File]::ReadAllBytes($file)) -ceq $proofs[$file]) ($phase + ': unchanged bytes at ' + $file) }
     Require (-not (Test-Path -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{28A1D010-82E3-4294-9676-83AC0AA1F5D3}_is1')) ($phase + ': legacy Apps entry removed')

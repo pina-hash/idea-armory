@@ -91,13 +91,14 @@ function Unmodified-LegacyPayload($copy) {
     return $entries -gt 0
 }
 function Owned-VelopackTree($copy) {
+    $root = Full $copy.Root
     # Update.exe removes its whole root. Prove every existing byte is package-owned first;
     # a user document, changed program file, cache, junction, or unknown metadata defers it.
-    if (Test-Path -LiteralPath (Join-Path $copy.Root '.msi-installed')) { return $false }
+    if (Test-Path -LiteralPath (Join-Path $root '.msi-installed')) { return $false }
     try {
-        [xml]$manifest = [IO.File]::ReadAllText((Join-Path $copy.Root 'current\sq.version'))
+        [xml]$manifest = [IO.File]::ReadAllText((Join-Path $root 'current\sq.version'))
         if ($manifest.package.metadata.id -cne 'IDEAArmory') { return $false }
-        $package = Join-Path $copy.Root ('packages\IDEAArmory-' + $manifest.package.metadata.version + '-full.nupkg')
+        $package = Join-Path $root ('packages\IDEAArmory-' + $manifest.package.metadata.version + '-full.nupkg')
         if (-not (Test-Path -LiteralPath $package) -or (Linked $package)) { return $false }
         Add-Type -AssemblyName System.IO.Compression.FileSystem
         $zip = [IO.Compression.ZipFile]::OpenRead($package)
@@ -106,27 +107,28 @@ function Owned-VelopackTree($copy) {
             foreach ($entry in $zip.Entries) {
                 if (-not $entry.FullName.StartsWith('lib/app/') -or $entry.FullName.EndsWith('/')) { continue }
                 $relative = $entry.FullName.Substring(8).Replace('/', '\')
-                $file = Full (Join-Path $copy.Root ('current\' + $relative))
-                if (-not (Within $file $copy.Root)) { return $false }
+                $file = Full (Join-Path $root ('current\' + $relative))
+                if (-not (Within $file $root)) { return $false }
                 $hash = Stream-Hash ($entry.Open()); $expected[$file] = $hash
                 if ($relative -ieq 'IdeaArmory.exe') { $expected[$file + '.retired'] = $hash }
-                if ($relative -ieq 'Squirrel.exe') { $expected[(Join-Path $copy.Root 'Update.exe')] = $hash }
-                if ($relative -ieq 'IDEA Armory_ExecutionStub.exe') { $expected[(Join-Path $copy.Root 'IDEA Armory.exe')] = $hash }
+                if ($relative -ieq 'Squirrel.exe') { $expected[(Join-Path $root 'Update.exe')] = $hash }
+                if ($relative -ieq 'IDEA Armory_ExecutionStub.exe') { $expected[(Join-Path $root 'IDEA Armory.exe')] = $hash }
             }
         } finally { $zip.Dispose() }
-        $todo = New-Object 'System.Collections.Generic.Queue[string]'; $todo.Enqueue($copy.Root)
+        $todo = New-Object 'System.Collections.Generic.Queue[string]'; $todo.Enqueue($root)
         while ($todo.Count) {
             foreach ($item in @(Get-ChildItem -LiteralPath $todo.Dequeue() -Force)) {
                 if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { return $false }
                 if ($item.PSIsContainer) { $todo.Enqueue($item.FullName); continue }
                 if ($item.FullName -ieq $package) { continue }
-                if ($item.FullName -ieq (Join-Path $copy.Root 'packages\.velopack_lock') -and $item.Length -eq 0) { continue }
-                if ($item.FullName -ieq (Join-Path $copy.Root '.portable') -and $item.Length -eq 0) { continue }
-                if (-not $expected.ContainsKey($item.FullName) -or (Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256).Hash -ine $expected[$item.FullName]) { return $false }
+                if ($item.FullName -ieq (Join-Path $root 'packages\.velopack_lock') -and $item.Length -eq 0) { continue }
+                if ($item.FullName -ieq (Join-Path $root '.portable') -and $item.Length -eq 0) { continue }
+                if (-not $expected.ContainsKey($item.FullName)) { Audit ('kept untracked updater-root file ' + $item.FullName); return $false }
+                if ((Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256).Hash -ine $expected[$item.FullName]) { Audit ('kept changed updater-root file ' + $item.FullName); return $false }
             }
         }
         return $true
-    } catch { Audit ('could not prove updater ownership at ' + $copy.Root + ': ' + $_.Exception.Message); return $false }
+    } catch { Audit ('could not prove updater ownership at ' + $root + ': ' + $_.Exception.Message); return $false }
 }
 $currentFolder = Split-Path -Parent (Full $CurrentExe)
 $currentRoot = $currentFolder
