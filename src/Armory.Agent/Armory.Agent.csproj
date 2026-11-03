@@ -25,6 +25,7 @@
   </PropertyGroup>
   <ItemGroup>
     <EmbeddedResource Include="../../installer/scripts/Retire.ps1" LogicalName="Armory.Retire.ps1" />
+    <EmbeddedResource Include="../../installer/scripts/AfterUpdate.ps1" LogicalName="Armory.AfterUpdate.ps1" />
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4258.31" />
     <!-- 0.4.0: Armory updates itself (Updates.cs). MIT licensed, free. -->
     <PackageReference Include="Velopack" Version="1.2.161" />

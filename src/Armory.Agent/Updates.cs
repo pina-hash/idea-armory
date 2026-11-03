@@ -44,29 +44,10 @@ internal static class Updates
             .Run();
     }
 
-    // Installed (or updated) by Velopack: the older install of this account goes (it would start
-    // a second Armory at sign-in), and the sign-in start entry points here. The registrations are
-    // the app's own to repair at its first start (ShellIdentity.Repair). 30 seconds at most.
+    // Keep the installer hook fast. The worker runs retirement and repairs registrations after
+    // the installer exits; ordinary startup uses that same reconciliation before the UI.
     [SupportedOSPlatform("windows")]
     private static void AfterInstall() => InstallRetirement.FinishAfterUpdaterExits();
-
-    [SupportedOSPlatform("windows")]
-    private static void ReconcileInstall()
-    {
-        var log = SetupLog();
-        try
-        {
-            if (!InstallRetirement.Run(AgentPaths.Resolve())) return;
-            if (Environment.ProcessPath is { } exe && IsVelopackCopy(exe, File.Exists))
-            {
-                var settings = new SettingsStore(AgentPaths.Resolve().SettingsFile).Load();
-                StartupRegistration.Apply(settings.StartAtSignIn, StableLauncher.For(exe, File.Exists));
-                ShellIdentity.Repair(Path.GetDirectoryName(exe)!, log);
-            }
-        }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.Security.SecurityException or InvalidOperationException)
-        { log("install step: " + error.Message); }
-    }
 
     // Updated: the log says so first (AgentLog.UpdatedLine), so the next start knows the older copy
     // was stopped by the update and not by a crash; then the same steps as an install.
@@ -81,21 +62,7 @@ internal static class Updates
     }
 
     [SupportedOSPlatform("windows")]
-    internal static int FinishUpdate(int updaterPid)
-    {
-        try
-        {
-            using var updater = Process.GetProcessById(updaterPid);
-            if (!updater.WaitForExit(TimeSpan.FromSeconds(60)))
-            {
-                InstallRetirement.Save(AgentPaths.Resolve(), "deferred: updater did not exit; the next start repairs registrations");
-                return 1;
-            }
-        }
-        catch (ArgumentException) { } // Already exited.
-        ReconcileInstall();
-        return 0;
-    }
+    internal static int FinishUpdate() => InstallRetirement.Run(AgentPaths.Resolve()) ? 0 : 1;
 
     // The line the new version writes once it is in place (AgentLog.EndOf reads it).
     internal static string UpdatedLineFor(string version) => AgentLog.UpdatedLine + version;
@@ -263,10 +230,8 @@ internal sealed class Updater : IDisposable
     public void Dispose() => timer?.Dispose();
 }
 
-// The install before 0.4.0's updating one (docs/agent/INSTALL.md): %LOCALAPPDATA%\Programs\IDEA
-// Armory, its Apps entries and its Start menu shortcut. Retired once Velopack's setup has
-// installed this account's updating copy: the old copy is asked to quit, then its files and
-// entries go. The vault, settings and sign-in (%LOCALAPPDATA%\IDEA Armory) are never touched.
+// Historical identities retained as a regression contract. Retirement discovers their actual
+// scopes and locations in Retire.ps1, rather than blindly deleting these keys in HKCU.
 internal static class LegacyInstall
 {
     // The Apps entries of the flash drive and of the Inno Setup installer.

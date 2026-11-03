@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using Armory.Telemetry;
+using Microsoft.Win32;
 
 namespace Armory.Agent;
 
@@ -9,21 +10,32 @@ namespace Armory.Agent;
 // inventory is embedded so an extracted release and every installer use exactly the same code.
 internal static class InstallRetirement
 {
-    internal const string FinishUpdateArgument = "--armory-finish-update";
+    internal const string FinishUpdateArgument = "armory-finish-update";
 
     internal static void FinishAfterUpdaterExits()
     {
+        var paths = AgentPaths.Resolve();
+        if (paths.IsOverridden) return;
         try
         {
             var info = new ProcessBasicInformation();
             Marshal.ThrowExceptionForHR(NtQueryInformationProcess(Process.GetCurrentProcess().Handle, 0, ref info, Marshal.SizeOf<ProcessBasicInformation>(), out _));
-            var start = new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = false, CreateNoWindow = true };
-            start.ArgumentList.Add(FinishUpdateArgument);
-            start.ArgumentList.Add(info.ParentId.ToInt64().ToString(System.Globalization.CultureInfo.InvariantCulture));
+            using var updater = Process.GetProcessById((int)info.ParentId);
+            var script = Path.Combine(Path.GetTempPath(), "Armory-after-update-" + Guid.NewGuid().ToString("N") + ".ps1");
+            using (var input = typeof(InstallRetirement).Assembly.GetManifestResourceStream("Armory.AfterUpdate.ps1")!)
+            using (var output = File.Create(script)) input.CopyTo(output);
+            // A same-root worker is killed by Velopack's post-hook force_stop_package.
+            // ShellExecute detaches the external waiter's standard handles from the hook too.
+            var start = new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), @"WindowsPowerShell\v1.0\powershell.exe"))
+            { UseShellExecute = true, WindowStyle = ProcessWindowStyle.Hidden, WorkingDirectory = Path.GetTempPath() };
+            foreach (var arg in new[] { "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-File", script,
+                "-UpdaterPid", updater.Id.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                "-UpdaterStarted", updater.StartTime.ToUniversalTime().Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                "-Exe", Environment.ProcessPath!, "-DataFolder", paths.DataFolder, "-Argument", FinishUpdateArgument }) start.ArgumentList.Add(arg);
             using var worker = Process.Start(start);
         }
-        catch (Exception error) when (error is System.ComponentModel.Win32Exception or COMException or InvalidOperationException)
-        { Save(AgentPaths.Resolve(), "deferred update repair: " + error.Message); }
+        catch (Exception error) when (error is System.ComponentModel.Win32Exception or COMException or InvalidOperationException or IOException or UnauthorizedAccessException)
+        { Save(paths, "deferred update repair: " + error.Message); }
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -37,7 +49,7 @@ internal static class InstallRetirement
 
     internal static bool Enabled(AgentPaths paths, string? exe, Func<string, bool> exists)
         => !paths.IsOverridden && exe is not null &&
-           (ShellIdentity.IsInstalledCopy(paths, exe, ShellIdentity.InstallFolder()) || Updates.IsVelopackCopy(exe, exists));
+           (ShellIdentity.IsInstalledCopy(paths, exe, ShellIdentity.InstallFolder()) || Updates.IsVelopackCopy(exe, exists) || ShellIdentity.IsPackagedCopy(paths, exe, exists));
 
     internal static bool Run(AgentPaths paths)
     {
@@ -50,16 +62,24 @@ internal static class InstallRetirement
             var start = new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), @"WindowsPowerShell\v1.0\powershell.exe"))
             { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
             foreach (var arg in new[] { "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script,
-                         "-CurrentExe", Environment.ProcessPath!, "-DataFolder", paths.DataFolder }) start.ArgumentList.Add(arg);
+                         "-CurrentExe", Environment.ProcessPath!, "-DataFolder", paths.DataFolder, "-CurrentProcessId", Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture) }) start.ArgumentList.Add(arg);
             using var process = Process.Start(start)!;
             var stdout = process.StandardOutput.ReadToEndAsync();
             var stderr = process.StandardError.ReadToEndAsync();
-            // Never kill an uninstaller halfway through its work. It has its own bounded waits;
-            // if it outlives this start, the next start retries the inventory under the same lock.
+            // Never kill an uninstaller halfway through its work. A slow one retains the safe
+            // cleanup hook; this launch gives way and the next start retries under the same lock.
             if (!process.WaitForExit(TimeSpan.FromSeconds(90))) { Save(paths, "deferred: retirement is still running; this launch waits for a later retry"); return false; }
             foreach (var line in stdout.GetAwaiter().GetResult().Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
                 Save(paths, line);
             if (process.ExitCode != 0) { Save(paths, "deferred: " + stderr.GetAwaiter().GetResult()); return false; }
+            // Old uninstallers remove shared shell keys and the common Start menu link.
+            // Repair even on a second launch, before it hands off to an existing runtime.
+            var exe = Environment.ProcessPath!;
+            var settings = new SettingsStore(paths.SettingsFile).Load();
+            StartupRegistration.Apply(settings.StartAtSignIn, StableLauncher.For(exe, File.Exists));
+            ShellIdentity.Repair(AgentPaths.AppFolder, line => Save(paths, line));
+            RepairExplorerTargets(paths);
+            AppsRegistration.Repair(exe, line => Save(paths, line));
             return true;
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception or InvalidOperationException)
@@ -108,10 +128,38 @@ internal static class InstallRetirement
 
     private static string AuditFile(AgentPaths paths) => Path.Combine(paths.LogFolder, "install-retirement.jsonl");
 
+    private static void RepairExplorerTargets(AgentPaths paths)
+    {
+        // Restore the survivor's forwarder path without changing the current account's vault
+        // filters or force-check-in permissions. The host owns the rest of this layout.
+        using var classes = Registry.CurrentUser.OpenSubKey(ShellVerbs.ClassesKey, writable: true);
+        if (classes is null) return;
+        var todo = new Queue<string>(ShellVerbs.Roots);
+        while (todo.TryDequeue(out var path))
+        {
+            using var key = classes.OpenSubKey(path, writable: true);
+            if (key is null) continue;
+            foreach (var child in key.GetSubKeyNames()) todo.Enqueue(path + "\\" + child);
+            foreach (var name in key.GetValueNames())
+            {
+                if (name != "Icon" && !(name.Length == 0 && path.EndsWith(@"\command", StringComparison.OrdinalIgnoreCase))) continue;
+                if (key.GetValue(name) is not string text || !text.StartsWith('"')) continue;
+                var end = text.IndexOf('"', 1);
+                if (end <= 1) continue;
+                var file = Path.GetFileName(text[1..end]);
+                if (!file.Equals("ArmoryShell.exe", StringComparison.OrdinalIgnoreCase) && !file.Equals("IdeaArmory.exe", StringComparison.OrdinalIgnoreCase)) continue;
+                var wanted = "\"" + Path.Combine(AgentPaths.AppFolder, file) + text[end..];
+                if (wanted == text) continue;
+                key.SetValue(name, wanted, key.GetValueKind(name));
+                Save(paths, "repointed Explorer registration " + path);
+            }
+        }
+    }
+
     // A second launch or a post-install worker can retire a copy while this runtime is already
     // open. Move those events into this recorder too, without requiring another restart.
     internal static IDisposable? Watch(AgentPaths paths, AgentLog log, FlightRecorder recorder)
-        => paths.IsOverridden ? null : new AuditWatcher(paths, log, recorder);
+        => Enabled(paths, Environment.ProcessPath, File.Exists) ? new AuditWatcher(paths, log, recorder) : null;
 
     private sealed class AuditWatcher : IDisposable
     {

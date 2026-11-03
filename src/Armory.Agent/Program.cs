@@ -32,8 +32,8 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
-        if (args.Length == 2 && args[0] == InstallRetirement.FinishUpdateArgument && int.TryParse(args[1], out var updaterPid))
-            return Updates.FinishUpdate(updaterPid);
+        if (args.Length == 1 && args[0] == "--" + InstallRetirement.FinishUpdateArgument)
+            return Updates.FinishUpdate();
         var command = AgentCommandLine.Parse(args);
         // Velopack's install, update and uninstall steps run (and exit) here, before anything
         // else; a downloaded update is applied here and the new version starts instead (0.4.0),
@@ -116,7 +116,7 @@ internal static class Program
             telemetry.Recorder.Exception("window thread", e.Exception, fatal: true);
         };
         log.Info("started " + AgentPaths.Version);
-        InstallRetirement.Replay(paths, log, telemetry.Recorder);
+        if (ShellIdentity.IsInstalledCopy(paths)) InstallRetirement.Replay(paths, log, telemetry.Recorder);
         using var retirementAudits = InstallRetirement.Watch(paths, log, telemetry.Recorder);
         // File Explorer's right-click items and a notification's second launch reach this Armory
         // over its pipe from here on, before the window or WebView2 (ShellDesk, ShellInbox). After
@@ -128,7 +128,6 @@ internal static class Program
         if (ShellIdentity.IsInstalledCopy(paths))
         {
             ShellIdentity.SetProcessAppId();
-            ShellIdentity.Repair(AgentPaths.AppFolder, log.Info);
         }
         ApplicationConfiguration.Initialize();
         var host = new AgentHost(paths, log, AgentPaths.Site(), telemetry);

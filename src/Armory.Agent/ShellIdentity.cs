@@ -39,7 +39,22 @@ internal static class ShellIdentity
 
     // 0.4.0: or the copy Velopack's setup installed, which updates itself (Updates.cs).
     internal static bool IsInstalledCopy(AgentPaths paths) =>
-        IsInstalledCopy(paths, Environment.ProcessPath, InstallFolder()) || !paths.IsOverridden && Updates.IsVelopackCopy(Environment.ProcessPath, File.Exists);
+        IsInstalledCopy(paths, Environment.ProcessPath, InstallFolder()) || !paths.IsOverridden && Updates.IsVelopackCopy(Environment.ProcessPath, File.Exists) ||
+        IsPackagedCopy(paths, Environment.ProcessPath, File.Exists);
+
+    // A release unpacked or copied to another folder can be launched directly. It participates
+    // in the same ownership/identity rules; a bin/obj build and an isolated test never do.
+    internal static bool IsPackagedCopy(AgentPaths paths, string? exe, Func<string, bool> exists)
+    {
+        if (paths.IsOverridden || string.IsNullOrEmpty(exe)) return false;
+        var path = exe.Replace('/', '\\');
+        if (path.Contains(@"\bin\Debug\", StringComparison.OrdinalIgnoreCase) || path.Contains(@"\bin\Release\", StringComparison.OrdinalIgnoreCase) ||
+            path.Contains(@"\obj\", StringComparison.OrdinalIgnoreCase)) return false;
+        var cut = path.LastIndexOf('\\');
+        if (cut <= 0 || !path[(cut + 1)..].Equals("IdeaArmory.exe", StringComparison.OrdinalIgnoreCase)) return false;
+        var folder = path[..cut];
+        return exists(folder + @"\scripts\payload.sha256") && exists(folder + @"\IdeaArmory.dll") && exists(folder + @"\ArmoryShell.exe");
+    }
 
     // Every value, relative to HKCU\Software\Classes. appFolder: where IdeaArmory.exe is.
     internal static IReadOnlyList<ShellRegistryValue> Layout(string appFolder)

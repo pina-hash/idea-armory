@@ -17,6 +17,23 @@ public sealed class InstallRetirementTests
     }
 
     [Fact]
+    public void An_unpacked_release_uses_the_same_ownership_rules_but_a_development_build_does_not()
+    {
+        var paths = new AgentPaths("live", false);
+        const string exe = @"D:\Downloads\Armory\files\IdeaArmory.exe";
+        var files = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            @"D:\Downloads\Armory\files\scripts\payload.sha256", @"D:\Downloads\Armory\files\IdeaArmory.dll", @"D:\Downloads\Armory\files\ArmoryShell.exe",
+        };
+        Assert.True(ShellIdentity.IsPackagedCopy(paths, exe, files.Contains));
+        Assert.True(InstallRetirement.Enabled(paths, exe, files.Contains));
+        Assert.False(ShellIdentity.IsPackagedCopy(paths with { IsOverridden = true }, exe, files.Contains));
+        Assert.False(ShellIdentity.IsPackagedCopy(paths, @"C:\src\bin\Release\IdeaArmory.exe", _ => true));
+        files.Remove(@"D:\Downloads\Armory\files\scripts\payload.sha256");
+        Assert.False(ShellIdentity.IsPackagedCopy(paths, exe, files.Contains));
+    }
+
+    [Fact]
     public void Callback_removals_reach_the_existing_flight_recorder_on_the_next_start()
     {
         using var folder = new TempFolder();
