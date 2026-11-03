@@ -4972,3 +4972,56 @@ body[data-screen='picker'] .screen-root {
 	width: 14px;
 	height: 14px;
 }
+
+
+/* The lesson points at the actual control. Colors follow the window's theme. */
+#tutorial { position: fixed; inset: 0; z-index: 1000; pointer-events: none; }
+#tutorial[hidden] { display: none; }
+.tutorial-spot {
+	box-sizing: border-box;
+	position: fixed;
+	border: 3px solid var(--plate-ink);
+	border-radius: 6px;
+	box-shadow: 0 0 0 100vmax rgb(0 0 0 / 65%);
+	pointer-events: none;
+}
+.tutorial-card {
+	position: fixed;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	max-height: min(420px, calc(100dvh - 32px));
+	padding: 16px;
+	border: 2px solid var(--plate-hair);
+	border-radius: 8px;
+	background: var(--plate-panel-ground);
+	color: var(--plate-ink);
+	pointer-events: auto;
+	overflow: hidden;
+	box-sizing: border-box;
+	font-size: 14px;
+	line-height: 1.45;
+}
+.tutorial-card p, .tutorial-card h2 { margin: 0; }
+.tutorial-card h2 { min-height: 44px; flex-shrink: 0; font-size: 20px; line-height: 1.2; }
+.tutorial-card .label { color: var(--plate-ink); flex-shrink: 0; }
+.tutorial-copy { min-height: 44px; overflow: auto; overflow-wrap: anywhere; }
+#tutorial-hint { margin-top: 8px; }
+.tutorial-keys { display: flex; flex-shrink: 0; gap: 8px; }
+.tutorial-keys .key { flex: 1; min-width: 44px; }
+.tutorial-card > .key { flex-shrink: 0; }
+body[data-tutorial] .scroller, body[data-tutorial] .plate-recess { scroll-padding-bottom: 50vh; }
+@media (max-width: 760px) {
+	.tutorial-card { max-height: 48dvh; padding: 12px; }
+}
+/* Leave room to scroll a real control above the lesson card at the window's foot. */
+body[data-tutorial] dialog.housing { padding-bottom: 50vh; }
+@media (max-width: 760px) {
+	body[data-tutorial] #main { padding-bottom: 50vh; }
+}
+@media (min-width: 761px) {
+	body[data-tutorial] #recess-scroll { padding-bottom: 50vh; }
+}
+@media (max-width: 360px) {
+	.report-kinds { grid-template-columns: minmax(0, 1fr); }
+}
