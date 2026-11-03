@@ -468,9 +468,11 @@ keeps the vault).
 - **Copies installed the old way** (the flash drive or `IDEA-Armory-Setup-v<version>.exe`, in
   `%LOCALAPPDATA%\Programs\IDEA Armory`) at 0.4.0 or later move themselves over: when a newer
   release exists, Armory downloads `IDEAArmory-win-Setup.exe` and runs it silently. Velopack's
-  install step (`Updates.cs`, `LegacyInstall.Retire`) asks the old copy to quit, removes its
-  two Apps entries, its Start menu shortcut and its folder, and points the sign-in start entry
-  at the new copy. Nothing in `%LOCALAPPDATA%\IDEA Armory` or the vault is touched.
+  reconciliation now runs before normal startup and after the installer/updater exits. It
+  retires discoverable competing copies and their launch entries, preserves local data, and
+  points the sign-in start entry at the surviving launcher. See
+  [install ownership](INSTALL-OWNERSHIP.md) for the checked historical identities, uninstaller
+  safeguards, protected paths, audit events and verification bounds.
 - **Copies older than 0.4.0** (0.3.1, 0.3.2, 0.3.3) have no updater. Each needs 0.4.0 installed
   once, by hand (below); after that it updates itself.
 - **Uninstall** (Settings > Apps > IDEA Armory) removes the app, the sign-in start entry, the
@@ -480,6 +482,9 @@ keeps the vault).
 How Mr. Pina publishes a release is in the README, "Publishing a release".
 
 ### Taskbar pins (0.4.3)
+
+The [current ownership and pin policy](INSTALL-OWNERSHIP.md) uses the root execution stub and
+repairs after the updater exits. The following records the 0.4.3 investigation and behavior.
 
 **What broke (Mr. Pina, 2026-10-23: "the pin turned into a blank page instead of the Armory
 icon, and I had to repin the Armory").** Measured on a Windows runner on 2026-10-24
