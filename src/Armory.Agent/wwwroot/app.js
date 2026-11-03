@@ -17,8 +17,19 @@
 (function () {
 	'use strict';
 
-	var bridge = window.ArmoryBridge;
-	var fileSearch = null;
+	var hostBridge = window.ArmoryBridge;
+	// Practice and lesson-only actions never cross the existing host bridge.
+	var bridge = Object.assign({}, hostBridge, {
+		send: function (type, fields) {
+			if (tutorial && tutorial.active()) return tutorial.practice() ? practiceSend(type, fields) : null;
+			return hostBridge.send(type, fields);
+		},
+		sendWithFiles: function (type, fields, files) {
+			if (tutorial && tutorial.active()) return null;
+			return hostBridge.sendWithFiles(type, fields, files);
+		}
+	});
+	var fileSearch = window.ArmoryFileSearch;
 	var main = document.getElementById('main');
 	var headerKeys = document.getElementById('header-keys');
 	var scroller = document.getElementById('scroller');
@@ -618,7 +629,7 @@
 		selEvery: function (c) { return 'Select all ' + plural(c.count, 'file', 'files') + ' in this folder.'; },
 		selClear: 'Clear the selection (Esc).',
 		// File detail.
-		back: 'Go back to Home, to the list you came from.',
+		back: 'Go back to the previous place in Armory.',
 		detailOpen: function (c) { return TIPS.open(c); },
 		detailOut: function (c) { return 'Check out ' + c.name + ' so you can save changes to it. Nobody else can until you check it in.'; },
 		detailOutOpen: function (c) { return 'Check out ' + c.name + ' and open it' + (c.cad ? ' in SolidWorks' : '') + ', ready to change.'; },
@@ -912,6 +923,7 @@
 		paintDrag();
 		updateCues();
 		tipAfterRender();
+		if (tutorial) tutorial.refresh();
 	}
 
 	/** Draws a region from its markup: in place (morph) when it stays, from scratch otherwise;
@@ -1414,6 +1426,7 @@
 				render();
 				var again = document.getElementById('pin-new-1');
 				if (again) again.focus();
+			navigation.after();
 				return;
 			}
 			el.readOnly = true;
@@ -2277,6 +2290,7 @@
 	/** The picture's address for a file on this computer, or null. Its version is in the
 	 *  query, so a file checked in or saved since gets its new picture. */
 	function thumbAddress(r) {
+		if (tutorial && tutorial.practice()) return null;
 		if (!THUMBS || !r || !r.path || r.status === 'notOnThisComputer' || !THUMB_KINDS[kindOf(r.name || r.path)]) return null;
 		return (
 			PICTURES + '/thumb/' + String(r.path).split('/').map(encodeURIComponent).join('/') +
@@ -2910,7 +2924,7 @@
 			'h1',
 			d.name,
 			' id="detail-title" tabindex="-1" data-key="detail-title"',
-			'<button class="key back-key" type="button" data-action="back" data-key="back" aria-label="Back to Home"' + tipAttr('back') + '>' + icon('chev-left') + '</button>'
+			'<button class="key back-key" type="button" data-action="back" data-key="back" aria-label="Back to the previous place"' + tipAttr('back') + '>' + icon('chev-left') + '</button>'
 		);
 		html +=
 			'<p class="title-sub">' + kindChip(d.name) + '<span class="meta-text">' + esc(whereIs(d.path)) + '</span>' +
@@ -3072,6 +3086,8 @@
 		html += settingsSolidWorksHtml(v);
 		html += sharedSettingsHtml(v);
 		html += settingsAboutHtml(s.about);
+		html += '<section class="setting" aria-labelledby="set-tutorial-label"><h3 class="section-label" id="set-tutorial-label">Getting started</h3>';
+		html += '<button class="key" type="button" data-action="showTutorial" data-key="set-tutorial" data-tip="Walk through Armory again with a safe practice file.">Show me again</button></section>';
 
 		// Something wrong: a person's own report, and the folder of saved reports to hand over by hand.
 		html += '<section class="setting" aria-labelledby="set-report-label">';
@@ -3119,12 +3135,14 @@
 		if (!ui.view || ui.view.connection !== 'signedIn') return;
 		// Settings is a sheet over Home: from a file's detail, Home comes back under it.
 		if (ui.screen !== 'home') {
+			navigation.before();
 			ui.screen = 'home';
 			ui.detail = null;
 			render();
 			scroller.scrollTop = ui.homeScroll;
 			setRecessTop(ui.homeRecess);
 			mountLists(false);
+			navigation.after();
 		}
 		// "Your feedback" shows in the sheet once the host says the website has it.
 		readMyFeedback();
@@ -4587,6 +4605,7 @@
 
 	/** Moves the view to a file's detail: the screen changes, scrolls to the top and the heading takes focus. */
 	function openFile(fileId, fromKey) {
+		navigation.before();
 		if (ui.screen === 'home') {
 			ui.homeScroll = scroller.scrollTop;
 			ui.homeRecess = recessTop();
@@ -4601,9 +4620,11 @@
 		scroller.scrollTop = 0;
 		focusHeading();
 		updateCues();
+		navigation.after();
 	}
 
 	function back() {
+		navigation.before();
 		ui.screen = 'home';
 		ui.detail = null;
 		render();
@@ -4614,11 +4635,13 @@
 		(target || document.querySelector('[data-key="hdr-vault"]')).focus({ preventScroll: true });
 		if (target && target.scrollIntoView) target.scrollIntoView({ block: 'nearest' });
 		updateCues();
+		navigation.after();
 	}
 
 	/** Into a folder (or back up to one): the selection is for one folder at a time, and
 	 *  the list starts at its top. */
 	function goFolder(path, fromKey) {
+		navigation.before();
 		var place = browserPlace();
 		ui.folders[place.project.id] = path;
 		clearPicked();
@@ -4635,6 +4658,7 @@
 		var focus = document.querySelector('#vl-browser [data-rove="row"][tabindex="0"]') || document.querySelector('.crumb-here');
 		if (fromKey && focus && focus.focus) focus.focus({ preventScroll: true });
 		updateCues();
+		navigation.after();
 	}
 
 	/* ------------------------------------------------------- Dropping files */
@@ -4878,7 +4902,7 @@
 				openFile(el.getAttribute('data-file-id'), from);
 				break;
 			case 'back':
-				back();
+				if (!navigation.go(-1)) back();
 				break;
 			case 'showInFolder':
 				bridge.send('showInFolder', { path: path });
@@ -5011,6 +5035,10 @@
 			case 'expand':
 				toggleExpand(el.getAttribute('data-notice'));
 				break;
+			case 'showTutorial':
+				sheet.close();
+				tutorial.start();
+				break;
 			case 'openSettings':
 				openSettings();
 				break;
@@ -5102,9 +5130,11 @@
 				saveSettings({ vaultRoot: path });
 				break;
 			case 'project':
+				navigation.before();
 				ui.projectId = el.getAttribute('data-project');
 				clearPicked();
 				render();
+				navigation.after();
 				break;
 			case 'connect':
 			case 'cancelConnect':
@@ -5146,11 +5176,13 @@
 			var tabs = Array.prototype.slice.call(el.parentNode.querySelectorAll('[role="tab"]'));
 			var t = tabs.indexOf(el) + (e.key === 'ArrowRight' ? 1 : -1);
 			var next = tabs[(t + tabs.length) % tabs.length];
+			navigation.before();
 			ui.projectId = next.getAttribute('data-project');
 			clearPicked();
 			render();
 			var again = document.querySelector('[data-key="' + sel(next.getAttribute('data-key')) + '"]');
 			if (again) again.focus();
+			navigation.after();
 			e.preventDefault();
 			return;
 		}
@@ -5446,10 +5478,21 @@
 		ui.view.effectiveTheme = v.effectiveTheme;
 		wearTheme(ui.view);
 		if (sheet.open) drawSheet(ui.view);
+		if (tutorial) tutorial.refresh();
 		// The header and Home say nothing of the settings but the folder, which the rest carries.
 	}
 
 	function onHost(message) {
+		var previousRealStudent = studentKey(latestRealView);
+		if (message.type === 'view') {
+			latestRealView = message.view;
+			if (tutorial && tutorial.active() && tutorial.owner() !== studentKey(latestRealView)) tutorial.cancel();
+		}
+		if (tutorial && tutorial.practice()) {
+			if (message.type === 'activity' && latestRealView) latestRealView.activity = message.activity;
+			// Actions started before a replay still get their answer and stop showing as busy.
+			if (message.type !== 'actionResult') return;
+		}
 		// While the host takes a picture of the window, nothing redraws it.
 		if (holdForShot(message)) return;
 		if (message.type === 'view') {
@@ -5466,8 +5509,10 @@
 			}
 			ui.viewRest = keys.rest;
 			ui.viewSet = keys.set;
+			var previousStudent = previousRealStudent;
 			var wasSignedIn = ui.view && ui.view.connection === 'signedIn';
 			ui.view = message.view;
+			if (previousStudent && previousStudent !== studentKey(ui.view)) leaveForPicker();
 			if (!ui.view.activity) ui.view.activity = { line: null, upload: null, download: null, move: null, waiting: null, active: [] };
 			ui.index = buildIndex(ui.view);
 			// Not now lasts for that one question; a new one (another open) asks again.
@@ -5496,6 +5541,8 @@
 			}
 			render();
 			applyRoute();
+			if (previousStudent !== studentKey(ui.view)) navigation.reset();
+			if (tutorial) tutorial.consider();
 		} else if (message.type === 'fileDetail') {
 			var d = message.detail;
 			if (ui.screen === 'detail' && ui.detail && ui.detail.fileId === d.fileId) {
@@ -5531,21 +5578,139 @@
 			reveal(message.path);
 		}
 	}
+	function studentKey(v) {
+		return v && v.connection === 'signedIn' && !picking(v) && v.account ? v.account.email.trim().toLowerCase() : '';
+	}
+
+	var navigation = window.ArmoryNavigation({
+		allowed: function () { return !!studentKey(ui.view) && !sheet.open && !ask.open && !(tutorial && tutorial.active()); },
+		same: function (a, b) { return a.screen === b.screen && a.fileId === b.fileId && a.projectId === b.projectId && (a.folders[a.projectId] || '') === (b.folders[b.projectId] || ''); },
+		capture: function () {
+			var place = browserPlace();
+			return { screen: ui.screen, fileId: ui.detail && ui.detail.fileId, projectId: place ? place.project.id : ui.projectId,
+				folders: Object.assign({}, ui.folders), search: Object.assign({}, ui.fileSearch, { timer: 0 }),
+				top: scroller.scrollTop, recess: recessTop(), homeScroll: ui.homeScroll, homeRecess: ui.homeRecess,
+				focus: activeKey(), returnKey: ui.returnKey };
+		},
+		restore: function (entry) {
+			clearTimeout(ui.fileSearch.timer);
+			ui.fileSearch = Object.assign({}, entry.search);
+			ui.projectId = entry.projectId;
+			ui.folders = Object.assign({}, entry.folders);
+			ui.returnKey = entry.returnKey;
+			ui.homeScroll = entry.homeScroll;
+			ui.homeRecess = entry.homeRecess;
+			clearPicked();
+			ui.screen = entry.screen === 'detail' && findRow(entry.fileId) ? 'detail' : 'home';
+			ui.detail = ui.screen === 'detail' ? partialDetail(entry.fileId) : null;
+			if (ui.detail) bridge.send('openFile', { fileId: entry.fileId });
+			render();
+			scroller.scrollTop = entry.top;
+			setRecessTop(entry.recess);
+			mountLists(false);
+			var focus = entry.focus && document.querySelector('[data-key="' + sel(entry.focus) + '"]');
+			(focus || document.querySelector('[data-key="hdr-vault"]')).focus({ preventScroll: true });
+			updateCues();
+		}
+	});
+	var tutorial = null;
+
+	var latestRealView = null, practiceRow = null;
+	function clone(value) { return JSON.parse(JSON.stringify(value)); }
+	function practiceView(phase) {
+		var v = clone(latestRealView || ui.view);
+		var mine = phase === 'mine' || phase === 'changed';
+		var checkout = mine ? { state: 'mine', label: 'Checked out by you', name: myName(v), email: v.account.email, device: v.account.deviceName, since: new Date(bridge.now()).toISOString() }
+			: phase === 'other' ? { state: 'other', label: 'Checked out by Ana Reyes on Practice PC', name: 'Ana Reyes', email: null, device: 'Practice PC', since: new Date(bridge.now()).toISOString() } : clone(AVAILABLE);
+		practiceRow = { fileId: 'tutorial-practice', name: 'Practice-Plate.SLDPRT', path: 'Practice/Your folder/Practice-Plate.SLDPRT',
+			status: phase === 'changed' ? 'changed' : 'synced', changed: phase === 'changed', checkout: checkout,
+			releaseNotChecked: false, updatedAt: new Date(bridge.now()).toISOString(), updatedBy: myName(v), savedRelease: null, newerThanPin: false };
+		v.projects = [{ id: 'tutorial-project', name: 'Practice', archived: false, role: 'student', canTakeBack: false,
+			folders: [{ path: '', name: 'Practice', fileCount: 0, files: [] }, { path: 'Your folder', name: 'Your folder', fileCount: 1, files: [practiceRow] }],
+			pinnedRelease: 2025, newerThanPinCount: 0 }];
+		v.myFiles = mine ? [{ fileId: practiceRow.fileId, name: practiceRow.name, path: practiceRow.path, project: 'Practice', status: practiceRow.status, note: null, checkout: checkout }] : [];
+		v.notices = []; v.prompt = null; v.heldForOthers = null; v.updateNote = null; v.profiles = null;
+		v.settings.sharedComputer = false;
+		v.activity = { line: null, upload: null, download: null, move: null, waiting: null, active: [], log: [] };
+		v.sync = { state: 'synced', line: 'Practice only. Your team\'s files stay as they are.', detail: null, pendingCount: 0 };
+		return v;
+	}
+	function practiceSend(type) {
+		if (type === 'checkOut' || type === 'checkIn') {
+			ui.view = practiceView(type === 'checkOut' ? 'mine' : 'available');
+			ui.index = buildIndex(ui.view);
+			render();
+			showResult(true, type === 'checkOut' ? 'Practice file checked out by you.' : 'Practice file checked in. Everyone can use it now.');
+		} else if (type === 'openFile') {
+			setTimeout(function () {
+				if (!tutorial.practice()) return;
+				ui.detail = partialDetail(practiceRow.fileId); ui.detail.history = [];
+				ui.waitingForDetail = false; render();
+			}, 0);
+		} else if (type === 'launchFile') showResult(true, 'Practice opened. A real part opens in SolidWorks.');
+		tutorial.refresh();
+		return null;
+	}
+	tutorial = window.ArmoryTutorial.create({
+		student: function () { return studentKey(latestRealView || ui.view); },
+		auto: function () { return (!bridge.isDemo || new URLSearchParams(location.search).get('tutorial') === '1') && !ask.open && !sheet.open; },
+		capture: function () {
+			return { screen: ui.screen, detail: ui.detail, projectId: ui.projectId, folders: Object.assign({}, ui.folders),
+				search: Object.assign({}, ui.fileSearch, { timer: 0 }), top: scroller.scrollTop, recess: recessTop(),
+				selected: ui.selected, anchor: ui.anchor, returnKey: ui.returnKey, homeScroll: ui.homeScroll, homeRecess: ui.homeRecess };
+		},
+		prepare: function (step) {
+			hideTip();
+			var keepReport = step.report && ask.open && ui.ask && ui.ask.kind === 'report';
+			if (ask.open && !keepReport) ask.close(); if (sheet.open) sheet.close();
+			clearTimeout(ui.fileSearch.timer); resetFileSearch(); clearPicked();
+			ui.view = step.practice ? practiceView(step.phase) : latestRealView;
+			ui.index = buildIndex(ui.view);
+			if (step.practice) { ui.projectId = 'tutorial-project'; ui.folders = { 'tutorial-project': 'Your folder' }; }
+			else if (ui.projectId === 'tutorial-project') { ui.projectId = null; ui.folders = {}; }
+			ui.screen = step.practice && step.place !== 'home' ? 'detail' : 'home';
+			ui.detail = ui.screen === 'detail' ? partialDetail(practiceRow.fileId) : null;
+			if (ui.detail) ui.detail.history = [];
+			ui.freshDraw = true; render();
+			if (step.settings) openSettings();
+			if (step.report && !keepReport) openAsk('report', { kind: 'bug' }, 'hdr-settings');
+		},
+		save: function () { ui.view = practiceView('changed'); ui.index = buildIndex(ui.view); render(); },
+		previewStudent: function () {
+			ui.view = clone(latestRealView);
+			ui.view.profiles = { showing: true, currentId: 'practice-student', sharedFolder: ui.view.vaultRoot, pinsRequired: false,
+				canChangePins: false, pinsNote: null, canTurnOff: false, note: null,
+				profiles: [{ id: 'practice-student', name: 'Practice student', email: 'practice@student.test', initials: 'PS', hue: 0,
+					current: true, lastUsedAt: null, folder: ui.view.vaultRoot, ownFolder: false, waiting: null, needsSignIn: false, hasPin: false, canRemove: false }],
+				step: { kind: 'choose', profileId: null, message: null, triesLeft: null, waitSeconds: null, ownFolder: null, ownerName: null,
+					ownerWaiting: null, fromName: null, connectPhase: null } };
+			ui.freshDraw = true; render();
+		},
+		stop: function (saved) {
+			if (ask.open) ask.close(); if (sheet.open) sheet.close();
+			ui.view = latestRealView; ui.index = buildIndex(ui.view); practiceRow = null;
+			clearTimeout(ui.fileSearch.timer); resetFileSearch();
+			ui.screen = 'home'; ui.detail = null; ui.projectId = null; ui.folders = {}; clearPicked();
+			if (saved) {
+				ui.projectId = saved.projectId; ui.folders = saved.folders; ui.fileSearch = saved.search;
+				ui.screen = saved.screen === 'detail' && saved.detail && findRow(saved.detail.fileId) ? 'detail' : 'home';
+				ui.detail = ui.screen === 'detail' ? saved.detail : null;
+				ui.selected = saved.selected; ui.anchor = saved.anchor; ui.returnKey = saved.returnKey;
+				ui.homeScroll = saved.homeScroll; ui.homeRecess = saved.homeRecess;
+			}
+			ui.freshDraw = true; render();
+			if (ui.detail) bridge.send('openFile', { fileId: ui.detail.fileId });
+			if (saved) { scroller.scrollTop = saved.top; setRecessTop(saved.recess); mountLists(false); }
+			var focus = document.querySelector('[data-key="hdr-settings"]'); if (focus) focus.focus({ preventScroll: true });
+		},
+		storageFailed: function () { showResult(false, 'Armory could not remember this lesson. You can replay it in Settings.'); }
+	});
+
 	bridge.onMessage(onHost);
 
-	// Load the pure module locally before asking for the first view. A classic script
-	// also works in the file:// demo, without changing index.html or the bridge.
-	var searchScript = document.createElement('script');
-	var searchUrl = new URL('file-search.js', document.currentScript.src);
-	searchUrl.search = new URL(document.currentScript.src).search;
-	searchScript.src = searchUrl.href;
-	searchScript.onload = function () {
-		fileSearch = window.ArmoryFileSearch;
-		bridge.send('ready');
-	};
-	searchScript.onerror = function () {
+	if (fileSearch) bridge.send('ready');
+	else {
 		resultWord.textContent = 'Armory could not load file search. Close and reopen Armory.';
 		resultBox.setAttribute('data-on', 'true');
-	};
-	document.head.appendChild(searchScript);
+	}
 })();

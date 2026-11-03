@@ -62,6 +62,11 @@
 //               student brings the picker back, a busy folder offers Wait or a folder of
 //               one's own, and Settings > Shared computer offers Remove only where it may
 //               be used.
+//   tutorial    every step targets an existing control, waits for safe practice, contains
+//               keyboard focus, uses 44px controls and readable contrast in both themes down
+//               to 320x480, and never sends a practice command to the host. Completion and
+//               Skip survive reopening per student; Settings replays; identity changes close
+//               practice. Screenshots of all steps go to evidence/tutorial for the UI artifact.
 //   logo        the IDEA gear turns (idea-gear-spin, 24s, linear, infinite) when motion is
 //               allowed, holds still when the student asks for reduced motion, and is
 //               fully painted in both.
@@ -640,7 +645,7 @@ function expectedTabStops() {
 
 /* --------------------------------------------------------------- Run */
 
-const browser = await chromium.launch();
+let browser = await chromium.launch();
 const list = combos();
 let gridControlChecked = false;
 
@@ -1289,7 +1294,7 @@ for (const size of SIZES) {
 		expect(await page.evaluate(() => document.getElementById('settings').open), 'Settings did not open');
 		// A theme pad says its name and, under it, what it is ("Dark", "Light"); the name is the setting.
 		const keys = await page.$$eval('#settings button', (b) => b.map((x) => (x.querySelector('.seg-name') || x).textContent.trim()));
-		expect(keys.join('|') === 'Done|Change|On|Match Windows|IDEA|Space White|Turn on|Report a problem|Send feedback|Your feedback (3)|Open incidents folder', `sheet holds ${keys.join(', ')}`);
+		expect(keys.join('|') === 'Done|Change|On|Match Windows|IDEA|Space White|Turn on|Show me again|Report a problem|Send feedback|Your feedback (3)|Open incidents folder', `sheet holds ${keys.join(', ')}`);
 		await page.click('[data-key="set-theme-spaceWhite"]');
 		await settle(page);
 		expect((await page.getAttribute('html', 'data-theme')) === 'spaceWhite', 'Space White did not apply');
@@ -1438,7 +1443,7 @@ for (const size of SIZES) {
 		expect(await page.evaluate(() => document.getElementById('settings').open), 'Settings did not open');
 		// A switch the student can't change is off (aria-disabled, so its tooltip says who can).
 		const keys = await page.$$eval('#settings button:not(:disabled):not([aria-disabled="true"])', (b) => b.map((x) => (x.querySelector('.seg-name') || x).textContent.trim()));
-		expect(keys.join('|') === 'Done|On|Match Windows|IDEA|Space White|Turn on|Remove|Report a problem|Send feedback|Your feedback (3)|Open incidents folder', `the sheet holds ${keys.join(', ')}`);
+		expect(keys.join('|') === 'Done|On|Match Windows|IDEA|Space White|Turn on|Remove|Show me again|Report a problem|Send feedback|Your feedback (3)|Open incidents folder', `the sheet holds ${keys.join(', ')}`);
 		expect(await page.$eval('[data-key="set-pins"]', (b) => b.getAttribute('aria-disabled') === 'true'), 'a student can change the PIN switch');
 		expect(!(await page.$('[data-key="set-shared"]')), 'Settings still offers a shared-computer switch; 0.5.0 shares a computer by itself');
 		expect(/Only a mentor can/.test(await page.getAttribute('[data-key="set-pins"]', 'data-tip')), 'the PIN switch does not say who can change it');
@@ -1721,6 +1726,7 @@ const CONTRACT = {
 	openFile: ['fileId'],
 	launchFile: ['path', ...ACT],
 	showInFolder: ['path'],
+	openRecovery: ['path'],
 	checkOut: ['paths', 'open', ...ACT],
 	checkIn: ['paths', ...ACT],
 	undoCheckOut: ['paths', ...ACT],
@@ -1770,6 +1776,10 @@ const CONTRACT = {
 // 0.4.2: the vaultRoot card's Fix it sends repairVaultRoot; opening a card's list asks for all of
 // its files (readNoticeItems), and the answer draws every one of them, a line before each reason.
 async function noticesBridge({ page, host, click, view, expect }) {
+	await host({ type: 'view', view: view('synced', { notices: [{ key: 'recovered', kind: 'recovered', tone: 'look', title: 'Your file is safe',
+		detail: 'Move it into your own folder.', count: 1, action: { label: 'Show me', command: 'openRecovery', paths: ['practice/Plate.SLDPRT'] }, items: [] }] }) });
+	const recovered = await click('[data-key="nt-act-recovered"]');
+	expect(recovered.type === 'openRecovery' && recovered.path === 'practice/Plate.SLDPRT', 'Show me sent ' + JSON.stringify(recovered));
 	await host({ type: 'view', view: view('folderInProject') });
 	let m = await click('[data-key="nt-act-vaultRoot"]');
 	expect(m.type === 'repairVaultRoot' && typeof m.requestId === 'string', 'Fix it sent ' + JSON.stringify(m));
@@ -1889,6 +1899,7 @@ tally.bridgeTypes = 0;
 	const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, colorScheme: 'dark', reducedMotion: 'reduce', timezoneId: 'America/Los_Angeles' });
 	const requests = [];
 	context.on('request', (r) => requests.push(r.url()));
+	await context.addInitScript((emails) => { for (const email of emails) localStorage.setItem('armory.tutorial.v1:' + encodeURIComponent(email.trim().toLowerCase()), 'finished'); }, Object.values(demo.states).map(s => s.view.account?.email).filter(Boolean));
 	await context.addInitScript(() => {
 		const t = new EventTarget();
 		window.__sent = [];
@@ -2469,6 +2480,7 @@ tally.drawing = 0;
 		if (!ok) fails.push(what);
 	};
 	const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, colorScheme: 'dark', reducedMotion: 'no-preference', timezoneId: 'America/Los_Angeles' });
+	await context.addInitScript((emails) => { for (const email of emails) localStorage.setItem('armory.tutorial.v1:' + encodeURIComponent(email.trim().toLowerCase()), 'finished'); }, Object.values(demo.states).map(s => s.view.account?.email).filter(Boolean));
 	await context.addInitScript(() => {
 		const t = new EventTarget();
 		window.__sent = [];
@@ -2749,13 +2761,237 @@ for (const [scheme, query, want] of [
 	await context.close();
 }
 
+// Release the hundreds of legacy contexts before the separate first-run matrix.
+await browser.close();
+browser = await chromium.launch();
+
+// The lesson uses the real renderers and a stand-in WebView2 host. Every action below is
+// reached with Tab and Enter. No practice action may become a host message.
+const tutorialShots = path.join(ROOT, 'evidence', 'tutorial');
+fs.mkdirSync(tutorialShots, { recursive: true });
+for (const theme of THEMES) for (const size of [...SIZES, { w: 320, h: 480 }]) {
+	const name = `tutorial ${theme} ${size.w}x${size.h}`;
+	const fails = [];
+	const expect = (ok, message) => { if (!ok) fails.push(message); };
+	const context = await browser.newContext({ viewport: { width: size.w, height: size.h }, reducedMotion: 'reduce', colorScheme: theme === 'idea' ? 'dark' : 'light' });
+	await context.addInitScript(() => {
+		const events = new EventTarget(); window.__sent = [];
+		window.chrome = { webview: { addEventListener: (...args) => events.addEventListener(...args), postMessage: m => window.__sent.push(m), postMessageWithAdditionalObjects: m => window.__sent.push(m) } };
+		window.__host = m => events.dispatchEvent(new MessageEvent('message', { data: m }));
+	});
+	const page = await context.newPage();
+	page.on('pageerror', e => fails.push(e.message));
+	try {
+		await page.goto(pathToFileURL(path.join(WWWROOT, 'index.html')).href);
+		await page.waitForFunction(() => window.__sent.length);
+		const real = JSON.parse(JSON.stringify(demoStates().states.synced.view)); real.effectiveTheme = theme;
+		await page.evaluate(v => window.__host({ type: 'view', view: v }), real);
+		await page.waitForSelector('#tutorial:not([hidden])');
+		const steps = await page.evaluate(() => window.ArmoryTutorial.steps.map(s => ({ id: s.id, target: s.target, action: s.action, click: s.click, exercise: s.exercise })));
+		expect(steps.length === 19, 'the lesson lost a requested topic');
+		async function tabTo(selector) {
+			for (let i = 0; i < 35; i++) {
+				await page.keyboard.press('Tab');
+				if (await page.evaluate(s => document.activeElement.matches(s), selector)) return;
+			}
+			throw new Error('Tab never reached ' + selector);
+		}
+		for (let i = 0; i < steps.length; i++) {
+			const step = steps[i];
+			tally.tutorialSteps = (tally.tutorialSteps || 0) + 1;
+			await page.waitForFunction(id => document.querySelector('#tutorial').dataset.step === id, step.id);
+			await settle(page);
+			expect(await page.locator(step.target).first().isVisible(), step.id + ': its declared target is missing or hidden');
+			expect(await page.evaluate(() => document.activeElement.id === 'tutorial-title'), step.id + ': the heading did not take focus');
+			const geometry = await page.evaluate(() => {
+				const target = document.querySelector('[data-tutorial-target]'), card = document.querySelector('.tutorial-card'), spot = document.querySelector('.tutorial-spot');
+				const rect = e => { const r = e.getBoundingClientRect(); return { x:r.x, y:r.y, right:r.right, bottom:r.bottom, w:r.width, h:r.height }; };
+				return { target: target && rect(target), card: rect(card), spot: rect(spot), overflow: document.documentElement.scrollWidth > innerWidth, motion: getComputedStyle(spot).animationName };
+			});
+			expect(geometry.target && geometry.target.w > 0 && geometry.target.h > 0, step.id + ': missing real target');
+			for (const [kind, r] of Object.entries({ card: geometry.card, spot: geometry.spot }))
+				expect(r.x >= 0 && r.y >= 0 && r.right <= size.w + 1 && r.bottom <= size.h + 1, step.id + ': ' + kind + ' leaves the window ' + JSON.stringify(r));
+			expect(geometry.spot.h >= 8, step.id + ': spotlight is hidden');
+			expect(!geometry.overflow && geometry.motion === 'none', step.id + ': overflow or reduced-motion failure');
+			const audit = await page.evaluate(inspect, JARGON);
+			for (const key of ['small', 'overflow', 'jargon', 'untipped']) for (const item of audit[key]) expect(false, step.id + ': ' + key + ': ' + item);
+			const contrast = await page.evaluate(() => {
+				const rgb = s => s.match(/[\d.]+/g).slice(0,3).map(Number);
+				const luminance = a => a.map(v => v / 255).map(v => v <= .04045 ? v/12.92 : ((v+.055)/1.055)**2.4).reduce((n,v,i) => n+v*[.2126,.7152,.0722][i],0);
+				const ratio = (a,b) => (Math.max(luminance(a),luminance(b))+.05)/(Math.min(luminance(a),luminance(b))+.05);
+				return [...document.querySelectorAll('.tutorial-card p, .tutorial-card h2, .tutorial-card button:not(:disabled):not([hidden])')].map(e => {
+					let p = e, bg;
+					while (p) { const s = getComputedStyle(p).backgroundColor; if (s.startsWith('rgb(')) { bg=rgb(s); break; } p=p.parentElement; }
+					return { text:e.textContent, ratio:ratio(rgb(getComputedStyle(e).color),bg) };
+				});
+			});
+			for (const c of contrast) expect(c.ratio >= 4.5, step.id + ': text contrast below 4.5: ' + JSON.stringify(c));
+			// A complete Tab loop visits only the target's permitted controls and the card, in order.
+			const focusOrder = [];
+			for (let n = 0; n < 16; n++) {
+				await page.keyboard.press('Tab');
+				const f = await page.evaluate(() => {
+					const e = document.activeElement;
+					return { key: e.dataset.tour || e.dataset.key || e.id, safe: !!e.closest('#tutorial, [data-tutorial-target]') };
+				});
+				if (focusOrder.includes(f.key)) break;
+				focusOrder.push(f.key); expect(f.safe, step.id + ': focus escaped to ' + f.key);
+				const ring = await page.evaluate(focusInfo);
+				expect(ring && ring.w >= 44 && ring.h >= 44 && ring.outlineWidth >= 2 && ring.ringRatio >= 3, step.id + ': focus ring/size ' + JSON.stringify(ring));
+			}
+			expect(focusOrder.includes('skip') && focusOrder.at(-1) === 'skip', step.id + ': Skip is not the last Tab stop');
+			expect(focusOrder.includes('tutorial-copy'), step.id + ': instructions cannot be reached for keyboard scrolling');
+			if (i > 0) expect(focusOrder.indexOf('tutorial-copy') < focusOrder.indexOf('back'), step.id + ': instructions do not precede the navigation controls');
+			await tabTo('#tutorial-copy');
+			const copyScrolls = await page.locator('#tutorial-copy').evaluate(e => e.scrollHeight > e.clientHeight);
+			if (copyScrolls) { await page.keyboard.press('PageDown'); expect(await page.locator('#tutorial-copy').evaluate(e => e.scrollTop > 0), step.id + ': keyboard cannot scroll the lesson words'); await page.keyboard.press('Home'); }
+			if (step.action) {
+				expect(await page.isDisabled('[data-tour="next"]'), step.id + ': Next did not wait for the exercise');
+				if (step.id === 'search' || step.id === 'words') {
+					await tabTo(step.id === 'search' ? '#file-search' : '#ask-report');
+					await page.keyboard.type(step.id === 'search' ? 'Practice' : 'The practice picture did not appear.');
+				} else {
+					await tabTo(step.exercise ? '[data-tour="exercise"]' : step.click);
+					await page.keyboard.press('Enter');
+				}
+				await page.waitForFunction(() => !document.querySelector('[data-tour="next"]').disabled);
+				await settle(page);
+			}
+			if (step.id === 'checkout') expect(await page.locator('[data-key="d-checkin"]').count() === 1, 'practice check out did not change the real state controls');
+			if (step.id === 'save') expect(/changes that aren't checked in/.test(await page.textContent('.detail-side .display')), 'practice change did not appear in file detail');
+			if (step.id === 'changed') expect((await page.textContent('[data-tutorial-target]')).trim() === 'Changed', 'Changed did not target the real badge');
+			if (step.id === 'checkin') expect(await page.locator('[data-key="d-checkout"]').count() === 1, 'practice check in did not release the file');
+			if (step.id === 'other') expect(await page.locator('[data-key="d-checkout"]').count() === 0 && /Ana/.test(await page.textContent('.detail-side .display')), 'another student has no meaningful state');
+			if (step.id === 'mine') {
+				const refreshed = JSON.parse(JSON.stringify(real)); refreshed.sync.detail = 'Fresh host update during practice.';
+				await page.evaluate(v => window.__host({ type: 'view', view: v }), refreshed);
+				expect(await page.locator('[data-key="d-checkin"]').count() === 1, 'host update replaced the practice file');
+			}
+			// A stray click, drop, or report shortcut must never send a host action.
+			await page.evaluate(() => {
+				const e = document.querySelector('[data-action="openVault"], [data-action="checkOut"], [data-action="askOk"]'); if (e) e.click();
+				document.dispatchEvent(new Event('drop', { bubbles:true, cancelable:true }));
+			});
+			await page.keyboard.press('Control+Enter');
+			expect(await page.evaluate(() => window.__sent.every(m => m.type === 'ready')), step.id + ': practice sent a host command');
+			await page.screenshot({ path: path.join(tutorialShots, `${String(i+1).padStart(2,'0')}-${step.id}-${theme}-${size.w}x${size.h}.png`) });
+			if (i > 0) {
+				await tabTo('[data-tour="back"]'); await page.keyboard.press('Enter'); await settle(page);
+				expect(await page.getAttribute('#tutorial','data-step') === steps[i-1].id, step.id + ': Back skipped a step');
+				await tabTo('[data-tour="next"]'); await page.keyboard.press('Enter'); await settle(page);
+			}
+			await tabTo('[data-tour="next"]'); await page.keyboard.press('Enter');
+		}
+		await page.waitForSelector('#tutorial[hidden]', { state:'attached' });
+		expect(await page.evaluate(() => Object.values(localStorage).includes('finished')), 'Finish was not remembered');
+		expect(await page.locator('#tab-tutorial-project').count() === 0 && await page.locator('[data-action=project]').count() === real.projects.length, 'practice data stayed after Finish');
+		expect((await page.textContent('#main')).includes('Fresh host update during practice.'), 'leaving practice discarded the newest host view');
+		await page.reload(); await page.waitForFunction(() => window.__sent.length);
+		await page.evaluate(v => window.__host({type:'view',view:v}), real); await settle(page);
+		expect(await page.getAttribute('#tutorial','hidden') !== null, 'a returning student saw first run again');
+		await page.click('[data-key="hdr-settings"]'); await page.click('[data-key="set-tutorial"]');
+		await page.waitForSelector('#tutorial:not([hidden])');
+		expect(await page.getAttribute('#tutorial','data-step') === 'welcome', 'Show me again did not restart');
+		await page.keyboard.press('Escape');
+		expect(await page.getAttribute('#tutorial','hidden') !== null, 'Escape did not skip the lesson');
+		const next = JSON.parse(JSON.stringify(real)); next.account.email = 'new-student@students.test';
+		await page.evaluate(v => window.__host({type:'view',view:v}), next); await settle(page);
+		expect(await page.getAttribute('#tutorial','hidden') === null, 'a new student inherited the previous student\'s completion');
+		const signedOut = JSON.parse(JSON.stringify(demoStates().states.signedOut.view));
+		await page.evaluate(v => window.__host({type:'view',view:v}), signedOut); await settle(page);
+		expect(await page.getAttribute('#tutorial','hidden') !== null && await page.getAttribute('body','data-screen') === 'connect', 'sign out left practice or another student visible');
+	} catch (e) { fails.push(threw(e)); }
+	try { await context.close(); } catch (e) { fails.push('closing context: ' + threw(e)); }
+	for (const f of fails) { tally.flowFailures++; problem('tutorial', name, f); }
+	tally.flows++;
+}
+
+// A first run also works before a class has folders, and an identity boundary immediately
+// removes the sandbox. Storage failure must leave the real window usable.
+for (const storageFails of [false, true]) {
+	const context = await browser.newContext({ viewport: {width:420,height:720}, reducedMotion:'reduce' });
+	await context.addInitScript(fail => {
+		if (fail) { Storage.prototype.getItem = () => { throw new Error('Storage unavailable'); }; Storage.prototype.setItem = () => { throw new Error('Storage unavailable'); }; }
+		const events = new EventTarget(); window.__sent = [];
+		window.chrome = { webview: { addEventListener: (...a) => events.addEventListener(...a), postMessage: m => window.__sent.push(m) } };
+		window.__host = m => events.dispatchEvent(new MessageEvent('message',{data:m}));
+	}, storageFails);
+	const page = await context.newPage();
+	const fails = []; page.on('pageerror', e => fails.push(e.message));
+	try {
+		await page.goto(pathToFileURL(path.join(WWWROOT,'index.html')).href);
+		await page.waitForFunction(() => window.__sent.length);
+		const real = JSON.parse(JSON.stringify(demoStates().states.synced.view)); real.projects = []; real.myFiles = [];
+		await page.evaluate(v => window.__host({type:'view',view:v}),real);
+		await page.waitForSelector('#tutorial:not([hidden])');
+		for (const next of ['project','folder','file']) {
+			await page.click('[data-tour="next"]');
+			await page.waitForFunction(id => document.querySelector('#tutorial').dataset.step === id,next);
+			if (next !== 'file' && await page.isDisabled('[data-tour="next"]')) fails.push('an empty account cannot continue past '+next);
+		}
+		await page.click('#vl-browser [data-action="openFile"]');
+		await page.waitForSelector('[data-key="d-checkout"]');
+		await page.evaluate(v => window.__host({type:'view',view:v}), JSON.parse(JSON.stringify(demoStates().states.pickerChoose.view)));
+		if (await page.getAttribute('#tutorial','hidden') === null || await page.getAttribute('body','data-screen') !== 'picker') fails.push('the picker left the previous student\'s practice visible');
+		real.account.email = 'another-student@students.test';
+		await page.evaluate(v => window.__host({type:'view',view:v}), real);
+		await page.waitForSelector('#tutorial:not([hidden])');
+		await page.click('[data-tour="skip"]');
+		if (storageFails && !(await page.textContent('#result-word')).includes('could not remember')) fails.push('storage failure was silent');
+		await page.reload(); await page.waitForFunction(() => window.__sent.length);
+		await page.evaluate(v => window.__host({type:'view',view:v}), real); await settle(page);
+		if (storageFails) {
+			await page.waitForSelector('#tutorial:not([hidden])'); await page.click('[data-tour="skip"]');
+		} else if (await page.getAttribute('#tutorial','hidden') === null) fails.push('Skip did not survive reopening');
+		await page.click('[data-key="hdr-settings"]'); await page.click('[data-key="set-tutorial"]');
+		await page.waitForSelector('#tutorial:not([hidden])');
+		await page.keyboard.press('Escape');
+		if (await page.getAttribute('body','data-screen') !== 'home') fails.push('replay did not return to real Home');
+	} catch(e) { fails.push(threw(e)); }
+	await context.close();
+	for (const f of fails) { tally.flowFailures++; problem('tutorial', 'lifecycle storageFails='+storageFails, f); }
+	tally.flows++;
+}
+
+for (const size of [...SIZES, {w:320,h:480}]) await flow('window back and forward', size, 'synced', async (page, expect) => {
+	await page.click('[data-action="folder"][data-folder="Drivetrain"]');
+	await page.fill('#file-search', 'Gearbox'); await page.waitForTimeout(220);
+	await page.click('#vl-browser [data-action="openFile"]'); await settle(page);
+	const file = await page.textContent('#detail-title');
+	await page.keyboard.press('Alt+ArrowLeft'); await settle(page);
+	expect(await page.inputValue('#file-search') === 'Gearbox', 'Back lost the folder search');
+	await page.keyboard.press('Alt+ArrowRight'); await settle(page);
+	expect(await page.textContent('#detail-title') === file, 'Forward lost the file detail');
+	async function side(button) {
+		await page.evaluate(b => { for (const type of ['mousedown','mouseup','auxclick']) document.dispatchEvent(new MouseEvent(type,{button:b,bubbles:true,cancelable:true})); }, button);
+		await settle(page);
+	}
+	await side(3); expect(await page.getAttribute('body','data-screen') === 'home', 'button 4 did not go back');
+	await side(4); expect(await page.getAttribute('body','data-screen') === 'detail', 'button 5 did not go forward');
+	await page.click('[data-key="hdr-settings"]');
+	await side(3); await page.keyboard.press('Alt+ArrowRight');
+	expect(await page.evaluate(() => document.querySelector('#settings').open), 'navigation dismissed a Settings sheet');
+	await page.click('[data-key="set-report"]'); await page.fill('#ask-report','Keep these words.');
+	await page.keyboard.press('Alt+ArrowLeft'); await side(4);
+	expect(await page.inputValue('#ask-report') === 'Keep these words.', 'navigation lost report words');
+	await page.keyboard.press('Escape');
+	await page.keyboard.press('Alt+ArrowLeft'); await settle(page);
+	expect(await page.getAttribute('body','data-screen') === 'detail', 'leaving detail for Settings lost the detail history entry');
+	await page.keyboard.press('Alt+ArrowLeft'); await settle(page);
+	await page.click('[data-action="project"]:last-child');
+	await side(4);
+	expect(await page.getAttribute('body','data-screen') === 'home', 'Forward survived a new navigation branch');
+	await side(3); await side(3); await side(3); await side(3);
+	expect(page.url().startsWith('file:'), 'an edge escaped the Armory page');
+});
+
 await browser.close();
 
 const fmt = (n) => (Number.isFinite(n) ? n.toFixed(2) : 'n/a');
 for (const p of problems.slice(0, 80)) console.log(p);
 if (problems.length > 80) console.log(`... and ${problems.length - 80} more`);
 console.log(
-	`CHECK-UI pages=${tally.pages} controls=${tally.controls} under44=${tally.under44} network=${tally.network} ` +
+	`CHECK-UI tutorialSteps=${tally.tutorialSteps || 0} pages=${tally.pages} controls=${tally.controls} under44=${tally.under44} network=${tally.network} ` +
 		`grids=${tally.grids} rowGrids=${tally.rowGrids} plantedGridLayersFound=${tally.gridControl ?? 0}/3 rowDecoration=${tally.rowDecoration} ` +
 		`chipsLikeButtons=${tally.chipsLikeButtons} overflow=${tally.overflow} hairlines=${tally.hairlines} hairlineMin=${fmt(tally.hairlineMin)} ` +
 		`hairlineUnder3=${tally.hairlineUnder3} tabStops=${tally.tabStops} focusMissed=${tally.focusMissed} ringMin=${fmt(tally.ringMin)} ` +
