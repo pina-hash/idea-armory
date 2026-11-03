@@ -2754,6 +2754,36 @@ for (const [scheme, query, want] of [
 	await context.close();
 }
 
+for (const size of [...SIZES, {w:320,h:480}]) await flow('window back and forward', size, 'synced', async (page, expect) => {
+	await page.click('[data-action="folder"][data-folder="Drivetrain"]');
+	await page.fill('#file-search', 'Gearbox'); await page.waitForTimeout(220);
+	await page.click('#vl-browser [data-action="openFile"]'); await settle(page);
+	const file = await page.textContent('#detail-title');
+	await page.keyboard.press('Alt+ArrowLeft'); await settle(page);
+	expect(await page.inputValue('#file-search') === 'Gearbox', 'Back lost the folder search');
+	await page.keyboard.press('Alt+ArrowRight'); await settle(page);
+	expect(await page.textContent('#detail-title') === file, 'Forward lost the file detail');
+	async function side(button) {
+		await page.evaluate(b => { for (const type of ['mousedown','mouseup','auxclick']) document.dispatchEvent(new MouseEvent(type,{button:b,bubbles:true,cancelable:true})); }, button);
+		await settle(page);
+	}
+	await side(3); expect(await page.getAttribute('body','data-screen') === 'home', 'button 4 did not go back');
+	await side(4); expect(await page.getAttribute('body','data-screen') === 'detail', 'button 5 did not go forward');
+	await page.click('[data-key="hdr-settings"]');
+	await side(3); await page.keyboard.press('Alt+ArrowRight');
+	expect(await page.evaluate(() => document.querySelector('#settings').open), 'navigation dismissed a Settings sheet');
+	await page.click('[data-key="set-report"]'); await page.fill('#ask-report','Keep these words.');
+	await page.keyboard.press('Alt+ArrowLeft'); await side(4);
+	expect(await page.inputValue('#ask-report') === 'Keep these words.', 'navigation lost report words');
+	await page.keyboard.press('Escape');
+	await page.keyboard.press('Alt+ArrowLeft'); await settle(page);
+	await page.click('[data-action="project"]:last-child');
+	await side(4);
+	expect(await page.getAttribute('body','data-screen') === 'home', 'Forward survived a new navigation branch');
+	await side(3); await side(3); await side(3); await side(3);
+	expect(page.url().startsWith('file:'), 'an edge escaped the Armory page');
+});
+
 await browser.close();
 
 const fmt = (n) => (Number.isFinite(n) ? n.toFixed(2) : 'n/a');

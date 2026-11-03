@@ -1414,6 +1414,7 @@
 				render();
 				var again = document.getElementById('pin-new-1');
 				if (again) again.focus();
+			navigation.after();
 				return;
 			}
 			el.readOnly = true;
@@ -4587,6 +4588,7 @@
 
 	/** Moves the view to a file's detail: the screen changes, scrolls to the top and the heading takes focus. */
 	function openFile(fileId, fromKey) {
+		navigation.before();
 		if (ui.screen === 'home') {
 			ui.homeScroll = scroller.scrollTop;
 			ui.homeRecess = recessTop();
@@ -4601,9 +4603,11 @@
 		scroller.scrollTop = 0;
 		focusHeading();
 		updateCues();
+		navigation.after();
 	}
 
 	function back() {
+		navigation.before();
 		ui.screen = 'home';
 		ui.detail = null;
 		render();
@@ -4614,11 +4618,13 @@
 		(target || document.querySelector('[data-key="hdr-vault"]')).focus({ preventScroll: true });
 		if (target && target.scrollIntoView) target.scrollIntoView({ block: 'nearest' });
 		updateCues();
+		navigation.after();
 	}
 
 	/** Into a folder (or back up to one): the selection is for one folder at a time, and
 	 *  the list starts at its top. */
 	function goFolder(path, fromKey) {
+		navigation.before();
 		var place = browserPlace();
 		ui.folders[place.project.id] = path;
 		clearPicked();
@@ -4635,6 +4641,7 @@
 		var focus = document.querySelector('#vl-browser [data-rove="row"][tabindex="0"]') || document.querySelector('.crumb-here');
 		if (fromKey && focus && focus.focus) focus.focus({ preventScroll: true });
 		updateCues();
+		navigation.after();
 	}
 
 	/* ------------------------------------------------------- Dropping files */
@@ -4878,7 +4885,7 @@
 				openFile(el.getAttribute('data-file-id'), from);
 				break;
 			case 'back':
-				back();
+				if (!navigation.go(-1)) back();
 				break;
 			case 'showInFolder':
 				bridge.send('showInFolder', { path: path });
@@ -5102,9 +5109,11 @@
 				saveSettings({ vaultRoot: path });
 				break;
 			case 'project':
+				navigation.before();
 				ui.projectId = el.getAttribute('data-project');
 				clearPicked();
 				render();
+				navigation.after();
 				break;
 			case 'connect':
 			case 'cancelConnect':
@@ -5146,11 +5155,13 @@
 			var tabs = Array.prototype.slice.call(el.parentNode.querySelectorAll('[role="tab"]'));
 			var t = tabs.indexOf(el) + (e.key === 'ArrowRight' ? 1 : -1);
 			var next = tabs[(t + tabs.length) % tabs.length];
+			navigation.before();
 			ui.projectId = next.getAttribute('data-project');
 			clearPicked();
 			render();
 			var again = document.querySelector('[data-key="' + sel(next.getAttribute('data-key')) + '"]');
 			if (again) again.focus();
+			navigation.after();
 			e.preventDefault();
 			return;
 		}
@@ -5466,8 +5477,10 @@
 			}
 			ui.viewRest = keys.rest;
 			ui.viewSet = keys.set;
+			var previousStudent = studentKey(ui.view);
 			var wasSignedIn = ui.view && ui.view.connection === 'signedIn';
 			ui.view = message.view;
+			if (previousStudent && previousStudent !== studentKey(ui.view)) leaveForPicker();
 			if (!ui.view.activity) ui.view.activity = { line: null, upload: null, download: null, move: null, waiting: null, active: [] };
 			ui.index = buildIndex(ui.view);
 			// Not now lasts for that one question; a new one (another open) asks again.
@@ -5496,6 +5509,7 @@
 			}
 			render();
 			applyRoute();
+			if (previousStudent !== studentKey(ui.view)) navigation.reset();
 		} else if (message.type === 'fileDetail') {
 			var d = message.detail;
 			if (ui.screen === 'detail' && ui.detail && ui.detail.fileId === d.fileId) {
@@ -5531,6 +5545,43 @@
 			reveal(message.path);
 		}
 	}
+	function studentKey(v) {
+		return v && v.connection === 'signedIn' && !picking(v) && v.account ? v.account.email.trim().toLowerCase() : '';
+	}
+
+	var navigation = window.ArmoryNavigation({
+		allowed: function () { return !!studentKey(ui.view) && !sheet.open && !ask.open && !(tutorial && tutorial.active()); },
+		same: function (a, b) { return a.screen === b.screen && a.fileId === b.fileId && a.projectId === b.projectId && (a.folders[a.projectId] || '') === (b.folders[b.projectId] || ''); },
+		capture: function () {
+			var place = browserPlace();
+			return { screen: ui.screen, fileId: ui.detail && ui.detail.fileId, projectId: place ? place.project.id : ui.projectId,
+				folders: Object.assign({}, ui.folders), search: Object.assign({}, ui.fileSearch, { timer: 0 }),
+				top: scroller.scrollTop, recess: recessTop(), homeScroll: ui.homeScroll, homeRecess: ui.homeRecess,
+				focus: activeKey(), returnKey: ui.returnKey };
+		},
+		restore: function (entry) {
+			clearTimeout(ui.fileSearch.timer);
+			ui.fileSearch = Object.assign({}, entry.search);
+			ui.projectId = entry.projectId;
+			ui.folders = Object.assign({}, entry.folders);
+			ui.returnKey = entry.returnKey;
+			ui.homeScroll = entry.homeScroll;
+			ui.homeRecess = entry.homeRecess;
+			clearPicked();
+			ui.screen = entry.screen === 'detail' && findRow(entry.fileId) ? 'detail' : 'home';
+			ui.detail = ui.screen === 'detail' ? partialDetail(entry.fileId) : null;
+			if (ui.detail) bridge.send('openFile', { fileId: entry.fileId });
+			render();
+			scroller.scrollTop = entry.top;
+			setRecessTop(entry.recess);
+			mountLists(false);
+			var focus = entry.focus && document.querySelector('[data-key="' + sel(entry.focus) + '"]');
+			(focus || document.querySelector('[data-key="hdr-vault"]')).focus({ preventScroll: true });
+			updateCues();
+		}
+	});
+	var tutorial = null;
+
 	bridge.onMessage(onHost);
 
 	if (fileSearch) bridge.send('ready');
