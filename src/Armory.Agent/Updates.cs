@@ -57,11 +57,12 @@ internal static class Updates
             // (TaskbarPins), so moving over never leaves a blank pin.
             if (Environment.ProcessPath is { } pinned && IsVelopackCopy(pinned, File.Exists))
                 TaskbarPins.Repair(TaskbarPins.Folder(), pinned, log);
-            LegacyInstall.Retire(LegacyInstall.Folder(), log);
+            InstallRetirement.Run(AgentPaths.Resolve());
             if (Environment.ProcessPath is { } exe && IsVelopackCopy(exe, File.Exists))
             {
                 var settings = new SettingsStore(AgentPaths.Resolve().SettingsFile).Load();
-                if (settings.StartAtSignIn) StartupRegistration.Apply(true, exe);
+                StartupRegistration.Apply(settings.StartAtSignIn, StableLauncher.For(exe, File.Exists));
+                ShellIdentity.Repair(Path.GetDirectoryName(exe)!, log);
             }
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.Security.SecurityException or InvalidOperationException)
@@ -75,7 +76,26 @@ internal static class Updates
     {
         var paths = AgentPaths.Resolve();
         new AgentLog(paths.LogFile, paths.CrashFile).Info(UpdatedLineFor(version));
+        // Velopack 1.2.161 rewrites shortcuts and extracts the root stub AFTER this hook.
+        // Repair after its process exits, including when --norestart leaves Armory closed.
+        InstallRetirement.FinishAfterUpdaterExits();
+    }
+
+    [SupportedOSPlatform("windows")]
+    internal static int FinishUpdate(int updaterPid)
+    {
+        try
+        {
+            using var updater = Process.GetProcessById(updaterPid);
+            if (!updater.WaitForExit(TimeSpan.FromSeconds(60)))
+            {
+                InstallRetirement.Save(AgentPaths.Resolve(), "deferred: updater did not exit; the next start repairs registrations");
+                return 1;
+            }
+        }
+        catch (ArgumentException) { } // Already exited.
         AfterInstall();
+        return 0;
     }
 
     // The line the new version writes once it is in place (AgentLog.EndOf reads it).
@@ -256,39 +276,4 @@ internal static class LegacyInstall
         @"Software\Microsoft\Windows\CurrentVersion\Uninstall\IDEA Armory",
         @"Software\Microsoft\Windows\CurrentVersion\Uninstall\{28A1D010-82E3-4294-9676-83AC0AA1F5D3}_is1",
     ];
-    private static readonly TimeSpan QuitWait = TimeSpan.FromSeconds(12);
-
-    internal static string Folder() => ShellIdentity.InstallFolder();
-
-    [SupportedOSPlatform("windows")]
-    internal static void Retire(string folder, Action<string> log)
-    {
-        var exe = Path.Combine(folder, "IdeaArmory.exe");
-        if (!File.Exists(exe)) return;
-        // The old copy, if it runs, quits cleanly first (the same request "--quit" makes).
-        try
-        {
-            using var quit = Process.Start(new ProcessStartInfo(exe, "--quit") { UseShellExecute = false, CreateNoWindow = true });
-            if (quit is not null && !quit.WaitForExit(QuitWait)) log("the older Armory did not quit within " + QuitWait.TotalSeconds + " s");
-        }
-        catch (Exception error) when (error is System.ComponentModel.Win32Exception or InvalidOperationException) { log("could not ask the older Armory to quit: " + error.Message); }
-        foreach (var key in UninstallKeys)
-        {
-            try { Registry.CurrentUser.DeleteSubKeyTree(key, throwOnMissingSubKey: false); }
-            catch (Exception error) when (error is UnauthorizedAccessException or System.Security.SecurityException or IOException) { log("could not remove " + key + ": " + error.Message); }
-        }
-        var shortcut = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs, Environment.SpecialFolderOption.DoNotVerify), ShellIdentity.ShortcutName);
-        try
-        {
-            if (File.Exists(shortcut) && ShortcutAppId.Target(shortcut) is { } target && string.Equals(Path.GetFullPath(target), Path.GetFullPath(exe), StringComparison.OrdinalIgnoreCase))
-                File.Delete(shortcut);
-        }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.Runtime.InteropServices.COMException or InvalidCastException) { log("could not remove the older Start menu shortcut: " + error.Message); }
-        try
-        {
-            Directory.Delete(folder, recursive: true);
-            log("retired the older install at " + folder);
-        }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { log("could not remove every file of the older install at " + folder + ": " + error.Message); }
-    }
 }
