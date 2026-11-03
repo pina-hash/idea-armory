@@ -645,7 +645,7 @@ function expectedTabStops() {
 
 /* --------------------------------------------------------------- Run */
 
-const browser = await chromium.launch();
+let browser = await chromium.launch();
 const list = combos();
 let gridControlChecked = false;
 
@@ -1294,7 +1294,7 @@ for (const size of SIZES) {
 		expect(await page.evaluate(() => document.getElementById('settings').open), 'Settings did not open');
 		// A theme pad says its name and, under it, what it is ("Dark", "Light"); the name is the setting.
 		const keys = await page.$$eval('#settings button', (b) => b.map((x) => (x.querySelector('.seg-name') || x).textContent.trim()));
-		expect(keys.join('|') === 'Done|Change|On|Match Windows|IDEA|Space White|Turn on|Report a problem|Send feedback|Your feedback (3)|Open incidents folder', `sheet holds ${keys.join(', ')}`);
+		expect(keys.join('|') === 'Done|Change|On|Match Windows|IDEA|Space White|Turn on|Show me again|Report a problem|Send feedback|Your feedback (3)|Open incidents folder', `sheet holds ${keys.join(', ')}`);
 		await page.click('[data-key="set-theme-spaceWhite"]');
 		await settle(page);
 		expect((await page.getAttribute('html', 'data-theme')) === 'spaceWhite', 'Space White did not apply');
@@ -1443,7 +1443,7 @@ for (const size of SIZES) {
 		expect(await page.evaluate(() => document.getElementById('settings').open), 'Settings did not open');
 		// A switch the student can't change is off (aria-disabled, so its tooltip says who can).
 		const keys = await page.$$eval('#settings button:not(:disabled):not([aria-disabled="true"])', (b) => b.map((x) => (x.querySelector('.seg-name') || x).textContent.trim()));
-		expect(keys.join('|') === 'Done|On|Match Windows|IDEA|Space White|Turn on|Remove|Report a problem|Send feedback|Your feedback (3)|Open incidents folder', `the sheet holds ${keys.join(', ')}`);
+		expect(keys.join('|') === 'Done|On|Match Windows|IDEA|Space White|Turn on|Remove|Show me again|Report a problem|Send feedback|Your feedback (3)|Open incidents folder', `the sheet holds ${keys.join(', ')}`);
 		expect(await page.$eval('[data-key="set-pins"]', (b) => b.getAttribute('aria-disabled') === 'true'), 'a student can change the PIN switch');
 		expect(!(await page.$('[data-key="set-shared"]')), 'Settings still offers a shared-computer switch; 0.5.0 shares a computer by itself');
 		expect(/Only a mentor can/.test(await page.getAttribute('[data-key="set-pins"]', 'data-tip')), 'the PIN switch does not say who can change it');
@@ -2761,6 +2761,10 @@ for (const [scheme, query, want] of [
 	await context.close();
 }
 
+// Release the hundreds of legacy contexts before the separate first-run matrix.
+await browser.close();
+browser = await chromium.launch();
+
 // The lesson uses the real renderers and a stand-in WebView2 host. Every action below is
 // reached with Tab and Enter. No practice action may become a host message.
 const tutorialShots = path.join(ROOT, 'evidence', 'tutorial');
@@ -2897,7 +2901,7 @@ for (const theme of THEMES) for (const size of [...SIZES, { w: 320, h: 480 }]) {
 		await page.evaluate(v => window.__host({type:'view',view:v}), signedOut); await settle(page);
 		expect(await page.getAttribute('#tutorial','hidden') !== null && await page.getAttribute('body','data-screen') === 'connect', 'sign out left practice or another student visible');
 	} catch (e) { fails.push(threw(e)); }
-	await context.close();
+	try { await context.close(); } catch (e) { fails.push('closing context: ' + threw(e)); }
 	for (const f of fails) { tally.flowFailures++; problem('tutorial', name, f); }
 	tally.flows++;
 }

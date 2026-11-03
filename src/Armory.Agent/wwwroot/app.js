@@ -629,7 +629,7 @@
 		selEvery: function (c) { return 'Select all ' + plural(c.count, 'file', 'files') + ' in this folder.'; },
 		selClear: 'Clear the selection (Esc).',
 		// File detail.
-		back: 'Go back to Home, to the list you came from.',
+		back: 'Go back to the previous place in Armory.',
 		detailOpen: function (c) { return TIPS.open(c); },
 		detailOut: function (c) { return 'Check out ' + c.name + ' so you can save changes to it. Nobody else can until you check it in.'; },
 		detailOutOpen: function (c) { return 'Check out ' + c.name + ' and open it' + (c.cad ? ' in SolidWorks' : '') + ', ready to change.'; },
@@ -2924,7 +2924,7 @@
 			'h1',
 			d.name,
 			' id="detail-title" tabindex="-1" data-key="detail-title"',
-			'<button class="key back-key" type="button" data-action="back" data-key="back" aria-label="Back to Home"' + tipAttr('back') + '>' + icon('chev-left') + '</button>'
+			'<button class="key back-key" type="button" data-action="back" data-key="back" aria-label="Back to the previous place"' + tipAttr('back') + '>' + icon('chev-left') + '</button>'
 		);
 		html +=
 			'<p class="title-sub">' + kindChip(d.name) + '<span class="meta-text">' + esc(whereIs(d.path)) + '</span>' +
