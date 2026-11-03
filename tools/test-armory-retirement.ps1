@@ -42,11 +42,17 @@ function Link([string]$file, [string]$target) {
 $oldSetup = Join-Path $scratch 'IDEA-Armory-Setup-v0.3.3.exe'
 [void][IO.Directory]::CreateDirectory($scratch)
 Invoke-WebRequest 'https://github.com/pina-hash/idea-armory/releases/download/v0.3.3/IDEA-Armory-Setup-v0.3.3.exe' -OutFile $oldSetup
+$oldPackage = Join-Path $scratch 'IDEAArmory-0.4.2-full.nupkg'
+Invoke-WebRequest 'https://github.com/pina-hash/idea-armory/releases/download/v0.4.2/IDEAArmory-0.4.2-full.nupkg' -OutFile $oldPackage
 $loose = Join-Path $scratch 'unpacked zip\files'
+$channel = Join-Path $scratch 'alternate-channel'
+$channelWithWork = Join-Path $scratch 'alternate-channel-with-work'
 $machine = Join-Path $env:ProgramFiles 'IDEA Armory retirement smoke'
 $orphan = $legacy + '.old'
 $taskName = 'Armory retirement smoke'
 $machineApp = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\ArmoryRetirementSmoke'
+$channelApp = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\ArmoryRetirementChannelSmoke'
+$channelWorkApp = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\ArmoryRetirementChannelWorkSmoke'
 $staleLink = Join-Path ([Environment]::GetFolderPath('Startup')) 'Old Armory smoke.lnk'
 $looseLink = Join-Path ([Environment]::GetFolderPath('DesktopDirectory')) 'Loose Armory smoke.lnk'
 $machineLink = Join-Path ([Environment]::GetFolderPath('CommonPrograms')) 'Machine Armory smoke.lnk'
@@ -55,6 +61,23 @@ function Proof([string]$path, [string]$text) {
     [void][IO.Directory]::CreateDirectory((Split-Path -Parent $path))
     [IO.File]::WriteAllText($path, $text)
     $script:proofs[$path] = [Convert]::ToBase64String([IO.File]::ReadAllBytes($path))
+}
+function Seed-Channel([string]$folder, [string]$appKey) {
+    if (Test-Path -LiteralPath $folder) { Remove-Item -LiteralPath $folder -Recurse -Force }
+    $unpacked = Join-Path $scratch ('unpack-' + [Guid]::NewGuid().ToString('N'))
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [IO.Compression.ZipFile]::ExtractToDirectory($oldPackage, $unpacked)
+    [void][IO.Directory]::CreateDirectory($folder)
+    Move-Item -LiteralPath (Join-Path $unpacked 'lib\app') -Destination (Join-Path $folder 'current')
+    [void][IO.Directory]::CreateDirectory((Join-Path $folder 'packages'))
+    Copy-Item -LiteralPath $oldPackage -Destination (Join-Path $folder 'packages\IDEAArmory-0.4.2-full.nupkg')
+    Copy-Item -LiteralPath (Join-Path $folder 'current\Squirrel.exe') -Destination (Join-Path $folder 'Update.exe')
+    Copy-Item -LiteralPath (Join-Path $folder 'current\IDEA Armory_ExecutionStub.exe') -Destination (Join-Path $folder 'IDEA Armory.exe')
+    New-Item -Path $appKey -Force | Out-Null
+    New-ItemProperty -LiteralPath $appKey -Name DisplayName -Value 'IDEA Armory' -Force | Out-Null
+    New-ItemProperty -LiteralPath $appKey -Name InstallLocation -Value $folder -Force | Out-Null
+    New-ItemProperty -LiteralPath $appKey -Name UninstallString -Value ('"' + (Join-Path $folder 'Update.exe') + '" --uninstall') -Force | Out-Null
+    Remove-Item -LiteralPath $unpacked -Recurse -Force
 }
 function Seed {
     # A real older installer, including its real uninstaller and automatic launch.
@@ -69,6 +92,9 @@ function Seed {
         Proof (Join-Path $folder 'settings.json') '{"localSetting":"keep"}'
     }
     New-Item -Path ('HKCU:\Software\Classes\AppUserModelId\velopack.IDEAArmory') -Force | Out-Null
+    Seed-Channel $channel $channelApp
+    Seed-Channel $channelWithWork $channelWorkApp
+    Proof (Join-Path $channelWithWork 'student-work.sldasm') 'keep work beside another updater channel'
     Link $pin (Join-Path $legacy 'IdeaArmory.exe')
     Link $staleLink (Join-Path $legacy 'IdeaArmory.exe')
     Link $looseLink (Join-Path $loose 'IdeaArmory.exe')
@@ -90,6 +116,10 @@ function Assert-One([string]$phase) {
     foreach ($folder in @($legacy, $loose, $machine, $orphan)) {
         Require (-not (Test-Path -LiteralPath (Join-Path $folder 'IdeaArmory.exe'))) ($phase + ': retired executable at ' + $folder)
     }
+    foreach ($folder in @($channel, $channelWithWork)) {
+        Require (-not (Test-Path -LiteralPath (Join-Path $folder 'current\IdeaArmory.exe'))) ($phase + ': retired channel executable ' + $folder)
+        Require (-not (Test-Path -LiteralPath (Join-Path $folder 'Update.exe'))) ($phase + ': retired channel updater ' + $folder)
+    }
     foreach ($key in @($run, $runOnce, $machineRun)) {
         $values = Get-ItemProperty -LiteralPath $key
         foreach ($name in @('ArmoryOldAlias', 'ArmoryZipAlias', 'ArmoryMachineAlias')) { Require (-not $values.$name) ($phase + ': no ' + $name + ' in ' + $key) }
@@ -103,6 +133,7 @@ function Assert-One([string]$phase) {
     foreach ($file in $proofs.Keys) { Require ((Test-Path -LiteralPath $file) -and [Convert]::ToBase64String([IO.File]::ReadAllBytes($file)) -ceq $proofs[$file]) ($phase + ': unchanged bytes at ' + $file) }
     Require (-not (Test-Path -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{28A1D010-82E3-4294-9676-83AC0AA1F5D3}_is1')) ($phase + ': legacy Apps entry removed')
     Require (-not (Test-Path -LiteralPath $machineApp)) ($phase + ': machine Apps entry removed')
+    foreach ($key in @($channelApp, $channelWorkApp)) { Require (-not (Test-Path -LiteralPath $key)) ($phase + ': channel Apps entry removed') }
     $apps = @(Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',
         'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -match '^IDEA Armory(?:\s+\d.*)?$' })
     Require ($apps.Count -eq 1) ($phase + ': exactly one Armory Apps entry')
@@ -141,6 +172,8 @@ try {
     Assert-One 'after updated start through the pin'
     $said = Get-Content -LiteralPath (Join-Path $data 'logs\agent.log') -Raw
     Require ($said -match 'retire: .*ran uninstaller') 'flight audit includes the real older uninstaller'
+    Require ($said -match 'retire: .*ran updater uninstaller') 'flight audit includes the real alternate-root updater uninstaller'
+    Require ($said -match 'retire: .*updater uninstall deferred, launchers retired') 'flight audit explains preserving work beside a retired updater'
     Require ($said -match 'retire: .*removed task') 'flight audit includes removed auto-start task'
     Require ($said -match 'retire: .*retired install') 'flight audit includes retired install paths'
     Require (-not (Get-ItemProperty -LiteralPath $run -Name 'IDEA Armory' -ErrorAction SilentlyContinue)) 'StartAtSignIn=false stayed off'

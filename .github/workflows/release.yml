@@ -47,6 +47,12 @@ jobs:
         run: |
           if ("v$env:PACKAGED" -cne $env:GITHUB_REF_NAME) { throw "Packaged version $env:PACKAGED does not match the tag $env:GITHUB_REF_NAME." }
 
+      - name: Retirement preserves protected, untracked, edited and linked data
+        run: |
+          $package = Join-Path '${{ steps.package.outputs.velopack-dir }}' 'IDEAArmory-${{ steps.package.outputs.version }}-full.nupkg'
+          & "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File ./tools/test-retirement-safety.ps1 -Package $package | Tee-Object -FilePath evidence/retirement-safety.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Retirement safety checks failed.' }
+
       - name: Install, launch and uninstall from the flash-drive zip
         run: ./tools/test-agent-install.ps1 -Kind Usb
 

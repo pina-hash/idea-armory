@@ -35,6 +35,12 @@ jobs:
         id: package
         uses: ./.github/actions/package-agent
 
+      - name: Retirement preserves protected, untracked, edited and linked data
+        run: |
+          $package = Join-Path '${{ steps.package.outputs.velopack-dir }}' 'IDEAArmory-${{ steps.package.outputs.version }}-full.nupkg'
+          & "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File ./tools/test-retirement-safety.ps1 -Package $package | Tee-Object -FilePath evidence/retirement-safety.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Retirement safety checks failed.' }
+
       - name: Platform tests (real NTFS, Restart Manager, DPAPI, child processes, the native parts)
         run: dotnet test tests/Armory.Platform.Windows.Tests --no-build --logger "console;verbosity=normal" --logger "trx;LogFileName=platform-tests.trx"
 
