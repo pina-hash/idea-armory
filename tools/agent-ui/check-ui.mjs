@@ -62,6 +62,11 @@
 //               student brings the picker back, a busy folder offers Wait or a folder of
 //               one's own, and Settings > Shared computer offers Remove only where it may
 //               be used.
+//   tutorial    every step targets an existing control, waits for safe practice, contains
+//               keyboard focus, uses 44px controls and readable contrast in both themes down
+//               to 320x480, and never sends a practice command to the host. Completion and
+//               Skip survive reopening per student; Settings replays; identity changes close
+//               practice. Screenshots of all steps go to evidence/tutorial for the UI artifact.
 //   logo        the IDEA gear turns (idea-gear-spin, 24s, linear, infinite) when motion is
 //               allowed, holds still when the student asks for reduced motion, and is
 //               fully painted in both.
@@ -2778,7 +2783,7 @@ for (const theme of THEMES) for (const size of [...SIZES, { w: 320, h: 480 }]) {
 		const real = JSON.parse(JSON.stringify(demoStates().states.synced.view)); real.effectiveTheme = theme;
 		await page.evaluate(v => window.__host({ type: 'view', view: v }), real);
 		await page.waitForSelector('#tutorial:not([hidden])');
-		const steps = await page.evaluate(() => window.ArmoryTutorial.steps.map(s => ({ id: s.id, action: s.action, click: s.click, exercise: s.exercise })));
+		const steps = await page.evaluate(() => window.ArmoryTutorial.steps.map(s => ({ id: s.id, target: s.target, action: s.action, click: s.click, exercise: s.exercise })));
 		expect(steps.length === 19, 'the lesson lost a requested topic');
 		async function tabTo(selector) {
 			for (let i = 0; i < 35; i++) {
@@ -2789,8 +2794,10 @@ for (const theme of THEMES) for (const size of [...SIZES, { w: 320, h: 480 }]) {
 		}
 		for (let i = 0; i < steps.length; i++) {
 			const step = steps[i];
+			tally.tutorialSteps = (tally.tutorialSteps || 0) + 1;
 			await page.waitForFunction(id => document.querySelector('#tutorial').dataset.step === id, step.id);
 			await settle(page);
+			expect(await page.locator(step.target).first().isVisible(), step.id + ': its declared target is missing or hidden');
 			expect(await page.evaluate(() => document.activeElement.id === 'tutorial-title'), step.id + ': the heading did not take focus');
 			const geometry = await page.evaluate(() => {
 				const target = document.querySelector('[data-tutorial-target]'), card = document.querySelector('.tutorial-card'), spot = document.querySelector('.tutorial-spot');
@@ -2895,6 +2902,53 @@ for (const theme of THEMES) for (const size of [...SIZES, { w: 320, h: 480 }]) {
 	tally.flows++;
 }
 
+// A first run also works before a class has folders, and an identity boundary immediately
+// removes the sandbox. Storage failure must leave the real window usable.
+for (const storageFails of [false, true]) {
+	const context = await browser.newContext({ viewport: {width:420,height:720}, reducedMotion:'reduce' });
+	await context.addInitScript(fail => {
+		if (fail) { Storage.prototype.getItem = () => { throw new Error('Storage unavailable'); }; Storage.prototype.setItem = () => { throw new Error('Storage unavailable'); }; }
+		const events = new EventTarget(); window.__sent = [];
+		window.chrome = { webview: { addEventListener: (...a) => events.addEventListener(...a), postMessage: m => window.__sent.push(m) } };
+		window.__host = m => events.dispatchEvent(new MessageEvent('message',{data:m}));
+	}, storageFails);
+	const page = await context.newPage();
+	const fails = []; page.on('pageerror', e => fails.push(e.message));
+	try {
+		await page.goto(pathToFileURL(path.join(WWWROOT,'index.html')).href);
+		await page.waitForFunction(() => window.__sent.length);
+		const real = JSON.parse(JSON.stringify(demoStates().states.synced.view)); real.projects = []; real.myFiles = [];
+		await page.evaluate(v => window.__host({type:'view',view:v}),real);
+		await page.waitForSelector('#tutorial:not([hidden])');
+		for (const next of ['project','folder','file']) {
+			await page.click('[data-tour="next"]');
+			await page.waitForFunction(id => document.querySelector('#tutorial').dataset.step === id,next);
+			if (next !== 'file' && await page.isDisabled('[data-tour="next"]')) fails.push('an empty account cannot continue past '+next);
+		}
+		await page.click('#vl-browser [data-action="openFile"]');
+		await page.waitForSelector('[data-key="d-checkout"]');
+		await page.evaluate(v => window.__host({type:'view',view:v}), JSON.parse(JSON.stringify(demoStates().states.pickerChoose.view)));
+		if (await page.getAttribute('#tutorial','hidden') === null || await page.getAttribute('body','data-screen') !== 'picker') fails.push('the picker left the previous student\'s practice visible');
+		real.account.email = 'another-student@students.test';
+		await page.evaluate(v => window.__host({type:'view',view:v}), real);
+		await page.waitForSelector('#tutorial:not([hidden])');
+		await page.click('[data-tour="skip"]');
+		if (storageFails && !(await page.textContent('#result-word')).includes('could not remember')) fails.push('storage failure was silent');
+		await page.reload(); await page.waitForFunction(() => window.__sent.length);
+		await page.evaluate(v => window.__host({type:'view',view:v}), real); await settle(page);
+		if (storageFails) {
+			await page.waitForSelector('#tutorial:not([hidden])'); await page.click('[data-tour="skip"]');
+		} else if (await page.getAttribute('#tutorial','hidden') === null) fails.push('Skip did not survive reopening');
+		await page.click('[data-key="hdr-settings"]'); await page.click('[data-key="set-tutorial"]');
+		await page.waitForSelector('#tutorial:not([hidden])');
+		await page.keyboard.press('Escape');
+		if (await page.getAttribute('body','data-screen') !== 'home') fails.push('replay did not return to real Home');
+	} catch(e) { fails.push(threw(e)); }
+	await context.close();
+	for (const f of fails) { tally.flowFailures++; problem('tutorial', 'lifecycle storageFails='+storageFails, f); }
+	tally.flows++;
+}
+
 for (const size of [...SIZES, {w:320,h:480}]) await flow('window back and forward', size, 'synced', async (page, expect) => {
 	await page.click('[data-action="folder"][data-folder="Drivetrain"]');
 	await page.fill('#file-search', 'Gearbox'); await page.waitForTimeout(220);
@@ -2933,7 +2987,7 @@ const fmt = (n) => (Number.isFinite(n) ? n.toFixed(2) : 'n/a');
 for (const p of problems.slice(0, 80)) console.log(p);
 if (problems.length > 80) console.log(`... and ${problems.length - 80} more`);
 console.log(
-	`CHECK-UI pages=${tally.pages} controls=${tally.controls} under44=${tally.under44} network=${tally.network} ` +
+	`CHECK-UI tutorialSteps=${tally.tutorialSteps || 0} pages=${tally.pages} controls=${tally.controls} under44=${tally.under44} network=${tally.network} ` +
 		`grids=${tally.grids} rowGrids=${tally.rowGrids} plantedGridLayersFound=${tally.gridControl ?? 0}/3 rowDecoration=${tally.rowDecoration} ` +
 		`chipsLikeButtons=${tally.chipsLikeButtons} overflow=${tally.overflow} hairlines=${tally.hairlines} hairlineMin=${fmt(tally.hairlineMin)} ` +
 		`hairlineUnder3=${tally.hairlineUnder3} tabStops=${tally.tabStops} focusMissed=${tally.focusMissed} ringMin=${fmt(tally.ringMin)} ` +
