@@ -92,6 +92,12 @@ internal static class ShellIdentity
         {
             using var classes = Registry.CurrentUser.CreateSubKey(ShellVerbs.ClassesKey, writable: true);
             if (Apply(classes, Layout(appFolder))) log("wrote Armory's notification and link registration");
+            using var oldIdentity = classes.OpenSubKey(@"AppUserModelId\" + TaskbarPins.VelopackAppId);
+            if (oldIdentity is not null)
+            {
+                classes.DeleteSubKeyTree(@"AppUserModelId\" + TaskbarPins.VelopackAppId, throwOnMissingSubKey: false);
+                log("removed the older Velopack notification identity " + TaskbarPins.VelopackAppId);
+            }
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.Security.SecurityException)
         { log("could not write Armory's notification and link registration: " + error.Message); }
