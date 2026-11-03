@@ -830,16 +830,26 @@ internal sealed class VaultRuntime
     {
         var disposables = new Stack<IDisposable>();
         Armory.SolidWorks.SolidWorksLink? solidWorks = null;
+        // 0.5.3: how long each part of a start takes goes to the log (a switch on IDEA-06, badges
+        // on, spent 17 to 20 seconds here, 1 to 1.5 on computers with them off; which part was
+        // never measured).
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var timings = new List<string>();
+        void Took(string what) { timings.Add($"{what} {clock.ElapsedMilliseconds} ms"); clock.Restart(); }
         try
         {
             var files = new WindowsVaultFileSystem(vaultRoot) { LaunchLog = log is null ? null : log.Info, OpenLog = log is null ? null : log.Info };
             disposables.Push(files);
+            Took("folder (" + files.StartTimings + ")");
             var journal = new DurableJournalStore(Path.Combine(files.Root, ".armory", "journal.bin"));
             disposables.Push(journal);
+            Took("journal");
             var snapshots = new WindowsSnapshotStore(new DurableSnapshotStore(new WindowsPaths(files.Root)));
             disposables.Push(snapshots);
+            Took("kept copies");
             var state = new FileStateStore(Path.Combine(files.Root, ".armory", "state.json"));
             if (solidWorksFile is not null) solidWorks = AgentHost.CreateSolidWorksLink(files.Root, solidWorksFile, log);
+            Took("SolidWorks link");
             var engine = new SyncEngine(new EngineOptions { VaultRoot = files.Root }, new EngineDependencies
             {
                 Files = files,
@@ -860,6 +870,8 @@ internal sealed class VaultRuntime
                 // What SolidWorks does with vault files: opens (C5), saves, save down (B2).
                 SolidWorks = solidWorks,
             });
+            Took("engine and its records");
+            log?.Info("runtime: started in " + string.Join(", ", timings));
             return new VaultRuntime(files.Root, files, engine, files, journal, snapshots) { SolidWorks = solidWorks };
         }
         catch

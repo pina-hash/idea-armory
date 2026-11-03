@@ -140,11 +140,13 @@ internal sealed class ShellThumbnails : IDisposable
                 me.Since = clock.GetTimestamp();
             }
             byte[]? png = null;
+            LastFailure = null;
             try { png = make(job.File, Size); }
             // Whatever a handler throws, this thread goes on to the next file (one that ended would
             // leave every later picture waiting).
             catch (Exception error) when (error is not OutOfMemoryException)
             { log?.Invoke($"thumbnail {Path.GetFileName(job.File)}: {error.GetType().Name}: {error.Message}"); }
+            Tally(job.File, png);
             lock (gate)
             {
                 // A thread left behind that answers after all: its picture is still good.
@@ -154,6 +156,30 @@ internal sealed class ShellThumbnails : IDisposable
             }
             job.Done.TrySetResult(png);
         }
+    }
+
+    // 0.5.3: thumbnails never showed in the app (feedback 4d26aaf3, 417e99fc) and nothing said
+    // why: a failed HRESULT was a silent null. The first FailuresLogged files Windows has no picture
+    // for say why (which step, which HRESULT), and every 100th picture asked says how many came.
+    internal const int FailuresLogged = 10;
+    private int madeCount, missingCount;
+    internal (int Made, int Missing) Counts { get { lock (gate) return (madeCount, missingCount); } }
+    // Why Make answered null on this thread (the step and its HRESULT), or null.
+    [ThreadStatic] private static string? LastFailure;
+
+    private void Tally(string file, byte[]? png)
+    {
+        int made, missing;
+        lock (gate)
+        {
+            if (png is null) missingCount++;
+            else madeCount++;
+            (made, missing) = (madeCount, missingCount);
+        }
+        var name = Path.GetFileName(file);
+        if (made + missing == 1) log?.Invoke($"thumbnail: the first picture asked this start ({name}) {(png is null ? "has none" : $"came, {png.Length:N0} bytes")}");
+        if (png is null && missing <= FailuresLogged) log?.Invoke($"thumbnail {name}: Windows gave no picture ({LastFailure ?? "no picture for this file"})");
+        if ((made + missing) % 100 == 0) log?.Invoke($"thumbnail: {made + missing:N0} pictures asked this start, {made:N0} came, {missing:N0} had none");
     }
 
     // A handler stuck on one file is left behind with its thread; a new thread takes the rest.
@@ -225,14 +251,21 @@ internal sealed class ShellThumbnails : IDisposable
     // One file's thumbnail at most size pixels on its longer side, as PNG; null when there is none.
     internal static byte[]? Make(string file, int size)
     {
-        if (!File.Exists(file)) return null;
+        if (!File.Exists(file)) { LastFailure = "the file is not there"; return null; }
         var iid = typeof(IShellItemImageFactory).GUID;
-        if (SHCreateItemFromParsingName(file, IntPtr.Zero, ref iid, out var item) != 0 || item is null) return null;
+        var created = SHCreateItemFromParsingName(file, IntPtr.Zero, ref iid, out var item);
+        if (created != 0 || item is null) { LastFailure = $"SHCreateItemFromParsingName 0x{created:X8}"; return null; }
         try
         {
             var factory = (IShellItemImageFactory)item;
-            if (factory.GetImage(new NativeSize { Width = size, Height = size }, ThumbnailOnly | BiggerSizeOk, out var bitmap) != 0 || bitmap == IntPtr.Zero) return null;
-            try { return Png(bitmap); }
+            var got = factory.GetImage(new NativeSize { Width = size, Height = size }, ThumbnailOnly | BiggerSizeOk, out var bitmap);
+            if (got != 0 || bitmap == IntPtr.Zero) { LastFailure = $"GetImage 0x{got:X8}" + (Thread.CurrentThread.GetApartmentState() == ApartmentState.STA ? "" : ", not on an STA thread"); return null; }
+            try
+            {
+                var png = Png(bitmap);
+                if (png is null) LastFailure = "the picture could not be read (GetObject or GetDIBits)";
+                return png;
+            }
             finally { DeleteObject(bitmap); }
         }
         finally { Marshal.ReleaseComObject(item); }

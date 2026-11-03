@@ -262,7 +262,10 @@ internal sealed class MainWindow : Form, IBridgeWindow
                 !uri.AbsolutePath.StartsWith(ThumbPrefix, StringComparison.Ordinal)) return;
             var vaultPath = Uri.UnescapeDataString(uri.AbsolutePath[ThumbPrefix.Length..]);
             deferral = args.GetDeferral();
+            if (Interlocked.Increment(ref thumbsServed) == 1) log.Info("thumbnail: the window asked Armory for its first picture (" + Path.GetExtension(vaultPath) + ")");
             var png = await host.ThumbnailAsync(vaultPath);
+            // A file this computer does not have, or Windows had none for it (ShellThumbnails says why).
+            if (png is null && Volatile.Read(ref thumbsServed) <= 5) log.Info("thumbnail: no picture for " + Path.GetFileName(vaultPath));
             args.Response = png is null
                 ? core.Environment.CreateWebResourceResponse(null, 404, "Not Found", "Cache-Control: no-store")
                 // The address carries the file's version (?v=), so a picture is kept as long as the page
@@ -480,6 +483,27 @@ internal sealed class MainWindow : Form, IBridgeWindow
     {
         pageReady = true;
         while (forReadyPage.TryDequeue(out var json)) ((IBridgeWindow)this).Post(json);
+        if (!thumbsLooked) { thumbsLooked = true; _ = LookAtThumbnailsAsync(); }
+    }
+
+    // 0.5.3: thumbnails never showed and nothing said why. Once a start, a minute after the page
+    // is ready, the log says how many pictures the page asked for and how many it shows, beside
+    // whether the host was asked at all (ServeThumbnail's first line): the page never asking, the
+    // window never passing the asks on, and Windows having no picture are then three different logs.
+    private bool thumbsLooked;
+    private int thumbsServed;
+    private async Task LookAtThumbnailsAsync()
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromMinutes(1));
+            if (web?.CoreWebView2 is not { } core) return;
+            var counts = await core.ExecuteScriptAsync(
+                "(function(){var i=document.querySelectorAll('img.thumb');var on=document.querySelectorAll('[data-thumb=\"on\"]').length;" +
+                "return i.length+' asked on the page, '+on+' shown, page at '+location.protocol+'//'+location.hostname;})()");
+            log.Info($"thumbnail: {counts.Trim('"')}; {Volatile.Read(ref thumbsServed)} asks reached Armory");
+        }
+        catch (Exception error) when (error is not OutOfMemoryException) { log.Error("thumbnail: could not look at the page's pictures", error); }
     }
 
     void IBridgeWindow.Post(string json)

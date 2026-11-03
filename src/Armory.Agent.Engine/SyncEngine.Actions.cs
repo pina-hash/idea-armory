@@ -1167,7 +1167,7 @@ public sealed partial class SyncEngine
             if (why.TryGetValue(file.Path.Value, out var problem))
             {
                 refused.Add(st);
-                Problem(NoticeKinds.CantRead, file.Path.Value, "Armory couldn't make it read-only or writable yet. Close any program that might be using it. Armory tries again by itself.", problem);
+                AttributeProblem(file.Path.Value, problem);
                 continue;
             }
             st.AppliedOwnership = ownership;
@@ -1191,7 +1191,7 @@ public sealed partial class SyncEngine
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
-            Problem(NoticeKinds.CantRead, path.Value, "Armory couldn't make it read-only or writable yet. Close any program that might be using it. Armory tries again by itself.", error.Message);
+            AttributeProblem(path.Value, error.Message);
             return false;
         }
     }

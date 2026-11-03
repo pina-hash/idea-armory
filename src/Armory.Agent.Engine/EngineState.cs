@@ -102,6 +102,10 @@ internal sealed class EngineState
     public List<MovingFolder> MovingFolders { get; set; } = [];
     // Bulk adds (an unzip, a paste, a Pack and Go, Add files): one import summary each.
     public List<ImportRecord> Imports { get; set; } = [];
+    // 0.5.3: work Armory moved to its recovery folder because nobody could send it (saved in a
+    // project its person is not in, or over someone's waiting file). Its person sees a card for it
+    // (Of, when known) until they dismiss it or RecoveredShownFor passes.
+    public List<RecoveredFile> Recovered { get; set; } = [];
     // Force check in of many files (armory_break_locks, v0.3.1): one record per call, saved before
     // it is sent and dropped once its answer is applied. A stop in between leaves it here, and the
     // next online pass sends it again with the same id only while every file still has the very
@@ -651,6 +655,9 @@ internal sealed class IdSet : ICollection<string>, IReadOnlyCollection<string>
 // why it went back); ReasonKind and Who let such a card name everyone in its title.
 internal sealed record RememberedNotice(string Kind, Guid? FileId, string Path, string Title, string Detail, DateTimeOffset At,
     string? ItemDetail = null, string? ReasonKind = null, string? Who = null);
+// Path: where the file was in the vault. Where: where it is now, relative to the recovery folder.
+// Of: whose bytes they are, when known (the person not in the project who saved them).
+internal sealed record RecoveredFile(string Path, string Where, string? Of, DateTimeOffset At);
 internal sealed record SideRecord(Guid VersionId, string Hash, string Reason, DateTimeOffset At);
 // A stamp of the SolidWorks link (EngineState.ReleaseStamps) and when its bytes reached the
 // server from this computer (null: not yet).

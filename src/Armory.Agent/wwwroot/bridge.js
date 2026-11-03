@@ -457,6 +457,7 @@
 	 *   openFile: { fileId }                  (the host answers with fileDetail)
 	 *   launchFile: { path }                  (opens it in its own program: SolidWorks for a part)
 	 *   showInFolder: { path }
+	 *   openRecovery: { path }                (0.5.3: opens Armory's recovery folder in File Explorer at work it kept aside; path is relative to it)
 	 *   checkOut: { paths, open }             (files or folders, vault-relative)
 	 *   checkIn: { paths }    undoCheckOut: { paths }    takeBack: { fileId }
  *   takeBackAll: { fileIds }              (Force check in of more than one file: one action, one pass)
@@ -506,7 +507,7 @@
 	 *   | 'putBackKeptCopy' | 'captureWindow' | 'readMyFeedback' | 'turnOnBadges' | 'repairVaultRoot' | 'readNoticeItems'
 	 *   | 'showPicker' | 'pickProfile' | 'enterPin' | 'setPin' | 'addProfile' | 'forgotPin' | 'cancelPicker'
 	 *   | 'removeProfile' | 'setPinsRequired'
-	 *   | 'keepLocal' | 'saveDown'} PageMessageType
+	 *   | 'keepLocal' | 'saveDown' | 'openRecovery'} PageMessageType
 	 */
 
 	/**
@@ -530,7 +531,7 @@
 	/* ------------------------------------------------------- Message lists */
 
 	/** Page to host message types (BRIDGE.md, "Page to host"). */
-	var PAGE_TO_HOST = ['ready', 'connect', 'cancelConnect', 'signOut', 'pause', 'resume', 'openVault', 'openFile', 'launchFile', 'showInFolder', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'dismissNotice', 'saveSettings', 'chooseVaultRoot', 'reportProblem', 'openIncidents', 'sendFeedback', 'takeBackAll', 'takeOverFolder', 'switchAccount', 'putBackKeptCopy', 'captureWindow', 'readMyFeedback', 'turnOnBadges', 'repairVaultRoot', 'readNoticeItems', 'showPicker', 'pickProfile', 'enterPin', 'setPin', 'addProfile', 'forgotPin', 'cancelPicker', 'removeProfile', 'setPinsRequired', 'keepLocal', 'saveDown'];
+	var PAGE_TO_HOST = ['ready', 'connect', 'cancelConnect', 'signOut', 'pause', 'resume', 'openVault', 'openFile', 'launchFile', 'showInFolder', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'dismissNotice', 'saveSettings', 'chooseVaultRoot', 'reportProblem', 'openIncidents', 'sendFeedback', 'takeBackAll', 'takeOverFolder', 'switchAccount', 'putBackKeptCopy', 'captureWindow', 'readMyFeedback', 'turnOnBadges', 'repairVaultRoot', 'readNoticeItems', 'showPicker', 'pickProfile', 'enterPin', 'setPin', 'addProfile', 'forgotPin', 'cancelPicker', 'removeProfile', 'setPinsRequired', 'keepLocal', 'saveDown', 'openRecovery'];
 
 	/** Host to page message types (BRIDGE.md, "Host to page"). */
 	var HOST_TO_PAGE = ['view', 'fileDetail', 'activity', 'actionResult', 'windowShot', 'myFeedback', 'reveal', 'noticeItems'];
@@ -540,6 +541,7 @@
 		openFile: ['fileId'],
 		launchFile: ['path'],
 		showInFolder: ['path'],
+		openRecovery: ['path'],
 		checkOut: ['paths', 'open'],
 		checkIn: ['paths'],
 		undoCheckOut: ['paths'],

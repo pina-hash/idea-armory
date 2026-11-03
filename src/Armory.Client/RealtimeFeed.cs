@@ -147,7 +147,18 @@ public sealed class RealtimeFeed
     // One connection. True when it was useful (a join answered ok) before it ended.
     private async Task<bool> RunConnectionAsync(ArmorySession session, CancellationToken ct)
     {
-        using var socket = await connect(SocketUri(session.SupabaseUrl, session.AnonKey), ct);
+        // 0.5.3: every 0.5.1 incident showed no connection ever open (connections 0) and a
+        // WebSocketException every few minutes, so whether the socket opens at all is logged apart
+        // from a connection that opened and then dropped.
+        WebSocket socket;
+        try { socket = await connect(SocketUri(session.SupabaseUrl, session.AnonKey), ct); }
+        catch (Exception error) when (error is WebSocketException or HttpRequestException or IOException or TimeoutException ||
+                                      error is OperationCanceledException && !ct.IsCancellationRequested)
+        {
+            Problem("the connection did not open: " + error.GetType().Name + ": " + error.Message + (error.InnerException is { } inner ? " (" + inner.Message + ")" : ""));
+            return false;
+        }
+        using var _ = socket;
         Connections++;
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var send = new SemaphoreSlim(1, 1);

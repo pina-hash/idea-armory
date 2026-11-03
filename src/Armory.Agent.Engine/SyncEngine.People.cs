@@ -26,7 +26,8 @@ public sealed partial class SyncEngine
 {
     // The person in use's held work goes back into the records (at the start of every pass, before
     // anything is captured: cheap when there is none).
-    private void ReturnHeld(string email)
+    // previous: the person who used the folder last, whose bytes any overwrite most likely is.
+    private void ReturnHeld(string email, string? previous = null)
     {
         if (!state.Held.Remove(email, out var held)) return;
         var back = 0;
@@ -56,7 +57,7 @@ public sealed partial class SyncEngine
             {
                 state.Aside[key] = new AsideFile
                 {
-                    Hash = now?.Hash, For = email, Since = deps.Clock.GetUtcNow(),
+                    Hash = now?.Hash, For = email, Of = previous, Since = deps.Clock.GetUtcNow(),
                     Restore = expected is null ? null : SaveWithHash(email, key, st, expected),
                 };
                 // Nothing of theirs to bring back (their file was not on disk): it stays gone.
@@ -93,6 +94,8 @@ public sealed partial class SyncEngine
     }
 
     private const string RecoveryWords = "the .armory\\recovery folder";
+    // How long the card for kept-aside work shows for its person (0.5.3).
+    private static readonly TimeSpan RecoveredShownFor = TimeSpan.FromDays(14);
 
     // A held file that can't go back yet stays held for its person (never captured meanwhile).
     private void KeepHeld(string email, HeldWork from, string key, FileState st)
@@ -146,6 +149,12 @@ public sealed partial class SyncEngine
                 }
                 local.Remove(key);
                 deps.Log?.Invoke($"aside: {key} ({file.Hash}) moved to the recovery folder");
+                // 0.5.3: kept where its person can find it, and the window shows them where.
+                if (moved.Where is { } where)
+                {
+                    state.Recovered.RemoveAll(r => string.Equals(r.Path, key, StringComparison.OrdinalIgnoreCase) && SameEmail(r.Of ?? "", aside.Of ?? ""));
+                    state.Recovered.Add(new RecoveredFile(key, where, aside.Of, deps.Clock.GetUtcNow()));
+                }
             }
             MarkDirty();
             // Its person had removed it: it stays removed, as they left it.
@@ -213,7 +222,7 @@ public sealed partial class SyncEngine
         deps.Log?.Invoke($"folder: handed from {last} to {session.Email}; {held} of {last}'s files held for them");
         activity.Log(held == 0 ? $"This Armory folder is yours now. It was {first}'s."
             : $"This Armory folder is yours now. {first}'s work waits here for {first}: {Count(held, "file", "files")}, read-only for you.");
-        ReturnHeld(session.Email);
+        ReturnHeld(session.Email, last);
     }
 
     // Everything of email's that waits in the folder moves into Held[email]: every record with work

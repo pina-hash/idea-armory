@@ -10,7 +10,31 @@ namespace Armory.Agent.Engine;
 // snapshot is built only when an incident is saved.
 public sealed partial class SyncEngine
 {
-    private const int MaximumNoticesRecorded = 200;
+    // 0.5.3: a notice goes into the flight once, when it first appears, and again only after a
+    // pass went by without it, and at most this many new ones a pass. Until 0.5.2 every pass
+    // recorded up to 200 (the same 600 "outside every project" files each time), the ring of
+    // 4,000 events held little else, and incident reports of 600 KB were cut at 200 KB.
+    private const int MaximumNoticesRecorded = 50;
+    private readonly HashSet<string> noticesInFlight = new(StringComparer.Ordinal);
+    private readonly HashSet<string> noticesThisPass = new(StringComparer.Ordinal);
+
+    // Whether this notice goes into the flight now (see MaximumNoticesRecorded).
+    private bool RecordNotice(string kind, string? path, string detail)
+    {
+        var key = kind + "|" + path + "|" + detail;
+        noticesThisPass.Add(key);
+        if (noticesInFlight.Contains(key) || noticesRecorded >= MaximumNoticesRecorded) return false;
+        noticesInFlight.Add(key);
+        noticesRecorded++;
+        return true;
+    }
+
+    // A pass ended: a notice it did not raise again may be recorded again when it comes back.
+    private void NoticesSeen()
+    {
+        if (passScope is null) noticesInFlight.IntersectWith(noticesThisPass);
+        noticesThisPass.Clear();
+    }
     internal const int SnapshotItemsPerCard = 20;
     private const int PassesKept = 3;
     private readonly FlightRecorder? flight;

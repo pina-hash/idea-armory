@@ -22,6 +22,9 @@ public sealed class OpenFileDetector(TimeProvider? clock = null)
     private readonly object gate = new();
     private readonly Dictionary<string, (FileStamp Stamp, long At)> cleared = new(StringComparer.OrdinalIgnoreCase);
     private Task? attributing;
+    // A probe still inside a call Windows holds up, past the deadline of the question that
+    // started it (0.5.3), or null.
+    private Task? stuckProbe;
     private int running;
     // Restart Manager questions started, and the most that ever ran at once (tests: one).
     internal int Attributions { get; private set; }
@@ -92,37 +95,98 @@ public sealed class OpenFileDetector(TimeProvider? clock = null)
         return Task.Run(() => AskAsync([.. files], budget, fresh, cancellationToken), cancellationToken);
     }
 
+    // The probe has a deadline of its own (0.5.3): ProbeLimit, or the budget when that is longer.
+    // Until 0.5.2 the probe ran file by file with no limit before Restart Manager's budget started,
+    // and one open that Windows held up (a virus scan, an oplock, right after a cold start) held
+    // the pass with it: a lab pass after a sign-in waited 307 seconds here for 56 files. Now the
+    // probe runs on its own worker, and past its deadline every file it has not reached is
+    // answered open (the safe answer: Armory waits for an open file and never writes over it).
+    // A probe of 1,500 files takes well under a second, so a normal question never meets it, and
+    // Restart Manager still has the whole budget after the probe.
+    internal static TimeSpan ProbeLimit { get; set; } = TimeSpan.FromSeconds(10);
+
     private async Task<OpenAmongResult> AskAsync(string[] files, TimeSpan budget, bool fresh, CancellationToken ct)
     {
-        string? diagnostic = null;
-        var open = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        List<(string File, FileStamp Stamp)> rest = [];
-        foreach (var file in files)
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var probe = new Probed();
+        Task probing;
+        lock (gate)
         {
-            ct.ThrowIfCancellationRequested();
-            var stamp = Stamp(file);
-            if (stamp is null) continue; // not there: not open
-            if (IsBlocked(file, ref diagnostic)) { open.Add(file); continue; }
-            if (!fresh && Cleared(file, stamp)) continue;
-            rest.Add((file, stamp));
+            // A probe still inside a call Windows holds up (past an earlier question's deadline) is
+            // never joined by a second one, which would only wait on the same file: every file is
+            // taken as open until it returns (safe), as Restart Manager's one question at a time is.
+            if (stuckProbe is { IsCompleted: false })
+                return new(new HashSet<string>(files, StringComparer.OrdinalIgnoreCase), true, "The last open-file check is still waiting on Windows; every file was taken as open.", []);
+            probing = Task.Run(() => Probe(files, fresh, probe, stop.Token), CancellationToken.None);
         }
-        if (rest.Count == 0) return new(open, false, diagnostic, []);
+        var deadline = budget > ProbeLimit ? budget : ProbeLimit;
+        if (await Task.WhenAny(probing, Task.Delay(deadline, ct)).ConfigureAwait(false) != probing)
+        {
+            // Left behind, it ends between two files (or when Windows lets go of the one it is on).
+            lock (gate) stuckProbe = probing;
+            await stop.CancelAsync().ConfigureAwait(false);
+            ct.ThrowIfCancellationRequested();
+            lock (probe)
+            {
+                var open = new HashSet<string>(probe.Open, StringComparer.OrdinalIgnoreCase);
+                for (var i = probe.Reached; i < files.Length; i++) open.Add(files[i]);
+                return new(open, true, probe.Diagnostic ?? $"The open-file check did not finish within {deadline.TotalSeconds:0} s; {files.Length - probe.Reached} files not reached were taken as open.", []);
+            }
+        }
+        await probing.ConfigureAwait(false);
+        ct.ThrowIfCancellationRequested();
+        string? diagnostic;
+        HashSet<string> found;
+        List<(string File, FileStamp Stamp)> rest;
+        lock (probe) { diagnostic = probe.Diagnostic; found = new(probe.Open, StringComparer.OrdinalIgnoreCase); rest = [.. probe.Rest]; }
+        if (rest.Count == 0) return new(found, false, diagnostic, []);
         Task<(HashSet<string> Held, List<string> Holders, bool Complete)>? attribution = null;
         lock (gate)
         {
             if (attributing is null || attributing.IsCompleted) attributing = attribution = Attribute(rest, ct);
         }
-        if (attribution is null) return new(open, true, diagnostic ?? "Restart Manager is still answering an earlier question; exclusive-open probe used.", []);
+        if (attribution is null) return new(found, true, diagnostic ?? "Restart Manager is still answering an earlier question; exclusive-open probe used.", []);
         if (await Task.WhenAny(attribution, Task.Delay(budget, ct)).ConfigureAwait(false) != attribution)
         {
             ct.ThrowIfCancellationRequested();
-            return new(open, true, diagnostic ?? $"Restart Manager did not answer within {budget.TotalSeconds:0} s; exclusive-open probe used.", []);
+            return new(found, true, diagnostic ?? $"Restart Manager did not answer within {budget.TotalSeconds:0} s; exclusive-open probe used.", []);
         }
         var (held, holders, complete) = await attribution.ConfigureAwait(false);
         ct.ThrowIfCancellationRequested();
-        if (!complete) return new(open, true, diagnostic ?? "Restart Manager did not finish; exclusive-open probe used.", []);
-        open.UnionWith(held);
-        return new(open, false, diagnostic, holders);
+        if (!complete) return new(found, true, diagnostic ?? "Restart Manager did not finish; exclusive-open probe used.", []);
+        found.UnionWith(held);
+        return new(found, false, diagnostic, holders);
+    }
+
+    // What the probe found so far (read under its own lock): the files it took as open, the ones
+    // left for Restart Manager, and how many of the files it has reached.
+    private sealed class Probed
+    {
+        internal readonly HashSet<string> Open = new(StringComparer.OrdinalIgnoreCase);
+        internal readonly List<(string File, FileStamp Stamp)> Rest = [];
+        internal int Reached;
+        internal string? Diagnostic;
+    }
+
+    // The exclusive-open probe, file by file, stopped between files by the token.
+    private void Probe(string[] files, bool fresh, Probed into, CancellationToken ct)
+    {
+        for (var i = 0; i < files.Length; i++)
+        {
+            if (ct.IsCancellationRequested) return;
+            var file = files[i];
+            var stamp = Stamp(file);
+            string? diagnostic = null;
+            var blocked = stamp is not null && IsBlocked(file, ref diagnostic);
+            var ask = stamp is not null && !blocked && (fresh || !Cleared(file, stamp));
+            lock (into)
+            {
+                into.Diagnostic ??= diagnostic;
+                if (blocked) into.Open.Add(file);
+                else if (ask) into.Rest.Add((file, stamp!));
+                into.Reached = i + 1;
+            }
+        }
     }
 
     // One Restart Manager question on a worker thread, stopped between sessions by the token or

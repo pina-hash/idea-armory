@@ -569,6 +569,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
         wrote = false;
         state.Remembered.RemoveAll(n => deps.Clock.GetUtcNow() - n.At > TimeSpan.FromMinutes(30));
         state.Imports.RemoveAll(i => deps.Clock.GetUtcNow() - i.At > ImportShownFor);
+        state.Recovered.RemoveAll(r => deps.Clock.GetUtcNow() - r.At > RecoveredShownFor);
         PruneStamps();
         var session = deps.Sessions.Current;
         if (session is null) { deps.Live?.SetProjects([]); return Report(false); }
@@ -889,6 +890,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
     private SyncReport Report(bool signedIn)
     {
         LogNewProblems();
+        NoticesSeen();
         return new(signedIn, online == true, uploaded, downloaded, sideVersions, refused, problems.ToArray());
     }
 
@@ -1228,6 +1230,20 @@ public sealed partial class SyncEngine : IAsyncDisposable
             var project = ProjectOf(file.Path);
             if (project is null)
             {
+                // 0.5.3: a file in a project folder this person can't work in now (another
+                // student's project on a shared computer, one they left, one being renamed) is
+                // not theirs to move and not "outside": nothing is said about it. On 2026-11-02 a
+                // red card told freshmen to move 600 FRC team files into their own folders.
+                // Work they saved there is handled by SetAsideNow (SyncEngine.People.cs).
+                if (KnownProjectOf(file.Path) is { } theirs)
+                {
+                    // Only what the person in use changed or added there is news, and it is theirs
+                    // to act on: one quiet card, never the team's files.
+                    var record = state.Files.GetValueOrDefault(key);
+                    if (notify && (record is null || ChangedOnDisk(record, file)))
+                        Notice(NoticeKinds.NotYourProject, null, key, NotYourProjectWords(theirs.Name));
+                    continue;
+                }
                 // A project deleted forever: its files are on their way to the recovery folder.
                 // 0.4.2: its own card, one for all of them (the field round's 1,498 on IDEA-06).
                 if (notify && !InPurgedProject(key)) Notice(NoticeKinds.OutsideProject, null, key, OutsideProjectWords);
@@ -1773,7 +1789,12 @@ public sealed partial class SyncEngine : IAsyncDisposable
         if (asked.Count == 0) return NoneOpen;
         var started = flight?.Now() ?? 0;
         OpenFilesAnswer answer;
-        var token = mayGiveWay && loopPass && loopQuestions is { } questions ? questions.Token : ct;
+        // The loop pass's question also ends when a window action waits (loopQuestions). 0.5.3: it
+        // is linked to the pass's own token too, so the pass watch (a stall) and a stop end it;
+        // until 0.5.2 the watch canceled a token this question never used, and a pass after a
+        // sign-in hung here for about 307 seconds.
+        using var either = mayGiveWay && loopPass && loopQuestions is { } questions ? CancellationTokenSource.CreateLinkedTokenSource(ct, questions.Token) : null;
+        var token = either?.Token ?? ct;
         try { answer = await fs.OpenAmongAsync(asked.Values, budget ?? OpenBudget, token, fresh); }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
@@ -1965,7 +1986,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
     {
         (Holding ? heldNotes : notes).Add(new Note(kind, fileId, path, detail, title, itemDetail, reasonKind, who));
         // A 5,000-file import is 5,000 notices: the first few hundred of a pass are plenty.
-        if (record && flight is not null && noticesRecorded++ < MaximumNoticesRecorded) flight.Notice(kind, path, detail);
+        if (record && flight is not null && RecordNotice(kind, path, detail)) flight.Notice(kind, path, detail);
     }
 
     // A problem with one file (path) or with this computer (no path): the window gets a plain
@@ -1974,7 +1995,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
     {
         (Holding ? heldProblems : problems).Add(string.IsNullOrEmpty(path) ? raw : $"{path}: {raw}");
         (Holding ? heldNotes : notes).Add(new Note(kind, null, path ?? "", plain, title));
-        flight?.Notice(kind, path, raw);
+        if (flight is not null && RecordNotice(kind, path, raw)) flight.Notice(kind, path, raw);
     }
 
     // Notices a carried unit makes between two passes: the next pass's own, which would otherwise
@@ -2040,7 +2061,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
 
     // One file waits for the program that has it: an information notice, a note in the flight
     // the first time (never FileFailed, so no repeatedFailure incident), and a pass soon after.
-    private void LockWait(string path, string raw)
+    private void LockWait(string path, string raw, string? detail = null)
     {
         var name = NameOf(path);
         if (!lockWaits.ContainsKey(path))
@@ -2049,7 +2070,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
             flight?.Note("lockWait", path);
         }
         (Holding ? heldNotes : notes).Add(new Note(NoticeKinds.LockWait, null, path,
-            $"SolidWorks (or another program) still has {name}. Armory uploads it as soon as it lets go. Nothing to do.", $"Waiting for SolidWorks to let go of {name}"));
+            detail ?? $"SolidWorks (or another program) still has {name}. Armory uploads it as soon as it lets go. Nothing to do.", $"Waiting for SolidWorks to let go of {name}"));
         var problem = $"{path}: {raw}";
         (Holding ? heldProblems : problems).Add(problem);
         waitProblems.Add(problem);
@@ -2059,6 +2080,20 @@ public sealed partial class SyncEngine : IAsyncDisposable
             deps.Log?.Invoke($"waiting: {path}: {raw}");
         }
         SoonAgain();
+    }
+
+    // A file's read-only bit could not be set (0.5.3). While SolidWorks or another program has the
+    // file open that is waiting, never an error: Armory sets it as soon as the file is let go.
+    private void AttributeProblem(string path, string raw)
+    {
+        if (markerDocuments.Contains(path) || scanHeld.Contains(path) || LinkHasOpen(path) ||
+            openAnswers.TryGetValue(path, out var answer) && answer.Open ||
+            raw.Contains("being used by another process", StringComparison.OrdinalIgnoreCase))
+        {
+            LockWait(path, raw, $"SolidWorks (or another program) has {NameOf(path)} open. Armory sets whether it can be saved as soon as it lets go. Nothing to do.");
+            return;
+        }
+        Problem(NoticeKinds.CantRead, path, "Armory couldn't make it read-only or writable yet. Close any program that might be using it. Armory tries again by itself.", raw);
     }
 
     // A file that waited went through, or is gone: it waits no more.

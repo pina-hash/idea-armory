@@ -205,7 +205,11 @@ public static class NoticeKinds
         LockWait = "lockWait",
         // 0.4.2: files outside every project, one card however many (the field round's 1,498), and
         // the Armory folder that is a project folder or inside one (the host's card, with Fix it).
-        OutsideProject = "outsideProject", VaultRoot = "vaultRoot";
+        OutsideProject = "outsideProject", VaultRoot = "vaultRoot",
+        // 0.5.3: a file the person in use saved in a project folder they are not in (on a shared
+        // computer, another student's or a team's), and work of theirs Armory kept safe in its
+        // recovery folder. Both are theirs to move into their own folder; neither is red.
+        NotYourProject = "notYourProject", Recovered = "recovered";
 }
 public static class BadgesStates
 {
@@ -245,12 +249,14 @@ public static class BridgeMessages
         SetPinsRequired = "setPinsRequired";
     // The SolidWorks link's save down (docs/agent/SOLIDWORKS.md).
     public const string KeepLocal = "keepLocal", SaveDown = "saveDown";
+    // 0.5.3: "Show me" on the card about work Armory kept aside (its recovery folder in File Explorer).
+    public const string OpenRecovery = "openRecovery";
     public static readonly IReadOnlyList<string> PageToHost = [Ready, Connect, CancelConnect, SignOut, Pause, Resume, OpenVault, OpenFile, LaunchFile, ShowInFolder,
         CheckOut, CheckIn, UndoCheckOut, TakeBack, CreateFolder, RenameFolder, DeleteFolder, RenameFile, AddFiles, DropFiles, DismissNotice, SaveSettings, ChooseVaultRoot,
         ReportProblem, OpenIncidents, SendFeedback, TakeBackAll, TakeOverFolder, SwitchAccount, PutBackKeptCopy, TurnOnBadges, RepairVaultRoot,
         CaptureWindow, ReadMyFeedback, ReadNoticeItems,
         ShowPicker, PickProfile, EnterPin, SetPin, AddProfile, ForgotPin, CancelPicker, RemoveProfile, SetPinsRequired,
-        KeepLocal, SaveDown];
+        KeepLocal, SaveDown, OpenRecovery];
 
     public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
     {

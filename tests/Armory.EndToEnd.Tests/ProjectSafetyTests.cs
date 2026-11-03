@@ -1,3 +1,4 @@
+using Armory.Agent.Engine.View;
 using Armory.TestSupport;
 using static Armory.EndToEnd.Tests.ScenarioTests;
 
@@ -106,6 +107,59 @@ public sealed class ProjectSafetyTests
         await t.A.SyncAsync();
         Assert.Empty(t.A.Engine.View.HeldForOthers!);
         Assert.True(t.A.Disk.IsReadOnly(Plate));
+    }
+
+    // 0.5.3 (2026-11-02, IDEA-06 and DESKTOP-PFH54TK): on a shared computer the team's files in a
+    // project the person in use is not in raised a red card telling a freshman to move 600 of them
+    // into his own folders. They are not his: nothing is said about them. What he saves there
+    // himself is one amber card about his own file, and once it is kept aside it is his to find:
+    // a card for him, the next time he uses Armory, opens the recovery folder at it.
+    [PostgresFact]
+    public async Task Other_peoples_project_files_raise_no_card_and_work_kept_aside_is_shown_to_its_student()
+    {
+        await using var t = await TeamAsync();
+        var box = await t.Mentor.Api.CreateProjectAsync("Freshman Box", 2027, Guid.NewGuid());
+        await t.Mentor.Api.AddMemberAsync(box, Jordan, Armory.Client.MemberRole.Student, Guid.NewGuid());
+        t.A.Write(Plate, "plate v1");
+        t.A.Write(Bracket, "bracket v1");
+        await t.A.SyncAsync();
+
+        await t.A.ConnectAsync(Jordan);
+        await t.A.SyncTimesAsync(2);
+        Assert.Null(t.A.Card(NoticeKinds.OutsideProject));
+        Assert.Null(t.A.Card(NoticeKinds.NotYourProject));
+        Assert.DoesNotContain(t.A.Engine.View.Notices, n => n.Tone == NoticeTones.Bad);
+
+        // His own part in Robot 2027: one amber card about it alone.
+        t.A.Write(Stray, "Jordan's part");
+        await t.A.SyncAsync();
+        Assert.Null(t.A.Card(NoticeKinds.OutsideProject));
+        var mine = t.A.Card(NoticeKinds.NotYourProject)!;
+        Assert.Equal(NoticeTones.Look, mine.Tone);
+        Assert.Equal("Jordans part.SLDPRT is in a project you're not in", mine.Title);
+        Assert.Equal("Robot 2027 isn't one of your projects, so Armory can't send it. Save it in your own folder.", mine.Detail);
+        Assert.Equal(("Show it", BridgeMessages.ShowInFolder), (mine.Action!.Label, mine.Action.Command));
+        Assert.Equal(new[] { Stray }, mine.Action.Paths);
+
+        // Alex is back: Jordan's part goes aside, and Alex is not told it is his.
+        await t.A.ConnectAsync(Alex);
+        await t.A.SyncTimesAsync(2);
+        Assert.Null(t.A.Text(Stray));
+        Assert.Null(t.A.Card(NoticeKinds.Recovered));
+
+        // Jordan again: his part is safe, and the card opens the recovery folder at it.
+        await t.A.ConnectAsync(Jordan);
+        await t.A.SyncAsync();
+        var safe = t.A.Card(NoticeKinds.Recovered)!;
+        Assert.Equal(NoticeTones.Look, safe.Tone);
+        Assert.Equal("Your Jordans part.SLDPRT is safe", safe.Title);
+        Assert.Equal(BridgeMessages.OpenRecovery, safe.Action!.Command);
+        var where = Assert.Single(safe.Action.Paths);
+        Assert.Equal("Jordan's part", File.ReadAllText(t.A.Disk.Full(".armory/recovery/" + where)));
+        // Dismissed, it stays dismissed.
+        await t.A.Engine.DismissNoticeAsync(safe.Key);
+        await t.A.SyncAsync();
+        Assert.Null(t.A.Card(NoticeKinds.Recovered));
     }
 
     [PostgresFact]

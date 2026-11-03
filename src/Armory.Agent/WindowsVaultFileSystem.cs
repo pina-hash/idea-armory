@@ -44,6 +44,9 @@ public sealed class WindowsVaultFileSystem : IVaultFileSystem, IDisposable
         recoveryFolder = Path.Combine(privateFolder, "recovery");
         Directory.CreateDirectory(stagingFolder);
         var created = new List<IDisposable>();
+        var watch = Stopwatch.StartNew();
+        var took = new List<string>();
+        void Took(string what) { took.Add($"{what} {watch.ElapsedMilliseconds} ms"); watch.Restart(); }
         try
         {
             // Both take an exclusive ownership handle in .armory, so a second agent on the same
@@ -52,14 +55,18 @@ public sealed class WindowsVaultFileSystem : IVaultFileSystem, IDisposable
             created.Add(replacer);
             policy = new ReadOnlyPolicy(paths);
             created.Add(policy);
+            Took("ownership");
             // Staged downloads are scratch copies of bytes the server already holds.
             foreach (var orphan in Directory.EnumerateFiles(stagingFolder, "*" + StagingExtension)) TryDelete(orphan);
             // Re-apply every recorded attribute intent before anything can edit or sync.
             foreach (var problem in policy.Recover(new Dictionary<VaultPath, LockOwnership>()))
                 pendingProblems.Add("A saved read-only setting could not be applied: " + problem);
+            Took("read-only settings");
             // No age-based re-hash: a hash is reused while the file's NTFS id, size and
             // last-write time are unchanged and it is outside the racy window.
             changes = new LocalChangeDetector(paths, clock: this.clock);
+            Took("file map and watcher");
+            StartTimings = string.Join(", ", took);
         }
         catch
         {
@@ -69,7 +76,11 @@ public sealed class WindowsVaultFileSystem : IVaultFileSystem, IDisposable
     }
 
     public string Root => paths.Root;
+    // How long each part of opening the folder took (0.5.3: the runtime's start line in the log).
+    public string StartTimings { get; } = "";
     public string PrivateFolder => privateFolder;
+    // Where MoveToRecovery puts bytes nobody may send (0.5.3: the window's "Show me" opens it).
+    public string RecoveryFolder => recoveryFolder;
     // Grows with every file-system notification under the vault (outside .armory); the host
     // polls it and wakes the engine. The scan, not the hint, is the inventory.
     public long HintCount => changes.HintCount;
@@ -239,7 +250,7 @@ public sealed class WindowsVaultFileSystem : IVaultFileSystem, IDisposable
             var outcome = MoveChecked(file!, WindowsPaths.Extended(target), expectedHash);
             // The path no longer holds this file, so it keeps no read-only intent.
             if (outcome.Succeeded) AfterLeaving(path, () => policy.Forget(path));
-            return outcome;
+            return outcome.Succeeded ? outcome with { Where = Path.GetRelativePath(recoveryFolder, target).Replace('\\', '/') } : outcome;
         }
     }
 

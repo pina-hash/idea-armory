@@ -51,6 +51,9 @@ public sealed record LocalMove(VaultPath From, VaultPath To);
 public sealed record FolderMove(string From, string To);
 public sealed record ReplaceOutcome(bool Succeeded, string? Problem)
 {
+    // MoveToRecovery (0.5.3): where the file went, relative to the recovery folder (forward
+    // slashes), so the window can show it to its student. Null when the platform does not say.
+    public string? Where { get; init; }
     public static ReplaceOutcome Done { get; } = new(true, null);
     public static ReplaceOutcome Refused(string problem) => new(false, problem);
 }

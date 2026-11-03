@@ -67,7 +67,14 @@ public sealed class PostgrestClient(HttpClient http, SessionManager sessions, Fl
                 string body;
                 try { body = await response.Content.ReadAsStringAsync(cancellationToken); }
                 catch (HttpRequestException cut) { throw new ArmoryOfflineException($"Armory's answer was cut off ({function}).", cut); }
-                if (response.IsSuccessStatusCode) return body.Length == 0 ? null : JsonNode.Parse(body);
+                if (response.IsSuccessStatusCode)
+                {
+                    if (body.Length == 0) return null;
+                    // 0.5.3: an answer cut off on the way (incident 398a5a8a: a 640 KB file list
+                    // ended at byte 641,983) is the site not answering, never a crash.
+                    try { return JsonNode.Parse(body); }
+                    catch (JsonException cut) { throw new ArmoryOfflineException($"Armory's answer was cut off ({function}).", cut); }
+                }
                 var error = ParseError(body);
                 if (response.StatusCode == HttpStatusCode.Unauthorized && error.Code?.StartsWith("PGRST3", StringComparison.Ordinal) == true && !refreshed)
                 {
@@ -78,7 +85,12 @@ public sealed class PostgrestClient(HttpClient http, SessionManager sessions, Fl
                 // A PT429 is Armory's own per-account limit, an answer with a DETAIL saying when to
                 // send again (ArmoryRpcException.IsRateLimited); only a 429 without that code (a
                 // gateway's) is a busy site.
+                // 0.5.3: any 5xx that is not the database's own answer (no PostgREST or SQL code) is
+                // the site down or failing, offline: Cloudflare's 520 to 527 (the 521 outage of
+                // 2026-10-30 was reported as a dozen crashes) and a bare 500. The engine waits
+                // longer each time while it lasts (SyncEngine.Schedule.cs).
                 if (response.StatusCode is HttpStatusCode.BadGateway or HttpStatusCode.ServiceUnavailable or HttpStatusCode.GatewayTimeout ||
+                    ((int)response.StatusCode >= 500 && error.Code is null) ||
                     (response.StatusCode == HttpStatusCode.TooManyRequests && error.Code != ArmoryRpcException.RateLimitedState))
                     throw new ArmoryOfflineException($"Armory is busy or unavailable ({function}, {(int)response.StatusCode}).");
                 // A deadlock or serialization failure rolled the whole call back, receipt included, so

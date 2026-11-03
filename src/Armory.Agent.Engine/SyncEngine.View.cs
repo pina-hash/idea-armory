@@ -17,10 +17,12 @@ public sealed partial class SyncEngine
     private const int NoticeItemsShown = 200;
     // A file outside every project, as its item in the list says it.
     internal const string OutsideProjectWords = "Outside every project. Move it into one of your project folders so Armory can keep it.";
+    // 0.5.3: saved in a project folder the person in use is not in.
+    internal static string NotYourProjectWords(string project) => $"{project} isn't one of your projects, so Armory can't send it. Save it in your own folder.";
     private static readonly TimeSpan KeptCopiesShownFor = TimeSpan.FromDays(1);
     private static readonly string[] NoticeOrder =
     [
-        NoticeKinds.CantSend, NoticeKinds.OutsideProject, NoticeKinds.CantRead, NoticeKinds.LockWait, NoticeKinds.SolidWorks, NoticeKinds.NewerRelease, NoticeKinds.NameShared, NoticeKinds.TakenBack, NoticeKinds.FolderPutBack, NoticeKinds.ProjectPutBack,
+        NoticeKinds.CantSend, NoticeKinds.OutsideProject, NoticeKinds.NotYourProject, NoticeKinds.Recovered, NoticeKinds.CantRead, NoticeKinds.LockWait, NoticeKinds.SolidWorks, NoticeKinds.NewerRelease, NoticeKinds.NameShared, NoticeKinds.TakenBack, NoticeKinds.FolderPutBack, NoticeKinds.ProjectPutBack,
         NoticeKinds.ProjectRenaming, NoticeKinds.ProjectDeleted, NoticeKinds.CheckInPartial, NoticeKinds.KeptCopy, NoticeKinds.NewerWaiting, NoticeKinds.Import,
     ];
     private IReadOnlyCollection<string> openWithoutCheckOut = [];
@@ -201,6 +203,11 @@ public sealed partial class SyncEngine
                 ItemDetail: n.ItemDetail, ReasonKind: n.ReasonKind, Who: n.Who));
         foreach (var n in state.Remembered.Where(n => now - n.At < TimeSpan.FromMinutes(30)))
             Add(n.Kind, new RawItem($"{n.Kind}:{n.Path}:{n.At.UtcTicks}", n.FileId, n.Path, n.Detail, n.Title, ItemDetail: n.ItemDetail, ReasonKind: n.ReasonKind, Who: n.Who));
+        // 0.5.3: the person in use's work that Armory kept aside, until they dismiss it.
+        if (deps.Sessions.Current?.Email is { } me)
+            foreach (var r in state.Recovered.Where(r => r.Of is not null && SameEmail(r.Of, me) && now - r.At < RecoveredShownFor))
+                Add(NoticeKinds.Recovered, new RawItem($"recovered:{r.Path}:{r.At.UtcTicks}", null, r.Path, null,
+                    Action: new NoticeActionView("Show me", BridgeMessages.OpenRecovery, [r.Where])));
         // One summary per bulk add (an unzip, a paste, a Pack and Go, Add files).
         foreach (var import in state.Imports.Where(i => now - i.At < ImportShownFor))
         {
@@ -333,6 +340,16 @@ public sealed partial class SyncEngine
                 n == 1 ? "Armory keeps only files inside a project folder. Move it into one of your project folders, and it uploads by itself."
                     : "Armory keeps only files inside a project folder. Move them into your project folders, and they upload by themselves.",
                 new NoticeActionView("Open the Armory folder", BridgeMessages.OpenVault, [])),
+            // 0.5.3: amber, never red. Their own file, in a project they are not in.
+            NoticeKinds.NotYourProject => (NoticeTones.Look,
+                n == 1 ? $"{name} is in a project you're not in" : $"{n:N0} of your files are in projects you're not in",
+                n == 1 ? first.Detail ?? "" : "Armory can't send them. Save them in your own folder.", n == 1 ? new NoticeActionView("Show it", BridgeMessages.ShowInFolder, [first.Path]) : expand),
+            // 0.5.3: work of theirs Armory moved to its recovery folder. Nothing is lost.
+            NoticeKinds.Recovered => (NoticeTones.Look,
+                n == 1 ? $"Your {name} is safe" : $"{n:N0} of your files are safe",
+                (n == 1 ? "You saved it in a project you're not in, so Armory kept it aside. " : "You saved them in projects you're not in, so Armory kept them aside. ")
+                    + "Open the folder, then move " + (n == 1 ? "it" : "them") + " into your own folder.",
+                first.Action ?? new NoticeActionView("Show me", BridgeMessages.OpenRecovery, [""])),
             NoticeKinds.CantRead when items.All(i => i.Flavor == "stale") => (NoticeTones.Look,
                 n == 1 ? StaleMarkerTitle : $"{StaleMarkerTitle} with {n:N0} files open",
                 n == 1 ? first.Detail ?? "" : "Armory is treating them as closed. If SolidWorks still has one open, save it there.", null),

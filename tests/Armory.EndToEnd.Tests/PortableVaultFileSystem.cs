@@ -302,8 +302,13 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
     // the quicker check (the open files here are SolidWorks', which the exclusive-open probe
     // finds), and says it gave up. A canceled token ends the wait at once.
     public Func<int, int, TimeSpan>? OpenAmongCost { get; set; }
+    // 0.5.3: a question Windows holds up, which only its token ends (a pass after a sign-in on a
+    // lab computer waited 307 seconds in one).
+    public bool OpenAmongHangs { get => Volatile.Read(ref openAmongHangs); set => Volatile.Write(ref openAmongHangs, value); }
+    private bool openAmongHangs;
     public async Task<OpenFilesAnswer> OpenAmongAsync(IReadOnlyCollection<VaultPath> paths, TimeSpan budget, CancellationToken cancellationToken, bool fresh = false)
     {
+        if (OpenAmongHangs) await Task.Delay(Timeout.Infinite, cancellationToken);
         var cost = Asked(paths);
         var timedOut = cost > budget;
         if (cost > TimeSpan.Zero) await Task.Delay(timedOut ? budget : cost, cancellationToken);
@@ -407,7 +412,8 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
         if (HashOf(full) != expectedHash) return ReplaceOutcome.Refused("File changed.");
         RecordIfOpen(path, "recovery");
         RecordIfUnpreserved(path, expectedHash, "recovery");
-        var target = Full($".armory/recovery/{Interlocked.Increment(ref recoveries)}/{path.Value}");
+        var where = $"{Interlocked.Increment(ref recoveries)}/{path.Value}";
+        var target = Full($".armory/recovery/{where}");
         Directory.CreateDirectory(Path.GetDirectoryName(target)!);
         File.Move(full, target);
         lock (gate)
@@ -415,7 +421,7 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
             Recovered.Add(path.Value);
             readOnlyBits.Remove(path.Value);
         }
-        return ReplaceOutcome.Done;
+        return ReplaceOutcome.Done with { Where = where };
     }
 
     public ReplaceOutcome Move(VaultPath from, VaultPath to, string expectedHash)

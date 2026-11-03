@@ -78,6 +78,9 @@ internal sealed partial class AgentHost
     }
 
     // The folder Armory runs in now: the student in use's on a shared computer, else settings'.
+    // Where Armory keeps work nobody could send (0.5.3: the window's "Show me" opens it), or null
+    // while no engine runs.
+    internal string? RecoveryFolder => Volatile.Read(ref runtime)?.Windows?.RecoveryFolder;
     internal string VaultFolder => Volatile.Read(ref runtime)?.Root ?? RuntimeFolder(Settings) ?? Settings.VaultRoot;
 
     private HostHttp HostClients => new(restHttp, siteHttp, storageHttp);
@@ -734,6 +737,18 @@ internal sealed partial class AgentHost
     // stopped between two steps, as every stop is.
     private async Task FlushLockedAsync(ProfileRecord from, VaultRuntime running)
     {
+        // 0.5.3: nothing of theirs to send (no save, change, new file or folder change waiting):
+        // no last pass at all. Until 0.5.2 every switch waited up to 15 seconds for one.
+        try
+        {
+            var waiting = await running.Engine.WaitingAsync();
+            if (waiting.Unsent + waiting.Changed + waiting.Added + waiting.FolderChanges == 0)
+            {
+                log.Info("profiles: " + from.Email + " has nothing to send; no last pass");
+                return;
+            }
+        }
+        catch (Exception error) when (error is IOException or EngineStoppedException) { log.Error("profiles: could not say what waits for " + from.Email, error); }
         using var patience = new CancellationTokenSource(parts.FlushPatience);
         try { await running.Engine.SyncOnceAsync(patience.Token); }
         catch (OperationCanceledException) { log.Info("profiles: " + from.Email + "'s last pass was cut short; what is left waits for them"); }

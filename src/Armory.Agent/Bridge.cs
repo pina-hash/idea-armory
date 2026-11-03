@@ -10,6 +10,8 @@ namespace Armory.Agent;
 internal sealed record OpenFileMessage(string? FileId);
 internal sealed record LaunchFileMessage(string? Path, string? RequestId);
 internal sealed record ShowInFolderMessage(string? Path);
+// 0.5.3: a place inside Armory's recovery folder ("" is the folder itself).
+internal sealed record OpenRecoveryMessage(string? Path);
 internal sealed record CheckOutMessage(IReadOnlyList<string>? Paths, bool? Open, string? RequestId);
 internal sealed record CheckInMessage(IReadOnlyList<string>? Paths, string? RequestId);
 internal sealed record UndoCheckOutMessage(IReadOnlyList<string>? Paths, string? RequestId);
@@ -93,6 +95,7 @@ internal sealed partial class Bridge(AgentHost host, IBridgeWindow window, Agent
         [BridgeMessages.OpenFile] = typeof(OpenFileMessage),
         [BridgeMessages.LaunchFile] = typeof(LaunchFileMessage),
         [BridgeMessages.ShowInFolder] = typeof(ShowInFolderMessage),
+        [BridgeMessages.OpenRecovery] = typeof(OpenRecoveryMessage),
         [BridgeMessages.CheckOut] = typeof(CheckOutMessage),
         [BridgeMessages.CheckIn] = typeof(CheckInMessage),
         [BridgeMessages.UndoCheckOut] = typeof(UndoCheckOutMessage),
@@ -226,6 +229,9 @@ internal sealed partial class Bridge(AgentHost host, IBridgeWindow window, Agent
                     break;
                 case BridgeMessages.ShowInFolder:
                     ShowInFolder(Read<ShowInFolderMessage>(message));
+                    break;
+                case BridgeMessages.OpenRecovery:
+                    OpenRecovery(Read<OpenRecoveryMessage>(message));
                     break;
                 case BridgeMessages.CheckOut:
                     var checkOut = Read<CheckOutMessage>(message);
@@ -498,6 +504,20 @@ internal sealed partial class Bridge(AgentHost host, IBridgeWindow window, Agent
         if (request is null || !Guid.TryParse(request.FileId, out var fileId)) return;
         var detail = await host.GetFileDetailAsync(fileId);
         if (detail is not null) window.Post(BridgeMessages.DetailMessage(detail));
+    }
+
+    // The file Armory kept aside, selected in File Explorer (or the nearest folder of it that is
+    // still there), never anywhere outside the recovery folder.
+    private void OpenRecovery(OpenRecoveryMessage? request)
+    {
+        if (host.RecoveryFolder is not { } recovery) return;
+        Directory.CreateDirectory(recovery);
+        var target = Path.GetFullPath(Path.Combine(recovery, (request?.Path ?? "").Replace('/', Path.DirectorySeparatorChar)));
+        if (!target.StartsWith(Path.GetFullPath(recovery), StringComparison.OrdinalIgnoreCase)) target = recovery;
+        if (File.Exists(target)) { Shell.SelectInExplorer(target); return; }
+        for (var folder = target; folder is not null && folder.StartsWith(recovery, StringComparison.OrdinalIgnoreCase); folder = Path.GetDirectoryName(folder))
+            if (Directory.Exists(folder)) { Shell.OpenFolder(folder); return; }
+        Shell.OpenFolder(recovery);
     }
 
     private void ShowInFolder(ShowInFolderMessage? request)

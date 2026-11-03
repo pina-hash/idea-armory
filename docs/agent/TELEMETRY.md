@@ -35,7 +35,7 @@ ring unless an incident is saved.
 | `rpc` | `PostgrestClient`, `BlobClient` (`blob-url`) | function name, ms, HTTP status (0 when none), error code (`offline`, `signedOut`, `canceled`, a SQLSTATE or PostgREST code) |
 | `transfer` | `BlobClient` | `upload` or `download`, bytes, ms, ok, status, error (`stalled`, 0.3.3: no bytes moved for 30 seconds, and it was tried once more with a fresh URL; a second stall ends as `StorageStalledException`) |
 | `windowAction` | `Bridge` | action type, how many files or folders it named, ms from the window's request to its answer (Add files: from when the picker closed), ok |
-| `notice` | the engine | every problem, and the first 200 notices of a pass: kind, path, the raw text the log gets. A stale `~$` marker is recorded once while it stays stale, not on every pass (0.3.3: IDEA-06's 224 markers spent every pass's 200) |
+| `notice` | the engine | a problem or notice once, when it first appears, and again only after a pass went by without it, at most 50 new ones a pass (0.5.3: every pass used to record up to 200, the same 600 files each time, and reports of 600 KB were cut at 200 KB): kind, path, the raw text the log gets. A stale `~$` marker is recorded once while it stays stale (0.3.3) |
 | `refusal` | the engine (`SetRefusal`, 0.3.3) | a file's refusal started or changed: path, `refusal` (`nameTaken`, `tooLarge`, `gate`, `refused`) and, for a taken name, `namesake` (the path of the file that holds it); or ended (`refusal: "ended"`). Never again while it stands, so a pass that only re-finds the same refusals records none |
 | `fileFailed` | the engine | path, exception type, message, stack |
 | `fileRecovered` | the engine | path of a file that failed before and went through |

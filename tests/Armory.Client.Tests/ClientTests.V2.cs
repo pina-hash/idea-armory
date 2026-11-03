@@ -161,6 +161,26 @@ public sealed partial class ClientTests
         Assert.False(new ArmoryRpcException(500, "55000", "immutable", null, null).IsInUse);
     }
 
+    // 0.5.3: the site down or failing is offline, never a refusal or a crash (2026-10-30: a
+    // Cloudflare 521 outage became a dozen crash incidents; 398a5a8a: a file list cut off at
+    // 641,983 bytes became a JsonReaderException).
+    [Theory]
+    [InlineData(521, "<html>Web server is down</html>")]
+    [InlineData(520, "")]
+    [InlineData(500, "<html>Internal Server Error</html>")]
+    [InlineData(500, "{\"message\":\"upstream failed\"}")]
+    [InlineData(200, "[{\"id\":\"2c6c5f0e-0000-4000-8000-000000000001\",\"na")]
+    public async Task An_outage_or_a_cut_answer_is_offline(int status, string body)
+        => await Assert.ThrowsAsync<ArmoryOfflineException>(() => CannedApi(new CannedRpc([(status, body)])).MyProjectsAsync());
+
+    [Fact]
+    public async Task The_database_s_own_500_is_still_a_refusal()
+    {
+        var refusal = new CannedRpc([(500, """{"code":"P0001","message":"not a project member","details":null,"hint":null}""")]);
+        var error = await Assert.ThrowsAsync<ArmoryRpcException>(() => CannedApi(refusal).MyProjectsAsync());
+        Assert.Equal((500, "P0001"), (error.Status, error.SqlState));
+    }
+
     [Fact]
     public async Task A_call_rolled_back_by_a_deadlock_is_sent_again_with_the_same_body()
     {

@@ -534,6 +534,8 @@
 					return 'Open ' + c.name + ' in its program.';
 				case 'showInFolder':
 					return 'Show ' + c.name + ' in File Explorer.';
+				case 'openRecovery':
+					return 'Show the file Armory kept safe, in File Explorer. Move it into your own folder to keep working on it.';
 				case 'openFile':
 					return 'Open the file\'s page: its history and who has it checked out.';
 				case 'keepLocal':
@@ -4086,6 +4088,9 @@
 				break;
 			case 'showInFolder':
 				if (paths[0]) bridge.send('showInFolder', { path: paths[0] });
+				break;
+			case 'openRecovery':
+				bridge.send('openRecovery', { path: paths[0] || '' });
 				break;
 			case 'openVault':
 			case 'chooseVaultRoot':

@@ -200,6 +200,10 @@ NoticeGroupView {
       | "outsideProject" | "vaultRoot",  // 0.4.2: files outside every project (one card however
                                         // many, its action Open the Armory folder); the host's card
                                         // for an Armory folder inside a project folder (Fix it)
+      | "notYourProject" | "recovered", // 0.5.3, both amber: the person in use's own file saved in
+                                        // a project they are not in (Show it), and their work Armory
+                                        // kept in its recovery folder (Show me: openRecovery). The
+                                        // team's files in other people's projects raise no card
   tone: "info" | "look" | "bad",    // the page shows info green, look amber, bad red
   title: string,                    // e.g. "14 files share a name with other files in this project"
   detail: string,
@@ -446,6 +450,7 @@ replaces it.
 | `openFile` | `fileId` | a file row, a notice item, a My files row | host answers with `fileDetail` (the page shows File detail) |
 | `launchFile` | `path`, `requestId` | Open (rows, File detail, a notice) | opens the file in its own program (SolidWorks for a part); refuses programs and scripts |
 | `showInFolder` | `path` | Show in folder, a row for a file that isn't in Armory | opens File Explorer with the file selected |
+| `openRecovery` | `path` | 0.5.3: Show me on a `recovered` card | opens Armory's recovery folder in File Explorer with that file selected (`path` is relative to the recovery folder; never anywhere outside it) |
 | `checkOut` | `paths`, `open`, `requestId` | Check out (a file row, File detail, the selection bar), Check out and open on File detail and Check out and reopen on the question (`open: true`), Check out all after the small dialog (the folder's path) | takes each file to change it, makes it writable here, downloads a newer version first; with `open`, then opens it (asking first for SolidWorks to close it, if it has it open) |
 | `checkIn` | `paths`, `requestId` | Check in (a file row, File detail, My files, the selection bar), Check in all | uploads the changes, makes the file read-only, reads it again and lets it go only over what it shared; a file open in SolidWorks stays checked out and writable and is checked in as soon as it is closed (0.3.3): "Plate.SLDPRT is open in SolidWorks. Save it there and close it; Armory checks it in as soon as it's closed.", "Checked in 12 of 15 files. 3 are open in SolidWorks: Armory checks them in as you close them." |
 | `undoCheckOut` | `paths`, `requestId` | Undo check out (File detail, the selection bar) | puts back the version from before the check out (changes are kept in the history), lets it go |

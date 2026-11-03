@@ -32,6 +32,26 @@ public sealed class ShellThumbnailsTests
         Assert.Null(files.ExistingFile("Robot 2027/Missing.bmp"));
     }
 
+    // 0.5.3: no thumbnail ever showed in the app and nothing said why. The first picture asked
+    // says whether it came, the first ten files without one say so, and every 100th ask counts.
+    [Fact]
+    public async Task Pictures_asked_and_missing_are_logged()
+    {
+        using var vault = new TempFolder();
+        Directory.CreateDirectory(vault.File("Robot 2027"));
+        for (var i = 0; i < 12; i++) File.WriteAllText(vault.File($"Robot 2027/Part{i}.SLDPRT"), "part " + i);
+        File.WriteAllText(vault.File("Robot 2027/Render.png"), "picture");
+        var lines = new List<string>();
+        using var thumbnails = new ShellThumbnails(log: line => { lock (lines) lines.Add(line); }, make: (file, _) => file.EndsWith(".png", StringComparison.Ordinal) ? [1, 2, 3] : null);
+        for (var i = 0; i < 12; i++) Assert.Null(await thumbnails.GetAsync(vault.File($"Robot 2027/Part{i}.SLDPRT")));
+        Assert.NotNull(await thumbnails.GetAsync(vault.File("Robot 2027/Render.png")));
+        List<string> said;
+        lock (lines) said = [.. lines];
+        Assert.Equal("thumbnail: the first picture asked this start (Part0.SLDPRT) has none", said[0]);
+        Assert.Equal(ShellThumbnails.FailuresLogged, said.Count(l => l.EndsWith("Windows gave no picture (no picture for this file)", StringComparison.Ordinal)));
+        Assert.Equal((1, 12), thumbnails.Counts);
+    }
+
     // The PNG is written here, nothing else loaded: its chunks carry their CRCs and its pixels
     // come back exactly, a row at a time, each with no filter.
     [Fact]
