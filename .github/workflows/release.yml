@@ -75,6 +75,7 @@ jobs:
         run: ./tools/test-velopack-update.ps1 -Version '${{ steps.package.outputs.version }}' -From 0.4.2 -ReleaseDir '${{ steps.package.outputs.velopack-dir }}'
 
       - name: One install and one shell identity after startup and a package update
+        timeout-minutes: 15
         run: ./tools/test-armory-retirement.ps1 -Version '${{ steps.package.outputs.version }}' -ReleaseDir '${{ steps.package.outputs.velopack-dir }}'
 
       # Last: it installs for the whole computer (the runner's steps run as an administrator).
