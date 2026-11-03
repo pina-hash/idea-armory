@@ -1721,6 +1721,7 @@ const CONTRACT = {
 	openFile: ['fileId'],
 	launchFile: ['path', ...ACT],
 	showInFolder: ['path'],
+	openRecovery: ['path'],
 	checkOut: ['paths', 'open', ...ACT],
 	checkIn: ['paths', ...ACT],
 	undoCheckOut: ['paths', ...ACT],
@@ -1770,6 +1771,10 @@ const CONTRACT = {
 // 0.4.2: the vaultRoot card's Fix it sends repairVaultRoot; opening a card's list asks for all of
 // its files (readNoticeItems), and the answer draws every one of them, a line before each reason.
 async function noticesBridge({ page, host, click, view, expect }) {
+	await host({ type: 'view', view: view('synced', { notices: [{ key: 'recovered', kind: 'recovered', tone: 'look', title: 'Your file is safe',
+		detail: 'Move it into your own folder.', count: 1, action: { label: 'Show me', command: 'openRecovery', paths: ['practice/Plate.SLDPRT'] }, items: [] }] }) });
+	const recovered = await click('[data-key="nt-act-recovered"]');
+	expect(recovered.type === 'openRecovery' && recovered.path === 'practice/Plate.SLDPRT', 'Show me sent ' + JSON.stringify(recovered));
 	await host({ type: 'view', view: view('folderInProject') });
 	let m = await click('[data-key="nt-act-vaultRoot"]');
 	expect(m.type === 'repairVaultRoot' && typeof m.requestId === 'string', 'Fix it sent ' + JSON.stringify(m));

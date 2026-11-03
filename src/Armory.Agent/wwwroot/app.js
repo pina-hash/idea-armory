@@ -18,7 +18,7 @@
 	'use strict';
 
 	var bridge = window.ArmoryBridge;
-	var fileSearch = null;
+	var fileSearch = window.ArmoryFileSearch;
 	var main = document.getElementById('main');
 	var headerKeys = document.getElementById('header-keys');
 	var scroller = document.getElementById('scroller');
@@ -5533,19 +5533,9 @@
 	}
 	bridge.onMessage(onHost);
 
-	// Load the pure module locally before asking for the first view. A classic script
-	// also works in the file:// demo, without changing index.html or the bridge.
-	var searchScript = document.createElement('script');
-	var searchUrl = new URL('file-search.js', document.currentScript.src);
-	searchUrl.search = new URL(document.currentScript.src).search;
-	searchScript.src = searchUrl.href;
-	searchScript.onload = function () {
-		fileSearch = window.ArmoryFileSearch;
-		bridge.send('ready');
-	};
-	searchScript.onerror = function () {
+	if (fileSearch) bridge.send('ready');
+	else {
 		resultWord.textContent = 'Armory could not load file search. Close and reopen Armory.';
 		resultBox.setAttribute('data-on', 'true');
-	};
-	document.head.appendChild(searchScript);
+	}
 })();
