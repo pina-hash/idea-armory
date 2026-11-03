@@ -135,7 +135,7 @@ public sealed record ActionResult(bool Ok, string Message, string? Offer = null)
 
 // Send feedback's picture of the Armory window (the answer to captureWindow), held by the host in
 // memory only and shown to the person exactly as it would be sent: Url serves those very bytes
-// (https://armory.local/shot/<id>.png, never cached). Width and Height are the PNG's pixels,
+// (https://armory-pictures.local/shot/<id>.png, never cached). Width and Height are the PNG's pixels,
 // Bytes its size, Scaled true when it was taken again smaller to fit 2 MB. Not Ok: Message says
 // why in one sentence, and the note can go without a picture.
 public sealed record WindowShotView(bool Ok, string? Id, string? Url, int Width, int Height, long Bytes, bool Scaled, string? Message);

@@ -74,7 +74,8 @@ internal static class Program
         {
             // Windows' own records say whether it restarted, lost power or saw Armory crash
             // (0.4.0): only a crash, or an end nobody recorded, is a crash incident.
-            var why = RunEndCause.Explain(previous.LastAt, previous.Asleep, WindowsEventHistory.Since(previous.LastAt, log.Info), WindowsEventHistory.CurrentUser());
+            var why = RunEndCause.Explain(previous.LastAt, previous.Asleep, WindowsEventHistory.Since(previous.LastAt, log.Info), WindowsEventHistory.CurrentUser(),
+                previous.UpdatedAt);
             if (why.Crash)
             {
                 log.Info("previous run ended unexpectedly; its last line was: " + previous.LastLine + " (" + why.Words + ")");
@@ -82,7 +83,8 @@ internal static class Program
             }
             else
             {
-                log.Info("previous run ended with Windows, not a crash: " + why.Words + " Its last line was: " + (previous.VeryLastLine ?? previous.LastLine));
+                log.Info((previous.UpdatedAt is null ? "previous run ended with Windows, not a crash: " : "previous run ended with an update, not a crash: ") +
+                    why.Words + " Its last line was: " + (previous.VeryLastLine ?? previous.LastLine));
                 telemetry.LastFlight.Clear();
             }
         }

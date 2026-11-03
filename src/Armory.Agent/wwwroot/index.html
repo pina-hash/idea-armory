@@ -3,10 +3,11 @@
 	<head>
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
-		<!-- Nothing leaves this folder: no network, no web fonts, no remote images. -->
+		<!-- Nothing leaves this folder: no network, no web fonts, no remote images. armory-pictures.local
+		     is the app's own: the host answers it from memory (thumbnails, Send feedback's picture). -->
 		<meta
 			http-equiv="Content-Security-Policy"
-			content="default-src 'none'; script-src 'self' file:; style-src 'self' file:; img-src 'self' file: data:; base-uri 'none'; form-action 'none'"
+			content="default-src 'none'; script-src 'self' file:; style-src 'self' file:; img-src 'self' file: data: https://armory-pictures.local; base-uri 'none'; form-action 'none'"
 		/>
 		<meta name="color-scheme" content="dark light" />
 		<title>Armory</title>

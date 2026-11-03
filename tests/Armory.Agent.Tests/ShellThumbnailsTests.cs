@@ -80,6 +80,100 @@ public sealed class ShellThumbnailsTests
         Assert.Equal([0, .. rgba[..12], 0, .. rgba[12..]], raw.ToArray());
     }
 
+    // GDI hands the handler's bitmap over as 32-bit BGRA. One whose alpha bytes are all zero (a
+    // 24-bit picture, or a handler that leaves the fourth byte empty) is opaque, never invisible;
+    // otherwise the colors are premultiplied and come back straight, and a clear pixel stays clear.
+    [Fact]
+    public void A_bitmap_with_no_alpha_is_opaque_and_premultiplied_color_comes_back_straight()
+    {
+        // Two pixels, alpha all zero: B, G, R, 0 each.
+        byte[] noAlpha = [30, 20, 10, 0, 200, 150, 100, 0];
+        Assert.Equal(new byte[] { 10, 20, 30, 255, 100, 150, 200, 255 }, ShellThumbnails.StraightRgba(noAlpha));
+
+        // Opaque, half covered (premultiplied 50% red: R 128 at alpha 128), and clear.
+        byte[] premultiplied = [0, 0, 255, 255, 0, 0, 128, 128, 0, 0, 0, 0];
+        Assert.Equal(new byte[] { 255, 0, 0, 255, 255, 0, 0, 128, 0, 0, 0, 0 }, ShellThumbnails.StraightRgba(premultiplied));
+
+        // A color brighter than its alpha allows (a handler's rounding) is held at 255.
+        Assert.Equal(new byte[] { 255, 255, 255, 10 }, ShellThumbnails.StraightRgba([200, 200, 200, 10]));
+
+        // A SolidWorks-sized picture with no alpha written: every pixel opaque in the PNG.
+        var big = new byte[Size * Size * 4];
+        for (var i = 0; i < big.Length; i += 4) (big[i], big[i + 1], big[i + 2]) = (90, 90, 90);
+        var rgba = ShellThumbnails.StraightRgba(big);
+        for (var i = 3; i < rgba.Length; i += 4) Assert.Equal(255, rgba[i]);
+    }
+
+    private const int Size = ShellThumbnails.Size;
+
+    // 0.5.4: the page asks for a thumbnail on the pictures host, which WebView2 hands to
+    // MainWindow (a host mapped to a folder never is: every ask on armory.local was 404). Its
+    // address names the vault path with each segment encoded as the page encodes it
+    // (encodeURIComponent; Uri.EscapeDataString here, which escapes a few more), and the host
+    // reads back exactly that path. Any other address names nothing.
+    [Theory]
+    [InlineData("Robot 2027/Drivetrain/Gearbox Plate.SLDPRT")]
+    [InlineData("Launcher B2 Team 1/Sub-Assembly (rev 2)/Shooter #3.SLDASM")]
+    [InlineData("Team's Files/100% infill & 2+2 parts/Bracket,v4.SLDPRT")]
+    [InlineData("Robótica/Pieza ñ é/Engranaje.SLDPRT")]
+    [InlineData("Part.SLDPRT")]
+    public void A_thumbnail_address_names_its_vault_path(string vaultPath)
+    {
+        foreach (var encode in new Func<string, string>[] { EncodeURIComponent, Uri.EscapeDataString })
+        {
+            var address = PageAssets.PictureOrigin + PageAssets.ThumbPrefix + string.Join('/', vaultPath.Split('/').Select(encode)) + "?v=" + encode("2026-11-03T18:00:00Z-changed");
+            Assert.Equal(vaultPath, PageAssets.ThumbVaultPath(address));
+        }
+    }
+
+    [Fact]
+    public void Only_the_pictures_host_answers_thumbnails_and_window_pictures()
+    {
+        Assert.NotEqual(PageAssets.HostName, PageAssets.PictureHost, StringComparer.OrdinalIgnoreCase);
+        Assert.Equal("https://armory-pictures.local", PageAssets.PictureOrigin);
+        foreach (var address in new[]
+        {
+            "https://armory.local/thumb/Robot%202027/Part.SLDPRT?v=1", // the folder-mapped host never reaches the handler
+            "http://armory-pictures.local/thumb/Part.SLDPRT",
+            "https://armory-pictures.local:8443/thumb/Part.SLDPRT",
+            "https://armory-pictures.local/shot/0123456789abcdef0123456789abcdef.png",
+            "https://armory-pictures.local/thumb/",
+            "https://armory-pictures.local/thumbnails/Part.SLDPRT",
+            "/thumb/Part.SLDPRT",
+            "",
+            null,
+        })
+            Assert.Null(PageAssets.ThumbVaultPath(address));
+        // A decoded path that tries to leave the vault is still only a path: ExistingFile refuses it.
+        Assert.Equal("../secret.txt", PageAssets.ThumbVaultPath("https://armory-pictures.local/thumb/..%2Fsecret.txt"));
+        Assert.StartsWith(PageAssets.PictureOrigin + WindowShots.Prefix, WindowShots.UrlOf(new string('a', 32)), StringComparison.Ordinal);
+
+        // The page asks there, and its Content-Security-Policy lets those images in.
+        var root = Repo.FindRoot();
+        Assert.NotNull(root);
+        var web = Path.Combine(root, "src", "Armory.Agent", "wwwroot");
+        var html = File.ReadAllText(Path.Combine(web, "index.html"));
+        var policy = System.Text.RegularExpressions.Regex.Match(html, "Content-Security-Policy\"\\s+content=\"(?<p>[^\"]+)\"").Groups["p"].Value;
+        var images = policy.Split(';').Select(d => d.Trim()).Single(d => d.StartsWith("img-src ", StringComparison.Ordinal)).Split(' ');
+        Assert.Contains(PageAssets.PictureOrigin, images);
+        var script = File.ReadAllText(Path.Combine(web, "app.js"));
+        Assert.Contains("var PICTURES = '" + PageAssets.PictureOrigin + "';", script);
+        Assert.Contains("PICTURES + '/thumb/' + String(r.path).split('/').map(encodeURIComponent).join('/')", script);
+    }
+
+    // JavaScript's encodeURIComponent: everything but A-Z a-z 0-9 - _ . ! ~ * ' ( ) as UTF-8 %XX.
+    private static string EncodeURIComponent(string text)
+    {
+        var output = new System.Text.StringBuilder();
+        foreach (var b in System.Text.Encoding.UTF8.GetBytes(text))
+        {
+            var c = (char)b;
+            if (b < 0x80 && (char.IsAsciiLetterOrDigit(c) || "-_.!~*'()".Contains(c))) output.Append(c);
+            else output.Append('%').Append(b.ToString("X2", System.Globalization.CultureInfo.InvariantCulture));
+        }
+        return output.ToString();
+    }
+
     // A handler is someone else's code (N15): the window never waits on one for long. These run
     // anywhere, with a stand-in for Windows' handlers and short waits.
     private static readonly byte[] Picture = [0x89, (byte)'P', (byte)'N', (byte)'G', 1, 2, 3];

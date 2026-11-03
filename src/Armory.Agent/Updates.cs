@@ -39,7 +39,7 @@ internal static class Updates
             .SetAppUserModelId(ShellIdentity.AppId)
             .SetAutoApplyOnStartup(applyDownloaded)
             .OnAfterInstallFastCallback(_ => AfterInstall())
-            .OnAfterUpdateFastCallback(_ => AfterInstall())
+            .OnAfterUpdateFastCallback(version => AfterUpdate(version.ToString()))
             .OnBeforeUninstallFastCallback(_ => BeforeUninstall())
             .Run();
     }
@@ -67,6 +67,19 @@ internal static class Updates
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.Security.SecurityException or InvalidOperationException)
         { log("install step: " + error.Message); }
     }
+
+    // Updated: the log says so first (AgentLog.UpdatedLine), so the next start knows the older copy
+    // was stopped by the update and not by a crash; then the same steps as an install.
+    [SupportedOSPlatform("windows")]
+    private static void AfterUpdate(string version)
+    {
+        var paths = AgentPaths.Resolve();
+        new AgentLog(paths.LogFile, paths.CrashFile).Info(UpdatedLineFor(version));
+        AfterInstall();
+    }
+
+    // The line the new version writes once it is in place (AgentLog.EndOf reads it).
+    internal static string UpdatedLineFor(string version) => AgentLog.UpdatedLine + version;
 
     // Uninstalled: what Armory registered for this account goes. The vault and its files never do.
     [SupportedOSPlatform("windows")]

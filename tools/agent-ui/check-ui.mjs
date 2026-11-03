@@ -176,9 +176,14 @@ for (const file of scanned) {
 // anywhere. The one http string allowed is the SVG namespace, which a data: URI SVG must
 // carry to parse and which no browser fetches.
 const SVG_NS = 'http://www.w3.org/2000/svg';
+// The other: the app's own pictures host (0.5.4, PageAssets.PictureHost). WebView2 hands every
+// ask for it to the Armory host, which answers from this computer; it is mapped to nothing
+// else and no request for it ever leaves the computer (the network rule still aborts it here).
+const APP_PICTURES = 'https://armory-pictures.local';
 function offlineProblems(text) {
 	const found = [];
-	const stripped = text.split(SVG_NS).join('');
+	// Only that exact host: armory-pictures.local.example.com is still a web address.
+	const stripped = text.split(SVG_NS).join('').replace(/https:\/\/armory-pictures\.local(?![a-z0-9.-])/gi, '');
 	for (const m of stripped.matchAll(/(?:https?:)?\/\/[a-z0-9.-]+\.[a-z]{2,}[^\s'")]*/gi)) found.push('web address ' + m[0].slice(0, 60));
 	for (const m of stripped.matchAll(/@font-face|@import/gi)) found.push(m[0]);
 	for (const m of stripped.matchAll(/url\(\s*(['"]?)([^'")]*)/gi)) {
@@ -197,6 +202,9 @@ tally.offline = 0;
 	tally.offlinePlanted = planted.length;
 	// Five: the import, its url(), the @font-face, its url() and the web address in it.
 	if (planted.length < 5) problem('offline', 'planted', `the offline scan found ${planted.length} of 5 planted problems`);
+	// The pictures host passes; a web address made to look like it does not.
+	if (offlineProblems("var a = '" + APP_PICTURES + "/thumb/x';").length !== 0 || offlineProblems("var b = '" + APP_PICTURES + ".example.com/x';").length !== 1)
+		problem('offline', 'planted', 'the offline scan mistook the pictures host or a look-alike');
 }
 for (const file of walkFiles(WWWROOT).filter((f) => /\.(html|css|js|mjs|json|svg)$/i.test(f))) {
 	const lines = fs.readFileSync(file, 'utf8').split('\n');
@@ -2608,9 +2616,14 @@ tally.drawing = 0;
 // the rows in view ask for their file's picture and wear it, a file with none keeps its
 // glyph, File detail shows its one picture, and a folder of 5,000 files asks only for the
 // rows drawn. Off armory.local (the demo, every page above) nothing is asked for.
+// 0.5.4: the pictures come from https://armory-pictures.local, never armory.local itself.
+// WebView2 serves armory.local from the wwwroot folder and never asks the host about it, so
+// here too armory.local only serves files: a picture asked there is a failure (until 0.5.4
+// this route answered /thumb/ on armory.local, which hid that no thumbnail could ever show).
 {
 	const fails = [];
 	const asked = [];
+	const askedOnPageHost = [];
 	// A small gray PNG stands in for File Explorer's picture.
 	const PNG = (() => {
 		const chunk = (type, data) => {
@@ -2631,13 +2644,16 @@ tally.drawing = 0;
 		return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(rows)), chunk('IEND', Buffer.alloc(0))]);
 	})();
 	const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, colorScheme: 'dark', reducedMotion: 'reduce' });
+	await context.route('https://armory-pictures.local/**', async (route) => {
+		const u = new URL(route.request().url());
+		if (!u.pathname.startsWith('/thumb/')) return route.fulfill({ status: 404, body: '' });
+		asked.push(decodeURIComponent(u.pathname));
+		// Parts have a picture, except Bearing-Block-0005 (Windows has none for it).
+		return /\.SLDPRT$/i.test(u.pathname) && !/-0005\.SLDPRT$/i.test(u.pathname) ? route.fulfill({ status: 200, contentType: 'image/png', body: PNG }) : route.fulfill({ status: 404, body: '' });
+	});
 	await context.route('https://armory.local/**', async (route) => {
 		const u = new URL(route.request().url());
-		if (u.pathname.startsWith('/thumb/')) {
-			asked.push(decodeURIComponent(u.pathname));
-			// Parts have a picture, except Bearing-Block-0005 (Windows has none for it).
-			return /\.SLDPRT$/i.test(u.pathname) && !/-0005\.SLDPRT$/i.test(u.pathname) ? route.fulfill({ status: 200, contentType: 'image/png', body: PNG }) : route.fulfill({ status: 404, body: '' });
-		}
+		if (u.pathname.startsWith('/thumb/') || u.pathname.startsWith('/shot/')) askedOnPageHost.push(u.pathname);
 		const file = path.join(WWWROOT, decodeURIComponent(u.pathname));
 		if (!file.startsWith(WWWROOT) || !fs.existsSync(file)) return route.fulfill({ status: 404, body: '' });
 		const type = file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.html') ? 'text/html' : 'application/octet-stream';
@@ -2657,6 +2673,7 @@ tally.drawing = 0;
 		expect(rows.on > 0, 'no row wore its thumbnail: ' + JSON.stringify(rows));
 		expect(asked.length > 0 && asked.length <= rows.drawn + 10, `a 5,000-file folder asked for ${asked.length} thumbnails with ${rows.drawn} rows drawn`);
 		expect(asked.every((a) => a.startsWith('/thumb/Robot 2027/')), 'a thumbnail was asked for outside the project: ' + asked.slice(0, 3).join(', '));
+		expect(askedOnPageHost.length === 0, 'a picture was asked for on armory.local, which WebView2 never hands to the host: ' + askedOnPageHost.slice(0, 3).join(', '));
 		const glyphs = await page.evaluate(() => [...document.querySelectorAll('#vl-browser .thumb-slot')].filter((s) => !s.querySelector('.thumb')).length);
 		expect(glyphs > 0, 'a file with no picture (404) lost its glyph or kept a broken image');
 		// Home drawn again (Pause: a new view) keeps every picture it wore, and asks for none again.

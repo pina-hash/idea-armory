@@ -500,7 +500,7 @@ another window. Over 2,097,152 bytes it is taken again smaller with the DevTools
 height, scale}}`, `scale` from `ScreenshotFit.NextScale`, at most three times, never below 0.25),
 measured each time. Still over, or not taken: `windowShot` with `ok: false` and why. The host
 keeps the picture in memory only (`WindowShots`, the last one; a new one replaces it, a sent one
-is forgotten) and serves exactly those bytes at `https://armory.local/shot/<id>.png` with
+is forgotten) and serves exactly those bytes at `https://armory-pictures.local/shot/<id>.png` with
 `Cache-Control: no-store`, so not even the WebView's cache keeps it. On `windowShot` the page puts
 back every address, picture and the dialog, applies the messages that waited, and shows the
 picture at the dialog's width with "This is the picture that will be sent: 1,120 by 760 pixels,
@@ -584,7 +584,10 @@ page:
 ## Thumbnails (0.3.2)
 
 Not a message: inside the app (`https://armory.local`) a file row and File detail show the
-file's own picture as an image at `/thumb/<vault path>?v=<version>`, which the host answers
+file's own picture as an image at `https://armory-pictures.local/thumb/<vault path>?v=<version>`
+(0.5.4: never on `armory.local` itself, which WebView2 serves from the wwwroot folder without
+ever raising WebResourceRequested, so until 0.5.4 every picture was 404; the page's
+Content-Security-Policy lets `https://armory-pictures.local` images in), which the host answers
 from Windows' thumbnail handlers (`ShellThumbnails`, the pictures File Explorer shows;
 SolidWorks installs one for parts, assemblies and drawings) as PNG, or 404 when Windows has
 no picture for it (never the file type's icon). Only files on this computer that are parts,

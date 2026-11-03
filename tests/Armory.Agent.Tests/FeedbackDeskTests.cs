@@ -339,7 +339,7 @@ public sealed class FeedbackDeskTests
         var first = shots.Answer(new WindowCapture(png, true));
         Assert.True(first.Ok);
         Assert.Matches("^[0-9a-f]{32}$", first.Id!);
-        Assert.Equal(("https://armory.local/shot/" + first.Id + ".png", 1680, 1140, 300_000L, true, (string?)null),
+        Assert.Equal(("https://armory-pictures.local/shot/" + first.Id + ".png", 1680, 1140, 300_000L, true, (string?)null),
             (first.Url, first.Width, first.Height, first.Bytes, first.Scaled, first.Message));
         Assert.Same(png, shots.Get(first.Id)!.Png); // exactly the bytes shown are the bytes sent
         Assert.Equal(first.Id, WindowShots.IdOfPath("/shot/" + first.Id + ".png"));

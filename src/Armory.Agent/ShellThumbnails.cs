@@ -288,13 +288,21 @@ internal sealed class ShellThumbnails : IDisposable
             if (GetDIBits(screen, hbitmap, 0, (uint)height, pixels, ref request, 0) == 0) return null;
         }
         finally { _ = ReleaseDC(IntPtr.Zero, screen); }
+        return Encode(width, height, StraightRgba(pixels));
+    }
+
+    // GDI's 32-bit BGRA as the PNG's straight RGBA. A bitmap whose alpha bytes are all zero has no
+    // alpha at all (a 24-bit picture, or a handler such as SolidWorks' that leaves the fourth byte
+    // empty): it is opaque, never invisible. Otherwise the colors are premultiplied by alpha, as
+    // Windows hands thumbnails over, and go back to straight color.
+    internal static byte[] StraightRgba(byte[] bgra)
+    {
         var anyAlpha = false;
-        for (var i = 3; i < pixels.Length && !anyAlpha; i += 4) anyAlpha = pixels[i] != 0;
-        var rgba = new byte[pixels.Length];
-        for (var i = 0; i < pixels.Length; i += 4)
+        for (var i = 3; i < bgra.Length && !anyAlpha; i += 4) anyAlpha = bgra[i] != 0;
+        var rgba = new byte[bgra.Length];
+        for (var i = 0; i + 3 < bgra.Length; i += 4)
         {
-            int b = pixels[i], g = pixels[i + 1], r = pixels[i + 2], a = anyAlpha ? pixels[i + 3] : 255;
-            // Premultiplied by alpha, as Windows hands thumbnails over: back to straight color.
+            int b = bgra[i], g = bgra[i + 1], r = bgra[i + 2], a = anyAlpha ? bgra[i + 3] : 255;
             if (a is > 0 and < 255)
             {
                 r = Math.Min(255, r * 255 / a);
@@ -306,7 +314,7 @@ internal sealed class ShellThumbnails : IDisposable
             rgba[i + 2] = (byte)b;
             rgba[i + 3] = (byte)a;
         }
-        return Encode(width, height, rgba);
+        return rgba;
     }
 
     internal static byte[] Encode(int width, int height, byte[] rgba)

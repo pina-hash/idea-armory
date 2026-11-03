@@ -2262,13 +2262,16 @@
 
 	/* ---- Thumbnails: File Explorer's own picture of a file ---- */
 
-	// Only inside the app: the host answers /thumb/<vault path> on its own page address with the
-	// picture Windows has for the file (SolidWorks draws its parts', assemblies' and drawings',
+	// Only inside the app: the host answers https://armory-pictures.local/thumb/<vault path> with
+	// the picture Windows has for the file (SolidWorks draws its parts', assemblies' and drawings',
 	// eDrawings and slicers theirs, Windows its pictures', videos' and documents'), or 404, and the
 	// kind's icon stays. Text, code, archives, CAD exchange files and laser jobs have no picture
 	// Windows makes, so they are never asked about (0.5.0). The demo and the check pages have none,
 	// and ask for nothing.
 	var THUMBS = location.protocol === 'https:' && location.hostname === 'armory.local';
+	// Never on armory.local itself: WebView2 serves that host from the wwwroot folder and never
+	// asks the host about it, so a picture there was always 404 (0.5.4, PageAssets.PictureHost).
+	var PICTURES = 'https://armory-pictures.local';
 	var THUMB_KINDS = { part: 1, asm: 1, drw: 1, template: 1, feature: 1, block: 1, edrawing: 1, mesh: 1, print: 1, vector: 1, pdf: 1, doc: 1, sheet: 1, slides: 1, image: 1, video: 1 };
 
 	/** The picture's address for a file on this computer, or null. Its version is in the
@@ -2276,7 +2279,7 @@
 	function thumbAddress(r) {
 		if (!THUMBS || !r || !r.path || r.status === 'notOnThisComputer' || !THUMB_KINDS[kindOf(r.name || r.path)]) return null;
 		return (
-			'/thumb/' + String(r.path).split('/').map(encodeURIComponent).join('/') +
+			PICTURES + '/thumb/' + String(r.path).split('/').map(encodeURIComponent).join('/') +
 			'?v=' + encodeURIComponent((r.updatedAt || '') + (r.changed || r.status === 'changed' ? '-' + (r.status || '') : ''))
 		);
 	}
