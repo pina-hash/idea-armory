@@ -398,7 +398,7 @@
 	/**
 	 * Send feedback's picture of the Armory window (the answer to captureWindow; its fields come
 	 * flat in the windowShot message). The host keeps it in memory only and serves exactly the
-	 * bytes that would be sent at url (armory.local/shot/<id>.png, never cached).
+	 * bytes that would be sent at url (armory-pictures.local/shot/<id>.png, never cached).
 	 * @typedef {object} WindowShotView
 	 * @property {boolean} ok
 	 * @property {string | null} id         32 hex digits; sendFeedback's shot

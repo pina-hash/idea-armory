@@ -71,6 +71,20 @@ public sealed class RunEndCauseTests
         Assert.Contains("7002", RunEndCause.SystemQueryIds.Split(','));
     }
 
+    // 0.5.4 (incident 0269c86e): an update put in place after the run's last line closed it. Windows'
+    // own record of Armory crashing still wins; a restart or power loss is the better reason.
+    [Fact]
+    public void An_update_that_closed_the_older_copy_is_not_a_crash()
+    {
+        var updated = Last.AddMinutes(42);
+        var verdict = RunEndCause.Explain(Last, false, [], null, updated);
+        Assert.False(verdict.Crash);
+        Assert.Equal("Armory was updated at 2026-10-21 05:33 UTC, and the update closed the older copy that was still running.", verdict.Words);
+        Assert.True(RunEndCause.Explain(Last, false, [E("Application", "Application Error", 1000, 1, "Faulting application name: IdeaArmory.exe")], null, updated).Crash);
+        Assert.StartsWith("Windows restarted", RunEndCause.Explain(Last, false, [E("System", "User32", 1074, 20, "restart")], null, updated).Words);
+        Assert.True(RunEndCause.Explain(Last, false, []).Crash);
+    }
+
     [Fact]
     public void A_crash_incident_carries_what_Windows_said()
         => Assert.Equal("The previous run ended unexpectedly. Windows has no record of why it ended. Its last log line was: pass: x",

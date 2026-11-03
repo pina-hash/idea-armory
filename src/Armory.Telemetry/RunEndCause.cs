@@ -33,7 +33,13 @@ public static class RunEndCause
 
     // user: this Windows account's security id, or null when it is not known (a sign out is then
     // never taken for this account's).
-    public static Verdict Explain(DateTimeOffset? lastLineAt, bool asleep, IReadOnlyList<WindowsEvent> events, string? user = null)
+    //
+    // 0.5.4: updatedAt, when an update of Armory was put in place after the run's last line (the
+    // new version's install step writes it in agent.log). Applying an update stops the older copy
+    // still running (incident 0269c86e, 2026-11-03: 0.5.1 in the tray, a student opened Armory, and
+    // 0.5.3 reported 0.5.1's end as a crash). Windows' own record of a crash still comes first.
+    public static Verdict Explain(DateTimeOffset? lastLineAt, bool asleep, IReadOnlyList<WindowsEvent> events, string? user = null,
+        DateTimeOffset? updatedAt = null)
     {
         // Only what Windows wrote after the run's last line (a minute's grace for the clock).
         var since = lastLineAt?.AddMinutes(-1) ?? DateTimeOffset.MinValue;
@@ -57,6 +63,8 @@ public static class RunEndCause
             return new(false, $"Windows signed this account out at {Time(signOut.At)}, and Armory ended with the session.");
         if (asleep)
             return new(false, "The computer went to sleep and was turned off or restarted before it woke up.");
+        if (updatedAt is { } updated)
+            return new(false, $"Armory was updated at {Time(updated)}, and the update closed the older copy that was still running.");
         return new(true, "Windows has no record of why it ended.");
     }
 

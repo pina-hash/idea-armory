@@ -89,6 +89,15 @@ open-files question stop on that token, the team's goodbye goes while the engine
 session end the tray waits up to 4 seconds for the stop, on its own thread, after writing the
 last flight.
 
+**An update is not a crash** (0.5.4). An update Velopack applies when Armory opens closes the
+older copy still running in the tray before it puts the new one in place (incident 0269c86e,
+2026-11-03: 0.5.1 had downloaded 0.5.3, a student opened Armory, and 0.5.3 filed a crash for
+0.5.1's end). The new version's install step writes `updates: put in place as Armory <version>`
+in agent.log (`Updates.AfterUpdate`, `AgentLog.UpdatedLine`); the next start reads it after the
+run's last line, treats every line after it as the installer's, and, unless Windows recorded
+Armory crashing, logs `previous run ended with an update, not a crash` and files nothing
+(`RunEndCause.Explain`'s `updatedAt`). Not verified on a lab computer: it takes a real release.
+
 **Throttles.** At most one incident per kind per 10 minutes on a computer, counted across
 restarts from the files on disk; a person's own report is never held back. At most 20
 incident files are kept (files the site already has go first, then the oldest). Each file is
@@ -134,7 +143,7 @@ so a person can hand the files over by hand today.
     "lastPasses": [ ...the last three passes... ],
     "host": { "runtimeProblem": null, "connectPhase": "idle", "signedIn": true, "transfersRunning": 6 }
   },
-  "log": [ "...the last 300 lines of agent.log..." ]
+  "log": [ "...the last 300 lines of agent.log..." ]   // 0.5.4: led by this start's first thumbnail lines, under "(kept from earlier in this run, for reports:)", when the last 300 no longer hold them (AgentLog.TailWithKept)
 }
 ```
 

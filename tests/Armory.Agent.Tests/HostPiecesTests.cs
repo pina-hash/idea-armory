@@ -127,6 +127,86 @@ public sealed class HostPiecesTests
         finally { Directory.Delete(folder, true); }
     }
 
+    // 0.5.4 (incident 0269c86e, 2026-11-03): 0.5.1 in the tray had downloaded 0.5.3; a student
+    // opened Armory, Velopack applied the update, which closed the running 0.5.1, and 0.5.3
+    // reported its end as a crash ("Windows has no record of why it ended"). The new version's
+    // install step now writes that it was put in place, and the next start reads it: an update,
+    // not a crash. Lines after it are the installer's, never the run's.
+    [Fact]
+    public void A_run_closed_by_an_update_is_not_a_crash()
+    {
+        string[] updated = [
+            "2026-11-03T17:34:47.786Z started 0.5.1",
+            "2026-11-03T17:35:08.098Z pass: ended after 16939 ms (loop), 0 downloaded, 0 uploaded, 0 kept copies, 0 refused",
+            "2026-11-03T17:35:55.054Z updates: " + Updates.ReadyWords("0.5.3"),
+            "2026-11-03T18:17:08.379Z solidworks: a new document (not saved yet) changed",
+            "2026-11-03T18:17:15.000Z " + Updates.UpdatedLineFor("0.5.4"),
+            "2026-11-03T18:17:18.967Z updates: pointed the taskbar pin IDEA Armory.lnk at C:\\Users\\IDEA\\AppData\\Local\\IDEAArmory\\current\\IdeaArmory.exe"];
+        var end = AgentLog.EndOf(updated)!;
+        Assert.False(end.Quitting);
+        Assert.Equal((updated[1], updated[3]), (end.LastLine, end.VeryLastLine));
+        Assert.Equal(DateTimeOffset.Parse("2026-11-03T18:17:15Z", System.Globalization.CultureInfo.InvariantCulture), end.UpdatedAt);
+        Assert.Equal(DateTimeOffset.Parse("2026-11-03T18:17:08.379Z", System.Globalization.CultureInfo.InvariantCulture), end.LastAt);
+        var verdict = Armory.Telemetry.RunEndCause.Explain(end.LastAt, end.Asleep, [], null, end.UpdatedAt);
+        Assert.False(verdict.Crash);
+        Assert.Equal("Armory was updated at 2026-11-03 18:17 UTC, and the update closed the older copy that was still running.", verdict.Words);
+
+        // Without the line, the same end is still a crash; and an update line from an earlier run
+        // (before this run's "started") says nothing about this one.
+        Assert.Null(AgentLog.EndOf(updated[..4])!.UpdatedAt);
+        Assert.True(Armory.Telemetry.RunEndCause.Explain(end.LastAt, false, [], null, AgentLog.EndOf(updated[..4])!.UpdatedAt).Crash);
+        Assert.Null(AgentLog.EndOf([updated[4], .. updated[..4]])!.UpdatedAt);
+
+        // Through the files, as the install step and the next start write and read them.
+        var folder = Path.Combine(Path.GetTempPath(), "armory-log-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var log = Path.Combine(folder, "agent.log");
+            var crash = Path.Combine(folder, "crash.log");
+            var older = new AgentLog(log, crash);
+            older.Info("started 0.5.3");
+            older.Info("pass: ended after 900 ms (loop), 0 downloaded, 0 uploaded, 0 kept copies, 0 refused");
+            new AgentLog(log, crash).Info(Updates.UpdatedLineFor("0.5.4"));
+            var next = new AgentLog(log, crash).PreviousRun()!;
+            Assert.NotNull(next.UpdatedAt);
+            Assert.False(next.Quitting);
+            Assert.EndsWith("pass: ended after 900 ms (loop), 0 downloaded, 0 uploaded, 0 kept copies, 0 refused", next.VeryLastLine, StringComparison.Ordinal);
+        }
+        finally { Directory.Delete(folder, true); }
+    }
+
+    // 0.5.4: the first thumbnail lines of a start go with every incident and note, however far
+    // agent.log's last lines have moved past them (0.5.3's never reached the site), under a
+    // heading, within the same 300 lines; a tail that still holds them is sent as it is.
+    [Fact]
+    public void The_first_thumbnail_lines_go_with_every_report()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), "armory-log-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var log = new AgentLog(Path.Combine(folder, "agent.log"), Path.Combine(folder, "crash.log"));
+            log.Info("started 0.5.4");
+            log.Info("thumbnail: the window asked Armory for its first picture (.SLDPRT)");
+            log.Error("could not serve a thumbnail", new InvalidOperationException("gone"));
+            for (var i = 0; i < AgentLog.KeptLines + 5; i++) log.Info($"thumbnail Part{i}.SLDPRT: Windows gave no picture (GetImage 0x8004B200)");
+            Assert.Equal(log.Tail(300), log.TailWithKept(300));
+            for (var i = 0; i < 400; i++) log.Info($"pass: ended after {i} ms (loop), 0 downloaded, 0 uploaded, 0 kept copies, 0 refused");
+
+            Assert.DoesNotContain(log.Tail(300), l => l.Contains("thumbnail", StringComparison.Ordinal));
+            var sent = log.TailWithKept(300).ToArray();
+            Assert.Equal(300, sent.Length);
+            Assert.Equal(AgentLog.KeptHeading, sent[0]);
+            Assert.EndsWith("thumbnail: the window asked Armory for its first picture (.SLDPRT)", sent[1], StringComparison.Ordinal);
+            Assert.EndsWith("could not serve a thumbnail: InvalidOperationException: gone", sent[2], StringComparison.Ordinal);
+            Assert.Equal(AgentLog.KeptLines, sent.Count(l => l.Contains("thumbnail", StringComparison.Ordinal)));
+            Assert.EndsWith("pass: ended after 399 ms (loop), 0 downloaded, 0 uploaded, 0 kept copies, 0 refused", sent[^1], StringComparison.Ordinal);
+            Assert.Equal(log.Tail(300).ToArray()[^(300 - 1 - AgentLog.KeptLines)..], sent[(1 + AgentLog.KeptLines)..]);
+        }
+        finally { Directory.Delete(folder, true); }
+        Assert.False(AgentLog.IsKept("pass: thumbnail"));
+        Assert.Equal(["a"], AgentLog.WithKept(["a"], ["b"], 2));
+    }
+
     // 0.4.0: a run whose last word about the power was "the computer is going to sleep" ended
     // while the computer slept (IDEA-06, 2026-10-20T23:13Z): the next start knows it.
     [Fact]

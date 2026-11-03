@@ -27,10 +27,50 @@ public sealed class AgentLog
         catch (UnauthorizedAccessException) { }
     }
 
-    public void Info(string message) => Append(file, Line(message));
+    public void Info(string message) => Write(message);
 
     public void Error(string message, Exception? error = null)
-        => Append(file, Line(error is null ? message : message + ": " + error.GetType().Name + ": " + error.Message));
+        => Write(error is null ? message : message + ": " + error.GetType().Name + ": " + error.Message);
+
+    private void Write(string message)
+    {
+        var line = Line(message);
+        Append(file, line);
+        if (IsKept(message)) lock (gate) if (kept.Count < KeptLines) kept.Add(line.TrimEnd());
+    }
+
+    // 0.5.4: the first lines of this start about thumbnails (MainWindow, ShellThumbnails) are kept
+    // in memory and go with every incident and note (TailWithKept), even once agent.log's last 300
+    // lines have moved past them: 0.5.3 wrote them a minute after the window opened, and none had
+    // reached the site, since an incident or a note carries only the log's last lines.
+    internal const int KeptLines = 16;
+    private readonly List<string> kept = [];
+
+    internal static bool IsKept(string message)
+        => message.StartsWith("thumbnail", StringComparison.Ordinal) ||
+           message.StartsWith("could not serve a thumbnail", StringComparison.Ordinal) ||
+           message.StartsWith("could not finish a thumbnail", StringComparison.Ordinal);
+
+    // The log's last lines (Tail), after the kept lines they no longer hold; count lines at most.
+    public IReadOnlyList<string> TailWithKept(int count)
+    {
+        string[] held;
+        lock (gate) held = [.. kept];
+        return WithKept(Tail(count), held, count);
+    }
+
+    internal const string KeptHeading = "(kept from earlier in this run, for reports:)";
+
+    internal static IReadOnlyList<string> WithKept(IReadOnlyList<string> tail, IReadOnlyList<string> held, int count)
+    {
+        var inTail = new HashSet<string>(tail, StringComparer.Ordinal);
+        var missing = held.Where(line => !inTail.Contains(line)).ToList();
+        if (missing.Count == 0 || count <= missing.Count + 1) return tail;
+        var room = count - missing.Count - 1;
+        List<string> lines = [KeptHeading, .. missing];
+        lines.AddRange(tail.Skip(Math.Max(0, tail.Count - room)));
+        return lines;
+    }
 
     // Never throws: a crash handler that fails loses the one line that says why the agent
     // stopped. Whatever part can't be written (the scrubbed details, the type name) is left out.
@@ -124,10 +164,15 @@ public sealed class AgentLog
         string? lastPass = null, last = null;
         var quitting = false;
         var asleep = false;
+        DateTimeOffset? updatedAt = null;
         for (var i = start + 1; i < lines.Count; i++)
         {
             var message = Message(lines[i]);
             if (message == "stopped") return null;
+            // Written by the new version's install step after the run ended, as is everything after
+            // it until the next start: never the run's own lines.
+            if (message.StartsWith(UpdatedLine, StringComparison.Ordinal)) updatedAt ??= TimeOf(lines[i]) ?? DateTimeOffset.MinValue;
+            if (updatedAt is not null) continue;
             if (message == "quitting" || message.StartsWith(SessionEndingLine, StringComparison.Ordinal)) quitting = true;
             // Asleep: the run's last word about the power was that the computer went to sleep.
             if (message == SleepLine) asleep = true;
@@ -136,8 +181,15 @@ public sealed class AgentLog
             if (message.StartsWith("pass: ", StringComparison.Ordinal)) lastPass = lines[i];
         }
         var veryLast = last ?? lines[start];
-        return new(lastPass ?? veryLast, quitting, veryLast, asleep, TimeOf(veryLast));
+        return new(lastPass ?? veryLast, quitting, veryLast, asleep, TimeOf(veryLast), updatedAt);
     }
+
+    // 0.5.4: the line Velopack's install step writes in the new version once an update is in place
+    // (Updates.AfterUpdate). An update applied when Armory opens stops the older copy still
+    // running in the tray first (incident 0269c86e: 0.5.1 had downloaded 0.5.3, a student opened
+    // Armory, and 0.5.3 reported 0.5.1's end as a crash). After the run's last line, it says why
+    // the run ended without "stopped" (RunEndCause.Explain's updatedAt).
+    internal const string UpdatedLine = "updates: put in place as Armory ";
 
     internal const string SleepLine = "the computer is going to sleep", WakeLine = "the computer woke up";
 
@@ -183,4 +235,6 @@ public sealed class AgentLog
 // line), and whether it had begun to quit.
 // VeryLastLine is the last line it wrote whatever it was about, Asleep whether the computer had
 // gone to sleep and not woken, LastAt when the last line was written.
-public sealed record RunEnd(string LastLine, bool Quitting, string? VeryLastLine = null, bool Asleep = false, DateTimeOffset? LastAt = null);
+// UpdatedAt is when an update was put in place after the run's last line (AgentLog.UpdatedLine).
+public sealed record RunEnd(string LastLine, bool Quitting, string? VeryLastLine = null, bool Asleep = false, DateTimeOffset? LastAt = null,
+    DateTimeOffset? UpdatedAt = null);

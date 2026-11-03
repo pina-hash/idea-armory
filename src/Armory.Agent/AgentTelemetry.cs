@@ -39,7 +39,8 @@ internal sealed class AgentTelemetry : IAsyncDisposable
             Header = Header,
             Snapshot = ct => snapshot is { } take ? take(ct) : Task.FromResult(quickSnapshot?.Invoke()),
             QuickSnapshot = () => quickSnapshot?.Invoke(),
-            LogTail = log.Tail,
+            // With the first thumbnail lines of this start, however long ago (AgentLog.TailWithKept).
+            LogTail = log.TailWithKept,
             Scrubber = Scrubber,
             Log = log.Info,
         }, clock, LastFlight);

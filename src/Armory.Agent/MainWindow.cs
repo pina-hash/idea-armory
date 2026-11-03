@@ -139,17 +139,23 @@ internal sealed class MainWindow : Form, IBridgeWindow
             core.Settings.IsWebMessageEnabled = true;
             core.SetVirtualHostNameToFolderMapping(HostName, AgentPaths.WebRoot, CoreWebView2HostResourceAccessKind.Deny);
             await ForgetOldPageAsync(core);
-            // index.html is served from here, never cached, with ?v=<version> on its scripts and
-            // style sheets. When anything fails the folder mapping above serves it as is.
+            // index.html served from here, never cached, with ?v=<version> on its scripts and style
+            // sheets. Microsoft documents that WebResourceRequested is not raised for a host mapped
+            // to a folder, so the folder mapping above may serve it as is; ForgetOldPageAsync empties
+            // the cache at each new version either way.
             core.AddWebResourceRequestedFilter("https://" + HostName + "/index.html*", CoreWebView2WebResourceContext.Document);
-            // A file's thumbnail, as File Explorer shows it: https://armory.local/thumb/<vault path>.
-            core.AddWebResourceRequestedFilter("https://" + HostName + ThumbPrefix + "*", CoreWebView2WebResourceContext.Image);
-            // Send feedback's picture of this window, from memory: https://armory.local/shot/<id>.png.
-            core.AddWebResourceRequestedFilter("https://" + HostName + WindowShots.Prefix + "*", CoreWebView2WebResourceContext.Image);
+            // The pictures made in memory are on a host mapped to nothing (PageAssets.PictureHost),
+            // the only kind of address WebView2 asks this handler about (0.5.4: on armory.local the
+            // folder mapping answered every thumbnail 404, and none ever showed):
+            // a file's thumbnail, as File Explorer shows it: https://armory-pictures.local/thumb/<vault path>;
+            core.AddWebResourceRequestedFilter(PageAssets.PictureOrigin + ThumbPrefix + "*", CoreWebView2WebResourceContext.Image);
+            // Send feedback's picture of this window: https://armory-pictures.local/shot/<id>.png.
+            core.AddWebResourceRequestedFilter(PageAssets.PictureOrigin + WindowShots.Prefix + "*", CoreWebView2WebResourceContext.Image);
             core.WebResourceRequested += (_, args) =>
             {
-                if (args.ResourceContext != CoreWebView2WebResourceContext.Image) ServeStartPage(core, args);
-                else if (IsShotRequest(args.Request.Uri)) ServeShot(core, args);
+                var uri = args.Request.Uri;
+                if (PageAssets.PictureUri(uri) is null) ServeStartPage(core, args);
+                else if (IsShotRequest(uri)) ServeShot(core, args);
                 else ServeThumbnail(core, args);
             };
             core.NavigationStarting += (_, args) => KeepInsideApp(args.Uri, () => args.Cancel = true);
@@ -249,7 +255,7 @@ internal sealed class MainWindow : Form, IBridgeWindow
         }
     }
 
-    internal const string ThumbPrefix = "/thumb/";
+    internal const string ThumbPrefix = PageAssets.ThumbPrefix;
 
     // A thumbnail is made off the window's thread (ShellThumbnails); the request waits on a
     // deferral. A file with no picture answers 404, and the page keeps its own glyph.
@@ -258,9 +264,7 @@ internal sealed class MainWindow : Form, IBridgeWindow
         CoreWebView2Deferral? deferral = null;
         try
         {
-            if (!IsAppUri(args.Request.Uri) || !Uri.TryCreate(args.Request.Uri, UriKind.Absolute, out var uri) ||
-                !uri.AbsolutePath.StartsWith(ThumbPrefix, StringComparison.Ordinal)) return;
-            var vaultPath = Uri.UnescapeDataString(uri.AbsolutePath[ThumbPrefix.Length..]);
+            if (PageAssets.ThumbVaultPath(args.Request.Uri) is not { } vaultPath) return;
             deferral = args.GetDeferral();
             if (Interlocked.Increment(ref thumbsServed) == 1) log.Info("thumbnail: the window asked Armory for its first picture (" + Path.GetExtension(vaultPath) + ")");
             var png = await host.ThumbnailAsync(vaultPath);
@@ -285,7 +289,7 @@ internal sealed class MainWindow : Form, IBridgeWindow
     }
 
     private static bool IsShotRequest(string uri)
-        => IsAppUri(uri) && Uri.TryCreate(uri, UriKind.Absolute, out var parsed) && parsed.AbsolutePath.StartsWith(WindowShots.Prefix, StringComparison.Ordinal);
+        => PageAssets.PictureUri(uri) is { } parsed && parsed.AbsolutePath.StartsWith(WindowShots.Prefix, StringComparison.Ordinal);
 
     // Send feedback's picture, exactly the bytes that would be sent, from memory. no-store: the
     // WebView's disk cache never keeps a picture of the window. One the host no longer holds is 404.
@@ -500,7 +504,8 @@ internal sealed class MainWindow : Form, IBridgeWindow
             if (web?.CoreWebView2 is not { } core) return;
             var counts = await core.ExecuteScriptAsync(
                 "(function(){var i=document.querySelectorAll('img.thumb');var on=document.querySelectorAll('[data-thumb=\"on\"]').length;" +
-                "return i.length+' asked on the page, '+on+' shown, page at '+location.protocol+'//'+location.hostname;})()");
+                "return i.length+' asked on the page, '+on+' shown, page at '+location.protocol+'//'+location.hostname+" +
+                "', pictures from '+(i.length?new URL(i[0].src).host:'nowhere');})()");
             log.Info($"thumbnail: {counts.Trim('"')}; {Volatile.Read(ref thumbsServed)} asks reached Armory");
         }
         catch (Exception error) when (error is not OutOfMemoryException) { log.Error("thumbnail: could not look at the page's pictures", error); }

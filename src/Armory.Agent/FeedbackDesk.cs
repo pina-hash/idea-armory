@@ -11,7 +11,7 @@ namespace Armory.Agent;
 internal sealed record WindowShot(string Id, byte[] Png, int Width, int Height, bool Scaled);
 
 // Send feedback's pictures of the window (0.3.3): the last one only, in memory only. Never
-// written to disk, and served to the page at https://armory.local/shot/<id>.png with
+// written to disk, and served to the page at https://armory-pictures.local/shot/<id>.png with
 // Cache-Control: no-store, so not even WebView2's cache keeps it. The person sees exactly the
 // bytes that would go. A new picture replaces the last; a sent one is forgotten.
 internal sealed class WindowShots
@@ -28,7 +28,9 @@ internal sealed class WindowShots
     // A picture's id as the page sends it back: 32 lowercase hex digits.
     internal static bool IsId(string? id) => id is { Length: 32 } && id.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f');
 
-    internal static string UrlOf(string id) => "https://" + PageAssets.HostName + Prefix + id + ".png";
+    // On the pictures host: WebView2 would never ask MainWindow for an address on armory.local
+    // (PageAssets.PictureHost).
+    internal static string UrlOf(string id) => PageAssets.PictureOrigin + Prefix + id + ".png";
 
     // "/shot/<id>.png": the id it names, or null.
     internal static string? IdOfPath(string path)
