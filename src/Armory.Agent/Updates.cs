@@ -48,16 +48,15 @@ internal static class Updates
     // a second Armory at sign-in), and the sign-in start entry points here. The registrations are
     // the app's own to repair at its first start (ShellIdentity.Repair). 30 seconds at most.
     [SupportedOSPlatform("windows")]
-    private static void AfterInstall()
+    private static void AfterInstall() => InstallRetirement.FinishAfterUpdaterExits();
+
+    [SupportedOSPlatform("windows")]
+    private static void ReconcileInstall()
     {
         var log = SetupLog();
         try
         {
-            // 0.4.3: a taskbar pin of the older copy points here before that copy is deleted
-            // (TaskbarPins), so moving over never leaves a blank pin.
-            if (Environment.ProcessPath is { } pinned && IsVelopackCopy(pinned, File.Exists))
-                TaskbarPins.Repair(TaskbarPins.Folder(), pinned, log);
-            InstallRetirement.Run(AgentPaths.Resolve());
+            if (!InstallRetirement.Run(AgentPaths.Resolve())) return;
             if (Environment.ProcessPath is { } exe && IsVelopackCopy(exe, File.Exists))
             {
                 var settings = new SettingsStore(AgentPaths.Resolve().SettingsFile).Load();
@@ -94,7 +93,7 @@ internal static class Updates
             }
         }
         catch (ArgumentException) { } // Already exited.
-        AfterInstall();
+        ReconcileInstall();
         return 0;
     }
 

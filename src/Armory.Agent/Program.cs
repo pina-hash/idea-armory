@@ -47,7 +47,7 @@ internal static class Program
         }
         if (command.Quit) return SingleInstance.RequestQuit(paths, TimeSpan.FromSeconds(30)) ? 0 : 1;
 
-        InstallRetirement.Run(paths);
+        if (!InstallRetirement.Run(paths)) return 1;
         using var instance = SingleInstance.Acquire(paths);
         if (!instance.IsFirst)
         {

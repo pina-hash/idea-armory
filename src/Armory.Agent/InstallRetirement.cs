@@ -39,9 +39,9 @@ internal static class InstallRetirement
         => !paths.IsOverridden && exe is not null &&
            (ShellIdentity.IsInstalledCopy(paths, exe, ShellIdentity.InstallFolder()) || Updates.IsVelopackCopy(exe, exists));
 
-    internal static void Run(AgentPaths paths)
+    internal static bool Run(AgentPaths paths)
     {
-        if (!OperatingSystem.IsWindows() || !Enabled(paths, Environment.ProcessPath, File.Exists)) return;
+        if (!OperatingSystem.IsWindows() || !Enabled(paths, Environment.ProcessPath, File.Exists)) return true;
         var script = Path.Combine(Path.GetTempPath(), "Armory-retire-" + Guid.NewGuid().ToString("N") + ".ps1");
         try
         {
@@ -56,13 +56,14 @@ internal static class InstallRetirement
             var stderr = process.StandardError.ReadToEndAsync();
             // Never kill an uninstaller halfway through its work. It has its own bounded waits;
             // if it outlives this start, the next start retries the inventory under the same lock.
-            if (!process.WaitForExit(TimeSpan.FromSeconds(25))) { Save(paths, "deferred: retirement is still running"); return; }
+            if (!process.WaitForExit(TimeSpan.FromSeconds(90))) { Save(paths, "deferred: retirement is still running; this launch waits for a later retry"); return false; }
             foreach (var line in stdout.GetAwaiter().GetResult().Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
                 Save(paths, line);
-            if (process.ExitCode != 0) Save(paths, "deferred: " + stderr.GetAwaiter().GetResult());
+            if (process.ExitCode != 0) { Save(paths, "deferred: " + stderr.GetAwaiter().GetResult()); return false; }
+            return true;
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception or InvalidOperationException)
-        { Save(paths, "deferred: " + error.Message); }
+        { Save(paths, "deferred: " + error.Message); return false; }
         finally
         {
             try { File.Delete(script); }
@@ -86,15 +87,20 @@ internal static class InstallRetirement
     {
         try
         {
-            if (!File.Exists(AuditFile(paths))) return;
-            foreach (var line in File.ReadLines(AuditFile(paths)))
+            var batch = AuditFile(paths) + ".replay";
+            if (!File.Exists(batch) && File.Exists(AuditFile(paths))) File.Move(AuditFile(paths), batch);
+            if (!File.Exists(batch)) return;
+            foreach (var line in File.ReadLines(batch))
             {
-                var detail = Redactor.Scrub(JsonSerializer.Deserialize<string>(line) ?? "");
-                if (detail is null) continue;
-                log.Info("retire: " + detail);
-                recorder.Note("install retirement", detail);
+                try
+                {
+                    var detail = Redactor.Scrub(JsonSerializer.Deserialize<string>(line) ?? "");
+                    log.Info("retire: " + detail);
+                    recorder.Note("install retirement", detail);
+                }
+                catch (JsonException) { log.Info("retire: ignored an incomplete audit line from an interrupted cleanup"); }
             }
-            File.Delete(AuditFile(paths));
+            File.Delete(batch);
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException)
         { log.Error("could not replay install retirement", error); }
