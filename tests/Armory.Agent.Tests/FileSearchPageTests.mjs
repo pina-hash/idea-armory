@@ -47,6 +47,8 @@ try {
                     } };
                 });
                 await page.addInitScript(v => {
+                    // Search flows use a returning student; first run is covered by check-ui.
+                    localStorage.setItem('armory.tutorial.v1:' + encodeURIComponent(v.account.email.trim().toLowerCase()), 'finished');
                     window.searchView = v;
                     const p = v.projects.find(p => !p.archived);
                     const base = p.folders.flatMap(f => f.files)[0];

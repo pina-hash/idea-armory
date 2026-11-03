@@ -1894,6 +1894,7 @@ tally.bridgeTypes = 0;
 	const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, colorScheme: 'dark', reducedMotion: 'reduce', timezoneId: 'America/Los_Angeles' });
 	const requests = [];
 	context.on('request', (r) => requests.push(r.url()));
+	await context.addInitScript((emails) => { for (const email of emails) localStorage.setItem('armory.tutorial.v1:' + encodeURIComponent(email.trim().toLowerCase()), 'finished'); }, Object.values(demo.states).map(s => s.view.account?.email).filter(Boolean));
 	await context.addInitScript(() => {
 		const t = new EventTarget();
 		window.__sent = [];
@@ -2474,6 +2475,7 @@ tally.drawing = 0;
 		if (!ok) fails.push(what);
 	};
 	const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, colorScheme: 'dark', reducedMotion: 'no-preference', timezoneId: 'America/Los_Angeles' });
+	await context.addInitScript((emails) => { for (const email of emails) localStorage.setItem('armory.tutorial.v1:' + encodeURIComponent(email.trim().toLowerCase()), 'finished'); }, Object.values(demo.states).map(s => s.view.account?.email).filter(Boolean));
 	await context.addInitScript(() => {
 		const t = new EventTarget();
 		window.__sent = [];
@@ -2754,6 +2756,145 @@ for (const [scheme, query, want] of [
 	await context.close();
 }
 
+// The lesson uses the real renderers and a stand-in WebView2 host. Every action below is
+// reached with Tab and Enter. No practice action may become a host message.
+const tutorialShots = path.join(ROOT, 'evidence', 'tutorial');
+fs.mkdirSync(tutorialShots, { recursive: true });
+for (const theme of THEMES) for (const size of [...SIZES, { w: 320, h: 480 }]) {
+	const name = `tutorial ${theme} ${size.w}x${size.h}`;
+	const fails = [];
+	const expect = (ok, message) => { if (!ok) fails.push(message); };
+	const context = await browser.newContext({ viewport: { width: size.w, height: size.h }, reducedMotion: 'reduce', colorScheme: theme === 'idea' ? 'dark' : 'light' });
+	await context.addInitScript(() => {
+		const events = new EventTarget(); window.__sent = [];
+		window.chrome = { webview: { addEventListener: (...args) => events.addEventListener(...args), postMessage: m => window.__sent.push(m), postMessageWithAdditionalObjects: m => window.__sent.push(m) } };
+		window.__host = m => events.dispatchEvent(new MessageEvent('message', { data: m }));
+	});
+	const page = await context.newPage();
+	page.on('pageerror', e => fails.push(e.message));
+	try {
+		await page.goto(pathToFileURL(path.join(WWWROOT, 'index.html')).href);
+		await page.waitForFunction(() => window.__sent.length);
+		const real = JSON.parse(JSON.stringify(demoStates().states.synced.view)); real.effectiveTheme = theme;
+		await page.evaluate(v => window.__host({ type: 'view', view: v }), real);
+		await page.waitForSelector('#tutorial:not([hidden])');
+		const steps = await page.evaluate(() => window.ArmoryTutorial.steps.map(s => ({ id: s.id, action: s.action, click: s.click, exercise: s.exercise })));
+		expect(steps.length === 19, 'the lesson lost a requested topic');
+		async function tabTo(selector) {
+			for (let i = 0; i < 35; i++) {
+				await page.keyboard.press('Tab');
+				if (await page.evaluate(s => document.activeElement.matches(s), selector)) return;
+			}
+			throw new Error('Tab never reached ' + selector);
+		}
+		for (let i = 0; i < steps.length; i++) {
+			const step = steps[i];
+			await page.waitForFunction(id => document.querySelector('#tutorial').dataset.step === id, step.id);
+			await settle(page);
+			expect(await page.evaluate(() => document.activeElement.id === 'tutorial-title'), step.id + ': the heading did not take focus');
+			const geometry = await page.evaluate(() => {
+				const target = document.querySelector('[data-tutorial-target]'), card = document.querySelector('.tutorial-card'), spot = document.querySelector('.tutorial-spot');
+				const rect = e => { const r = e.getBoundingClientRect(); return { x:r.x, y:r.y, right:r.right, bottom:r.bottom, w:r.width, h:r.height }; };
+				return { target: target && rect(target), card: rect(card), spot: rect(spot), overflow: document.documentElement.scrollWidth > innerWidth, motion: getComputedStyle(spot).animationName };
+			});
+			expect(geometry.target && geometry.target.w > 0 && geometry.target.h > 0, step.id + ': missing real target');
+			for (const [kind, r] of Object.entries({ card: geometry.card, spot: geometry.spot }))
+				expect(r.x >= 0 && r.y >= 0 && r.right <= size.w + 1 && r.bottom <= size.h + 1, step.id + ': ' + kind + ' leaves the window ' + JSON.stringify(r));
+			expect(geometry.spot.h >= 8, step.id + ': spotlight is hidden');
+			expect(!geometry.overflow && geometry.motion === 'none', step.id + ': overflow or reduced-motion failure');
+			const audit = await page.evaluate(inspect, JARGON);
+			for (const key of ['small', 'overflow', 'jargon', 'untipped']) for (const item of audit[key]) expect(false, step.id + ': ' + key + ': ' + item);
+			const contrast = await page.evaluate(() => {
+				const rgb = s => s.match(/[\d.]+/g).slice(0,3).map(Number);
+				const luminance = a => a.map(v => v / 255).map(v => v <= .04045 ? v/12.92 : ((v+.055)/1.055)**2.4).reduce((n,v,i) => n+v*[.2126,.7152,.0722][i],0);
+				const ratio = (a,b) => (Math.max(luminance(a),luminance(b))+.05)/(Math.min(luminance(a),luminance(b))+.05);
+				return [...document.querySelectorAll('.tutorial-card p, .tutorial-card h2, .tutorial-card button:not(:disabled):not([hidden])')].map(e => {
+					let p = e, bg;
+					while (p) { const s = getComputedStyle(p).backgroundColor; if (s.startsWith('rgb(')) { bg=rgb(s); break; } p=p.parentElement; }
+					return { text:e.textContent, ratio:ratio(rgb(getComputedStyle(e).color),bg) };
+				});
+			});
+			for (const c of contrast) expect(c.ratio >= 4.5, step.id + ': text contrast below 4.5: ' + JSON.stringify(c));
+			// A complete Tab loop visits only the target's permitted controls and the card, in order.
+			const focusOrder = [];
+			for (let n = 0; n < 16; n++) {
+				await page.keyboard.press('Tab');
+				const f = await page.evaluate(() => {
+					const e = document.activeElement;
+					return { key: e.dataset.tour || e.dataset.key || e.id, safe: !!e.closest('#tutorial, [data-tutorial-target]') };
+				});
+				if (focusOrder.includes(f.key)) break;
+				focusOrder.push(f.key); expect(f.safe, step.id + ': focus escaped to ' + f.key);
+				const ring = await page.evaluate(focusInfo);
+				expect(ring && ring.w >= 44 && ring.h >= 44 && ring.outlineWidth >= 2 && ring.ringRatio >= 3, step.id + ': focus ring/size ' + JSON.stringify(ring));
+			}
+			expect(focusOrder.includes('skip') && focusOrder.at(-1) === 'skip', step.id + ': Skip is not the last Tab stop');
+			expect(focusOrder.includes('tutorial-copy'), step.id + ': instructions cannot be reached for keyboard scrolling');
+			if (i > 0) expect(focusOrder.indexOf('tutorial-copy') < focusOrder.indexOf('back'), step.id + ': instructions do not precede the navigation controls');
+			await tabTo('#tutorial-copy');
+			const copyScrolls = await page.locator('#tutorial-copy').evaluate(e => e.scrollHeight > e.clientHeight);
+			if (copyScrolls) { await page.keyboard.press('PageDown'); expect(await page.locator('#tutorial-copy').evaluate(e => e.scrollTop > 0), step.id + ': keyboard cannot scroll the lesson words'); await page.keyboard.press('Home'); }
+			if (step.action) {
+				expect(await page.isDisabled('[data-tour="next"]'), step.id + ': Next did not wait for the exercise');
+				if (step.id === 'search' || step.id === 'words') {
+					await tabTo(step.id === 'search' ? '#file-search' : '#ask-report');
+					await page.keyboard.type(step.id === 'search' ? 'Practice' : 'The practice picture did not appear.');
+				} else {
+					await tabTo(step.exercise ? '[data-tour="exercise"]' : step.click);
+					await page.keyboard.press('Enter');
+				}
+				await page.waitForFunction(() => !document.querySelector('[data-tour="next"]').disabled);
+				await settle(page);
+			}
+			if (step.id === 'checkout') expect(await page.locator('[data-key="d-checkin"]').count() === 1, 'practice check out did not change the real state controls');
+			if (step.id === 'save') expect(/changes that aren't checked in/.test(await page.textContent('.detail-side .display')), 'practice change did not appear in file detail');
+			if (step.id === 'changed') expect((await page.textContent('[data-tutorial-target]')).trim() === 'Changed', 'Changed did not target the real badge');
+			if (step.id === 'checkin') expect(await page.locator('[data-key="d-checkout"]').count() === 1, 'practice check in did not release the file');
+			if (step.id === 'other') expect(await page.locator('[data-key="d-checkout"]').count() === 0 && /Ana/.test(await page.textContent('.detail-side .display')), 'another student has no meaningful state');
+			if (step.id === 'mine') {
+				const refreshed = JSON.parse(JSON.stringify(real)); refreshed.sync.detail = 'Fresh host update during practice.';
+				await page.evaluate(v => window.__host({ type: 'view', view: v }), refreshed);
+				expect(await page.locator('[data-key="d-checkin"]').count() === 1, 'host update replaced the practice file');
+			}
+			// A stray click, drop, or report shortcut must never send a host action.
+			await page.evaluate(() => {
+				const e = document.querySelector('[data-action="openVault"], [data-action="checkOut"], [data-action="askOk"]'); if (e) e.click();
+				document.dispatchEvent(new Event('drop', { bubbles:true, cancelable:true }));
+			});
+			await page.keyboard.press('Control+Enter');
+			expect(await page.evaluate(() => window.__sent.every(m => m.type === 'ready')), step.id + ': practice sent a host command');
+			await page.screenshot({ path: path.join(tutorialShots, `${String(i+1).padStart(2,'0')}-${step.id}-${theme}-${size.w}x${size.h}.png`) });
+			if (i > 0) {
+				await tabTo('[data-tour="back"]'); await page.keyboard.press('Enter'); await settle(page);
+				expect(await page.getAttribute('#tutorial','data-step') === steps[i-1].id, step.id + ': Back skipped a step');
+				await tabTo('[data-tour="next"]'); await page.keyboard.press('Enter'); await settle(page);
+			}
+			await tabTo('[data-tour="next"]'); await page.keyboard.press('Enter');
+		}
+		await page.waitForSelector('#tutorial[hidden]', { state:'attached' });
+		expect(await page.evaluate(() => Object.values(localStorage).includes('finished')), 'Finish was not remembered');
+		expect(await page.locator('#tab-tutorial-project').count() === 0 && await page.locator('[data-action=project]').count() === real.projects.length, 'practice data stayed after Finish');
+		expect((await page.textContent('#main')).includes('Fresh host update during practice.'), 'leaving practice discarded the newest host view');
+		await page.reload(); await page.waitForFunction(() => window.__sent.length);
+		await page.evaluate(v => window.__host({type:'view',view:v}), real); await settle(page);
+		expect(await page.getAttribute('#tutorial','hidden') !== null, 'a returning student saw first run again');
+		await page.click('[data-key="hdr-settings"]'); await page.click('[data-key="set-tutorial"]');
+		await page.waitForSelector('#tutorial:not([hidden])');
+		expect(await page.getAttribute('#tutorial','data-step') === 'welcome', 'Show me again did not restart');
+		await page.keyboard.press('Escape');
+		expect(await page.getAttribute('#tutorial','hidden') !== null, 'Escape did not skip the lesson');
+		const next = JSON.parse(JSON.stringify(real)); next.account.email = 'new-student@students.test';
+		await page.evaluate(v => window.__host({type:'view',view:v}), next); await settle(page);
+		expect(await page.getAttribute('#tutorial','hidden') === null, 'a new student inherited the previous student\'s completion');
+		const signedOut = JSON.parse(JSON.stringify(demoStates().states.signedOut.view));
+		await page.evaluate(v => window.__host({type:'view',view:v}), signedOut); await settle(page);
+		expect(await page.getAttribute('#tutorial','hidden') !== null && await page.getAttribute('body','data-screen') === 'connect', 'sign out left practice or another student visible');
+	} catch (e) { fails.push(threw(e)); }
+	await context.close();
+	for (const f of fails) { tally.flowFailures++; problem('tutorial', name, f); }
+	tally.flows++;
+}
+
 for (const size of [...SIZES, {w:320,h:480}]) await flow('window back and forward', size, 'synced', async (page, expect) => {
 	await page.click('[data-action="folder"][data-folder="Drivetrain"]');
 	await page.fill('#file-search', 'Gearbox'); await page.waitForTimeout(220);
@@ -2776,6 +2917,8 @@ for (const size of [...SIZES, {w:320,h:480}]) await flow('window back and forwar
 	await page.keyboard.press('Alt+ArrowLeft'); await side(4);
 	expect(await page.inputValue('#ask-report') === 'Keep these words.', 'navigation lost report words');
 	await page.keyboard.press('Escape');
+	await page.keyboard.press('Alt+ArrowLeft'); await settle(page);
+	expect(await page.getAttribute('body','data-screen') === 'detail', 'leaving detail for Settings lost the detail history entry');
 	await page.keyboard.press('Alt+ArrowLeft'); await settle(page);
 	await page.click('[data-action="project"]:last-child');
 	await side(4);
