@@ -349,14 +349,18 @@ try {
         return $false
     }
     function Remove-TaskAction($entry, $copy) {
-        $remaining = @($entry.Task.Actions | Where-Object { -not (Belongs ([Environment]::ExpandEnvironmentVariables([string]$_.Execute).Trim('"')) $copy) })
+        # Other copies can share this task. Read its latest actions so a later removal cannot
+        # restore an action removed for an earlier copy from the original inventory snapshot.
+        $task = Get-ScheduledTask -TaskName $entry.Task.TaskName -TaskPath $entry.Task.TaskPath -ErrorAction SilentlyContinue
+        if (-not $task) { return }
+        $remaining = @($task.Actions | Where-Object { -not (Belongs ([Environment]::ExpandEnvironmentVariables([string]$_.Execute).Trim('"')) $copy) })
         if ($remaining.Count) {
-            Set-ScheduledTask -TaskName $entry.Task.TaskName -TaskPath $entry.Task.TaskPath -Action $remaining | Out-Null
-            Audit ('removed Armory action from mixed task ' + $entry.Task.TaskPath + $entry.Task.TaskName)
+            Set-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -Action $remaining | Out-Null
+            Audit ('removed Armory action from mixed task ' + $task.TaskPath + $task.TaskName)
         } else {
-            Stop-ScheduledTask -InputObject $entry.Task -ErrorAction SilentlyContinue
-            Unregister-ScheduledTask -InputObject $entry.Task -Confirm:$false
-            Audit ('removed task ' + $entry.Task.TaskPath + $entry.Task.TaskName)
+            Stop-ScheduledTask -InputObject $task -ErrorAction SilentlyContinue
+            Unregister-ScheduledTask -InputObject $task -Confirm:$false
+            Audit ('removed task ' + $task.TaskPath + $task.TaskName)
         }
     }
     function Remove-Reg($item, [bool]$app) {

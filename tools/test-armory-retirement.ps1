@@ -50,6 +50,7 @@ $channelWithWork = Join-Path $scratch 'alternate-channel-with-work'
 $machine = Join-Path $env:ProgramFiles 'IDEA Armory retirement smoke'
 $orphan = $legacy + '.old'
 $taskName = 'Armory retirement smoke'
+$mixedTaskName = 'Armory retirement mixed smoke'
 $machineApp = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\ArmoryRetirementSmoke'
 $channelApp = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\ArmoryRetirementChannelSmoke'
 $channelWorkApp = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\ArmoryRetirementChannelWorkSmoke'
@@ -121,6 +122,9 @@ function Seed {
     New-ItemProperty -LiteralPath $machineApp -Name InstallLocation -Value $machine -Force | Out-Null
     $action = New-ScheduledTaskAction -Execute (Join-Path $loose 'IdeaArmory.exe') -Argument '--background'
     Register-ScheduledTask -TaskName $taskName -Action $action -Trigger (New-ScheduledTaskTrigger -AtLogOn) -Force | Out-Null
+    $machineAction = New-ScheduledTaskAction -Execute (Join-Path $machine 'IdeaArmory.exe') -Argument '--background'
+    $controlAction = New-ScheduledTaskAction -Execute $env:ComSpec -Argument '/d /c exit 0'
+    Register-ScheduledTask -TaskName $mixedTaskName -Action @($action, $machineAction, $controlAction) -Trigger (New-ScheduledTaskTrigger -AtLogOn) -Force | Out-Null
 }
 function Assert-One([string]$phase) {
     Wait-For { -not (Test-Path -LiteralPath (Join-Path $legacy 'IdeaArmory.exe')) -and (Test-Path -LiteralPath $menu) -and
@@ -139,6 +143,8 @@ function Assert-One([string]$phase) {
         foreach ($name in @('ArmoryOldAlias', 'ArmoryZipAlias', 'ArmoryMachineAlias')) { Require (-not $values.$name) ($phase + ': no ' + $name + ' in ' + $key) }
     }
     Require (-not (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue)) ($phase + ': scheduled task removed')
+    $mixedTask = Get-ScheduledTask -TaskName $mixedTaskName
+    Require ($mixedTask.Actions.Count -eq 1 -and $mixedTask.Actions[0].Execute -ieq $env:ComSpec -and $mixedTask.Actions[0].Arguments -ceq '/d /c exit 0') ($phase + ': both retired task actions removed and unrelated action preserved')
     foreach ($file in @($staleLink, $looseLink, $machineLink)) { Require (-not (Test-Path -LiteralPath $file)) ($phase + ': retired shortcut ' + $file) }
     foreach ($file in @($menu, $pin)) {
         Require ([ArmoryPinReader]::Target($file) -ieq $launcher) ($phase + ': shortcut uses root launcher ' + $file)
@@ -228,6 +234,7 @@ try {
     Note 'PASS: one runnable Armory and one shell identity through startup, update and concurrent starts.'
 } finally {
     Quit
+    Unregister-ScheduledTask -TaskName $mixedTaskName -Confirm:$false -ErrorAction SilentlyContinue
     if (Test-Path -LiteralPath (Join-Path $install 'Update.exe')) {
         $cleanup = Start-Process (Join-Path $install 'Update.exe') -ArgumentList '--silent --uninstall' -PassThru
         if (-not $cleanup.WaitForExit(120000)) { Note 'Cleanup did not finish within two minutes; runner evidence is retained.' }
