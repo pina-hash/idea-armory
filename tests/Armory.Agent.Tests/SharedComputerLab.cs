@@ -272,7 +272,14 @@ internal sealed class Lab : IAsyncDisposable
         var folder = Folder(root);
         var closing = new Closing("the runtime made for " + (clients.Sessions.Current?.Email ?? "nobody") + " in " + root + " (" + (++RuntimesMade) + ")", Violations);
         var files = new GuardedFiles(folder.Disk, closing);
-        var engine = new SyncEngine(new EngineOptions { VaultRoot = root, ActivePollInterval = TimeSpan.FromMilliseconds(300), IdlePollInterval = TimeSpan.FromMilliseconds(300) },
+        // The lab's host has no window and its disk sends no hints, so its engines look every
+        // 300 ms whatever the schedule (0.5.3) would wait: these tests are about people, not pace.
+        var quick = TimeSpan.FromMilliseconds(300);
+        var engine = new SyncEngine(new EngineOptions
+            {
+                VaultRoot = root, ActivePollInterval = quick, IdlePollInterval = quick, HiddenPollInterval = quick, OfflinePollLongest = quick,
+                LivePollInterval = TimeSpan.Zero, ProjectListEvery = TimeSpan.Zero, QuietProjectEvery = TimeSpan.Zero,
+            },
             new EngineDependencies
             {
                 Files = files, Journal = new GuardedJournal(folder.Journal, closing), Snapshots = new GuardedSnapshots(folder.Snapshots, closing),
