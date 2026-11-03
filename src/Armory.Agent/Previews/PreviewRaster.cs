@@ -82,6 +82,16 @@ internal sealed class PreviewRaster(int size, PreviewBudget budget)
             var az = face.A.X + face.A.Y + face.A.Z;
             var bz = face.B.X + face.B.Y + face.B.Z;
             var cz = face.C.X + face.C.Y + face.C.Z;
+            // A subpixel triangle may cover no pixel center at all. Keep its shaded
+            // centroid, so a sampled dense mesh still reads as a surface at tile size.
+            if (Math.Abs(area) < 1)
+            {
+                var x = Math.Clamp((int)Math.Round((a.X + b.X + c.X) / 3), 0, size - 1);
+                var y = Math.Clamp((int)Math.Round((a.Y + b.Y + c.Y) / 3), 0, size - 1);
+                var z = (az + bz + cz) / 3;
+                if (z >= depth[y * size + x]) { depth[y * size + x] = z; Pixel(x, y, color); }
+                continue;
+            }
             var minX = Math.Clamp((int)Math.Floor(Math.Min(a.X, Math.Min(b.X, c.X))), 0, size - 1);
             var maxX = Math.Clamp((int)Math.Ceiling(Math.Max(a.X, Math.Max(b.X, c.X))), 0, size - 1);
             var minY = Math.Clamp((int)Math.Floor(Math.Min(a.Y, Math.Min(b.Y, c.Y))), 0, size - 1);

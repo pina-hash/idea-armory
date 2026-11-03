@@ -17,11 +17,16 @@ internal static class StlReader
             // Binary headers may start with "solid". Exact byte length disambiguates them.
             if (84L + count * 50L == input.Length)
             {
-                var stride = Math.Max(1L, (count + PreviewBudget.MaxTriangles - 1L) / PreviewBudget.MaxTriangles);
+                var samples = (int)Math.Min(count, PreviewBudget.MaxTriangles);
                 Span<byte> triangle = stackalloc byte[50];
-                for (long i = 0; i < count; i += stride)
+                for (var sample = 0; sample < samples; sample++)
                 {
                     geometry.Budget.Check();
+                    // One triangle per equal-sized interval. A deterministic offset avoids
+                    // always selecting the same face of regularly tessellated exports.
+                    var from = sample * (long)count / samples;
+                    var until = (sample + 1L) * count / samples;
+                    var i = from + (uint)(sample * 2654435761L) % (until - from);
                     input.Position = 84 + i * 50;
                     input.ReadExactly(triangle);
                     Add(geometry, Vector(triangle[12..]), Vector(triangle[24..]), Vector(triangle[36..]));
