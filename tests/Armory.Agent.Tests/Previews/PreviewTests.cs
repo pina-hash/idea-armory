@@ -150,6 +150,62 @@ public sealed class PreviewTests(ITestOutputHelper output)
         Assert.NotEqual(renderer.Make(a, 192), renderer.Make(Fixture("small-part.stp"), 192));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Both_step_tiles_keep_their_own_goldens_during_concurrent_requests(bool crlf)
+    {
+        using var folder = new TempFolder();
+        var names = new[] { "original-bracket.step", "small-part.stp" };
+        foreach (var name in names)
+        {
+            var text = File.ReadAllText(Fixture(name)).ReplaceLineEndings(crlf ? "\r\n" : "\n");
+            File.WriteAllText(folder.File(name), text, new UTF8Encoding(false));
+        }
+        var renderer = new ContentPreviews();
+        var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var tasks = Enumerable.Range(0, 32).Select(i => Task.Run(async () =>
+        {
+            await start.Task;
+            var png = renderer.Make(folder.File(names[i % names.Length]), 192);
+            Assert.NotNull(png);
+            return png;
+        })).ToArray();
+        start.SetResult();
+        var pictures = await Task.WhenAll(tasks).WaitAsync(TimeSpan.FromSeconds(10));
+        for (var i = 0; i < pictures.Length; i++)
+        {
+            AssertGolden(names[i % names.Length], pictures[i]);
+            Assert.Same(pictures[i % names.Length], pictures[i]);
+        }
+        Assert.NotEqual(Decode(pictures[0]), Decode(pictures[1]));
+        Assert.Equal(2, renderer.Rendered);
+    }
+
+    [Fact]
+    public async Task Identical_step_bytes_with_different_names_cannot_share_a_labeled_tile()
+    {
+        using var folder = new TempFolder();
+        // Same extension and identical bytes make the SHA-256/type/size key identical.
+        // Only the filename distinguishes the labels, which must retain their own goldens.
+        File.Copy(Fixture("original-bracket.step"), folder.File("original-bracket.step"));
+        File.Copy(Fixture("original-bracket.step"), folder.File("small-part.step"));
+        var renderer = new ContentPreviews();
+        var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var tasks = new[] { "original-bracket.step", "small-part.step" }.Select(name => Task.Run(async () =>
+        {
+            await start.Task;
+            return renderer.Make(folder.File(name), 192);
+        })).ToArray();
+        start.SetResult();
+        var pictures = await Task.WhenAll(tasks).WaitAsync(TimeSpan.FromSeconds(10));
+        var bracket = pictures[0]; var small = pictures[1];
+        Assert.NotNull(bracket); Assert.NotNull(small);
+        AssertGolden("original-bracket.step", bracket);
+        AssertGolden("small-part.stp", small);
+        Assert.Equal(2, renderer.Rendered);
+    }
+
     [Fact]
     public void Hostile_inputs_are_bounded_and_do_not_poison_the_next_picture()
     {
