@@ -117,6 +117,7 @@ internal static class Program
         };
         log.Info("started " + AgentPaths.Version);
         InstallRetirement.Replay(paths, log, telemetry.Recorder);
+        using var retirementAudits = InstallRetirement.Watch(paths, log, telemetry.Recorder);
         // File Explorer's right-click items and a notification's second launch reach this Armory
         // over its pipe from here on, before the window or WebView2 (ShellDesk, ShellInbox). After
         // "started", so the previous run's last lines are read as it left them.
@@ -124,7 +125,11 @@ internal static class Program
         using var inbox = ShellDesk.StartInbox(paths, desk, log.Info);
 
         // Before any window: one identity for the taskbar, the tray and the notifications.
-        if (ShellIdentity.IsInstalledCopy(paths)) ShellIdentity.SetProcessAppId();
+        if (ShellIdentity.IsInstalledCopy(paths))
+        {
+            ShellIdentity.SetProcessAppId();
+            ShellIdentity.Repair(AgentPaths.AppFolder, log.Info);
+        }
         ApplicationConfiguration.Initialize();
         var host = new AgentHost(paths, log, AgentPaths.Site(), telemetry);
         using (var tray = new TrayApp(host, paths, log, instance, command.Background))

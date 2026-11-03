@@ -17,4 +17,15 @@ public sealed class StableLauncherTests
         Assert.Equal(legacy, StableLauncher.For(legacy, Exists));
     }
 
+    [Fact]
+    public void An_update_cannot_leave_a_stable_pin_with_a_version_folder_icon_or_old_arguments()
+    {
+        var pins = new[]
+        {
+            new TaskbarPins.Pin("icon.lnk", Launcher, ShellIdentity.AppId, Exe),
+            new TaskbarPins.Pin("args.lnk", Launcher, ShellIdentity.AppId, Launcher, Arguments: "--processStart IdeaArmory.exe"),
+            new TaskbarPins.Pin("good.lnk", Launcher, ShellIdentity.AppId, Launcher, Arguments: ""),
+        };
+        Assert.Equal(["icon.lnk", "args.lnk"], TaskbarPins.Plan(pins, Launcher, _ => true).Select(f => f.File));
+    }
 }

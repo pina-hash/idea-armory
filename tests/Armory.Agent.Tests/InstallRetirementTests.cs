@@ -34,4 +34,21 @@ public sealed class InstallRetirementTests
         InstallRetirement.Replay(paths, log, recorder);
         Assert.Equal(2, recorder.Recorded);
     }
+
+    [Fact]
+    public void An_interrupted_audit_does_not_hide_later_removals()
+    {
+        using var folder = new TempFolder();
+        var paths = new AgentPaths(folder.Root, true);
+        var log = new AgentLog(paths.LogFile, paths.CrashFile);
+        var recorder = new FlightRecorder();
+        var audit = Path.Combine(paths.LogFolder, "install-retirement.jsonl");
+        File.WriteAllText(audit + ".replay", "\"interrupted\n");
+        InstallRetirement.Save(paths, "removed old task");
+        InstallRetirement.Replay(paths, log, recorder);
+        InstallRetirement.Replay(paths, log, recorder);
+        Assert.Single(recorder.Snapshot());
+        Assert.Contains("removed old task", recorder.Snapshot()[0].Detail);
+        Assert.Contains(log.Tail(10), line => line.Contains("incomplete audit line", StringComparison.Ordinal));
+    }
 }

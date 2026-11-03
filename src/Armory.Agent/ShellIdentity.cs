@@ -118,12 +118,14 @@ internal static class ShellIdentity
             if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder)) continue;
             try
             {
-                var options = new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = FileAttributes.ReparsePoint, IgnoreInaccessible = true };
+                var options = new EnumerationOptions { RecurseSubdirectories = special is Environment.SpecialFolder.Programs or Environment.SpecialFolder.CommonPrograms,
+                    AttributesToSkip = FileAttributes.ReparsePoint, IgnoreInaccessible = true };
                 foreach (var file in Directory.EnumerateFiles(folder, "*.lnk", options))
                 {
                     try
                     {
                         var target = ShortcutAppId.Target(file);
+                        if (!string.IsNullOrEmpty(target)) target = LinkForwarder.LongName(Path.GetFullPath(target));
                         if (target is null || !(string.Equals(target, launcher, StringComparison.OrdinalIgnoreCase) ||
                             string.Equals(target, Path.Combine(appFolder, "IdeaArmory.exe"), StringComparison.OrdinalIgnoreCase))) continue;
                         if (file == shortcut) continue;

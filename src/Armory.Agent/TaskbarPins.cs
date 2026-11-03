@@ -30,7 +30,7 @@ internal static class TaskbarPins
         Folder(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData, Environment.SpecialFolderOption.DoNotVerify));
 
     // One .lnk in the pins folder, as read.
-    internal sealed record Pin(string File, string? Target, string? AppId);
+    internal sealed record Pin(string File, string? Target, string? AppId, string? Icon = null, int IconIndex = 0, string? Arguments = null);
 
     // One pin to rewrite. Broken: it pointed at nothing.
     internal sealed record Fix(string File, bool Broken);
@@ -45,7 +45,8 @@ internal static class TaskbarPins
         {
             if (!IsArmorys(pin, fileExists)) continue;
             var pointsHere = pin.Target is not null && SamePath(pin.Target, exe);
-            if (pointsHere && string.Equals(pin.AppId, ShellIdentity.AppId, StringComparison.Ordinal)) continue;
+            if (pointsHere && string.Equals(pin.AppId, ShellIdentity.AppId, StringComparison.Ordinal) &&
+                (pin.Icon is null || SamePath(pin.Icon, exe)) && pin.IconIndex == 0 && string.IsNullOrEmpty(pin.Arguments)) continue;
             fixes.Add(new Fix(pin.File, pin.Target is null || !fileExists(pin.Target)));
         }
         return fixes;
@@ -81,7 +82,14 @@ internal static class TaskbarPins
             var pins = new List<Pin>();
             foreach (var file in Directory.EnumerateFiles(folder, "*.lnk"))
             {
-                try { pins.Add(new Pin(file, PinLink.Target(file), ShortcutAppId.ReadAppId(file))); }
+                try
+                {
+                    var details = PinLink.Details(file);
+                    var target = PinLink.Target(file);
+                    if (!string.IsNullOrEmpty(target)) target = LinkForwarder.LongName(Path.GetFullPath(target));
+                    var icon = details.Icon.Length > 0 ? LinkForwarder.LongName(Path.GetFullPath(details.Icon)) : "";
+                    pins.Add(new Pin(file, target, ShortcutAppId.ReadAppId(file), icon, details.Index, details.Arguments));
+                }
                 catch (Exception error) when (error is COMException or IOException or UnauthorizedAccessException or InvalidCastException or ArgumentException)
                 { log("could not read the taskbar pin " + Path.GetFileName(file) + ": " + error.Message); }
             }
@@ -116,6 +124,21 @@ internal static class PinLink
     private const int ReadWriteMode = 2; // STGM_READWRITE
 
     internal static string? Target(string shortcut) => ShortcutAppId.Target(shortcut);
+
+    internal static (string Icon, int Index, string Arguments) Details(string shortcut)
+    {
+        var link = (IShellLinkW)new ShellLinkObject();
+        try
+        {
+            ((System.Runtime.InteropServices.ComTypes.IPersistFile)link).Load(shortcut, 0);
+            var icon = new System.Text.StringBuilder(32768);
+            var args = new System.Text.StringBuilder(32768);
+            link.GetIconLocation(icon, icon.Capacity, out var index);
+            link.GetArguments(args, args.Capacity);
+            return (icon.ToString(), index, args.ToString());
+        }
+        finally { Marshal.FinalReleaseComObject(link); }
+    }
 
     internal static void Point(string shortcut, string exe, string appId)
     {

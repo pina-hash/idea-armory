@@ -107,4 +107,27 @@ internal static class InstallRetirement
     }
 
     private static string AuditFile(AgentPaths paths) => Path.Combine(paths.LogFolder, "install-retirement.jsonl");
+
+    // A second launch or a post-install worker can retire a copy while this runtime is already
+    // open. Move those events into this recorder too, without requiring another restart.
+    internal static IDisposable? Watch(AgentPaths paths, AgentLog log, FlightRecorder recorder)
+        => paths.IsOverridden ? null : new AuditWatcher(paths, log, recorder);
+
+    private sealed class AuditWatcher : IDisposable
+    {
+        private readonly System.Threading.Timer timer;
+        private int reading;
+
+        internal AuditWatcher(AgentPaths paths, AgentLog log, FlightRecorder recorder)
+        {
+            timer = new System.Threading.Timer(_ =>
+            {
+                if (Interlocked.Exchange(ref reading, 1) != 0) return;
+                try { Replay(paths, log, recorder); }
+                finally { Volatile.Write(ref reading, 0); }
+            }, null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
+        }
+
+        public void Dispose() => timer.Dispose();
+    }
 }
