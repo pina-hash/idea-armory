@@ -45,6 +45,22 @@ $arguments = @('pack',
     '--delta', 'None',
     '--noPortable',
     '--outputDir', $out)
+# A title change renames Velopack's execution stub. Fail packaging if the app's stable
+# launcher, package ID, process/shortcut identity, and vpk arguments would drift apart.
+$identity = Get-Content -LiteralPath (Join-Path $root 'src/Armory.Agent/ShellIdentity.cs') -Raw
+$updates = Get-Content -LiteralPath (Join-Path $root 'src/Armory.Agent/Updates.cs') -Raw
+$launcher = Get-Content -LiteralPath (Join-Path $root 'src/Armory.Agent/StableLauncher.cs') -Raw
+$expected = @{
+    '--aumid' = [regex]::Match($identity, 'const string AppId = "([^"]+)"').Groups[1].Value
+    '--packTitle' = [regex]::Match($identity, 'const string DisplayName = "([^"]+)"').Groups[1].Value
+    '--packId' = [regex]::Match($updates, 'const string PackId = "([^"]+)"').Groups[1].Value
+}
+foreach ($flag in $expected.Keys) {
+    $at = [Array]::IndexOf($arguments, $flag)
+    if (-not $expected[$flag] -or $at -lt 0 -or $arguments[$at + 1] -cne $expected[$flag]) { throw ('Packaging and the app disagree on ' + $flag + '.') }
+}
+$stub = [regex]::Match($launcher, 'const string FileName = "([^"]+)"').Groups[1].Value
+if ($stub -cne ($expected['--packTitle'] + '.exe')) { throw 'The stable launcher must have the packTitle execution stub name.' }
 & vpk @arguments
 if ($LASTEXITCODE -ne 0) { throw ('vpk pack failed with exit code ' + $LASTEXITCODE + '.') }
 foreach ($required in @('IDEAArmory-win-Setup.exe', ('IDEAArmory-' + $Version + '-full.nupkg'), 'releases.win.json')) {
