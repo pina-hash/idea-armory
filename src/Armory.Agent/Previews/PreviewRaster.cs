@@ -112,7 +112,8 @@ internal sealed class PreviewRaster(int size, PreviewBudget budget)
         if (title.Length > 42) title = title[..39] + "...";
         Text(title[..Math.Min(21, title.Length)], 12, 72, 1);
         if (title.Length > 21) Text(title[21..], 12, 85, 1);
-        var label = bytes >= 1024 * 1024 ? $"{bytes / (1024d * 1024):0.0} MB" : bytes >= 1024 ? $"{bytes / 1024d:0.0} KB" : $"{bytes} BYTES";
+        var label = bytes >= 1024 * 1024 ? FormattableString.Invariant($"{bytes / (1024d * 1024):0.0} MB") :
+            bytes >= 1024 ? FormattableString.Invariant($"{bytes / 1024d:0.0} KB") : FormattableString.Invariant($"{bytes} BYTES");
         Text(label, 12, 112, 1);
         Text(reason, 12, 150, 1);
     }

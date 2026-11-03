@@ -2398,6 +2398,11 @@ body[data-screen='connect'] .screen-root {
 .detail-thumb[data-thumb='on'] {
 	display: block;
 }
+/* Managed lab pictures carry opaque paper and ink, legible in either Armory theme. */
+.thumb-slot[data-thumb='on'],
+.detail-thumb[data-thumb='on'] {
+	background-color: #eff3f6;
+}
 .row-body {
 	grid-area: body;
 	display: flex;
