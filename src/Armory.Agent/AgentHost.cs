@@ -760,8 +760,8 @@ internal sealed partial class AgentHost : IAsyncDisposable
         if (exe is null || !Path.GetFileName(exe).Equals("IdeaArmory.exe", StringComparison.OrdinalIgnoreCase)) return;
         // At startup only (re)write the entry, so a moved exe still starts; removing it is
         // only ever the student's choice in Settings.
-        if (startup && !settings.StartAtSignIn) return;
-        StartupRegistration.Apply(settings.StartAtSignIn, exe);
+        if (!ShellIdentity.IsInstalledCopy(paths)) return;
+        StartupRegistration.Apply(settings.StartAtSignIn, StableLauncher.For(exe, File.Exists));
     }
 
     internal static HttpClient Http(TimeSpan timeout)

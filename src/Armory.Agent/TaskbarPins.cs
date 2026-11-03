@@ -57,7 +57,11 @@ internal static class TaskbarPins
         if (pin.Target is not { Length: > 0 } target) return false;
         var path = target.Replace('/', '\\');
         var cut = path.LastIndexOf('\\');
-        if (cut <= 0 || !path[(cut + 1)..].Equals("IdeaArmory.exe", StringComparison.OrdinalIgnoreCase)) return false;
+        if (cut <= 0) return false;
+        var name = path[(cut + 1)..];
+        if (name.Equals("IDEA Armory.exe", StringComparison.OrdinalIgnoreCase) &&
+            path[..cut].EndsWith(@"\" + Updates.PackId, StringComparison.OrdinalIgnoreCase)) return true;
+        if (!name.Equals("IdeaArmory.exe", StringComparison.OrdinalIgnoreCase)) return false;
         var folder = path[..cut].TrimEnd('\\');
         return !fileExists(target)
             || folder.EndsWith(@"\" + Updates.PackId + @"\current", StringComparison.OrdinalIgnoreCase)
@@ -119,8 +123,9 @@ internal static class PinLink
         try
         {
             var file = (System.Runtime.InteropServices.ComTypes.IPersistFile)link;
-            file.Load(shortcut, ReadWriteMode);
+            if (File.Exists(shortcut)) file.Load(shortcut, ReadWriteMode);
             link.SetPath(exe);
+            link.SetArguments("");
             link.SetWorkingDirectory(Path.GetDirectoryName(exe) ?? "");
             link.SetIconLocation(exe, 0);
             file.Save(shortcut, true);

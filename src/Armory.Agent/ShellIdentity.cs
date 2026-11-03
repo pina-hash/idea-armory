@@ -96,13 +96,42 @@ internal static class ShellIdentity
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.Security.SecurityException)
         { log("could not write Armory's notification and link registration: " + error.Message); }
         var shortcut = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs, Environment.SpecialFolderOption.DoNotVerify), ShortcutName);
+        var launcher = StableLauncher.For(Path.Combine(appFolder, "IdeaArmory.exe"), File.Exists);
         try
         {
-            if (ShortcutAppId.Stamp(shortcut, Path.Combine(appFolder, "IdeaArmory.exe"), AppId)) log("gave the Start menu shortcut Armory's notification identity");
+            Directory.CreateDirectory(Path.GetDirectoryName(shortcut)!);
+            PinLink.Point(shortcut, launcher, AppId);
+            log("Start menu shortcut: " + launcher + " (" + AppId + ")");
         }
         catch (Exception error) when (error is COMException or IOException or UnauthorizedAccessException or InvalidCastException or ArgumentException)
         { log("could not give the Start menu shortcut Armory's notification identity: " + error.Message); }
-        return TaskbarPins.Repair(TaskbarPins.Folder(), Path.Combine(appFolder, "IdeaArmory.exe"), log);
+        foreach (var special in new[] { Environment.SpecialFolder.Programs, Environment.SpecialFolder.CommonPrograms,
+                     Environment.SpecialFolder.DesktopDirectory, Environment.SpecialFolder.CommonDesktopDirectory })
+        {
+            var folder = Environment.GetFolderPath(special, Environment.SpecialFolderOption.DoNotVerify);
+            if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder)) continue;
+            try
+            {
+                var options = new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = FileAttributes.ReparsePoint, IgnoreInaccessible = true };
+                foreach (var file in Directory.EnumerateFiles(folder, "*.lnk", options))
+                {
+                    try
+                    {
+                        var target = ShortcutAppId.Target(file);
+                        if (target is null || !(string.Equals(target, launcher, StringComparison.OrdinalIgnoreCase) ||
+                            string.Equals(target, Path.Combine(appFolder, "IdeaArmory.exe"), StringComparison.OrdinalIgnoreCase))) continue;
+                        if (file == shortcut) continue;
+                        PinLink.Point(file, launcher, AppId);
+                        log("repaired shortcut " + file + " (" + AppId + ")");
+                    }
+                    catch (Exception error) when (error is COMException or IOException or UnauthorizedAccessException or InvalidCastException or ArgumentException)
+                    { log("could not repair shortcut " + file + ": " + error.Message); }
+                }
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            { log("could not inspect shortcuts in " + folder + ": " + error.Message); }
+        }
+        return TaskbarPins.Repair(TaskbarPins.Folder(), launcher, log);
     }
 
     // Before any window: the taskbar, the tray and the notifications are one app with one switch.
@@ -111,6 +140,23 @@ internal static class ShellIdentity
     {
         try { SetCurrentProcessExplicitAppUserModelID(AppId); }
         catch (Exception error) when (error is COMException or EntryPointNotFoundException or DllNotFoundException) { }
+    }
+
+    // Explorer uses the window's relaunch command when a person pins a running window.
+    // Give that new pin the root launcher too, even when the process lives in current.
+    [SupportedOSPlatform("windows")]
+    internal static void ConfigureWindow(IntPtr window, Action<string> log)
+    {
+        var exe = Environment.ProcessPath;
+        if (exe is null) return;
+        try
+        {
+            var launcher = StableLauncher.For(exe, File.Exists);
+            ShortcutAppId.Window(window, launcher, AppId);
+            log("shell window: " + AppId + "; relaunch " + launcher);
+        }
+        catch (Exception error) when (error is COMException or IOException or UnauthorizedAccessException)
+        { log("could not set the window's relaunch identity: " + error.Message); }
     }
 
     [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
@@ -128,6 +174,32 @@ internal static class ShortcutAppId
     private const int ReadWriteMode = 2; // STGM_READWRITE
     private const ushort StringType = 31; // VT_LPWSTR
     private const ushort BstrType = 8; // VT_BSTR: how Inno Setup writes the setup's shortcut
+
+    internal static void Window(IntPtr window, string launcher, string appId)
+    {
+        var iid = typeof(IPropertyStore).GUID;
+        Marshal.ThrowExceptionForHR(SHGetPropertyStoreForWindow(window, ref iid, out var store));
+        try
+        {
+            Put(store, 2, "\"" + launcher + "\""); // RelaunchCommand
+            Put(store, 3, launcher + ",0"); // RelaunchIconResource
+            Put(store, 4, ShellIdentity.DisplayName); // RelaunchDisplayNameResource
+            Put(store, 5, appId);
+            Marshal.ThrowExceptionForHR(store.Commit());
+        }
+        finally { Marshal.FinalReleaseComObject(store); }
+    }
+
+    private static void Put(IPropertyStore store, int id, string text)
+    {
+        var key = new PropertyKey(AppIdKey.FormatId, id);
+        var value = new PropVariant { Type = StringType, Pointer = Marshal.StringToCoTaskMemUni(text) };
+        try { Marshal.ThrowExceptionForHR(store.SetValue(ref key, ref value)); }
+        finally { PropVariantClear(ref value); }
+    }
+
+    [DllImport("shell32.dll")]
+    private static extern int SHGetPropertyStoreForWindow(IntPtr window, ref Guid iid, [MarshalAs(UnmanagedType.Interface)] out IPropertyStore store);
 
     // True when it wrote the value.
     internal static bool Stamp(string shortcut, string exe, string appId)
