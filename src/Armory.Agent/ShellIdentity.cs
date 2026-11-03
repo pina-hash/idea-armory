@@ -9,9 +9,8 @@ namespace Armory.Agent;
 // that names the app and its icon in a notification and in Settings > Notifications; and the
 // idea-armory: link scheme that a notification's buttons open (ProtocolLink). Both installers
 // write the same keys and remove them; Armory repairs them at start, comparing before it
-// writes, but only the installed copy (%LOCALAPPDATA%\IDEAArmory\current\IdeaArmory.exe from
-// 0.4.0, or the older %LOCALAPPDATA%\Programs\IDEA Armory\IdeaArmory.exe), so a
-// test instance or a developer's build never takes the registration over.
+// writes. Installed and directly launched packaged releases participate; an isolated test
+// instance or a developer's bin/obj build never takes the registration over.
 internal static class ShellIdentity
 {
     internal const string AppId = "IdeaBosco.Armory";
@@ -21,7 +20,7 @@ internal static class ShellIdentity
     internal const string SchemeKey = ProtocolLink.Scheme;
     internal const string ShortcutName = "IDEA Armory.lnk";
 
-    // %LOCALAPPDATA%\Programs\IDEA Armory: where both installers put the app.
+    // The legacy Inno and flash-drive installers' program folder.
     internal static string InstallFolder(string localAppData) => Path.Combine(localAppData, "Programs", "IDEA Armory");
 
     internal static string InstallFolder() =>

@@ -758,8 +758,8 @@ internal sealed partial class AgentHost : IAsyncDisposable
         // Only the real IdeaArmory.exe registers itself (never "dotnet IdeaArmory.dll").
         var exe = Environment.ProcessPath;
         if (exe is null || !Path.GetFileName(exe).Equals("IdeaArmory.exe", StringComparison.OrdinalIgnoreCase)) return;
-        // At startup only (re)write the entry, so a moved exe still starts; removing it is
-        // only ever the student's choice in Settings.
+        // Keep the one canonical entry on the stable launcher, including removing stale
+        // entries at startup when the student's saved choice is off.
         if (!ShellIdentity.IsInstalledCopy(paths)) return;
         StartupRegistration.Apply(settings.StartAtSignIn, StableLauncher.For(exe, File.Exists));
     }

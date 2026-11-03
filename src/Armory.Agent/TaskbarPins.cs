@@ -3,16 +3,10 @@ using System.Runtime.Versioning;
 
 namespace Armory.Agent;
 
-// Taskbar pins that survive an update (0.4.3, Mr. Pina's "the pin turned into a blank page
-// instead of the Armory icon, and I had to repin the Armory"; docs/agent/INSTALL.md, "Taskbar
-// pins"). An update in place keeps a pin working: CI applied 0.4.3 over the published 0.4.2 with
-// Velopack's own Update.exe and the pin kept its target (current\IdeaArmory.exe, the same path)
-// and its identity. What broke a pin was the move onto the install that updates itself (0.4.0
-// and 0.4.1): it deletes %LOCALAPPDATA%\Programs\IDEA Armory, the folder a pin of the older copy
-// points at. So every pin of Armory is pointed at this IdeaArmory.exe with IdeaBosco.Armory, in
-// the install step before the older copy goes and at every start, and the person is told once,
-// in one sentence, how to pin it again, because File Explorer can keep showing a blank picture
-// it saved for the old pin.
+// Repair an existing pin in place, preserving its filename and Explorer position. The target
+// and icon use the surviving install's stable launcher; its identity matches the process and
+// native window. See docs/agent/INSTALL-OWNERSHIP.md for the historical identity split and the
+// human check still needed for Explorer's cached icon and live taskbar order.
 internal static class TaskbarPins
 {
     // Velopack's own fallback identity for this app ("velopack." and the packId), which the
