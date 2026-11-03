@@ -91,6 +91,7 @@ jobs:
             dist/*.zip
             dist/*.exe
             dist/*.sha256
+            dist/velopack/*
           if-no-files-found: warn
 
       - name: Upload the evidence

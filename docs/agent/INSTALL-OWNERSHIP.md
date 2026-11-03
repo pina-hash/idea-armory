@@ -111,13 +111,24 @@ Protected roots and unsafe uninstallers are explicitly deferred. Copies in those
 are not silently declared removed. Snapshot/ownership checks are bounded evidence; concurrent
 external writers and machine policy enforcement need lab verification.
 
-On a lab PC, record the account, versions/paths, Apps and auto-start entries first. Keep proof
-bytes in the team folder and record settings/sign-in. Install the candidate beside the old
-copy, open it, and confirm one participating copy and unchanged data. Pin its running window,
-check the root launcher target, let a newer lab release download, quit/reopen to apply it, and
-confirm the same pin position/icon opens one window and one copy remains. Sign out/in and
-repeat with start-at-sign-in on and off. Inspect the recorder for removals and any deferrals.
-Explorer's live pin ordering/cache and policy-restricted machines require that human check.
+On a disposable lab PC:
+
+1. Record the account, versions/paths, Apps and auto-start entries. Keep proof bytes in the
+   team folder and record settings/sign-in. Install the published 0.4.2 alongside the old Inno
+   or USB copy. Pin its running window and record the pin's position/icon.
+2. Download `agent-dist` from this PR's successful installers run and extract it. Quit Armory.
+   In PowerShell, apply its candidate package through the existing updater (replace the
+   placeholder with the extracted package's absolute path):
+   `& "$env:LOCALAPPDATA\IDEAArmory\Update.exe" --silent apply --package '<candidate-full.nupkg>' --norestart`
+3. Open the original taskbar pin. Confirm its position/icon, one window, one Apps entry, and
+   unchanged team files/settings/sign-in. Inspect its shortcut properties: the target must be
+   `%LOCALAPPDATA%\IDEAArmory\IDEA Armory.exe`; the shell identity is `IdeaBosco.Armory`.
+4. Unpin once and pin this candidate's running window, to check its native relaunch properties.
+   Repeat the pin/update/single-copy checks when the next coordinated release downloads through
+   the normal feed; quit/reopen to apply it. Record both release versions and the date.
+5. Sign out/in and repeat with start-at-sign-in on and off. Inspect the recorder for removals
+   and any deferrals. Explorer's live pin ordering/cache and policy-restricted machines require
+   this human check.
 
 The release version is unchanged in this lane. These changes must ship in a new release version
 after the coordinated work lands; publishing an already-used tag is not an update rollout.
