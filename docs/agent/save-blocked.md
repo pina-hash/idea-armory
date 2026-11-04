@@ -34,7 +34,11 @@ at the front of Home's things to look at. Assembly components are included even
 when they were not opened as top-level documents. It also explains a checkout on
 another computer and a project that cannot be edited, rather than mislabeling them.
 Unknown ownership, untracked files, writable files and paths outside Armory do not
-raise save cards.
+raise save cards. Before reporting an attempt, the Windows adapter verifies the
+current file id still matches Armory's existing read-only intent and the bit is set,
+using the same attributes-only handle for both facts. An immutable snapshot of
+existing intents keeps this metadata read out of the whole-vault scan gate. It does
+not apply any intent.
 
 The first event publishes the card using the last complete view, including while a
 server read is stalled. It does not wait for a disk scan, hint poll, or sync pass.
@@ -83,7 +87,9 @@ fixture, not proof of real SolidWorks' save algorithm or native toast delivery.
 `tools/agent-ui/check-ui.mjs` checks the three reasons in both themes and at
 1280x800, 420x720 and 320x480, including Tab/Enter, focus, one primary action, layout,
 contrast and bridge fields. Screenshots go to `evidence/save-blocked` in the normal
-`ui-evidence` Actions artifact. The PR records dated results and measured timings.
+`ui-evidence` Actions artifact. The checked-in [IDEA](screens/save-blocked/idea.png)
+and [Space White](screens/save-blocked/space-white.png) card crops are generated
+demo views, not lab screenshots. The PR records dated results and measured timings.
 
 ## Required lab-PC check with real SolidWorks
 

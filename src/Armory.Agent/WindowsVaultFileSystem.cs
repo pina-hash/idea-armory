@@ -282,6 +282,10 @@ public sealed class WindowsVaultFileSystem : IVaultFileSystem, IDisposable
         { pendingProblems.Add($"{path.Value}: the read-only setting could not follow the file: {error.Message}"); }
     }
 
+    // The policy's immutable intent snapshot and an attributes-only handle, independent of
+    // gate: a long scan must not hold a save explanation behind it.
+    public bool IsProtectedReadOnly(VaultPath path) => policy.IsProtectedReadOnly(path);
+
     public void ApplyLockAttribute(VaultPath path, LockOwnership ownership)
     {
         lock (gate)

@@ -18,6 +18,9 @@ public sealed class ReadOnlyPolicy : IDisposable
     private readonly string manifest;
     private readonly FileStream ownership;
     private readonly Dictionary<string, Intent> desired = new(StringComparer.OrdinalIgnoreCase);
+    // Immutable snapshots for save explanations: a metadata read must not wait behind a
+    // whole-vault scan or a durable manifest write on the file-system adapter's gate.
+    private Dictionary<string, Intent> published = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<string> loadProblems = [];
     // The intents in memory are not all in the manifest yet (a write failed): the next call
     // writes them before it changes any bit, even when it changes no intent itself.
@@ -32,6 +35,7 @@ public sealed class ReadOnlyPolicy : IDisposable
         manifest = Path.Combine(folder, "read-only.json");
         ownership = new(Path.Combine(folder, "read-only.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
         if (File.Exists(manifest)) Load(File.ReadAllBytes(manifest));
+        PublishIntents();
     }
 
     // The v2 rule is Armory.Core's CheckoutRules.IsReadOnlyOnDisk, the one function the engine
@@ -110,6 +114,18 @@ public sealed class ReadOnlyPolicy : IDisposable
 
     // The NTFS id of the file at path, or null when no file is there.
     public string? CurrentFileId(VaultPath path) => FileIdAt(paths.Resolve(path));
+
+    // Read-only metadata query for a save explanation. Identity and bit come from the same
+    // attributes-only handle, shared with every reader/writer. Never applies or renews intent.
+    public bool IsProtectedReadOnly(VaultPath path)
+    {
+        if (!Volatile.Read(ref published).TryGetValue(path.Value, out var intent) || !IsReadOnly(intent.Ownership)) return false;
+        try
+        {
+            return NativeMethods.FileStampWithReadOnly(paths.Resolve(path)) is { ReadOnly: true } stamp && stamp.Id == intent.FileId;
+        }
+        catch (Exception error) when (error is Win32Exception or IOException or UnauthorizedAccessException) { return false; }
+    }
 
     // New bytes replaced the file at path (a new file id). An intent made for the file that was
     // there (previous, from CurrentFileId before the replace) follows the new file; one made for
@@ -234,8 +250,11 @@ public sealed class ReadOnlyPolicy : IDisposable
         try { NativeMethods.Move(temp, manifest, replace: true); }
         catch (Win32Exception error) { throw new IOException(error.Message, error); }
         unsaved = false;
+        PublishIntents();
         AfterIntentPersisted?.Invoke();
     }
+
+    private void PublishIntents() => Volatile.Write(ref published, new Dictionary<string, Intent>(desired, StringComparer.OrdinalIgnoreCase));
 
     // Version 2 only. A 0.1.0 manifest ({"<path>": n}) named paths, not files, and meant "Free
     // is writable", so none of it is applied: its paths may hold other files by now, and the

@@ -102,7 +102,7 @@ public sealed partial class SyncEngine
 
     private void SaveAttempted(VaultPath path)
     {
-        if (!BlockedSaves.Attempt(path.Value, ProtectionOf(path.Value))) return;
+        if (!fs.IsProtectedReadOnly(path) || !BlockedSaves.Attempt(path.Value, ProtectionOf(path.Value))) return;
         // A server read or long action must not delay this explanation. Reuse the already
         // published view, replacing only our cards; don't build from a half-refreshed server.
         var cards = SaveBlockedCards();

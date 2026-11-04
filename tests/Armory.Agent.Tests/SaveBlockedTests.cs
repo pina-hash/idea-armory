@@ -78,6 +78,23 @@ public sealed class SaveBlockedTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public async Task Cached_ownership_does_not_accuse_a_file_whose_bit_was_cleared_or_whose_path_is_now_empty()
+    {
+        using var temp = new TempFolder(); var link = new RecordsLink();
+        await using var app = new Fixture(temp.Root, "free", link);
+        var disk = (PortableVaultFileSystem)app.Files;
+        disk.ClearReadOnly(Part);
+        link.Send(new LinkSaving(42, app.Engine.FullPathOf(Part), Guid.NewGuid(), LinkSaveMode.Current));
+        await app.Engine.LinkSettledAsync();
+        Assert.DoesNotContain(app.Engine.View.Notices, n => n.Kind == "saveBlocked");
+        disk.ApplyLockAttribute(TempFolder.PathValue(Part), LockOwnership.Free);
+        File.Delete(disk.Full(Part));
+        link.Send(new LinkSaving(42, app.Engine.FullPathOf(Part), Guid.NewGuid(), LinkSaveMode.Current));
+        await app.Engine.LinkSettledAsync();
+        Assert.DoesNotContain(app.Engine.View.Notices, n => n.Kind == "saveBlocked");
+    }
+
+    [Fact]
     public async Task Closed_documents_and_signed_out_students_leave_no_action_for_an_old_notification()
     {
         using var temp = new TempFolder(); var link = new RecordsLink();
@@ -223,6 +240,13 @@ public sealed class SaveBlockedTests(ITestOutputHelper output)
             else if (reason != "unmanaged") state.Files[Part] = st;
             var store = new MemoryStateStore(); store.Save(state.Serialize());
             Files = windows ? new WindowsVaultFileSystem(root) : new PortableVaultFileSystem(root);
+            if (!windows)
+            {
+                var portable = (PortableVaultFileSystem)Files;
+                var full = portable.Full(Part); Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+                File.WriteAllText(full, "original fixture bytes");
+                portable.ApplyLockAttribute(TempFolder.PathValue(Part), reason == "mine" ? LockOwnership.ThisDevice : LockOwnership.Free);
+            }
             Engine = new(new EngineOptions { VaultRoot = root }, new EngineDependencies { Files = Files, State = store, Journal = new MemoryJournalStore(), Snapshots = Snapshots,
                 Sessions = Sessions, Api = new(new PostgrestClient(http, Sessions)), Blobs = new(http, http, new Uri("http://fixture.test"), Sessions), SolidWorks = link });
         }
