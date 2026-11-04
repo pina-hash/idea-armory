@@ -262,8 +262,19 @@ export async function runColdUser({ size = { w: 1280, h: 800 }, theme = 'idea' }
 		// Hold the very element the student is looking at: a scroll can move the light, and
 		// a click must land on what was read, not on whatever is lit a moment later.
 		const handle = locator.asElement ? locator : await locator.elementHandle();
-		await handle.scrollIntoViewIfNeeded().catch(() => {});
-		await handle.click();
+		// A student clicks what they can see where they see it, and scrolls only when it is not
+		// on screen. (Playwright's own click scrolls first, which can push a control under the
+		// lesson card, which then scrolls it back: a fight no person has.)
+		const spot = () => handle.evaluate((e) => {
+			const r = e.getBoundingClientRect();
+			const x = r.left + r.width / 2, y = r.top + Math.min(r.height / 2, 20);
+			const hit = document.elementFromPoint(x, y);
+			return r.width > 0 && y > 0 && y < innerHeight && x > 0 && x < innerWidth && hit && (hit === e || e.contains(hit)) ? { x, y } : null;
+		});
+		let at = await spot();
+		if (!at) { await handle.scrollIntoViewIfNeeded().catch(() => {}); await settle(); at = await spot(); }
+		if (at) await page.mouse.click(at.x, at.y);
+		else await handle.click({ timeout: 8000 });
 		tally.steps++;
 		log.push('press ' + what);
 		await settle();
