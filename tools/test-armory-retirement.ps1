@@ -137,6 +137,8 @@ function Assert-One([string]$phase) {
     foreach ($folder in @($channel, $channelWithWork)) {
         Require (-not (Test-Path -LiteralPath (Join-Path $folder 'current\IdeaArmory.exe'))) ($phase + ': retired channel executable ' + $folder)
         Require (-not (Test-Path -LiteralPath (Join-Path $folder 'Update.exe'))) ($phase + ': retired channel updater ' + $folder)
+        Require (-not (Test-Path -LiteralPath (Join-Path $folder 'current\Squirrel.exe'))) ($phase + ': retired bundled updater ' + $folder)
+        Require (-not (Test-Path -LiteralPath (Join-Path $folder 'current\IdeaArmory.dll'))) ($phase + ': retired channel assembly ' + $folder)
     }
     foreach ($key in @($run, $runOnce, $machineRun)) {
         $values = Get-ItemProperty -LiteralPath $key

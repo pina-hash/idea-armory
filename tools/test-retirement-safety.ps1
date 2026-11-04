@@ -6,7 +6,7 @@ $tokens = $null; $errors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($scriptFile, [ref]$tokens, [ref]$errors)
 if ($errors.Count) { throw ($errors | Out-String) }
 $names = @('Audit', 'Initialize-NativePaths', 'Full', 'Within', 'Linked', 'Binary', 'Protected', 'OverlapsProtected',
-    'Add-Copy', 'Stream-Hash', 'Owned-VelopackTree', 'Owned-Updater', 'Unmodified-LegacyPayload')
+    'Add-Copy', 'Stream-Hash', 'Owned-VelopackTree', 'Package-Launchers', 'Owned-Updater', 'Unmodified-LegacyPayload')
 foreach ($function in $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false)) {
     if ($function.Name -in $names) { Invoke-Expression $function.Extent.Text }
 }
@@ -39,6 +39,8 @@ try {
     Move-Item -LiteralPath $copy.Exe -Destination ($copy.Exe + '.retired')
     Require (Owned-VelopackTree $copy) 'a pristine package-owned tree permits the real updater uninstaller'
     Require (Owned-Updater $copy) 'the updater bytes match the cached package'
+    $launchers = Package-Launchers $copy
+    Require ($launchers.ContainsKey((Join-Path $fakeRoot 'current\Squirrel.exe')) -and $launchers.ContainsKey((Join-Path $fakeRoot 'current\IDEA Armory_ExecutionStub.exe'))) 'bundled native launchers are included in ownership evidence'
     $updaterFile = Join-Path $fakeRoot 'Update.exe'
     $updaterBytes = [IO.File]::ReadAllBytes($updaterFile)
     [IO.File]::AppendAllText($updaterFile, 'changed')

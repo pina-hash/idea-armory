@@ -124,22 +124,33 @@ function Unmodified-LegacyPayload($copy) {
     }
     return $entries -gt 0
 }
-function Owned-Updater($copy) {
+function Package-Launchers($copy) {
+    $owned = @{}
     try {
-        $updater = Join-Path $copy.Root 'Update.exe'
-        if (-not (Test-Path -LiteralPath $updater) -or (Linked $updater)) { return $false }
         [xml]$manifest = [IO.File]::ReadAllText((Join-Path $copy.Root 'current\sq.version'))
-        if ($manifest.package.metadata.id -cne 'IDEAArmory') { return $false }
+        if ($manifest.package.metadata.id -cne 'IDEAArmory') { return $owned }
         $package = Join-Path $copy.Root ('packages\IDEAArmory-' + $manifest.package.metadata.version + '-full.nupkg')
-        if (-not (Test-Path -LiteralPath $package) -or (Linked $package)) { return $false }
+        if (-not (Test-Path -LiteralPath $package) -or (Linked $package)) { return $owned }
         Add-Type -AssemblyName System.IO.Compression.FileSystem
         $zip = [IO.Compression.ZipFile]::OpenRead($package)
         try {
-            $entry = $zip.GetEntry('lib/app/Squirrel.exe')
-            if (-not $entry) { return $false }
-            return (Get-FileHash -LiteralPath $updater -Algorithm SHA256).Hash -ieq (Stream-Hash ($entry.Open()))
+            foreach ($name in @('Squirrel.exe', 'IDEA Armory_ExecutionStub.exe')) {
+                $entry = $zip.GetEntry('lib/app/' + $name)
+                if (-not $entry) { continue }
+                $hash = Stream-Hash ($entry.Open())
+                $owned[(Join-Path $copy.Root ('current\' + $name))] = $hash
+                $rootName = if ($name -eq 'Squirrel.exe') { 'Update.exe' } else { 'IDEA Armory.exe' }
+                $owned[(Join-Path $copy.Root $rootName)] = $hash
+            }
         } finally { $zip.Dispose() }
-    } catch { return $false }
+    } catch { }
+    return $owned
+}
+function Owned-Updater($copy) {
+    $updater = Join-Path $copy.Root 'Update.exe'
+    if (-not (Test-Path -LiteralPath $updater) -or (Linked $updater)) { return $false }
+    $owned = Package-Launchers $copy
+    $owned.ContainsKey($updater) -and (Get-FileHash -LiteralPath $updater -Algorithm SHA256).Hash -ieq $owned[$updater]
 }
 function Owned-VelopackTree($copy) {
     $root = Full $copy.Root
@@ -343,8 +354,9 @@ try {
         if (-not $file) { return $false }
         $file = Full $file
         foreach ($relative in @('IdeaArmory.exe', 'current\IdeaArmory.exe', 'IDEA Armory.exe', 'Update.exe')) {
+            if ($file -ine (Join-Path $copy.Root $relative)) { continue }
             if ($relative -eq 'Update.exe' -and -not (Owned-Updater $copy)) { continue }
-            if ($file -ieq (Join-Path $copy.Root $relative)) { return $true }
+            return $true
         }
         return $false
     }
@@ -407,8 +419,8 @@ try {
     foreach ($copy in @($copies.Values)) {
         try {
             Audit ('found competing install ' + $copy.Root + ' (' + $copy.Kind + ')')
-            $ownedUpdaterHash = $null
-            if (Owned-Updater $copy) { $ownedUpdaterHash = (Get-FileHash -LiteralPath (Join-Path $copy.Root 'Update.exe') -Algorithm SHA256).Hash }
+            # Capture before an uninstaller or payload cleanup removes sq.version/packages.
+            $nativeLaunchers = Package-Launchers $copy
             # Close only processes whose full path is in this verified install, never by name.
             foreach ($p in $processes) {
                 if (-not (Belongs $p.ExecutablePath $copy)) { continue }
@@ -504,13 +516,14 @@ try {
                 }
             }
             # The manifest proves ownership AND bytes. Edited or unlisted files stay put.
-            $manifest = Join-Path $copy.Root 'scripts\payload.sha256'
+            $payloadRoot = if ($copy.Kind -eq 'velopack') { Join-Path $copy.Root 'current' } else { $copy.Root }
+            $manifest = Join-Path $payloadRoot 'scripts\payload.sha256'
             if (Test-Path -LiteralPath $manifest) {
                 foreach ($line in [IO.File]::ReadAllLines($manifest)) {
                     if ($line -notmatch '^([0-9a-fA-F]{64})  (.+)$') { continue }
                     $hash = $Matches[1]; $relative = $Matches[2]
-                    $file = Full (Join-Path $copy.Root $relative)
-                    if (-not (Within $file $copy.Root) -or (Protected $file) -or (Within $CurrentExe $file)) { continue }
+                    $file = Full (Join-Path $payloadRoot $relative)
+                    if (-not (Within $file $payloadRoot) -or (Protected $file) -or (Within $CurrentExe $file)) { continue }
                     if ((Test-Path -LiteralPath $file -PathType Leaf) -and (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -ieq $hash) {
                         Remove-Item -LiteralPath $file -Force; Audit ('removed payload ' + $file)
                     }
@@ -522,10 +535,14 @@ try {
             # Update.exe could reinstall an otherwise retired channel. Disable it too, but
             # leave package caches and all unknown files intact.
             if ($copy.Kind -eq 'velopack') {
-                $updater = Join-Path $copy.Root 'Update.exe'
-                if ((Test-Path -LiteralPath $updater) -and -not (Protected $updater)) {
+                $rootUpdater = Join-Path $copy.Root 'Update.exe'
+                if ((Test-Path -LiteralPath $rootUpdater) -and -not $nativeLaunchers.ContainsKey($rootUpdater)) {
+                    Audit ('deferred updater without package ownership evidence ' + $rootUpdater)
+                }
+                foreach ($updater in $nativeLaunchers.Keys) {
+                    if (-not (Test-Path -LiteralPath $updater) -or (Protected $updater)) { continue }
                     try {
-                        if ($ownedUpdaterHash -and (Get-FileHash -LiteralPath $updater -Algorithm SHA256).Hash -ieq $ownedUpdaterHash) {
+                        if ((Get-FileHash -LiteralPath $updater -Algorithm SHA256).Hash -ieq $nativeLaunchers[$updater]) {
                             Remove-Item -LiteralPath $updater -Force; Audit ('removed retired updater ' + $updater)
                         } else { Audit ('deferred unrecognized or changed updater ' + $updater) }
                     } catch { Audit ('deferred updater removal: ' + $_.Exception.Message) }

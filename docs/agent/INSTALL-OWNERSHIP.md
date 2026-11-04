@@ -73,6 +73,8 @@ executable's quit hook and temporarily substitutes a no-data PowerShell hook bef
 the uninstaller. Changed payloads or a cache targeted by recursive uninstall defer that
 uninstaller. Velopack's recursive uninstaller runs only when the cached package accounts for
 the root's existing files; otherwise its launchers and updater are retired and other files stay.
+Manifest cleanup uses `current` for these roots, and cached-package hashes also cover the
+bundled `current\Squirrel.exe` and execution stub, so those cannot re-create the retired app.
 Slow uninstallers retain the safe hook until they finish. The application waits at most 90
 seconds before giving this launch up; it does not kill an uninstaller midway through cleanup.
 
