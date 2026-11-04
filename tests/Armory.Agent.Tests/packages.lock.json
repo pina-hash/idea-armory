@@ -126,6 +126,9 @@
       "armory.core": {
         "type": "Project"
       },
+      "armory.fakesolidworks": {
+        "type": "Project"
+      },
       "armory.platform.windows": {
         "type": "Project",
         "dependencies": {

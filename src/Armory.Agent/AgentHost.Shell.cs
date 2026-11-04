@@ -41,6 +41,7 @@ internal sealed partial class AgentHost : IShellHost
     Task<ActionResult> IShellHost.CheckInAsync(IReadOnlyList<string> paths) => CheckInAsync(paths);
     Task<ActionResult> IShellHost.UndoCheckOutAsync(IReadOnlyList<string> paths) => UndoCheckOutAsync(paths);
     Task<ActionResult> IShellHost.TakeBackAsync(IReadOnlyList<Guid> fileIds) => TakeBackAsync(fileIds);
+    Task<ActionResult> IShellHost.SaveBlockedActionAsync(string key) => SaveBlockedActionAsync(key);
     Task<ActionResult> IShellHost.CheckOutAndReopenAsync(IReadOnlyList<string> paths) => CheckOutAndReopenAsync(paths);
     Task<ActionResult> IShellHost.AnswerSaveDownAsync(string path, bool keepLocal) => AnswerSaveDownAsync(path, keepLocal);
     bool IShellHost.PickerShowing => PickerShowing;

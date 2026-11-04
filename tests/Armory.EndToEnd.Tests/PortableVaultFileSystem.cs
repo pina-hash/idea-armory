@@ -537,6 +537,11 @@ internal sealed class PortableVaultFileSystem : IVaultFileSystem
     // Bits set one file at a time (each a manifest write on Windows), not through a batch.
     public int SingleAttributeCalls { get; private set; }
 
+    public bool IsProtectedReadOnly(VaultPath path)
+    {
+        lock (gate) return readOnlyBits.Contains(path.Value) && File.Exists(Full(path.Value));
+    }
+
     public void ApplyLockAttribute(VaultPath path, LockOwnership ownership)
     {
         lock (gate) SingleAttributeCalls++;

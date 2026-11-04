@@ -1758,6 +1758,22 @@
 		bytes: 219113
 	};
 
+	// Explicit save events on protected files: one card per file, including assembly parts.
+	[
+		['saveBlockedCheckOut', 'Armory keeps this file read-only because you have not checked it out.', true],
+		['saveBlockedOther', 'This file belongs to Ana Reyes and opens read-only for you.', false],
+		['saveBlockedNonmember', 'Armory keeps this file read-only because it is in a project you are not on.', false]
+	].forEach(function (entry) {
+		var v = JSON.parse(JSON.stringify(states.synced.view));
+		var next = entry[2] ? 'Check out here, then save again in SolidWorks.' : 'In SolidWorks, use Save As to save a copy in the folder this button opens.';
+		v.notices = [{ key: entry[0], kind: 'saveBlocked', tone: 'look', title: "SolidWorks can't save Bracket.SLDPRT",
+			detail: entry[1] + ' ' + next, count: 1,
+			action: { label: entry[2] ? 'Check out' : 'Save a copy in your folder', command: 'saveBlockedAction', paths: [entry[0]] },
+			items: [{ fileId: null, path: 'Class/Bracket.SLDPRT', name: 'Bracket.SLDPRT', detail: entry[1] }] }];
+		v.prompt = null;
+		states[entry[0]] = { label: 'SolidWorks save needs you: ' + entry[0], screens: ['home'], view: v };
+	});
+
 	window.ArmoryDemoStates = {
 		now: NOW,
 		/** Your feedback, and Send feedback's picture of the window. */

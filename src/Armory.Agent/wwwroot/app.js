@@ -542,6 +542,8 @@
 		// Notices.
 		noticeAction: function (c) {
 			switch (c.command) {
+				case 'saveBlockedAction':
+					return c.label === 'Check out' ? 'Check out this file so you can save it again in SolidWorks.' : 'Open your copy folder so you can use Save As in SolidWorks.';
 				case 'dismissNotice':
 					return 'Close this card.';
 				case 'checkIn':
@@ -2134,7 +2136,7 @@
 		};
 		if (a && a.command !== 'expand')
 			keys +=
-				'<button class="key" type="button" data-action="notice" data-notice="' + esc(n.key) + '" data-key="nt-act-' + esc(n.key) + '" aria-describedby="' + id + '-t"' +
+				'<button class="key' + (n.kind === 'saveBlocked' ? ' primary' : '') + '" type="button" data-action="notice" data-notice="' + esc(n.key) + '" data-key="nt-act-' + esc(n.key) + '" aria-describedby="' + id + '-t"' +
 				tipAttr('noticeAction', { command: a.command, label: a.label, name: leaf((a.paths || [])[0] || (items[0] || {}).path || '') }) + '>' + esc(a.label) + '</button>';
 		if (hasItems) keys += expandKey(open ? (a && a.command === 'expand' ? 'Hide them' : 'Hide the files') : a && a.command === 'expand' ? a.label : 'Show the ' + plural(total, 'file', 'files'));
 		else if (items.length === 1 && items[0].fileId && (!a || a.command === 'expand'))
@@ -4176,6 +4178,9 @@
 		var a = n.action;
 		var paths = a.paths || [];
 		switch (a.command) {
+			case 'saveBlockedAction':
+				act('saveBlockedAction', { key: n.key }, { key: 'nt-act-' + n.key });
+				break;
 			case 'expand':
 				toggleExpand(n.key);
 				break;

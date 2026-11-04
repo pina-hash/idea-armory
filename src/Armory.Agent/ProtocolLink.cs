@@ -29,7 +29,7 @@ internal sealed record ProtocolLink(string Token, string Action)
     internal const string CheckOut = "checkout", Show = "show";
     // The two answers to the question before a save down (SaveDownAsks): save in the project's
     // year, or keep the file on this computer only.
-    internal const string SaveIn = "savein", KeepLocal = "keeplocal";
+    internal const string SaveIn = "savein", KeepLocal = "keeplocal", SaveBlocked = "saveblocked";
     internal const int TokenLength = 22;
     internal const int MaxLength = 80;
     // What a second launch hands over for anything that is not a link: open the window, nothing more.
@@ -76,7 +76,7 @@ internal sealed record ProtocolLink(string Token, string Action)
         return true;
     }
 
-    internal static bool IsAction(string action) => action is CheckOut or Show or SaveIn or KeepLocal;
+    internal static bool IsAction(string action) => action is CheckOut or Show or SaveIn or KeepLocal or SaveBlocked;
 
     internal static bool IsTokenChar(char c) => char.IsAsciiLetterOrDigit(c) || c is '_' or '-';
 

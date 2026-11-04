@@ -1727,6 +1727,7 @@ const CONTRACT = {
 	launchFile: ['path', ...ACT],
 	showInFolder: ['path'],
 	openRecovery: ['path'],
+	saveBlockedAction: ['key', ...ACT],
 	checkOut: ['paths', 'open', ...ACT],
 	checkIn: ['paths', ...ACT],
 	undoCheckOut: ['paths', ...ACT],
@@ -1776,6 +1777,11 @@ const CONTRACT = {
 // 0.4.2: the vaultRoot card's Fix it sends repairVaultRoot; opening a card's list asks for all of
 // its files (readNoticeItems), and the answer draws every one of them, a line before each reason.
 async function noticesBridge({ page, host, click, view, expect }) {
+	await host({ type: 'view', view: view('saveBlockedOther') });
+	const saveBlocked = await click('[data-key="nt-act-saveBlockedOther"]');
+	expect(saveBlocked.type === 'saveBlockedAction' && saveBlocked.key === 'saveBlockedOther' && !!saveBlocked.requestId, 'Blocked-save action sent ' + JSON.stringify(saveBlocked));
+	await host({ type: 'actionResult', requestId: saveBlocked.requestId, ok: true, message: 'In SolidWorks, use Save As in the folder that opened.' });
+
 	await host({ type: 'view', view: view('synced', { notices: [{ key: 'recovered', kind: 'recovered', tone: 'look', title: 'Your file is safe',
 		detail: 'Move it into your own folder.', count: 1, action: { label: 'Show me', command: 'openRecovery', paths: ['practice/Plate.SLDPRT'] }, items: [] }] }) });
 	const recovered = await click('[data-key="nt-act-recovered"]');
@@ -2984,6 +2990,35 @@ for (const size of [...SIZES, {w:320,h:480}]) await flow('window back and forwar
 	await side(3); await side(3); await side(3); await side(3);
 	expect(page.url().startsWith('file:'), 'an edge escaped the Armory page');
 });
+
+// Both themes, each reason, a small window, keyboard activation, and shareable evidence.
+const saveBlockedShots = path.join(ROOT, 'evidence', 'save-blocked');
+fs.mkdirSync(saveBlockedShots, { recursive: true });
+for (const theme of THEMES) for (const size of [...SIZES, { w: 320, h: 480 }]) for (const state of ['saveBlockedCheckOut', 'saveBlockedOther', 'saveBlockedNonmember']) {
+	const { context, page } = await openPage(browser, { screen: 'home', state, size }, theme);
+	const fails = []; page.on('pageerror', e => fails.push(e.message));
+	try {
+		const card = page.locator('[data-kind="saveBlocked"]');
+		if (await card.count() !== 1) fails.push('expected one save card');
+		if (await card.locator('button').count() !== 1) fails.push('expected one primary action');
+		const key = '[data-key="nt-act-' + state + '"]';
+		await page.evaluate(() => document.activeElement.blur());
+		let reached = false;
+		for (let i = 0; i < 40; i++) {
+			await page.keyboard.press('Tab');
+			if (await page.locator(key).evaluate(e => e === document.activeElement)) { reached = true; break; }
+		}
+		if (!reached) fails.push('keyboard could not reach the save action');
+		const ring = await page.evaluate(focusInfo);
+		if (!ring || ring.w < 44 || ring.h < 44 || ring.outlineWidth < 2 || ring.ringRatio < 3) fails.push('save action focus/size ' + JSON.stringify(ring));
+		await page.screenshot({ path: path.join(saveBlockedShots, state + '-' + theme + '-' + size.w + 'x' + size.h + '.png') });
+		await page.keyboard.press('Enter'); await settle(page);
+		if (!(await page.textContent('#result-word')).includes('SolidWorks')) fails.push('keyboard action had no answer');
+	} catch(e) { fails.push(threw(e)); }
+	await context.close();
+	for (const f of fails) { tally.flowFailures++; problem('saveBlocked', state + ' ' + theme + ' ' + size.w, f); }
+	tally.flows++;
+}
 
 await browser.close();
 

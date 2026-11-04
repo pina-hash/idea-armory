@@ -1,0 +1,26 @@
+name: Blocked save Windows evidence
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  save-blocked:
+    runs-on: windows-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - run: dotnet restore tests/Armory.Agent.Tests --locked-mode
+      - run: dotnet restore tests/Armory.Platform.Windows.Tests --locked-mode
+      - name: Current file identity and read-only intent
+        run: dotnet test tests/Armory.Platform.Windows.Tests --no-restore --filter FullyQualifiedName~SaveBlockedProtectionTests --logger "console;verbosity=detailed" --logger "trx;LogFileName=save-blocked-protection.trx"
+      - name: Real read-only disk, child COM save fixture, Home and notification reasons
+        run: dotnet test tests/Armory.Agent.Tests --no-restore --filter FullyQualifiedName~SaveBlocked --logger "console;verbosity=detailed" --logger "trx;LogFileName=save-blocked.trx"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: save-blocked-windows
+          path: tests/**/TestResults/save-blocked*.trx

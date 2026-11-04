@@ -71,6 +71,9 @@ public interface IVaultFileSystem
     VaultScan Scan(CancellationToken cancellationToken) => Scan();
     // Whether an application has the file open right now (Restart Manager on Windows).
     bool IsOpen(VaultPath path);
+    // Save-attempt evidence only: the current file still has Armory's read-only intent and
+    // its bit is set. Unknown/unsupported is false, never a guess from cached ownership.
+    bool IsProtectedReadOnly(VaultPath path) => false;
     // Which of many files are open (their VaultPath.Value), each answered as IsOpen answers it.
     // A pass asks once for all its files: on Windows one Restart Manager session per file cost
     // about 28 ms, 40 seconds a pass for 1,500 files (0.3.1's field reports).

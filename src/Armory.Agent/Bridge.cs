@@ -7,6 +7,7 @@ namespace Armory.Agent;
 // Page-to-host messages (docs/agent/BRIDGE.md). Only these fields are ever read, and each
 // record names exactly the fields wwwroot/bridge.js sends for its type (REQUIRED, plus the
 // requestId of an action); AgentViewContractTests holds the two to each other.
+internal sealed record SaveBlockedActionMessage(string? Key, string? RequestId);
 internal sealed record OpenFileMessage(string? FileId);
 internal sealed record LaunchFileMessage(string? Path, string? RequestId);
 internal sealed record ShowInFolderMessage(string? Path);
@@ -96,6 +97,7 @@ internal sealed partial class Bridge(AgentHost host, IBridgeWindow window, Agent
         [BridgeMessages.LaunchFile] = typeof(LaunchFileMessage),
         [BridgeMessages.ShowInFolder] = typeof(ShowInFolderMessage),
         [BridgeMessages.OpenRecovery] = typeof(OpenRecoveryMessage),
+        [BridgeMessages.SaveBlockedAction] = typeof(SaveBlockedActionMessage),
         [BridgeMessages.CheckOut] = typeof(CheckOutMessage),
         [BridgeMessages.CheckIn] = typeof(CheckInMessage),
         [BridgeMessages.UndoCheckOut] = typeof(UndoCheckOutMessage),
@@ -229,6 +231,10 @@ internal sealed partial class Bridge(AgentHost host, IBridgeWindow window, Agent
                     break;
                 case BridgeMessages.ShowInFolder:
                     ShowInFolder(Read<ShowInFolderMessage>(message));
+                    break;
+                case BridgeMessages.SaveBlockedAction:
+                    var blocked = Read<SaveBlockedActionMessage>(message);
+                    await AnswerAsync(type, 1, asked, blocked?.RequestId, host.SaveBlockedActionAsync(blocked?.Key ?? ""));
                     break;
                 case BridgeMessages.OpenRecovery:
                     OpenRecovery(Read<OpenRecoveryMessage>(message));

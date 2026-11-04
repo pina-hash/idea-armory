@@ -178,7 +178,7 @@ public sealed partial class SyncEngine
     {
         var groups = RawNotices(files);
         shownNoticeItems = groups.ToDictionary(g => g.Key, g => g.Items.Select(i => i.Id).ToArray(), StringComparer.Ordinal);
-        return groups.OrderBy(g => Array.IndexOf(NoticeOrder, g.Kind)).Select(Group).ToArray();
+        return SaveBlockedCards().Concat(groups.OrderBy(g => Array.IndexOf(NoticeOrder, g.Kind)).Select(Group)).ToArray();
     }
 
     // Every notice item there is now, one group per kind, without the ones the student dismissed.
