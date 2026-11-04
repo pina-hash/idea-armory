@@ -41,6 +41,7 @@ internal sealed class MainWindow : Form, IBridgeWindow
         this.host = host;
         this.paths = paths;
         this.log = log;
+        if (ShellIdentity.IsInstalledCopy(paths)) HandleCreated += (_, _) => ShellIdentity.ConfigureWindow(Handle, log.Info);
         bridge = new Bridge(host, this, log);
         Text = "IDEA Armory";
         Icon = icon;

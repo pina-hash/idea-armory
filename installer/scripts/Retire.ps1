@@ -1,0 +1,576 @@
+# Shared by startup and Velopack's post-install/update hooks. Windows PowerShell 5.1.
+# Inventory is bounded to registrations, running processes and known install locations.
+# Never search a vault or a whole drive, never delete a directory tree, never follow links.
+param([Parameter(Mandatory = $true)][string]$CurrentExe,
+      [Parameter(Mandatory = $true)][string]$DataFolder,
+      [int]$CurrentProcessId = 0)
+$ErrorActionPreference = 'Stop'
+if ($PSVersionTable.PSEdition -ne 'Core') {
+    $env:PSModulePath = (Join-Path $PSHOME 'Modules') + ';' + (Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\Modules')
+}
+function Audit([string]$text) {
+    $folder = Join-Path $DataFolder 'logs'
+    [void][IO.Directory]::CreateDirectory($folder)
+    $line = ([DateTime]::UtcNow.ToString('O') + ' ' + $text) | ConvertTo-Json -Compress
+    [IO.File]::AppendAllText((Join-Path $folder 'install-retirement.jsonl'), $line + "`n")
+}
+function Initialize-NativePaths {
+    if ('ArmoryRetirementPath' -as [type]) { return }
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class ArmoryRetirementPath {
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    private static extern uint GetLongPathName(string path, StringBuilder buffer, uint length);
+    public static string Expand(string path) {
+        var buffer = new StringBuilder(32768);
+        var size = GetLongPathName(path, buffer, (uint)buffer.Capacity);
+        return size > 0 && size < buffer.Capacity ? buffer.ToString() : path;
+    }
+}
+'@
+}
+function Full([string]$path) {
+    Initialize-NativePaths
+    $full = [IO.Path]::GetFullPath($path)
+    if ($full.Length -gt 3) { $full = $full.TrimEnd('\') }
+    # Expand 8.3 aliases even when the executable was already removed. Otherwise a short
+    # path in a shortcut could make the surviving install look like a different copy.
+    $existing = $full; $suffix = ''
+    while (-not (Test-Path -LiteralPath $existing)) {
+        $parent = Split-Path -Parent $existing
+        if (-not $parent -or $parent -eq $existing) { break }
+        $suffix = '\' + (Split-Path -Leaf $existing) + $suffix; $existing = $parent
+    }
+    $expanded = [ArmoryRetirementPath]::Expand($existing)
+    if ($suffix) { $expanded.TrimEnd('\') + $suffix } else { $expanded }
+}
+function Within([string]$path, [string]$folder) {
+    $p = Full $path; $f = Full $folder
+    $p -ieq $f -or $p.StartsWith($f.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)
+}
+function Linked([string]$path) {
+    for ($p = Full $path; $p; $p = Split-Path -Parent $p) {
+        if ((Test-Path -LiteralPath $p) -and ((Get-Item -LiteralPath $p -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { return $true }
+    }
+    return $false
+}
+function Binary([string]$path) {
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf) -or (Linked $path)) { return $false }
+    $v = [Diagnostics.FileVersionInfo]::GetVersionInfo($path)
+    $v.ProductName -ceq 'IDEA Armory' -and $v.CompanyName -ceq 'IDEA, Don Bosco Tech'
+}
+function CommandFile([string]$command) {
+    if ($command -match '^\s*"([^"]+)"') { return $Matches[1] }
+    if ($command -match '^\s*(.+?\.(?:exe|cmd|bat|ps1))(?=\s|,|$)') { return $Matches[1] }
+    return $null
+}
+function Start-Uninstaller([string]$file, [string]$arguments) {
+    $start = New-Object Diagnostics.ProcessStartInfo
+    $start.FileName = $file; $start.Arguments = $arguments
+    $start.UseShellExecute = $false; $start.CreateNoWindow = $true
+    [Diagnostics.Process]::Start($start)
+}
+function Start-UsbUninstaller([string]$file) {
+    $start = New-Object Diagnostics.ProcessStartInfo
+    $start.FileName = $env:ComSpec
+    $start.Arguments = '/d /s /c ""%ARMORY_RETIRING_UNINSTALL_TARGET%" /quiet"'
+    $start.EnvironmentVariables['ARMORY_RETIRING_UNINSTALL_TARGET'] = $file
+    $start.UseShellExecute = $false; $start.CreateNoWindow = $true
+    [Diagnostics.Process]::Start($start)
+}
+function Snapshot-UserTree([string]$root) {
+    $snapshot = @{}; $todo = New-Object 'System.Collections.Generic.Queue[string]'; $todo.Enqueue($root)
+    while ($todo.Count) {
+        $path = $todo.Dequeue(); $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($path)
+        if (-not $key) { continue }
+        try {
+            $values = @{}
+            foreach ($name in $key.GetValueNames()) { $values[$name] = @{ Value = $key.GetValue($name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames); Kind = $key.GetValueKind($name) } }
+            $snapshot[$path] = $values
+            foreach ($child in $key.GetSubKeyNames()) { $todo.Enqueue($path + '\' + $child) }
+        } finally { $key.Dispose() }
+    }
+    return $snapshot
+}
+function Restore-UserTree($snapshot) {
+    foreach ($path in $snapshot.Keys) {
+        $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($path)
+        try {
+            foreach ($name in $snapshot[$path].Keys) {
+                # Keep any newer value an already-running survivor wrote during uninstall.
+                if ($null -eq $key.GetValue($name)) { $key.SetValue($name, $snapshot[$path][$name].Value, $snapshot[$path][$name].Kind) }
+            }
+        } finally { $key.Dispose() }
+    }
+}
+function Stream-Hash($stream) {
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { ([BitConverter]::ToString($sha.ComputeHash($stream))).Replace('-', '') }
+    finally { $sha.Dispose(); $stream.Dispose() }
+}
+function Unmodified-LegacyPayload($copy) {
+    $manifest = Join-Path $copy.Root 'scripts\payload.sha256'
+    if (-not (Test-Path -LiteralPath $manifest) -or (Linked $manifest) -or (Test-Path -LiteralPath (Join-Path $copy.Root 'IdeaArmory.exe.WebView2'))) { return $false }
+    $entries = 0
+    foreach ($line in [IO.File]::ReadAllLines($manifest)) {
+        if (-not $line) { continue }
+        if ($line -notmatch '^([0-9a-fA-F]{64})  (.+)$') { return $false }
+        $hash = $Matches[1]; $file = Full (Join-Path $copy.Root $Matches[2]); $entries++
+        if (-not (Within $file $copy.Root) -or (Protected $file)) { return $false }
+        if ($file -ieq $copy.Exe -and -not (Test-Path -LiteralPath $file)) { $file += '.retired' }
+        if ((Test-Path -LiteralPath $file) -and (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -ine $hash) { return $false }
+    }
+    return $entries -gt 0
+}
+function Package-Launchers($copy) {
+    $owned = @{}
+    try {
+        [xml]$manifest = [IO.File]::ReadAllText((Join-Path $copy.Root 'current\sq.version'))
+        if ($manifest.package.metadata.id -cne 'IDEAArmory') { return $owned }
+        $package = Join-Path $copy.Root ('packages\IDEAArmory-' + $manifest.package.metadata.version + '-full.nupkg')
+        if (-not (Test-Path -LiteralPath $package) -or (Linked $package)) { return $owned }
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $zip = [IO.Compression.ZipFile]::OpenRead($package)
+        try {
+            foreach ($name in @('Squirrel.exe', 'IDEA Armory_ExecutionStub.exe')) {
+                $entry = $zip.GetEntry('lib/app/' + $name)
+                if (-not $entry) { continue }
+                $hash = Stream-Hash ($entry.Open())
+                $owned[(Join-Path $copy.Root ('current\' + $name))] = $hash
+                $rootName = if ($name -eq 'Squirrel.exe') { 'Update.exe' } else { 'IDEA Armory.exe' }
+                $owned[(Join-Path $copy.Root $rootName)] = $hash
+            }
+        } finally { $zip.Dispose() }
+    } catch { }
+    return $owned
+}
+function Owned-Updater($copy) {
+    $updater = Join-Path $copy.Root 'Update.exe'
+    if (-not (Test-Path -LiteralPath $updater) -or (Linked $updater)) { return $false }
+    $owned = Package-Launchers $copy
+    $owned.ContainsKey($updater) -and (Get-FileHash -LiteralPath $updater -Algorithm SHA256).Hash -ieq $owned[$updater]
+}
+function Owned-VelopackTree($copy) {
+    $root = Full $copy.Root
+    # Update.exe removes its whole root. Prove every existing byte is package-owned first;
+    # a user document, changed program file, cache, junction, or unknown metadata defers it.
+    if (Test-Path -LiteralPath (Join-Path $root '.msi-installed')) { return $false }
+    try {
+        [xml]$manifest = [IO.File]::ReadAllText((Join-Path $root 'current\sq.version'))
+        if ($manifest.package.metadata.id -cne 'IDEAArmory') { return $false }
+        $package = Join-Path $root ('packages\IDEAArmory-' + $manifest.package.metadata.version + '-full.nupkg')
+        if (-not (Test-Path -LiteralPath $package) -or (Linked $package)) { return $false }
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $zip = [IO.Compression.ZipFile]::OpenRead($package)
+        $expected = @{}
+        try {
+            foreach ($entry in $zip.Entries) {
+                if (-not $entry.FullName.StartsWith('lib/app/') -or $entry.FullName.EndsWith('/')) { continue }
+                $relative = $entry.FullName.Substring(8).Replace('/', '\')
+                $file = Full (Join-Path $root ('current\' + $relative))
+                if (-not (Within $file $root)) { return $false }
+                $hash = Stream-Hash ($entry.Open()); $expected[$file] = $hash
+                if ($relative -ieq 'IdeaArmory.exe') { $expected[$file + '.retired'] = $hash }
+                if ($relative -ieq 'Squirrel.exe') { $expected[(Join-Path $root 'Update.exe')] = $hash }
+                if ($relative -ieq 'IDEA Armory_ExecutionStub.exe') { $expected[(Join-Path $root 'IDEA Armory.exe')] = $hash }
+            }
+        } finally { $zip.Dispose() }
+        $todo = New-Object 'System.Collections.Generic.Queue[string]'; $todo.Enqueue($root)
+        while ($todo.Count) {
+            foreach ($item in @(Get-ChildItem -LiteralPath $todo.Dequeue() -Force)) {
+                if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { return $false }
+                if ($item.PSIsContainer) { $todo.Enqueue($item.FullName); continue }
+                if ($item.FullName -ieq $package) { continue }
+                if ($item.FullName -ieq (Join-Path $root 'packages\.velopack_lock') -and $item.Length -eq 0) { continue }
+                if ($item.FullName -ieq (Join-Path $root '.portable') -and $item.Length -eq 0) { continue }
+                if (-not $expected.ContainsKey($item.FullName)) { Audit ('kept untracked updater-root file ' + $item.FullName); return $false }
+                if ((Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256).Hash -ine $expected[$item.FullName]) { Audit ('kept changed updater-root file ' + $item.FullName); return $false }
+            }
+        }
+        return $true
+    } catch { Audit ('could not prove updater ownership at ' + $root + ': ' + $_.Exception.Message); return $false }
+}
+$currentFolder = Split-Path -Parent (Full $CurrentExe)
+$currentRoot = $currentFolder
+if ((Split-Path -Leaf $currentFolder) -ieq 'current' -and (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $currentFolder) 'Update.exe'))) {
+    $currentRoot = Split-Path -Parent $currentFolder
+}
+$protected = New-Object 'System.Collections.Generic.List[string]'
+$protected.Add((Full $DataFolder)); $protected.Add('C:\IDEA\Armory')
+$startWanted = $true
+try {
+    $settings = [IO.File]::ReadAllText((Join-Path $DataFolder 'settings.json')) | ConvertFrom-Json
+    if ($settings.startAtSignIn -is [bool] -and -not $settings.startAtSignIn) { $startWanted = $false }
+} catch { }
+# Profiles can retain a different vault. Read only settings, never the vault's files.
+foreach ($s in @((Join-Path $DataFolder 'settings.json')) + @(Get-ChildItem -LiteralPath (Join-Path $DataFolder 'profiles') -Filter settings.json -Recurse -File -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName)) {
+    try { $v = (Get-Content -LiteralPath $s -Raw | ConvertFrom-Json).vaultRoot; if ($v) { $protected.Add((Full $v)) } } catch { }
+}
+function Protected([string]$path) {
+    if (Linked $path) { return $true }
+    foreach ($folder in $protected) { if (Within $path $folder) { return $true } }
+    for ($p = Full $path; $p; $p = Split-Path -Parent $p) {
+        if (Test-Path -LiteralPath (Join-Path $p '.armory')) { return $true }
+    }
+    return $false
+}
+function OverlapsProtected([string]$root) {
+    if (Protected $root) { return $true }
+    foreach ($folder in $protected) { if (Within $folder $root) { return $true } }
+    return $false
+}
+$copies = @{}
+function Add-Copy([string]$path, [bool]$Referenced = $true) {
+    if (-not $path) { return }
+    try {
+        $path = Full $path
+        if ($path -notmatch '^[A-Za-z]:\\') { Audit ('deferred nonlocal target ' + $path); return }
+        $folder = Split-Path -Parent $path
+        $name = Split-Path -Leaf $path
+        if ($name -ieq 'Update.exe' -or $name -ieq 'IDEA Armory.exe') { $folder = Join-Path $folder 'current'; $path = Join-Path $folder 'IdeaArmory.exe' }
+        if ((Split-Path -Leaf $path) -ine 'IdeaArmory.exe' -or (Within $path $currentRoot)) { return }
+        if (Protected $path) { Audit ('deferred protected target ' + $path); return }
+        # Never retire a development build, including one registered by a developer.
+        if ($path -match '\\(?:bin|obj)\\(?:Debug|Release)\\') { return }
+        if (-not $Referenced -and -not (Test-Path -LiteralPath $path) -and
+            -not (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $folder) 'Update.exe'))) { return }
+        $known = Binary $path
+        if ((Test-Path -LiteralPath $path) -and -not $known) { Audit ('deferred unrecognized executable ' + $path); return }
+        if (-not $known) { $known = (Binary ($path + '.retired')) -or (Binary (Join-Path $folder 'IdeaArmory.dll')) }
+        if (-not $known -and (Test-Path -LiteralPath (Join-Path $folder 'sq.version'))) {
+            [xml]$meta = [IO.File]::ReadAllText((Join-Path $folder 'sq.version'))
+            $known = $meta.package.metadata.id -ceq 'IDEAArmory' -and $meta.package.metadata.authors -ceq 'IDEA, Don Bosco Tech' -and $meta.package.metadata.mainExe -ceq 'IdeaArmory.exe'
+        }
+        if (-not $known) { return }
+        $root = $folder; $kind = 'files'
+        if ((Split-Path -Leaf $folder) -ieq 'current' -and (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $folder) 'Update.exe'))) {
+            $root = Split-Path -Parent $folder; $kind = 'velopack'
+        }
+        if ((Full $root).Length -le 3) { Audit ('deferred drive-root install ' + $root); return }
+        if ((Within $CurrentExe $root) -or (OverlapsProtected $root)) { Audit ('deferred protected install ' + $root); return }
+        $copies[$root] = [pscustomobject]@{ Root = $root; Exe = $path; Kind = $kind }
+    } catch { Audit ('could not inspect ' + $path + ': ' + $_.Exception.Message) }
+}
+$sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$gate = New-Object Threading.Mutex($false, ('Global\IDEA-Armory-Retire-' + $sid))
+$owned = $false
+$sharedTrees = @(); $survivorApps = @()
+try {
+    if (-not $CurrentProcessId) { $CurrentProcessId = (Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $PID)).ParentProcessId }
+    $callerProcess = Get-Process -Id $CurrentProcessId -ErrorAction Stop
+    $callerStarted = $callerProcess.StartTime.ToUniversalTime().Ticks
+    try { $owned = $gate.WaitOne(60000) } catch [Threading.AbandonedMutexException] { $owned = $true }
+    if (-not $owned) { Audit 'deferred: another retirement owns the inventory'; exit 1 }
+    $callerProcess = Get-Process -Id $CurrentProcessId -ErrorAction SilentlyContinue
+    if (-not $callerProcess -or $callerProcess.StartTime.ToUniversalTime().Ticks -ne $callerStarted -or
+        (Full $callerProcess.Path) -ine (Full $CurrentExe) -or -not (Binary $CurrentExe)) {
+        Audit ('retired while waiting: another install owns this account; leaving ' + $CurrentExe)
+        exit 2
+    }
+    # Both registry views and scopes. The optional badges have a different DisplayName and stay.
+    $apps = @(); $runs = @(); $survivorApps = @()
+    foreach ($hive in @([Microsoft.Win32.RegistryHive]::CurrentUser, [Microsoft.Win32.RegistryHive]::LocalMachine)) {
+        foreach ($view in @([Microsoft.Win32.RegistryView]::Registry64, [Microsoft.Win32.RegistryView]::Registry32)) {
+            $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey($hive, $view)
+            try {
+                $uninstall = 'Software\Microsoft\Windows\CurrentVersion\Uninstall'
+                $list = $base.OpenSubKey($uninstall)
+                if ($list) {
+                    try { foreach ($name in $list.GetSubKeyNames()) {
+                        $key = $list.OpenSubKey($name)
+                        try {
+                            if ([string]$key.GetValue('DisplayName') -notmatch '^IDEA Armory(?:\s+\d.*)?$') { continue }
+                            $location = [string]$key.GetValue('InstallLocation')
+                            if ($location) { Add-Copy (Join-Path $location 'IdeaArmory.exe'); Add-Copy (Join-Path $location 'current\IdeaArmory.exe') }
+                            $icon = CommandFile ([string]$key.GetValue('DisplayIcon')); Add-Copy $icon
+                            $command = [string]$key.GetValue('QuietUninstallString')
+                            if (-not $command) { $command = [string]$key.GetValue('UninstallString') }
+                            $apps += [pscustomobject]@{ Hive = $hive; View = $view; Key = $uninstall + '\' + $name; Location = $location; Icon = $icon; Command = $command }
+                            if ($location -and (Full $location) -ieq $currentRoot) {
+                                $values = @{}
+                                foreach ($valueName in $key.GetValueNames()) { $values[$valueName] = @{ Value = $key.GetValue($valueName, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames); Kind = $key.GetValueKind($valueName) } }
+                                $survivorApps += [pscustomobject]@{ Hive = $hive; View = $view; Key = $uninstall + '\' + $name; Values = $values }
+                            }
+                        } finally { if ($key) { $key.Dispose() } }
+                    } } finally { $list.Dispose() }
+                }
+                foreach ($runKey in @('Software\Microsoft\Windows\CurrentVersion\Run', 'Software\Microsoft\Windows\CurrentVersion\RunOnce')) {
+                    $key = $base.OpenSubKey($runKey)
+                    if (-not $key) { continue }
+                    try { foreach ($name in $key.GetValueNames()) {
+                        $file = CommandFile ([string]$key.GetValue($name)); Add-Copy $file
+                        $runs += [pscustomobject]@{ Hive = $hive; View = $view; Key = $runKey; Name = $name; File = $file }
+                    } } finally { $key.Dispose() }
+                }
+            } finally { $base.Dispose() }
+        }
+    }
+    foreach ($folder in @((Join-Path $env:LOCALAPPDATA 'Programs\IDEA Armory'), (Join-Path $env:LOCALAPPDATA 'IDEAArmory'),
+                          (Join-Path $env:ProgramFiles 'IDEA Armory'), (Join-Path $env:ProgramFiles 'IDEAArmory'),
+                          (Join-Path ${env:ProgramFiles(x86)} 'IDEA Armory'))) {
+        foreach ($suffix in @('', '.old', '.new')) {
+            Add-Copy (Join-Path ($folder + $suffix) 'IdeaArmory.exe') $false; Add-Copy (Join-Path ($folder + $suffix) 'current\IdeaArmory.exe') $false
+        }
+    }
+    $processes = @(Get-CimInstance Win32_Process -Filter "Name = 'IdeaArmory.exe' OR Name = 'Update.exe'" -ErrorAction Stop)
+    $caller = $CurrentProcessId
+    $survivorRunning = @($processes | Where-Object { $_.ExecutablePath -ieq $CurrentExe -and $_.ProcessId -ne $caller }).Count -gt 0
+    foreach ($p in $processes) {
+        # An elevated inventory must not stop another student's per-user copy.
+        $owner = Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -ErrorAction SilentlyContinue
+        if ($owner.Sid -eq $sid) { Add-Copy $p.ExecutablePath }
+    }
+    $shell = New-Object -ComObject WScript.Shell
+    $links = @()
+    foreach ($special in @('Programs', 'CommonPrograms', 'DesktopDirectory', 'CommonDesktopDirectory', 'Startup', 'CommonStartup', 'Pins')) {
+        $folder = if ($special -eq 'Pins') { Join-Path $env:APPDATA 'Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar' } else { [Environment]::GetFolderPath($special) }
+        if (-not $folder -or -not (Test-Path -LiteralPath $folder)) { continue }
+        # Do not follow a redirected/junction folder. No search outside these shell folders.
+        $todo = New-Object 'System.Collections.Generic.Queue[string]'; $todo.Enqueue($folder)
+        while ($todo.Count) {
+            $dir = $todo.Dequeue(); if (Linked $dir) { continue }
+            foreach ($item in @(Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue)) {
+                if ($item.PSIsContainer) { if ($special -match 'Programs') { $todo.Enqueue($item.FullName) }; continue }
+                if ($item.Extension -ine '.lnk') { continue }
+                try {
+                    $target = $shell.CreateShortcut($item.FullName).TargetPath; Add-Copy $target
+                    $links += [pscustomobject]@{ File = $item.FullName; Target = $target; Pin = ($special -eq 'Pins'); Startup = ($special -match 'Startup') }
+                } catch { Audit ('could not read shortcut ' + $item.FullName) }
+            }
+        }
+    }
+    $tasks = @()
+    try {
+        foreach ($task in @(Get-ScheduledTask -ErrorAction Stop)) {
+            foreach ($action in $task.Actions) {
+                $file = [Environment]::ExpandEnvironmentVariables([string]$action.Execute).Trim('"'); Add-Copy $file
+                $tasks += [pscustomobject]@{ Task = $task; File = $file }
+            }
+        }
+    } catch { Audit ('could not inventory scheduled tasks: ' + $_.Exception.Message) }
+    function Belongs([string]$file, $copy) {
+        if (-not $file) { return $false }
+        $file = Full $file
+        foreach ($relative in @('IdeaArmory.exe', 'current\IdeaArmory.exe', 'IDEA Armory.exe', 'Update.exe')) {
+            if ($file -ine (Join-Path $copy.Root $relative)) { continue }
+            if ($relative -eq 'Update.exe' -and -not (Owned-Updater $copy)) { continue }
+            return $true
+        }
+        return $false
+    }
+    function Remove-TaskAction($entry, $copy) {
+        # Other copies can share this task. Read its latest actions so a later removal cannot
+        # restore an action removed for an earlier copy from the original inventory snapshot.
+        $task = Get-ScheduledTask -TaskName $entry.Task.TaskName -TaskPath $entry.Task.TaskPath -ErrorAction SilentlyContinue
+        if (-not $task) { return }
+        $remaining = @($task.Actions | Where-Object { -not (Belongs ([Environment]::ExpandEnvironmentVariables([string]$_.Execute).Trim('"')) $copy) })
+        if ($remaining.Count) {
+            Set-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -Action $remaining | Out-Null
+            Audit ('removed Armory action from mixed task ' + $task.TaskPath + $task.TaskName)
+        } else {
+            Stop-ScheduledTask -InputObject $task -ErrorAction SilentlyContinue
+            Unregister-ScheduledTask -InputObject $task -Confirm:$false
+            Audit ('removed task ' + $task.TaskPath + $task.TaskName)
+        }
+    }
+    function Remove-Reg($item, [bool]$app) {
+        $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey($item.Hive, $item.View)
+        try {
+            if ($app) {
+                $key = $base.OpenSubKey($item.Key); if (-not $key) { return }; $key.Dispose()
+                $base.DeleteSubKeyTree($item.Key, $false)
+            } else {
+                $key = $base.OpenSubKey($item.Key, $true); if (-not $key) { return }
+                try { if ($null -eq $key.GetValue($item.Name)) { return }; $key.DeleteValue($item.Name, $false) } finally { $key.Dispose() }
+            }
+            Audit ('removed registry ' + $item.Hive + '/' + $item.View + '/' + $item.Key + '/' + $item.Name)
+        } finally { $base.Dispose() }
+    }
+    # Consolidate even aliases of the surviving install. The app writes the one canonical Run
+    # entry after this step, according to StartAtSignIn, including when that choice is off.
+    $survivor = [pscustomobject]@{ Root = $currentRoot }
+    foreach ($run in $runs) {
+        if (Belongs $run.File $survivor) {
+            # Setup checks its canonical entry as soon as the process says "started".
+            # Retain a correct one until the host repairs it; do not create an off/on gap.
+            if ($startWanted -and $run.Hive -eq [Microsoft.Win32.RegistryHive]::CurrentUser -and
+                $run.Key -eq 'Software\Microsoft\Windows\CurrentVersion\Run' -and $run.Name -eq 'IDEA Armory') { continue }
+            try { Remove-Reg $run $false } catch { Audit ('deferred survivor auto-start: ' + $_.Exception.Message) }
+        }
+    }
+    foreach ($link in $links) {
+        if ($link.Startup -and (Belongs $link.Target $survivor)) {
+            try { Remove-Item -LiteralPath $link.File -Force; Audit ('removed startup shortcut ' + $link.File) } catch { Audit ('deferred startup shortcut: ' + $_.Exception.Message) }
+        }
+    }
+    foreach ($entry in $tasks) {
+        if (Belongs $entry.File $survivor) { try { Remove-TaskAction $entry $survivor } catch { Audit ('deferred survivor task: ' + $_.Exception.Message) } }
+    }
+    # Inno's compiled [Registry] records remove these shared keys even when its PowerShell
+    # data cleanup hook is suppressed. Preserve unknown local preferences and menu fields.
+    $sharedTrees = @()
+    foreach ($key in @('Software\IDEA Armory', 'Software\Classes\AppUserModelId\IdeaBosco.Armory', 'Software\Classes\idea-armory',
+        'Software\Classes\AllFilesystemObjects\shell\IDEAArmory', 'Software\Classes\IDEAArmory.Menu',
+        'Software\Classes\Directory\Background\shell\IDEAArmory', 'Software\Classes\IDEAArmory.BackgroundMenu')) {
+        $sharedTrees += ,(Snapshot-UserTree $key)
+    }
+    foreach ($copy in @($copies.Values)) {
+        try {
+            Audit ('found competing install ' + $copy.Root + ' (' + $copy.Kind + ')')
+            # Capture before an uninstaller or payload cleanup removes sq.version/packages.
+            $nativeLaunchers = Package-Launchers $copy
+            # Close only processes whose full path is in this verified install, never by name.
+            foreach ($p in $processes) {
+                if (-not (Belongs $p.ExecutablePath $copy)) { continue }
+                $owner = Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -ErrorAction SilentlyContinue
+                if ($owner.Sid -ne $sid) { continue }
+                $live = Get-Process -Id $p.ProcessId -ErrorAction SilentlyContinue
+                if ($live -and $live.Path -ieq $p.ExecutablePath) {
+                    if (-not $survivorRunning -and $p.ExecutablePath -ieq $copy.Exe) {
+                        # The older versions share the user's quit signal. Only use it when
+                        # there is no surviving runtime to accidentally signal instead.
+                        try {
+                            $quit = Start-Uninstaller $copy.Exe '--quit'
+                            [void]$quit.WaitForExit(3000)
+                            if ($live.HasExited) { Audit ('closed process ' + $p.ProcessId + ' cleanly at ' + $p.ExecutablePath); continue }
+                        } catch { Audit ('could not ask the older process to quit: ' + $_.Exception.Message) }
+                    }
+                    [void]$live.CloseMainWindow()
+                    if (-not $live.WaitForExit(1500)) {
+                        if (-not $survivorRunning -and $p.ExecutablePath -ieq $copy.Exe) {
+                            # AgentLog already recognizes this intentional end. Do not report
+                            # retiring an unresponsive old copy as a crash of the next version.
+                            [IO.File]::AppendAllText((Join-Path $DataFolder 'logs\agent.log'), [DateTime]::UtcNow.ToString('O') + " quitting`n")
+                        }
+                        $live.Kill(); [void]$live.WaitForExit(1500)
+                    }
+                    Audit ('stopped process ' + $p.ProcessId + ' at ' + $p.ExecutablePath)
+                }
+            }
+            foreach ($run in $runs) { if (Belongs $run.File $copy) { try { Remove-Reg $run $false } catch { Audit ('deferred auto-start: ' + $_.Exception.Message) } } }
+            foreach ($entry in $tasks) {
+                if (Belongs $entry.File $copy) {
+                    try { Remove-TaskAction $entry $copy }
+                    catch { Audit ('deferred task: ' + $_.Exception.Message) }
+                }
+            }
+            foreach ($link in $links) {
+                if (-not (Belongs $link.Target $copy)) { continue }
+                try {
+                    if ($link.Pin) {
+                        # Velopack's uninstaller deletes pins rooted in its install. Repoint the
+                        # existing link first, preserving its name and taskbar position. The app
+                        # stamps its property store after the inventory finishes.
+                        $launcher = Join-Path $currentRoot 'IDEA Armory.exe'
+                        if (-not (Test-Path -LiteralPath $launcher)) { $launcher = $CurrentExe }
+                        $pin = $shell.CreateShortcut($link.File); $pin.TargetPath = $launcher
+                        $pin.Arguments = ''; $pin.WorkingDirectory = Split-Path -Parent $launcher; $pin.IconLocation = $launcher + ',0'; $pin.Save()
+                        Audit ('preserved taskbar pin ' + $link.File + ' at ' + $launcher)
+                    } else { Remove-Item -LiteralPath $link.File -Force; Audit ('removed shortcut ' + $link.File) }
+                } catch { Audit ('deferred shortcut: ' + $_.Exception.Message) }
+            }
+            # Disable the executable before an old uninstaller's --quit hook can signal the
+            # surviving instance. Only our verified executable is renamed, never user data.
+            $disabled = $copy.Exe + '.retired'
+            if ((Test-Path -LiteralPath $disabled) -and -not (Binary $disabled)) { $disabled = $copy.Exe + '.retired-' + [Guid]::NewGuid().ToString('N') }
+            if (Test-Path -LiteralPath $copy.Exe) { Move-Item -LiteralPath $copy.Exe -Destination $disabled -Force }
+            $setup = Join-Path $copy.Root 'scripts\Setup.ps1'
+            $saved = $null
+            $uninstaller = $null
+            $backup = $null
+            try {
+                # Published 0.3.x/0.4.x uninstall scripts delete the shared data directory.
+                # Substitute a no-data cleanup hook while Inno removes its recorded payload.
+                # Restore the original if the uninstaller leaves it behind.
+                $inno = Join-Path $copy.Root 'unins000.exe'
+                $usb = Join-Path $copy.Root 'scripts\Uninstall.cmd'
+                $registeredInno = @($apps | Where-Object { (CommandFile $_.Command) -ieq $inno }).Count -gt 0
+                if ((($registeredInno -and (Test-Path -LiteralPath $inno)) -or (Test-Path -LiteralPath $usb)) -and
+                    (Test-Path -LiteralPath $setup) -and -not (Protected $setup) -and (Unmodified-LegacyPayload $copy)) {
+                    $saved = [IO.File]::ReadAllBytes($setup)
+                    $backup = $setup + '.retire-original-' + [Guid]::NewGuid().ToString('N')
+                    [IO.File]::WriteAllBytes($backup, $saved)
+                    [IO.File]::WriteAllText($setup, 'param($Mode, $Source, $LogDir)' + "`r`n" + 'exit 0')
+                    if ($registeredInno) { $uninstaller = Start-Uninstaller $inno '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART' }
+                    else { $uninstaller = Start-UsbUninstaller $usb }
+                    if (-not $uninstaller.WaitForExit(10000)) { Audit ('waiting for the slow uninstaller at ' + $copy.Root); $uninstaller.WaitForExit() }
+                    Audit ('ran uninstaller at ' + $copy.Root + ', exit ' + $uninstaller.ExitCode + '; data cleanup suppressed')
+                    if ($uninstaller.ExitCode -ne 0) { continue }
+                } elseif ($copy.Kind -eq 'velopack') {
+                    if (Owned-VelopackTree $copy) {
+                        $uninstaller = Start-Uninstaller (Join-Path $copy.Root 'Update.exe') '--silent --uninstall'
+                        if (-not $uninstaller.WaitForExit(10000)) { Audit ('waiting for the slow updater uninstaller at ' + $copy.Root); $uninstaller.WaitForExit() }
+                        Audit ('ran updater uninstaller at ' + $copy.Root + ', exit ' + $uninstaller.ExitCode)
+                    } else { Audit ('kept untracked or changed files at ' + $copy.Root + '; updater uninstall deferred, launchers retired') }
+                } elseif ($registeredInno -or (Test-Path -LiteralPath $usb)) {
+                    Audit ('kept changed payload or cache at ' + $copy.Root + '; uninstaller deferred, launchers retired')
+                }
+            } finally {
+                # A slow uninstaller may invoke its hook later. Never put a destructive hook
+                # back while that process is alive; retain the original beside it for recovery.
+                if ($saved -and (-not $uninstaller -or $uninstaller.HasExited)) {
+                    if (Test-Path -LiteralPath $setup) { [IO.File]::WriteAllBytes($setup, $saved) }
+                    if ($backup) { Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue }
+                }
+            }
+            # The manifest proves ownership AND bytes. Edited or unlisted files stay put.
+            $payloadRoot = if ($copy.Kind -eq 'velopack') { Join-Path $copy.Root 'current' } else { $copy.Root }
+            $manifest = Join-Path $payloadRoot 'scripts\payload.sha256'
+            if (Test-Path -LiteralPath $manifest) {
+                foreach ($line in [IO.File]::ReadAllLines($manifest)) {
+                    if ($line -notmatch '^([0-9a-fA-F]{64})  (.+)$') { continue }
+                    $hash = $Matches[1]; $relative = $Matches[2]
+                    $file = Full (Join-Path $payloadRoot $relative)
+                    if (-not (Within $file $payloadRoot) -or (Protected $file) -or (Within $CurrentExe $file)) { continue }
+                    if ((Test-Path -LiteralPath $file -PathType Leaf) -and (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -ieq $hash) {
+                        Remove-Item -LiteralPath $file -Force; Audit ('removed payload ' + $file)
+                    }
+                }
+            }
+            foreach ($file in @($disabled, (Join-Path $copy.Root 'IDEA Armory.exe'))) {
+                if ((Test-Path -LiteralPath $file) -and (Binary $file) -and -not (Protected $file)) { Remove-Item -LiteralPath $file -Force; Audit ('removed launcher ' + $file) }
+            }
+            # Update.exe could reinstall an otherwise retired channel. Disable it too, but
+            # leave package caches and all unknown files intact.
+            if ($copy.Kind -eq 'velopack') {
+                $rootUpdater = Join-Path $copy.Root 'Update.exe'
+                if ((Test-Path -LiteralPath $rootUpdater) -and -not $nativeLaunchers.ContainsKey($rootUpdater)) {
+                    Audit ('deferred updater without package ownership evidence ' + $rootUpdater)
+                }
+                foreach ($updater in $nativeLaunchers.Keys) {
+                    if (-not (Test-Path -LiteralPath $updater) -or (Protected $updater)) { continue }
+                    try {
+                        if ((Get-FileHash -LiteralPath $updater -Algorithm SHA256).Hash -ieq $nativeLaunchers[$updater]) {
+                            Remove-Item -LiteralPath $updater -Force; Audit ('removed retired updater ' + $updater)
+                        } else { Audit ('deferred unrecognized or changed updater ' + $updater) }
+                    } catch { Audit ('deferred updater removal: ' + $_.Exception.Message) }
+                }
+            }
+            foreach ($app in $apps) {
+                if (($app.Location -and (Within $app.Location $copy.Root)) -or (Belongs $app.Icon $copy) -or (Belongs (CommandFile $app.Command) $copy)) {
+                    try { Remove-Reg $app $true } catch { Audit ('deferred Apps entry: ' + $_.Exception.Message) }
+                }
+            }
+            Audit ('retired install ' + $copy.Root + '; settings and vaults kept')
+        } catch { Audit ('deferred install ' + $copy.Root + ': ' + $_.Exception.Message) }
+    }
+    # Velopack's uninstaller removes the HKCU key by package ID, even for a different root.
+    # Restore the survivor's exact Apps values, including the original install date/version.
+    Audit ('inventory complete; survivor ' + $CurrentExe)
+} catch { Audit ('retirement failed: ' + $_.Exception.Message); exit 1 }
+finally {
+    foreach ($app in $survivorApps) {
+        try {
+            $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey($app.Hive, $app.View)
+            try {
+                $key = $base.CreateSubKey($app.Key)
+                try { foreach ($name in $app.Values.Keys) { $key.SetValue($name, $app.Values[$name].Value, $app.Values[$name].Kind) } }
+                finally { $key.Dispose() }
+            } finally { $base.Dispose() }
+        } catch { Audit ('deferred survivor Apps registration: ' + $_.Exception.Message) }
+    }
+    foreach ($tree in $sharedTrees) { try { Restore-UserTree $tree } catch { Audit ('deferred shared registration: ' + $_.Exception.Message) } }
+    if ($owned) { $gate.ReleaseMutex() }; $gate.Dispose()
+}

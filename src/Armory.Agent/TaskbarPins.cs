@@ -3,16 +3,10 @@ using System.Runtime.Versioning;
 
 namespace Armory.Agent;
 
-// Taskbar pins that survive an update (0.4.3, Mr. Pina's "the pin turned into a blank page
-// instead of the Armory icon, and I had to repin the Armory"; docs/agent/INSTALL.md, "Taskbar
-// pins"). An update in place keeps a pin working: CI applied 0.4.3 over the published 0.4.2 with
-// Velopack's own Update.exe and the pin kept its target (current\IdeaArmory.exe, the same path)
-// and its identity. What broke a pin was the move onto the install that updates itself (0.4.0
-// and 0.4.1): it deletes %LOCALAPPDATA%\Programs\IDEA Armory, the folder a pin of the older copy
-// points at. So every pin of Armory is pointed at this IdeaArmory.exe with IdeaBosco.Armory, in
-// the install step before the older copy goes and at every start, and the person is told once,
-// in one sentence, how to pin it again, because File Explorer can keep showing a blank picture
-// it saved for the old pin.
+// Repair an existing pin in place, preserving its filename and Explorer position. The target
+// and icon use the surviving install's stable launcher; its identity matches the process and
+// native window. See docs/agent/INSTALL-OWNERSHIP.md for the historical identity split and the
+// human check still needed for Explorer's cached icon and live taskbar order.
 internal static class TaskbarPins
 {
     // Velopack's own fallback identity for this app ("velopack." and the packId), which the
@@ -30,7 +24,7 @@ internal static class TaskbarPins
         Folder(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData, Environment.SpecialFolderOption.DoNotVerify));
 
     // One .lnk in the pins folder, as read.
-    internal sealed record Pin(string File, string? Target, string? AppId);
+    internal sealed record Pin(string File, string? Target, string? AppId, string? Icon = null, int IconIndex = 0, string? Arguments = null);
 
     // One pin to rewrite. Broken: it pointed at nothing.
     internal sealed record Fix(string File, bool Broken);
@@ -45,7 +39,8 @@ internal static class TaskbarPins
         {
             if (!IsArmorys(pin, fileExists)) continue;
             var pointsHere = pin.Target is not null && SamePath(pin.Target, exe);
-            if (pointsHere && string.Equals(pin.AppId, ShellIdentity.AppId, StringComparison.Ordinal)) continue;
+            if (pointsHere && string.Equals(pin.AppId, ShellIdentity.AppId, StringComparison.Ordinal) &&
+                (pin.Icon is null || SamePath(pin.Icon, exe)) && pin.IconIndex == 0 && string.IsNullOrEmpty(pin.Arguments)) continue;
             fixes.Add(new Fix(pin.File, pin.Target is null || !fileExists(pin.Target)));
         }
         return fixes;
@@ -57,7 +52,11 @@ internal static class TaskbarPins
         if (pin.Target is not { Length: > 0 } target) return false;
         var path = target.Replace('/', '\\');
         var cut = path.LastIndexOf('\\');
-        if (cut <= 0 || !path[(cut + 1)..].Equals("IdeaArmory.exe", StringComparison.OrdinalIgnoreCase)) return false;
+        if (cut <= 0) return false;
+        var name = path[(cut + 1)..];
+        if (name.Equals("IDEA Armory.exe", StringComparison.OrdinalIgnoreCase) &&
+            path[..cut].EndsWith(@"\" + Updates.PackId, StringComparison.OrdinalIgnoreCase)) return true;
+        if (!name.Equals("IdeaArmory.exe", StringComparison.OrdinalIgnoreCase)) return false;
         var folder = path[..cut].TrimEnd('\\');
         return !fileExists(target)
             || folder.EndsWith(@"\" + Updates.PackId + @"\current", StringComparison.OrdinalIgnoreCase)
@@ -77,7 +76,14 @@ internal static class TaskbarPins
             var pins = new List<Pin>();
             foreach (var file in Directory.EnumerateFiles(folder, "*.lnk"))
             {
-                try { pins.Add(new Pin(file, PinLink.Target(file), ShortcutAppId.ReadAppId(file))); }
+                try
+                {
+                    var details = PinLink.Details(file);
+                    var target = PinLink.Target(file);
+                    if (!string.IsNullOrEmpty(target)) target = LinkForwarder.LongName(Path.GetFullPath(target));
+                    var icon = details.Icon.Length > 0 ? LinkForwarder.LongName(Path.GetFullPath(details.Icon)) : "";
+                    pins.Add(new Pin(file, target, ShortcutAppId.ReadAppId(file), icon, details.Index, details.Arguments));
+                }
                 catch (Exception error) when (error is COMException or IOException or UnauthorizedAccessException or InvalidCastException or ArgumentException)
                 { log("could not read the taskbar pin " + Path.GetFileName(file) + ": " + error.Message); }
             }
@@ -113,14 +119,30 @@ internal static class PinLink
 
     internal static string? Target(string shortcut) => ShortcutAppId.Target(shortcut);
 
+    internal static (string Icon, int Index, string Arguments) Details(string shortcut)
+    {
+        var link = (IShellLinkW)new ShellLinkObject();
+        try
+        {
+            ((System.Runtime.InteropServices.ComTypes.IPersistFile)link).Load(shortcut, 0);
+            var icon = new System.Text.StringBuilder(32768);
+            var args = new System.Text.StringBuilder(32768);
+            link.GetIconLocation(icon, icon.Capacity, out var index);
+            link.GetArguments(args, args.Capacity);
+            return (icon.ToString(), index, args.ToString());
+        }
+        finally { Marshal.FinalReleaseComObject(link); }
+    }
+
     internal static void Point(string shortcut, string exe, string appId)
     {
         var link = (IShellLinkW)new ShellLinkObject();
         try
         {
             var file = (System.Runtime.InteropServices.ComTypes.IPersistFile)link;
-            file.Load(shortcut, ReadWriteMode);
+            if (File.Exists(shortcut)) file.Load(shortcut, ReadWriteMode);
             link.SetPath(exe);
+            link.SetArguments("");
             link.SetWorkingDirectory(Path.GetDirectoryName(exe) ?? "");
             link.SetIconLocation(exe, 0);
             file.Save(shortcut, true);

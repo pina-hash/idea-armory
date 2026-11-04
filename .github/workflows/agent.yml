@@ -35,6 +35,12 @@ jobs:
         id: package
         uses: ./.github/actions/package-agent
 
+      - name: Retirement preserves protected, untracked, edited and linked data
+        run: |
+          $package = Join-Path '${{ steps.package.outputs.velopack-dir }}' 'IDEAArmory-${{ steps.package.outputs.version }}-full.nupkg'
+          & "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File ./tools/test-retirement-safety.ps1 -Package $package | Tee-Object -FilePath evidence/retirement-safety.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Retirement safety checks failed.' }
+
       - name: Platform tests (real NTFS, Restart Manager, DPAPI, child processes, the native parts)
         run: dotnet test tests/Armory.Platform.Windows.Tests --no-build --logger "console;verbosity=normal" --logger "trx;LogFileName=platform-tests.trx"
 
@@ -64,6 +70,10 @@ jobs:
       - name: Taskbar pins survive an update from the published v0.4.2
         run: ./tools/test-velopack-update.ps1 -Version '${{ steps.package.outputs.version }}' -From 0.4.2 -ReleaseDir '${{ steps.package.outputs.velopack-dir }}'
 
+      - name: One install and one shell identity after startup and a package update
+        timeout-minutes: 15
+        run: ./tools/test-armory-retirement.ps1 -Version '${{ steps.package.outputs.version }}' -ReleaseDir '${{ steps.package.outputs.velopack-dir }}'
+
       # 0.4.3: docs/LAB_COMPUTER_NAMES.md's script, which renames nothing here (-ListOnly and -DryRun).
       - name: The lab computer rename script finds the runner and refuses a taken name (renames nothing)
         run: ./tools/test-lab-names.ps1
@@ -81,6 +91,7 @@ jobs:
             dist/*.zip
             dist/*.exe
             dist/*.sha256
+            dist/velopack/*
           if-no-files-found: warn
 
       - name: Upload the evidence

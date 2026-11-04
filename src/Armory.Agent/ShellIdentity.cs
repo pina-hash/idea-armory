@@ -9,9 +9,8 @@ namespace Armory.Agent;
 // that names the app and its icon in a notification and in Settings > Notifications; and the
 // idea-armory: link scheme that a notification's buttons open (ProtocolLink). Both installers
 // write the same keys and remove them; Armory repairs them at start, comparing before it
-// writes, but only the installed copy (%LOCALAPPDATA%\IDEAArmory\current\IdeaArmory.exe from
-// 0.4.0, or the older %LOCALAPPDATA%\Programs\IDEA Armory\IdeaArmory.exe), so a
-// test instance or a developer's build never takes the registration over.
+// writes. Installed and directly launched packaged releases participate; an isolated test
+// instance or a developer's bin/obj build never takes the registration over.
 internal static class ShellIdentity
 {
     internal const string AppId = "IdeaBosco.Armory";
@@ -21,7 +20,7 @@ internal static class ShellIdentity
     internal const string SchemeKey = ProtocolLink.Scheme;
     internal const string ShortcutName = "IDEA Armory.lnk";
 
-    // %LOCALAPPDATA%\Programs\IDEA Armory: where both installers put the app.
+    // The legacy Inno and flash-drive installers' program folder.
     internal static string InstallFolder(string localAppData) => Path.Combine(localAppData, "Programs", "IDEA Armory");
 
     internal static string InstallFolder() =>
@@ -39,7 +38,22 @@ internal static class ShellIdentity
 
     // 0.4.0: or the copy Velopack's setup installed, which updates itself (Updates.cs).
     internal static bool IsInstalledCopy(AgentPaths paths) =>
-        IsInstalledCopy(paths, Environment.ProcessPath, InstallFolder()) || !paths.IsOverridden && Updates.IsVelopackCopy(Environment.ProcessPath, File.Exists);
+        IsInstalledCopy(paths, Environment.ProcessPath, InstallFolder()) || !paths.IsOverridden && Updates.IsVelopackCopy(Environment.ProcessPath, File.Exists) ||
+        IsPackagedCopy(paths, Environment.ProcessPath, File.Exists);
+
+    // A release unpacked or copied to another folder can be launched directly. It participates
+    // in the same ownership/identity rules; a bin/obj build and an isolated test never do.
+    internal static bool IsPackagedCopy(AgentPaths paths, string? exe, Func<string, bool> exists)
+    {
+        if (paths.IsOverridden || string.IsNullOrEmpty(exe)) return false;
+        var path = exe.Replace('/', '\\');
+        if (path.Contains(@"\bin\Debug\", StringComparison.OrdinalIgnoreCase) || path.Contains(@"\bin\Release\", StringComparison.OrdinalIgnoreCase) ||
+            path.Contains(@"\obj\", StringComparison.OrdinalIgnoreCase)) return false;
+        var cut = path.LastIndexOf('\\');
+        if (cut <= 0 || !path[(cut + 1)..].Equals("IdeaArmory.exe", StringComparison.OrdinalIgnoreCase)) return false;
+        var folder = path[..cut];
+        return exists(folder + @"\scripts\payload.sha256") && exists(folder + @"\IdeaArmory.dll") && exists(folder + @"\ArmoryShell.exe");
+    }
 
     // Every value, relative to HKCU\Software\Classes. appFolder: where IdeaArmory.exe is.
     internal static IReadOnlyList<ShellRegistryValue> Layout(string appFolder)
@@ -92,17 +106,54 @@ internal static class ShellIdentity
         {
             using var classes = Registry.CurrentUser.CreateSubKey(ShellVerbs.ClassesKey, writable: true);
             if (Apply(classes, Layout(appFolder))) log("wrote Armory's notification and link registration");
+            using var oldIdentity = classes.OpenSubKey(@"AppUserModelId\" + TaskbarPins.VelopackAppId);
+            if (oldIdentity is not null)
+            {
+                classes.DeleteSubKeyTree(@"AppUserModelId\" + TaskbarPins.VelopackAppId, throwOnMissingSubKey: false);
+                log("removed the older Velopack notification identity " + TaskbarPins.VelopackAppId);
+            }
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.Security.SecurityException)
         { log("could not write Armory's notification and link registration: " + error.Message); }
         var shortcut = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs, Environment.SpecialFolderOption.DoNotVerify), ShortcutName);
+        var launcher = StableLauncher.For(Path.Combine(appFolder, "IdeaArmory.exe"), File.Exists);
         try
         {
-            if (ShortcutAppId.Stamp(shortcut, Path.Combine(appFolder, "IdeaArmory.exe"), AppId)) log("gave the Start menu shortcut Armory's notification identity");
+            Directory.CreateDirectory(Path.GetDirectoryName(shortcut)!);
+            PinLink.Point(shortcut, launcher, AppId);
+            log("Start menu shortcut: " + launcher + " (" + AppId + ")");
         }
         catch (Exception error) when (error is COMException or IOException or UnauthorizedAccessException or InvalidCastException or ArgumentException)
         { log("could not give the Start menu shortcut Armory's notification identity: " + error.Message); }
-        return TaskbarPins.Repair(TaskbarPins.Folder(), Path.Combine(appFolder, "IdeaArmory.exe"), log);
+        foreach (var special in new[] { Environment.SpecialFolder.Programs, Environment.SpecialFolder.CommonPrograms,
+                     Environment.SpecialFolder.DesktopDirectory, Environment.SpecialFolder.CommonDesktopDirectory })
+        {
+            var folder = Environment.GetFolderPath(special, Environment.SpecialFolderOption.DoNotVerify);
+            if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder)) continue;
+            try
+            {
+                var options = new EnumerationOptions { RecurseSubdirectories = special is Environment.SpecialFolder.Programs or Environment.SpecialFolder.CommonPrograms,
+                    AttributesToSkip = FileAttributes.ReparsePoint, IgnoreInaccessible = true };
+                foreach (var file in Directory.EnumerateFiles(folder, "*.lnk", options))
+                {
+                    try
+                    {
+                        var target = ShortcutAppId.Target(file);
+                        if (!string.IsNullOrEmpty(target)) target = LinkForwarder.LongName(Path.GetFullPath(target));
+                        if (target is null || !(string.Equals(target, launcher, StringComparison.OrdinalIgnoreCase) ||
+                            string.Equals(target, Path.Combine(appFolder, "IdeaArmory.exe"), StringComparison.OrdinalIgnoreCase))) continue;
+                        if (file == shortcut) continue;
+                        PinLink.Point(file, launcher, AppId);
+                        log("repaired shortcut " + file + " (" + AppId + ")");
+                    }
+                    catch (Exception error) when (error is COMException or IOException or UnauthorizedAccessException or InvalidCastException or ArgumentException)
+                    { log("could not repair shortcut " + file + ": " + error.Message); }
+                }
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            { log("could not inspect shortcuts in " + folder + ": " + error.Message); }
+        }
+        return TaskbarPins.Repair(TaskbarPins.Folder(), launcher, log);
     }
 
     // Before any window: the taskbar, the tray and the notifications are one app with one switch.
@@ -111,6 +162,23 @@ internal static class ShellIdentity
     {
         try { SetCurrentProcessExplicitAppUserModelID(AppId); }
         catch (Exception error) when (error is COMException or EntryPointNotFoundException or DllNotFoundException) { }
+    }
+
+    // Explorer uses the window's relaunch command when a person pins a running window.
+    // Give that new pin the root launcher too, even when the process lives in current.
+    [SupportedOSPlatform("windows")]
+    internal static void ConfigureWindow(IntPtr window, Action<string> log)
+    {
+        var exe = Environment.ProcessPath;
+        if (exe is null) return;
+        try
+        {
+            var launcher = StableLauncher.For(exe, File.Exists);
+            ShortcutAppId.Window(window, launcher, AppId);
+            log("shell window: " + AppId + "; relaunch " + launcher);
+        }
+        catch (Exception error) when (error is COMException or IOException or UnauthorizedAccessException)
+        { log("could not set the window's relaunch identity: " + error.Message); }
     }
 
     [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
@@ -128,6 +196,32 @@ internal static class ShortcutAppId
     private const int ReadWriteMode = 2; // STGM_READWRITE
     private const ushort StringType = 31; // VT_LPWSTR
     private const ushort BstrType = 8; // VT_BSTR: how Inno Setup writes the setup's shortcut
+
+    internal static void Window(IntPtr window, string launcher, string appId)
+    {
+        var iid = typeof(IPropertyStore).GUID;
+        Marshal.ThrowExceptionForHR(SHGetPropertyStoreForWindow(window, ref iid, out var store));
+        try
+        {
+            Put(store, 2, "\"" + launcher + "\""); // RelaunchCommand
+            Put(store, 3, launcher + ",0"); // RelaunchIconResource
+            Put(store, 4, ShellIdentity.DisplayName); // RelaunchDisplayNameResource
+            Put(store, 5, appId);
+            Marshal.ThrowExceptionForHR(store.Commit());
+        }
+        finally { Marshal.FinalReleaseComObject(store); }
+    }
+
+    private static void Put(IPropertyStore store, int id, string text)
+    {
+        var key = new PropertyKey(AppIdKey.FormatId, id);
+        var value = new PropVariant { Type = StringType, Pointer = Marshal.StringToCoTaskMemUni(text) };
+        try { Marshal.ThrowExceptionForHR(store.SetValue(ref key, ref value)); }
+        finally { PropVariantClear(ref value); }
+    }
+
+    [DllImport("shell32.dll")]
+    private static extern int SHGetPropertyStoreForWindow(IntPtr window, ref Guid iid, [MarshalAs(UnmanagedType.Interface)] out IPropertyStore store);
 
     // True when it wrote the value.
     internal static bool Stamp(string shortcut, string exe, string appId)

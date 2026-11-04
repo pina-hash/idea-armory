@@ -44,29 +44,10 @@ internal static class Updates
             .Run();
     }
 
-    // Installed (or updated) by Velopack: the older install of this account goes (it would start
-    // a second Armory at sign-in), and the sign-in start entry points here. The registrations are
-    // the app's own to repair at its first start (ShellIdentity.Repair). 30 seconds at most.
+    // Keep the installer hook fast. The worker runs retirement and repairs registrations after
+    // the installer exits; ordinary startup uses that same reconciliation before the UI.
     [SupportedOSPlatform("windows")]
-    private static void AfterInstall()
-    {
-        var log = SetupLog();
-        try
-        {
-            // 0.4.3: a taskbar pin of the older copy points here before that copy is deleted
-            // (TaskbarPins), so moving over never leaves a blank pin.
-            if (Environment.ProcessPath is { } pinned && IsVelopackCopy(pinned, File.Exists))
-                TaskbarPins.Repair(TaskbarPins.Folder(), pinned, log);
-            LegacyInstall.Retire(LegacyInstall.Folder(), log);
-            if (Environment.ProcessPath is { } exe && IsVelopackCopy(exe, File.Exists))
-            {
-                var settings = new SettingsStore(AgentPaths.Resolve().SettingsFile).Load();
-                if (settings.StartAtSignIn) StartupRegistration.Apply(true, exe);
-            }
-        }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.Security.SecurityException or InvalidOperationException)
-        { log("install step: " + error.Message); }
-    }
+    private static void AfterInstall() => InstallRetirement.FinishAfterUpdaterExits();
 
     // Updated: the log says so first (AgentLog.UpdatedLine), so the next start knows the older copy
     // was stopped by the update and not by a crash; then the same steps as an install.
@@ -75,8 +56,13 @@ internal static class Updates
     {
         var paths = AgentPaths.Resolve();
         new AgentLog(paths.LogFile, paths.CrashFile).Info(UpdatedLineFor(version));
-        AfterInstall();
+        // Velopack 1.2.161 rewrites shortcuts and extracts the root stub AFTER this hook.
+        // Repair after its process exits, including when --norestart leaves Armory closed.
+        InstallRetirement.FinishAfterUpdaterExits();
     }
+
+    [SupportedOSPlatform("windows")]
+    internal static int FinishUpdate() => InstallRetirement.Run(AgentPaths.Resolve()) ? 0 : 1;
 
     // The line the new version writes once it is in place (AgentLog.EndOf reads it).
     internal static string UpdatedLineFor(string version) => AgentLog.UpdatedLine + version;
@@ -244,10 +230,8 @@ internal sealed class Updater : IDisposable
     public void Dispose() => timer?.Dispose();
 }
 
-// The install before 0.4.0's updating one (docs/agent/INSTALL.md): %LOCALAPPDATA%\Programs\IDEA
-// Armory, its Apps entries and its Start menu shortcut. Retired once Velopack's setup has
-// installed this account's updating copy: the old copy is asked to quit, then its files and
-// entries go. The vault, settings and sign-in (%LOCALAPPDATA%\IDEA Armory) are never touched.
+// Historical identities retained as a regression contract. Retirement discovers their actual
+// scopes and locations in Retire.ps1, rather than blindly deleting these keys in HKCU.
 internal static class LegacyInstall
 {
     // The Apps entries of the flash drive and of the Inno Setup installer.
@@ -256,39 +240,4 @@ internal static class LegacyInstall
         @"Software\Microsoft\Windows\CurrentVersion\Uninstall\IDEA Armory",
         @"Software\Microsoft\Windows\CurrentVersion\Uninstall\{28A1D010-82E3-4294-9676-83AC0AA1F5D3}_is1",
     ];
-    private static readonly TimeSpan QuitWait = TimeSpan.FromSeconds(12);
-
-    internal static string Folder() => ShellIdentity.InstallFolder();
-
-    [SupportedOSPlatform("windows")]
-    internal static void Retire(string folder, Action<string> log)
-    {
-        var exe = Path.Combine(folder, "IdeaArmory.exe");
-        if (!File.Exists(exe)) return;
-        // The old copy, if it runs, quits cleanly first (the same request "--quit" makes).
-        try
-        {
-            using var quit = Process.Start(new ProcessStartInfo(exe, "--quit") { UseShellExecute = false, CreateNoWindow = true });
-            if (quit is not null && !quit.WaitForExit(QuitWait)) log("the older Armory did not quit within " + QuitWait.TotalSeconds + " s");
-        }
-        catch (Exception error) when (error is System.ComponentModel.Win32Exception or InvalidOperationException) { log("could not ask the older Armory to quit: " + error.Message); }
-        foreach (var key in UninstallKeys)
-        {
-            try { Registry.CurrentUser.DeleteSubKeyTree(key, throwOnMissingSubKey: false); }
-            catch (Exception error) when (error is UnauthorizedAccessException or System.Security.SecurityException or IOException) { log("could not remove " + key + ": " + error.Message); }
-        }
-        var shortcut = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs, Environment.SpecialFolderOption.DoNotVerify), ShellIdentity.ShortcutName);
-        try
-        {
-            if (File.Exists(shortcut) && ShortcutAppId.Target(shortcut) is { } target && string.Equals(Path.GetFullPath(target), Path.GetFullPath(exe), StringComparison.OrdinalIgnoreCase))
-                File.Delete(shortcut);
-        }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.Runtime.InteropServices.COMException or InvalidCastException) { log("could not remove the older Start menu shortcut: " + error.Message); }
-        try
-        {
-            Directory.Delete(folder, recursive: true);
-            log("retired the older install at " + folder);
-        }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { log("could not remove every file of the older install at " + folder + ": " + error.Message); }
-    }
 }
