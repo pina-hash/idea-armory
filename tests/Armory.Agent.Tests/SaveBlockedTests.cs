@@ -7,6 +7,7 @@ using Armory.Agent.Engine.View;
 using Armory.Client;
 using Armory.Core;
 using Armory.EndToEnd.Tests;
+using Armory.Platform.Windows;
 using Armory.SolidWorks;
 using Xunit.Abstractions;
 
@@ -130,6 +131,73 @@ public sealed class SaveBlockedTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public async Task Changed_words_or_actions_refresh_the_card_without_a_second_notification_in_the_burst()
+    {
+        using var temp = new TempFolder(); var link = new RecordsLink();
+        await using var app = new Fixture(temp.Root, "free", link);
+        link.Send(new LinkSaving(42, app.Engine.FullPathOf(Part), Guid.NewGuid(), LinkSaveMode.Current));
+        await app.Engine.LinkSettledAsync();
+        var view = app.Engine.View;
+        var card = Assert.Single(view.Notices, n => n.Kind == "saveBlocked");
+        var asks = new SaveBlockedAsks();
+        var first = Assert.Single(asks.Update(view).Show);
+        // Going online can enable checkout; ownership can change while the card is standing.
+        var refreshed = card with { Detail = "The current protection reason changed.", Action = card.Action! with { Label = "Check out" } };
+        view = view with { Notices = [refreshed] };
+        Assert.Empty(asks.Update(view).Show);
+        Assert.Single(view.Notices);
+        var next = refreshed with { Key = "saveBlocked:" + Guid.NewGuid().ToString("N") };
+        var second = Assert.Single(asks.Update(view with { Notices = [next] }).Show);
+        Assert.Equal(first.Tag, second.Tag);
+        Assert.Equal(next.Key, second.Card.Key);
+    }
+
+    [Theory]
+    [InlineData("free")]
+    [InlineData("held")]
+    [InlineData("nonmember")]
+    public async Task Two_hundred_save_bursts_each_have_exactly_one_card_and_notification(string reason)
+    {
+        using var temp = new TempFolder(); var link = new RecordsLink();
+        await using var app = new Fixture(temp.Root, reason, link);
+        using var notices = new SaveNotices(app.Engine);
+        string? previous = null;
+        var tags = new HashSet<string>();
+        for (var burst = 1; burst <= 200; burst++)
+        {
+            var id = Guid.NewGuid();
+            var attempt = new LinkSaving(42, app.Engine.FullPathOf(Part), id, LinkSaveMode.Current);
+            link.Send(attempt);
+            var posted = await notices.NextAsync();
+            tags.Add(posted.Tag);
+            await app.Engine.LinkSettledAsync();
+            var card = Assert.Single(app.Engine.View.Notices, n => n.Kind == "saveBlocked");
+            Assert.NotEqual(previous, card.Key);
+            Assert.Equal(card.Key, posted.Card.Key);
+            // Duplicate delivery, two link processes, and retries immediately before the
+            // boundary all belong to this sliding burst, even beyond its original start + 3s.
+            link.Send(attempt);
+            for (var retry = 0; retry < 2; retry++)
+            {
+                app.Clock.Advance(SaveBlockedDetector.Burst - TimeSpan.FromTicks(1));
+                link.Send(attempt with { ProcessId = 43, SaveId = Guid.NewGuid() });
+                await app.Engine.LinkSettledAsync();
+                Assert.Equal(card.Key, Assert.Single(app.Engine.View.Notices, n => n.Kind == "saveBlocked").Key);
+                Assert.Equal(burst, notices.Posted.Count);
+            }
+            previous = card.Key;
+            app.Clock.Advance(SaveBlockedDetector.Burst + TimeSpan.FromTicks(burst % 2));
+        }
+        Assert.Equal(200, notices.Posted.Count);
+        Assert.Single(tags);
+        Assert.Equal("original fixture bytes", File.ReadAllText(temp.File(Part)));
+        Assert.Equal(0, app.Network.Calls);
+        Assert.Empty(app.Snapshots.All());
+        Assert.Empty(link.Commands);
+        output.WriteLine($"{reason}: 200 bursts, 800 save records, 200 notification plans, one standing card and one stable tag; exact 3s and 3s + 1 tick boundaries.");
+    }
+
+    [Fact]
     public async Task A_save_notification_routes_its_single_use_card_key_without_directly_checking_out()
     {
         var desk = new ShellDesk(_ => { });
@@ -171,48 +239,87 @@ public sealed class SaveBlockedTests(ITestOutputHelper output)
     public async Task Windows_read_only_save_fixture_reaches_Home_and_notification_without_changing_the_original()
     {
         foreach (var (reason, words) in new[] { ("free", "have not checked it out"), ("held", "belongs to Ana Reyes"), ("nonmember", "project you are not on") })
+            await WindowsSaveBurstsAsync(reason, words, 1);
+    }
+
+    [WindowsFact]
+    public Task Windows_two_hundred_read_only_save_bursts_each_notify_once()
+        => WindowsSaveBurstsAsync("free", "have not checked it out", 200);
+
+    private async Task WindowsSaveBurstsAsync(string reason, string words, int bursts)
+    {
+        using var temp = new TempFolder();
+        var target = temp.File(Part); Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+        File.WriteAllText(target, "original fixture bytes");
+        // Establish intent and protection BEFORE the adapter's watcher exists. A sleep
+        // cannot drain queued attribute hints, and those hints are not refused writes.
+        using (var policy = new ReadOnlyPolicy(new WindowsPaths(temp.Root)))
+            policy.Apply(TempFolder.PathValue(Part), LockOwnership.OtherPerson);
+        using var child = new ComSaveChild();
+        await child.ReadyAsync();
+        await using var link = new SolidWorksLink(new SolidWorksLinkOptions { VaultRoot = temp.Root, Candidates = () => [child.Pid], DiscoveryInterval = TimeSpan.FromMilliseconds(50) });
+        await using var app = new Fixture(temp.Root, reason, link, windows: true);
+        link.Start();
+        await WaitForViewAsync(app.Engine, view => view.SolidWorks?.State == SolidWorksStates.Attached);
+        child.Send("open \"" + target + "\"");
+        await child.UntilLine(s => s.StartsWith("event FileOpenPostNotify", StringComparison.Ordinal));
+        await app.Engine.LinkSettledAsync();
+        var disk = (WindowsVaultFileSystem)app.Files;
+        Assert.True((File.GetAttributes(target) & FileAttributes.ReadOnly) != 0);
+        var hints = disk.HintCount;
+        Assert.Equal(0, hints);
+        using var notices = new SaveNotices(app.Engine);
+        string? previous = null;
+        var tags = new HashSet<string>();
+        var latencies = new List<double>();
+        for (var burst = 1; burst <= bursts; burst++)
         {
-            using var temp = new TempFolder();
-            var target = temp.File(Part); Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-            File.WriteAllText(target, "original fixture bytes");
-            using var child = new ComSaveChild();
-            await child.ReadyAsync();
-            await using var link = new SolidWorksLink(new SolidWorksLinkOptions { VaultRoot = temp.Root, Candidates = () => [child.Pid], DiscoveryInterval = TimeSpan.FromMilliseconds(50) });
-            await using var app = new Fixture(temp.Root, reason, link, windows: true);
-            link.Start();
-            await Until(() => app.Engine.View.SolidWorks?.State == SolidWorksStates.Attached);
-            child.Send("open \"" + target + "\"");
-            await child.UntilLine(s => s.StartsWith("advise 83a33d32", StringComparison.OrdinalIgnoreCase));
-            await app.Engine.LinkSettledAsync();
-            var disk = (WindowsVaultFileSystem)app.Files;
-            disk.ApplyLockAttribute(TempFolder.PathValue(Part), LockOwnership.OtherPerson);
-            Assert.True((File.GetAttributes(target) & FileAttributes.ReadOnly) != 0);
-            await Task.Delay(250); // drain the successful attribute-change hint before the refused write
-            var hints = disk.HintCount;
             var timer = Stopwatch.StartNew();
-            var posted = new TaskCompletionSource<(NoticeGroupView Card, string Tag)>(TaskCreationOptions.RunContinuationsAsynchronously);
-            var asks = new SaveBlockedAsks();
-            app.Engine.ViewChanged += view => { foreach (var (tag, card) in asks.Update(view).Show) posted.TrySetResult((card, tag)); };
             child.Send("save \"" + target + "\"");
-            var notice = await posted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            var notice = await notices.NextAsync();
             var elapsed = timer.Elapsed;
-            await child.UntilLine(s => s.StartsWith("error save", StringComparison.Ordinal) && s.Contains("UnauthorizedAccessException", StringComparison.Ordinal));
+            await RefusedAsync();
             Assert.Contains(words, notice.Card.Detail);
             Assert.True(elapsed < TimeSpan.FromSeconds(2));
+            latencies.Add(elapsed.TotalMilliseconds);
+            tags.Add(notice.Tag);
+            var card = Assert.Single(app.Engine.View.Notices, n => n.Kind == "saveBlocked");
+            Assert.Equal(notice.Card.Key, card.Key);
+            Assert.NotEqual(previous, card.Key);
+            Assert.Equal(burst, notices.Posted.Count);
+            // A real second COM save just before the boundary stays in the same burst.
+            app.Clock.Advance(SaveBlockedDetector.Burst - TimeSpan.FromTicks(1));
+            child.Send("save \"" + target + "\"");
+            await RefusedAsync();
+            Assert.Equal(card.Key, Assert.Single(app.Engine.View.Notices, n => n.Kind == "saveBlocked").Key);
+            Assert.Equal(burst, notices.Posted.Count);
+            Assert.Equal(2 * burst, child.SaveEvents);
             Assert.Equal("original fixture bytes", File.ReadAllText(target));
             Assert.True((File.GetAttributes(target) & FileAttributes.ReadOnly) != 0);
-            await Task.Delay(250);
-            Assert.Equal(hints, disk.HintCount); // denied writes do not produce a watcher save event
-            Assert.Equal(0, app.Network.Calls);
-            Assert.Empty(app.Snapshots.All());
-            output.WriteLine($"Windows {reason}: child save request to Home + notification plan {elapsed.TotalMilliseconds:F2} ms; refused-write watcher hints {disk.HintCount - hints}; original bytes and protection unchanged.");
+            Assert.Equal(hints, disk.HintCount); // keep the original strict equality
+            previous = card.Key;
+            app.Clock.Advance(SaveBlockedDetector.Burst + TimeSpan.FromTicks(burst % 2));
+        }
+        Assert.Single(tags);
+        Assert.Equal(bursts, notices.Posted.Count);
+        Assert.Equal(0, app.Network.Calls);
+        Assert.Empty(app.Snapshots.All());
+        output.WriteLine($"Windows {reason}: {bursts} bursts, {2 * bursts} refused COM writes, {notices.Posted.Count} notifications, one standing card/tag, {disk.HintCount - hints} watcher hints; latency min {latencies.Min():F2} max {latencies.Max():F2} ms; original bytes/protection unchanged.");
+
+        async Task RefusedAsync()
+        {
+            await child.UntilLine(s => s.StartsWith("error save", StringComparison.Ordinal) && s.Contains("UnauthorizedAccessException", StringComparison.Ordinal));
+            await app.Engine.LinkSettledAsync();
         }
     }
 
-    private static async Task Until(Func<bool> condition)
+    private static async Task WaitForViewAsync(SyncEngine engine, Func<AgentView, bool> condition)
     {
-        var time = Stopwatch.StartNew();
-        while (!condition()) { Assert.True(time.Elapsed < TimeSpan.FromSeconds(20), "Timed out waiting for the Windows COM fixture."); await Task.Delay(10); }
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void Observe(AgentView view) { if (condition(view)) ready.TrySetResult(); }
+        engine.ViewChanged += Observe;
+        try { Observe(engine.View); await ready.Task.WaitAsync(TimeSpan.FromSeconds(20)); }
+        finally { engine.ViewChanged -= Observe; }
     }
 
     private sealed class Fixture : IAsyncDisposable
@@ -222,6 +329,7 @@ public sealed class SaveBlockedTests(ITestOutputHelper output)
         internal readonly SessionManager Sessions;
         internal readonly SyncEngine Engine;
         internal readonly IVaultFileSystem Files;
+        internal readonly SaveClock Clock = new();
         private readonly HttpClient http;
         internal Fixture(string root, string reason, ISolidWorksLink link, bool windows = false)
         {
@@ -248,9 +356,35 @@ public sealed class SaveBlockedTests(ITestOutputHelper output)
                 portable.ApplyLockAttribute(TempFolder.PathValue(Part), reason == "mine" ? LockOwnership.ThisDevice : LockOwnership.Free);
             }
             Engine = new(new EngineOptions { VaultRoot = root }, new EngineDependencies { Files = Files, State = store, Journal = new MemoryJournalStore(), Snapshots = Snapshots,
-                Sessions = Sessions, Api = new(new PostgrestClient(http, Sessions)), Blobs = new(http, http, new Uri("http://fixture.test"), Sessions), SolidWorks = link });
+                Sessions = Sessions, Api = new(new PostgrestClient(http, Sessions)), Blobs = new(http, http, new Uri("http://fixture.test"), Sessions), SolidWorks = link, Clock = Clock });
         }
         public async ValueTask DisposeAsync() { await Engine.DisposeAsync(); (Files as IDisposable)?.Dispose(); http.Dispose(); }
+    }
+
+    private sealed class SaveClock : TimeProvider
+    {
+        private long ticks;
+        private readonly DateTimeOffset start = DateTimeOffset.UtcNow;
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+        public override long GetTimestamp() => Interlocked.Read(ref ticks);
+        public override DateTimeOffset GetUtcNow() => start + TimeSpan.FromTicks(GetTimestamp());
+        internal void Advance(TimeSpan by) => Interlocked.Add(ref ticks, by.Ticks);
+    }
+
+    private sealed class SaveNotices : IDisposable
+    {
+        private readonly SyncEngine engine;
+        private readonly SaveBlockedAsks asks = new();
+        private readonly Channel<(string Tag, NoticeGroupView Card)> arrived = Channel.CreateUnbounded<(string, NoticeGroupView)>();
+        internal readonly ConcurrentQueue<(string Tag, NoticeGroupView Card)> Posted = new();
+        internal SaveNotices(SyncEngine engine) { this.engine = engine; engine.ViewChanged += Observe; Observe(engine.View); }
+        private void Observe(AgentView view)
+        {
+            foreach (var notice in asks.Update(view).Show) { Posted.Enqueue(notice); arrived.Writer.TryWrite(notice); }
+        }
+        internal async Task<(string Tag, NoticeGroupView Card)> NextAsync()
+            => await arrived.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(2));
+        public void Dispose() => engine.ViewChanged -= Observe;
     }
 
     private sealed class RefuseNetwork : HttpMessageHandler
@@ -284,23 +418,27 @@ public sealed class SaveBlockedTests(ITestOutputHelper output)
     {
         private readonly Process process;
         private readonly ConcurrentQueue<string> lines = new();
+        private readonly Channel<string> arrived = Channel.CreateUnbounded<string>();
         internal ComSaveChild()
         {
             var start = new ProcessStartInfo("dotnet") { UseShellExecute = false, RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true };
             start.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "Armory.FakeSolidWorks.dll"));
             start.ArgumentList.Add("--start-after"); start.ArgumentList.Add("0");
             process = Process.Start(start)!;
-            process.OutputDataReceived += (_, e) => { if (e.Data is { } line) lines.Enqueue(line); };
-            process.ErrorDataReceived += (_, e) => { if (e.Data is { } line) lines.Enqueue(line); };
+            void Receive(object sender, DataReceivedEventArgs e) { if (e.Data is { } line) { lines.Enqueue(line); arrived.Writer.TryWrite(line); } }
+            process.OutputDataReceived += Receive;
+            process.ErrorDataReceived += Receive;
             process.BeginOutputReadLine(); process.BeginErrorReadLine();
         }
         internal int Pid => process.Id;
+        internal int SaveEvents => lines.Count(s => s.StartsWith("event FileSaveNotify", StringComparison.Ordinal));
         internal Task ReadyAsync() => UntilLine(s => s.StartsWith("ready ", StringComparison.Ordinal));
         internal void Send(string command) { process.StandardInput.WriteLine(command); process.StandardInput.Flush(); }
         internal async Task UntilLine(Func<string, bool> match)
         {
-            var time = Stopwatch.StartNew();
-            while (!lines.Any(match)) { Assert.True(time.Elapsed < TimeSpan.FromSeconds(20), string.Join("\n", lines)); await Task.Delay(10); }
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            try { await foreach (var line in arrived.Reader.ReadAllAsync(timeout.Token)) if (match(line)) return; }
+            catch (OperationCanceledException) { Assert.Fail("Timed out waiting for the COM fixture:\n" + string.Join("\n", lines)); }
         }
         public void Dispose() { if (!process.HasExited) process.Kill(entireProcessTree: true); process.Dispose(); }
     }

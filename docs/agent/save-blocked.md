@@ -45,6 +45,9 @@ server read is stalled. It does not wait for a disk scan, hint poll, or sync pas
 Events less than three seconds apart for the same file form a sliding burst. There
 is one stable card key per burst and one Windows notification tag per file. A new
 burst replaces the prior card/notification. Memory is capped at 200 files.
+The notification planner deduplicates by the detector's burst key alone. Changes
+to a standing card's reason or checkout availability refresh Home without another
+notification. A notification click resolves that key against the current action.
 Notifications appear even if Home is visible; the generic open-file question is
 suppressed for the affected file. Closing or successfully saving removes the card;
 checkout removes it when protection clears. Signing out or switching students
@@ -83,6 +86,44 @@ seconds, and checks original bytes and read-only protection remain unchanged for
 each of the three requested reasons. It also compares watcher hints before/after
 the refused write. The test is skipped on Linux. This is a controlled API/write
 fixture, not proof of real SolidWorks' save algorithm or native toast delivery.
+
+### Release-test flake investigation, November 3, 2026 (America/Los_Angeles)
+
+The v0.5.5 [release-event run](https://github.com/pina-hash/idea-armory/actions/runs/41770895570/job/126383427191)
+failed at `SaveBlockedTests.cs:205` on `da982f1`: `Assert.Equal(hints,
+disk.HintCount)` expected 1, actual 2, after the free-file case had passed. This
+counter measures filesystem notifications, not Home cards or Windows notifications.
+The [push run of the same commit](https://github.com/pina-hash/idea-armory/actions/runs/41770895265)
+and [PR 17 evidence run](https://github.com/pina-hash/idea-armory/actions/runs/41762529903)
+passed. The old test changed the target's read-only attribute with the watcher
+running and assumed a 250 ms sleep drained its asynchronous hints. It then compared
+the counter after another sleep. Neither sleep establishes a watcher barrier.
+The log does not record the delayed hint's path or operation, so it cannot identify
+that individual hint or establish duplicate COM events, cards or notifications.
+
+The fixture now persists protection before the Windows adapter and its watcher
+exist. It waits for the attached view, completed COM open event, each refused-write
+response, and the engine's record barrier. It retains strict equality for the hint
+counter and additionally counts every notification plan and COM save event. No
+sleep determines burst membership: an injected monotonic clock tests 3 seconds
+minus one tick, exactly 3 seconds and 3 seconds plus one tick.
+
+Separately, a regression test reproduced a product defect: `SaveBlockedAsks` included
+detail/action text in notification identity. A refresh within one unchanged burst
+could notify twice. Notification identity now uses only the burst key. The detector
+already retains one card/key per file during its sliding burst; its timing rule and
+the host's current-action recheck remain unchanged.
+
+Three portable engine stress cases each run 200 bursts with duplicate deliveries,
+two link process ids and sliding retries (800 records, 200 notification plans per
+case). The Windows stress case runs 200 bursts with two actual refused COM writes
+per burst and asserts one standing card, exactly one notification per burst, one
+stable notification tag, unchanged original bytes/protection, and no extra watcher
+hints. `Blocked save Windows evidence` runs all affected Agent, detector and
+protection tests 20 times: four independent Windows jobs with five repetitions
+each, retaining a separate TRX for every suite/repetition. The PR records completed
+run counts and measured latency ranges, rather than treating this configuration as
+evidence that the runs passed.
 
 `tools/agent-ui/check-ui.mjs` checks the three reasons in both themes and at
 1280x800, 420x720 and 320x480, including Tab/Enter, focus, one primary action, layout,
