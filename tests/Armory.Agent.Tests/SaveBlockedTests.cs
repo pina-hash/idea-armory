@@ -263,6 +263,9 @@ public sealed class SaveBlockedTests(ITestOutputHelper output)
         await WaitForViewAsync(app.Engine, view => view.SolidWorks?.State == SolidWorksStates.Attached);
         child.Send("open \"" + target + "\"");
         await child.UntilLine(s => s.StartsWith("event FileOpenPostNotify", StringComparison.Ordinal));
+        // The app's callback queues discovery on the link's STA. Its return alone
+        // does not mean the document's save-event sink has been advised yet.
+        await child.UntilLine(s => s.StartsWith("advise 83a33d32", StringComparison.OrdinalIgnoreCase), includeHistory: true);
         await app.Engine.LinkSettledAsync();
         var disk = (WindowsVaultFileSystem)app.Files;
         Assert.True((File.GetAttributes(target) & FileAttributes.ReadOnly) != 0);
@@ -434,8 +437,9 @@ public sealed class SaveBlockedTests(ITestOutputHelper output)
         internal int SaveEvents => lines.Count(s => s.StartsWith("event FileSaveNotify", StringComparison.Ordinal));
         internal Task ReadyAsync() => UntilLine(s => s.StartsWith("ready ", StringComparison.Ordinal));
         internal void Send(string command) { process.StandardInput.WriteLine(command); process.StandardInput.Flush(); }
-        internal async Task UntilLine(Func<string, bool> match)
+        internal async Task UntilLine(Func<string, bool> match, bool includeHistory = false)
         {
+            if (includeHistory && lines.Any(match)) return;
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
             try { await foreach (var line in arrived.Reader.ReadAllAsync(timeout.Token)) if (match(line)) return; }
             catch (OperationCanceledException) { Assert.Fail("Timed out waiting for the COM fixture:\n" + string.Join("\n", lines)); }
