@@ -46,7 +46,7 @@ for (const size of [{ w: 1280, h: 800 }, { w: 420, h: 720 }]) {
 		// Walk to card 3, Check it out.
 		await page.click('[data-tour="next"]');
 		await page.waitForFunction(() => document.querySelector('#tutorial').dataset.step === 'file');
-		await page.click('[data-lit]');
+		await page.locator('[data-lit]').dispatchEvent('click');
 		await page.waitForFunction(() => !document.querySelector('[data-tour="next"]').disabled);
 		await page.click('[data-tour="next"]');
 		await page.waitForFunction(() => document.querySelector('#tutorial').dataset.step === 'checkout');
