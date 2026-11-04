@@ -45,8 +45,8 @@ internal sealed class SaveBlockedDetector(TimeProvider clock)
             if (current(file.Path) is not { } protection) { files.Remove(file.Path); continue; }
             var name = file.Path[(file.Path.LastIndexOf('/') + 1)..];
             var reason = Words(protection);
-            var next = protection.CanCheckOut ? "Check out here, then save again in SolidWorks."
-                : "In SolidWorks, use Save As to save a copy in the folder this button opens.";
+            var next = protection.CanCheckOut ? "Click Check out, then save again in SolidWorks."
+                : "Click the button, then use Save As in SolidWorks to keep a copy.";
             cards.Add(new(file.Key, NoticeKinds.SaveBlocked, NoticeTones.Look, $"SolidWorks can't save {name}", reason + " " + next, 1,
                 new(protection.CanCheckOut ? "Check out" : "Save a copy in your folder", BridgeMessages.SaveBlockedAction, [file.Key]),
                 [new(null, file.Path, name, reason)]));
@@ -54,13 +54,14 @@ internal sealed class SaveBlockedDetector(TimeProvider clock)
         return cards;
     }
 
+    // Grade 5 words, what happened then what to do (ledger 0504, tools/agent-ui/first-run-check.mjs).
     internal static string Words(SaveProtection p) => p.Reason switch
     {
-        SaveBlockedReason.NotCheckedOut => "Armory keeps this file read-only because you have not checked it out.",
-        SaveBlockedReason.OtherStudent => $"This file belongs to {p.Who ?? "another student"} and opens read-only for you.",
-        SaveBlockedReason.NotYourProject => "Armory keeps this file read-only because it is in a project you are not on.",
-        SaveBlockedReason.OtherComputer => "Armory keeps this file read-only because you checked it out on another computer.",
-        _ => "Armory keeps this file read-only because this project does not allow you to edit it.",
+        SaveBlockedReason.NotCheckedOut => "You have not checked out this file.",
+        SaveBlockedReason.OtherStudent => $"{p.Who ?? "Another student"} has this file, so you can only look at it.",
+        SaveBlockedReason.NotYourProject => "This file is in a project you are not on.",
+        SaveBlockedReason.OtherComputer => "You checked out this file on another computer.",
+        _ => "This project does not let you change its files.",
     };
 }
 

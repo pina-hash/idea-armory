@@ -5,12 +5,12 @@ namespace Armory.Agent.Engine.Tests;
 public sealed class SaveBlockedDetectorTests
 {
     [Theory]
-    [InlineData((int)SaveBlockedReason.NotCheckedOut, true, "have not checked it out")]
-    [InlineData((int)SaveBlockedReason.NotCheckedOut, false, "have not checked it out")]
-    [InlineData((int)SaveBlockedReason.OtherStudent, false, "belongs to Ana Reyes and opens read-only for you")]
+    [InlineData((int)SaveBlockedReason.NotCheckedOut, true, "have not checked out this file")]
+    [InlineData((int)SaveBlockedReason.NotCheckedOut, false, "have not checked out this file")]
+    [InlineData((int)SaveBlockedReason.OtherStudent, false, "Ana Reyes has this file, so you can only look at it")]
     [InlineData((int)SaveBlockedReason.NotYourProject, false, "project you are not on")]
     [InlineData((int)SaveBlockedReason.OtherComputer, false, "another computer")]
-    [InlineData((int)SaveBlockedReason.ProjectReadOnly, false, "does not allow you to edit")]
+    [InlineData((int)SaveBlockedReason.ProjectReadOnly, false, "does not let you change")]
     public void Each_reason_names_the_file_and_one_safe_action(int reason, bool checkout, string words)
     {
         var detector = new SaveBlockedDetector(TimeProvider.System);

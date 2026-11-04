@@ -55,6 +55,19 @@ jobs:
       - name: The same geometry in both themes (bbox-diff.mjs)
         run: node tools/agent-ui/bbox-diff.mjs | tee evidence/bbox-diff.txt
 
+      # The first run's words at grade 5 or lower, one short sentence at a time, one
+      # vocabulary, and plain help for the real report lines (ledger 0504).
+      - name: The first run's words (first-run-check.mjs)
+        run: node tools/agent-ui/first-run-check.mjs | tee evidence/first-run-check.txt
+
+      # A first-time student with no help, from Connect to a part checked in, in under 10
+      # modeled minutes, at the lab window size and the small one (ledger 0504).
+      - name: The cold-user test (cold-user.mjs)
+        run: |
+          set -o pipefail
+          node tools/agent-ui/cold-user.mjs --size 1280x800 --json evidence/cold-user-1280x800.json | tee evidence/cold-user.txt
+          node tools/agent-ui/cold-user.mjs --size 420x720 --json evidence/cold-user-420x720.json | tee -a evidence/cold-user.txt
+
       - name: Upload the evidence
         if: always()
         uses: actions/upload-artifact@v4

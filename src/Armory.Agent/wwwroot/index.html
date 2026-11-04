@@ -146,10 +146,11 @@
 		<dialog id="ask" class="housing ask" tabindex="-1" aria-labelledby="ask-title"></dialog>
 		<div id="tutorial" hidden>
 			<div class="tutorial-spot" aria-hidden="true"></div>
-			<section class="tutorial-card" role="dialog" aria-modal="false" aria-labelledby="tutorial-title" aria-describedby="tutorial-body tutorial-hint">
+			<section class="tutorial-card" role="dialog" aria-modal="false" aria-labelledby="tutorial-title" aria-describedby="tutorial-body tutorial-word tutorial-hint">
 				<p class="label" id="tutorial-progress" role="status" aria-live="polite"></p>
+				<ol class="tutorial-dots" id="tutorial-dots" aria-hidden="true"></ol>
 				<h2 id="tutorial-title" tabindex="-1"></h2>
-				<div class="tutorial-copy" id="tutorial-copy" tabindex="0" role="region" aria-label="Lesson instructions"><p id="tutorial-body"></p><p id="tutorial-hint" role="status" aria-live="polite"></p></div>
+				<div class="tutorial-copy" id="tutorial-copy" tabindex="0" role="region" aria-label="Lesson instructions"><p id="tutorial-body"></p><div id="tutorial-word" hidden></div><p id="tutorial-hint" role="status" aria-live="polite"></p></div>
 				<button class="key" type="button" data-tour="exercise" data-tip="Change only the practice file in this lesson." hidden></button>
 				<div class="tutorial-keys">
 					<button class="key" type="button" data-tour="back" data-tip="Go to the previous lesson step.">Back</button>
@@ -162,7 +163,10 @@
 		<noscript><p>Armory needs JavaScript turned on in this window.</p></noscript>
 		<script src="file-search.js"></script>
 		<script src="navigation.js"></script>
+		<script src="words.js"></script>
+		<script src="help.js"></script>
 		<script src="tutorial.js"></script>
+		<script src="first-steps.js"></script>
 		<script src="app.js"></script>
 	</body>
 </html>

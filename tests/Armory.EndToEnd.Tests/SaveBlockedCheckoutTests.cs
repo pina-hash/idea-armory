@@ -23,7 +23,7 @@ public sealed class SaveBlockedCheckoutTests
         sw.Saving(Part, LinkSaveMode.Current);
         await team.B.LinkSettledAsync();
         var card = Assert.Single(team.B.Engine.View.Notices, n => n.Kind == "saveBlocked");
-        Assert.Contains("have not checked it out", card.Detail);
+        Assert.Contains("have not checked out this file", card.Detail);
         Assert.Equal("Check out", card.Action!.Label);
         Assert.True(team.B.Disk.IsReadOnly(Part));
         Assert.Equal(0, await team.LiveLocks(await team.FileId("Bracket.SLDPRT")));

@@ -22,6 +22,7 @@
 	var bridge = Object.assign({}, hostBridge, {
 		send: function (type, fields) {
 			if (tutorial && tutorial.active()) return tutorial.practice() ? practiceSend(type, fields) : null;
+			if (window.ArmoryFirstSteps) window.ArmoryFirstSteps.sent(type, fields);
 			return hostBridge.send(type, fields);
 		},
 		sendWithFiles: function (type, fields, files) {
@@ -926,6 +927,7 @@
 		updateCues();
 		tipAfterRender();
 		if (tutorial) tutorial.refresh();
+		if (window.ArmoryFirstSteps) window.ArmoryFirstSteps.light(v, !!(tutorial && tutorial.active()));
 	}
 
 	/** Draws a region from its markup: in place (morph) when it stays, from scratch otherwise;
@@ -1059,15 +1061,15 @@
 		// The welcome sentence is for before the first click; after it, the status plate
 		// says what is happening instead.
 		if (!waiting && !finishing && !failed)
-			html += '<p class="lead">You only do this once. After that, Armory keeps your team\'s files up to date on this computer by itself.</p>';
+			html += '<p class="lead">Do this once, and your team\'s files stay up to date here.</p>';
 		html += '<ol class="steps">';
 		html += step(1, current, failed ? 'Click <strong>Try again</strong> below.' : 'Click the button below.');
-		html += step(2, current, 'Sign in with your school Google account in the browser that opens.');
-		html += step(3, current, 'Come back here. Your files show up in <span class="mono-inline">' + esc(v.vaultRoot) + '</span>.');
+		html += step(2, current, 'Sign in with your school Google account.');
+		html += step(3, current, 'Come back here to find your files in <span class="mono-inline">' + esc(v.vaultRoot) + '</span>.');
 		html += '</ol>';
 		if (waiting) html += lcdPlate('look', 'Waiting for Google', v.connect.message || 'Finish signing in in your browser. This window updates by itself.', true);
 		else if (finishing) html += lcdPlate('ok', 'Getting your files', v.connect.message || 'Almost done.', true);
-		else if (failed) html += lcdPlate('bad', "Sign-in didn't finish", v.connect.message || 'Check that you\'re online, then try again.', false);
+		else if (failed) html += lcdPlate('bad', "Sign-in didn't finish", plainHelp(v.connect.message) || 'Check that you\'re online, then try again.', false);
 		html += '<div class="connect-actions">';
 		if (waiting) {
 			html += '<button class="key" type="button" data-action="connect" data-key="cn-reopen"' + tipAttr('browserAgain') + '>Open the browser again</button>';
@@ -1621,6 +1623,7 @@
 			'<div class="main-col plate-recess"><div class="recess-scroll" id="recess-scroll">' +
 			selectionBarHtml(v) +
 			promptHtml(v) +
+			(window.ArmoryFirstSteps && !(tutorial && tutorial.practice()) ? window.ArmoryFirstSteps.html(v, !!(tutorial && tutorial.active())) : '') +
 			activityHtml(v.activity) +
 			noticesHtml(v) +
 			heldHtml(v) +
@@ -2955,6 +2958,7 @@
 
 		html += '<section class="detail-main plate-recess" aria-labelledby="history-label"><div class="history-group brackets">';
 		html += '<h2 class="section-label history-head" id="history-label"><span>History</span>' + (d.history ? count(d.history.length, 'entry', 'entries') : '') + '</h2>';
+		if (window.ArmoryWords) html += window.ArmoryWords.line('version');
 		if (!d.history) html += '<p class="hist-loading">Getting the history\u2026</p>';
 		else {
 			html += '<ol class="history-list list-well">';
@@ -3090,6 +3094,7 @@
 		html += settingsAboutHtml(s.about);
 		html += '<section class="setting" aria-labelledby="set-tutorial-label"><h3 class="section-label" id="set-tutorial-label">Getting started</h3>';
 		html += '<button class="key" type="button" data-action="showTutorial" data-key="set-tutorial" data-tip="Walk through Armory again with a safe practice file.">Show me again</button></section>';
+		if (window.ArmoryWords) html += '<section class="setting" aria-labelledby="set-words-label"><h3 class="section-label" id="set-words-label">Words to know</h3>' + window.ArmoryWords.all() + '</section>';
 
 		// Something wrong: a person's own report, and the folder of saved reports to hand over by hand.
 		html += '<section class="setting" aria-labelledby="set-report-label">';
@@ -4147,6 +4152,11 @@
 		resultBox.setAttribute('data-on', 'true');
 	}
 
+	/** Plain words for a message that came from code (help.js); plain words pass through. */
+	function plainHelp(message) {
+		return message && window.ArmoryHelp ? window.ArmoryHelp.say(message) : message;
+	}
+
 	/** The host's word on an action: a small tag at the window's foot, read out by a
 	 *  screen reader, that fades after a while. Never an alert, never a focus change. */
 	function showResult(ok, message) {
@@ -4159,7 +4169,8 @@
 		}
 		resultBox.removeAttribute('data-working');
 		resultBox.removeAttribute('aria-busy');
-		resultWord.textContent = message;
+		// A problem says what happened and the one thing to do, never a raw error (help.js).
+		resultWord.textContent = ok ? message : plainHelp(message);
 		resultBox.setAttribute('data-tone', ok ? 'ok' : 'look');
 		resultBox.setAttribute('data-on', 'true');
 		var glyph = resultBox.querySelector('use');
@@ -5042,6 +5053,7 @@
 				break;
 			case 'showTutorial':
 				sheet.close();
+				if (window.ArmoryFirstSteps) window.ArmoryFirstSteps.show();
 				tutorial.start();
 				break;
 			case 'openSettings':
@@ -5491,6 +5503,7 @@
 		var previousRealStudent = studentKey(latestRealView);
 		if (message.type === 'view') {
 			latestRealView = message.view;
+			if (window.ArmoryFirstSteps) window.ArmoryFirstSteps.observe(message.view);
 			if (tutorial && tutorial.active() && tutorial.owner() !== studentKey(latestRealView)) tutorial.cancel();
 		}
 		if (tutorial && tutorial.practice()) {
@@ -5710,6 +5723,14 @@
 		},
 		storageFailed: function () { showResult(false, 'Armory could not remember this lesson. You can replay it in Settings.'); }
 	});
+
+	if (window.ArmoryFirstSteps)
+		window.ArmoryFirstSteps.connect({
+			lesson: function () { tutorial.start(); },
+			finished: function (email) { return tutorial.finished(email); },
+			help: function () { openAsk('report', { kind: 'bug' }, 'fs-help'); },
+			redraw: function () { render(); }
+		});
 
 	bridge.onMessage(onHost);
 

@@ -1760,12 +1760,12 @@
 
 	// Explicit save events on protected files: one card per file, including assembly parts.
 	[
-		['saveBlockedCheckOut', 'Armory keeps this file read-only because you have not checked it out.', true],
-		['saveBlockedOther', 'This file belongs to Ana Reyes and opens read-only for you.', false],
-		['saveBlockedNonmember', 'Armory keeps this file read-only because it is in a project you are not on.', false]
+		['saveBlockedCheckOut', 'You have not checked out this file.', true],
+		['saveBlockedOther', 'Ana Reyes has this file, so you can only look at it.', false],
+		['saveBlockedNonmember', 'This file is in a project you are not on.', false]
 	].forEach(function (entry) {
 		var v = JSON.parse(JSON.stringify(states.synced.view));
-		var next = entry[2] ? 'Check out here, then save again in SolidWorks.' : 'In SolidWorks, use Save As to save a copy in the folder this button opens.';
+		var next = entry[2] ? 'Click Check out, then save again in SolidWorks.' : 'Click the button, then use Save As in SolidWorks to keep a copy.';
 		v.notices = [{ key: entry[0], kind: 'saveBlocked', tone: 'look', title: "SolidWorks can't save Bracket.SLDPRT",
 			detail: entry[1] + ' ' + next, count: 1,
 			action: { label: entry[2] ? 'Check out' : 'Save a copy in your folder', command: 'saveBlockedAction', paths: [entry[0]] },
@@ -1773,6 +1773,17 @@
 		v.prompt = null;
 		states[entry[0]] = { label: 'SolidWorks save needs you: ' + entry[0], screens: ['home'], view: v };
 	});
+
+	// First steps on Home (ledger 0504): a student who has not done the practice yet, with
+	// nothing checked out. The demo shows the list only when asked (?firstSteps=1).
+	(function () {
+		var v = JSON.parse(JSON.stringify(states.synced.view));
+		v.myFiles = [];
+		v.projects.forEach(function (p) { p.folders.forEach(function (f) { f.files.forEach(function (r) {
+			if (r.checkout.state === 'mine') { r.checkout = available(); r.status = 'synced'; r.changed = false; }
+		}); }); });
+		states.firstSteps = { label: 'First steps on Home: a new student\'s list, with Start lit', screens: ['home'], params: { firstSteps: '1' }, view: v };
+	})();
 
 	window.ArmoryDemoStates = {
 		now: NOW,

@@ -18,12 +18,12 @@ public sealed class SaveBlockedTests(ITestOutputHelper output)
     private const string Part = "Class/Bracket.SLDPRT";
 
     [Theory]
-    [InlineData("free", "have not checked it out")]
-    [InlineData("held", "belongs to Ana Reyes")]
-    [InlineData("other", "belongs to Ana Reyes")]
+    [InlineData("free", "have not checked out this file")]
+    [InlineData("held", "Ana Reyes has this file")]
+    [InlineData("other", "Ana Reyes has this file")]
     [InlineData("nonmember", "project you are not on")]
     [InlineData("othercomputer", "another computer")]
-    [InlineData("archived", "does not allow you to edit")]
+    [InlineData("archived", "does not let you change")]
     public async Task Real_engine_resolves_the_reason_from_its_state_without_network_or_a_pass(string reason, string words)
     {
         using var temp = new TempFolder(); var link = new RecordsLink();
@@ -238,13 +238,13 @@ public sealed class SaveBlockedTests(ITestOutputHelper output)
     [WindowsFact]
     public async Task Windows_read_only_save_fixture_reaches_Home_and_notification_without_changing_the_original()
     {
-        foreach (var (reason, words) in new[] { ("free", "have not checked it out"), ("held", "belongs to Ana Reyes"), ("nonmember", "project you are not on") })
+        foreach (var (reason, words) in new[] { ("free", "have not checked out this file"), ("held", "Ana Reyes has this file"), ("nonmember", "project you are not on") })
             await WindowsSaveBurstsAsync(reason, words, 1);
     }
 
     [WindowsFact]
     public Task Windows_two_hundred_read_only_save_bursts_each_notify_once()
-        => WindowsSaveBurstsAsync("free", "have not checked it out", 200);
+        => WindowsSaveBurstsAsync("free", "have not checked out this file", 200);
 
     private async Task WindowsSaveBurstsAsync(string reason, string words, int bursts)
     {

@@ -1905,7 +1905,7 @@ tally.bridgeTypes = 0;
 	const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, colorScheme: 'dark', reducedMotion: 'reduce', timezoneId: 'America/Los_Angeles' });
 	const requests = [];
 	context.on('request', (r) => requests.push(r.url()));
-	await context.addInitScript((emails) => { for (const email of emails) localStorage.setItem('armory.tutorial.v1:' + encodeURIComponent(email.trim().toLowerCase()), 'finished'); }, Object.values(demo.states).map(s => s.view.account?.email).filter(Boolean));
+	await context.addInitScript((emails) => { for (const email of emails) { localStorage.setItem('armory.tutorial.v1:' + encodeURIComponent(email.trim().toLowerCase()), 'finished'); localStorage.setItem('armory.firstSteps.v1:' + encodeURIComponent(email.trim().toLowerCase()), '{"hidden":true}'); } }, Object.values(demo.states).map(s => s.view.account?.email).filter(Boolean));
 	await context.addInitScript(() => {
 		const t = new EventTarget();
 		window.__sent = [];
@@ -2486,7 +2486,7 @@ tally.drawing = 0;
 		if (!ok) fails.push(what);
 	};
 	const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, colorScheme: 'dark', reducedMotion: 'no-preference', timezoneId: 'America/Los_Angeles' });
-	await context.addInitScript((emails) => { for (const email of emails) localStorage.setItem('armory.tutorial.v1:' + encodeURIComponent(email.trim().toLowerCase()), 'finished'); }, Object.values(demo.states).map(s => s.view.account?.email).filter(Boolean));
+	await context.addInitScript((emails) => { for (const email of emails) { localStorage.setItem('armory.tutorial.v1:' + encodeURIComponent(email.trim().toLowerCase()), 'finished'); localStorage.setItem('armory.firstSteps.v1:' + encodeURIComponent(email.trim().toLowerCase()), '{"hidden":true}'); } }, Object.values(demo.states).map(s => s.view.account?.email).filter(Boolean));
 	await context.addInitScript(() => {
 		const t = new EventTarget();
 		window.__sent = [];
@@ -2794,7 +2794,12 @@ for (const theme of THEMES) for (const size of [...SIZES, { w: 320, h: 480 }]) {
 		await page.evaluate(v => window.__host({ type: 'view', view: v }), real);
 		await page.waitForSelector('#tutorial:not([hidden])');
 		const steps = await page.evaluate(() => window.ArmoryTutorial.steps.map(s => ({ id: s.id, target: s.target, action: s.action, click: s.click, exercise: s.exercise })));
-		expect(steps.length === 19, 'the lesson lost a requested topic');
+		// The first run is a worked example (ledger 0504): it is held to the job, every topic
+		// of a first edit in order, and to being short, never to a count of cards.
+		const topics = await page.evaluate(() => window.ArmoryTutorial.steps.map(s => s.topic));
+		const job = ['find', 'checkOut', 'launch', 'save', 'checkIn', 'other', 'realWork'];
+		expect(job.every((t, i) => topics.indexOf(t) >= 0 && (i === 0 || topics.indexOf(t) > topics.indexOf(job[i - 1]))), 'the lesson lost or reordered a step of the job: ' + topics.join(','));
+		expect(steps.length <= 10, 'the lesson grew past ten cards: ' + steps.length);
 		async function tabTo(selector) {
 			for (let i = 0; i < 35; i++) {
 				await page.keyboard.press('Tab');
@@ -2821,6 +2826,11 @@ for (const theme of THEMES) for (const size of [...SIZES, { w: 320, h: 480 }]) {
 			expect(!geometry.overflow && geometry.motion === 'none', step.id + ': overflow or reduced-motion failure');
 			const audit = await page.evaluate(inspect, JARGON);
 			for (const key of ['small', 'overflow', 'jargon', 'untipped']) for (const item of audit[key]) expect(false, step.id + ': ' + key + ': ' + item);
+			// The next action is always lit, and only one thing is.
+			const litNow = await page.evaluate(() => [...document.querySelectorAll('[data-lit]')].filter(e => e.getClientRects().length).map(e => e.dataset.tour || e.dataset.action || e.dataset.key || e.tagName));
+			expect(litNow.length === 1, step.id + ': ' + litNow.length + ' lit controls, not one: ' + litNow.join(','));
+			if (step.click && !step.exercise) expect(await page.evaluate(sel => !!document.querySelector('[data-lit]')?.matches(sel), step.click), step.id + ': the lit control is not the one the step needs');
+			if (step.exercise) expect(litNow[0] === 'exercise', step.id + ': the exercise key is not lit');
 			const contrast = await page.evaluate(() => {
 				const rgb = s => s.match(/[\d.]+/g).slice(0,3).map(Number);
 				const luminance = a => a.map(v => v / 255).map(v => v <= .04045 ? v/12.92 : ((v+.055)/1.055)**2.4).reduce((n,v,i) => n+v*[.2126,.7152,.0722][i],0);
@@ -2868,7 +2878,7 @@ for (const theme of THEMES) for (const size of [...SIZES, { w: 320, h: 480 }]) {
 			if (step.id === 'changed') expect((await page.textContent('[data-tutorial-target]')).trim() === 'Changed', 'Changed did not target the real badge');
 			if (step.id === 'checkin') expect(await page.locator('[data-key="d-checkout"]').count() === 1, 'practice check in did not release the file');
 			if (step.id === 'other') expect(await page.locator('[data-key="d-checkout"]').count() === 0 && /Ana/.test(await page.textContent('.detail-side .display')), 'another student has no meaningful state');
-			if (step.id === 'mine') {
+			if (step.id === 'open') {
 				const refreshed = JSON.parse(JSON.stringify(real)); refreshed.sync.detail = 'Fresh host update during practice.';
 				await page.evaluate(v => window.__host({ type: 'view', view: v }), refreshed);
 				expect(await page.locator('[data-key="d-checkin"]').count() === 1, 'host update replaced the practice file');
@@ -2930,10 +2940,9 @@ for (const storageFails of [false, true]) {
 		const real = JSON.parse(JSON.stringify(demoStates().states.synced.view)); real.projects = []; real.myFiles = [];
 		await page.evaluate(v => window.__host({type:'view',view:v}),real);
 		await page.waitForSelector('#tutorial:not([hidden])');
-		for (const next of ['project','folder','file']) {
+		for (const next of ['file']) {
 			await page.click('[data-tour="next"]');
 			await page.waitForFunction(id => document.querySelector('#tutorial').dataset.step === id,next);
-			if (next !== 'file' && await page.isDisabled('[data-tour="next"]')) fails.push('an empty account cannot continue past '+next);
 		}
 		await page.click('#vl-browser [data-action="openFile"]');
 		await page.waitForSelector('[data-key="d-checkout"]');
@@ -2956,6 +2965,117 @@ for (const storageFails of [false, true]) {
 	} catch(e) { fails.push(threw(e)); }
 	await context.close();
 	for (const f of fails) { tally.flowFailures++; problem('tutorial', 'lifecycle storageFails='+storageFails, f); }
+	tally.flows++;
+}
+
+// FIRST STEPS (ledger 0504): Home's list ticks itself off from real actions only, lights
+// exactly one control for the next step (and it is the right one), keeps each student's
+// list apart, survives storage failing, and Hide and Show me again do what they say.
+for (const storageFails of [false, true]) for (const size of [SIZES[0], { w: 320, h: 480 }]) {
+	const name = `first steps storageFails=${storageFails} ${size.w}x${size.h}`;
+	const fails = [];
+	const expect = (ok, message) => { if (!ok) fails.push(message); };
+	const context = await browser.newContext({ viewport: { width: size.w, height: size.h }, reducedMotion: 'reduce' });
+	await context.addInitScript(fail => {
+		if (fail) { Storage.prototype.getItem = () => { throw new Error('Storage unavailable'); }; Storage.prototype.setItem = () => { throw new Error('Storage unavailable'); }; }
+		else localStorage.setItem('armory.tutorial.v1:' + encodeURIComponent('jordan.reyes@boscotech.edu'), 'finished');
+		const events = new EventTarget(); window.__sent = [];
+		window.chrome = { webview: { addEventListener: (...a) => events.addEventListener(...a), postMessage: m => window.__sent.push(m) } };
+		window.__host = m => events.dispatchEvent(new MessageEvent('message', { data: m }));
+	}, storageFails);
+	const page = await context.newPage();
+	page.on('pageerror', e => fails.push(e.message));
+	const lit = () => page.evaluate(() => [...document.querySelectorAll('[data-lit]')].filter(e => e.getClientRects().length).map(e => ({ action: e.dataset.action || e.dataset.fs || e.dataset.tour, path: e.dataset.path || null, mine: !!e.closest('[data-part="mine"]') })));
+	const stateOf = id => page.getAttribute(`#first-steps [data-step="${id}"]`, 'data-state');
+	// When the step's control is out of sight, Show me is the one lit thing; it brings the
+	// control into view and the light moves to it.
+	const reach = async () => {
+		let l = await lit();
+		if (l.length === 1 && l[0].action === 'show') { await page.click('[data-lit]'); await settle(page); l = await lit(); }
+		return l;
+	};
+	try {
+		await page.goto(pathToFileURL(path.join(WWWROOT, 'index.html')).href);
+		await page.waitForFunction(() => window.__sent.length);
+		const real = JSON.parse(JSON.stringify(demoStates().states.synced.view));
+		const rows = [];
+		for (const p of real.projects) for (const f of p.folders) for (const r of f.files) { if (r.checkout.state === 'mine') { r.checkout = { state: 'available', label: 'Available', name: null, email: null, device: null, since: null }; r.status = 'synced'; r.changed = false; } rows.push(r); }
+		real.myFiles = [];
+		const send = v => page.evaluate(x => window.__host({ type: 'view', view: x }), v);
+		await send(real); await settle(page);
+		if (storageFails) {
+			// The lesson cannot be remembered, so it starts: skip it, and the list is there.
+			await page.waitForSelector('#tutorial:not([hidden])'); await page.keyboard.press('Escape'); await settle(page);
+			expect(await stateOf('practice') === 'next', 'with no storage the practice is not the next step');
+			let l = await lit();
+			expect(l.length === 1 && l[0].action === 'lesson', 'with the practice next, Start is not the one lit control: ' + JSON.stringify(l));
+			// Mark it done for this session the honest way: finish the lesson.
+			await page.click('[data-fs="lesson"]'); await page.waitForSelector('#tutorial:not([hidden])');
+			for (let i = 0; i < 20 && await page.locator('#tutorial:not([hidden])').count(); i++) {
+				const next = page.locator('[data-tour="next"]');
+				// The lesson's own pointer and keyboard paths are held above; here it is only the way
+				// to a finished lesson, so the lit control is pressed without Playwright's scrolling.
+				if (await next.isDisabled()) { const e = page.locator('[data-tour="exercise"]:visible'); if (await e.count()) await e.click(); else await page.locator('[data-lit]').dispatchEvent('click'); await page.waitForFunction(() => !document.querySelector('[data-tour="next"]').disabled); }
+				await next.click(); await settle(page);
+			}
+			await send(real); await settle(page);
+		}
+		expect(await page.locator('#first-steps').count() === 1, 'Home has no First steps list');
+		expect(await stateOf('practice') === 'done', 'a finished lesson did not tick Try the practice');
+		expect(await stateOf('checkOut') === 'next', 'Check out is not the next step');
+		let l = await reach();
+		expect(l.length === 1 && l[0].action === 'checkOut' && !l[0].mine, 'the lit control is not one Check out in the team files: ' + JSON.stringify(l));
+		// A press on the list never ticks anything; the host's answer does.
+		const target = l[0] && l[0].path;
+		await page.click('[data-lit]'); await settle(page);
+		expect(await stateOf('checkOut') === 'next', 'a press ticked Check out before the host said so');
+		expect((await page.evaluate(() => window.__sent.map(m => m.type))).includes('checkOut'), 'the lit Check out did not ask the host');
+		const row = rows.find(r => r.path === target);
+		row.checkout = { state: 'mine', label: 'Checked out by you', name: 'Jordan Reyes', email: real.account.email, device: real.account.deviceName, since: real.sync.lastChecked || new Date().toISOString() };
+		real.myFiles = [{ fileId: row.fileId, path: row.path, name: row.name, project: real.projects[0].name, status: 'synced', note: null, checkout: row.checkout }];
+		await send(real); await settle(page);
+		expect(await stateOf('checkOut') === 'done' && await stateOf('open') === 'next', 'checking out did not tick, or Open is not next');
+		l = await reach();
+		expect(l.length === 1 && l[0].action === 'launch' && l[0].mine && l[0].path === target, 'Open on my file is not the one lit control: ' + JSON.stringify(l));
+		await page.click('[data-lit]'); await settle(page);
+		expect(await stateOf('open') === 'done' && await stateOf('save') === 'next', 'opening my file did not tick Open');
+		// Nothing in Armory saves; the line itself says to save in SolidWorks.
+		real.myFiles[0].status = 'changed'; row.status = 'changed'; row.changed = true;
+		await send(real); await settle(page);
+		expect(await stateOf('save') === 'done' && await stateOf('checkIn') === 'next', 'a changed file did not tick Change it and save');
+		l = await reach();
+		expect(l.length === 1 && l[0].action === 'checkIn' && l[0].mine, 'Check in on my file is not the one lit control: ' + JSON.stringify(l));
+		await page.click('[data-lit]'); await settle(page);
+		expect(await stateOf('checkIn') === 'next', 'a press ticked Check in before the host said so');
+		row.checkout = { state: 'available', label: 'Available', name: null, email: null, device: null, since: null }; row.status = 'synced'; row.changed = false; real.myFiles = [];
+		await send(real); await settle(page);
+		expect(await stateOf('checkIn') === 'done' && await stateOf('others') === 'next', 'the check in did not tick');
+		l = await reach();
+		expect(l.length === 1 && l[0].action === 'searchOthers', 'Checked out by others is not the one lit control: ' + JSON.stringify(l));
+		await page.click('[data-lit]'); await settle(page);
+		expect(/You did every step/.test(await page.textContent('#first-steps')), 'the list did not say every step is done');
+		expect((await lit()).length === 0, 'something is still lit after the last step');
+		// Another student on this computer gets a list of their own.
+		const other = JSON.parse(JSON.stringify(real)); other.account.email = 'sam.lee@boscotech.edu';
+		await send(other); await settle(page);
+		expect(await page.locator('#first-steps').count() === 0 || await stateOf('checkOut') !== 'done', 'a second student inherited the first student\'s ticks');
+		if (await page.locator('#tutorial:not([hidden])').count()) { await page.keyboard.press('Escape'); await settle(page); }
+		await send(real); await settle(page);
+		if (await page.locator('#tutorial:not([hidden])').count()) { await page.keyboard.press('Escape'); await settle(page); }
+		await page.click('[data-fs="hide"]'); await settle(page);
+		expect(await page.locator('#first-steps').count() === 0, 'Hide did not put the list away');
+		if (!storageFails) {
+			await page.reload(); await page.waitForFunction(() => window.__sent.length); await send(real); await settle(page);
+			expect(await page.locator('#first-steps').count() === 0, 'Hide did not survive reopening');
+		}
+		await page.click('[data-key="hdr-settings"]');
+		expect(await page.locator('#settings .word-row').count() === 6, 'Settings does not list the six words');
+		await page.click('[data-key="set-tutorial"]'); await page.waitForSelector('#tutorial:not([hidden])');
+		await page.keyboard.press('Escape'); await settle(page);
+		expect(await page.locator('#first-steps').count() === 1, 'Show me again did not bring the list back');
+	} catch (e) { fails.push(threw(e)); }
+	await context.close();
+	for (const f of fails) { tally.flowFailures++; problem('firstSteps', name, f); }
 	tally.flows++;
 }
 
