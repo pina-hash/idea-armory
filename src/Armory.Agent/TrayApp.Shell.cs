@@ -15,6 +15,7 @@ internal sealed partial class TrayApp : IShellSurface
     private Notifier? notifier;
     private readonly OpenAsks asks = new();
     private readonly SaveDownAsks saveDownAsks = new();
+    private readonly SaveBlockedAsks saveBlockedAsks = new();
     private System.Threading.Timer? askTimer;
     private int asksPosted;
 
@@ -137,8 +138,13 @@ internal sealed partial class TrayApp : IShellSurface
     private void UpdateAsks()
     {
         if (quitting || notifier is null) return;
+        UpdateSaveBlockedAsks();
         IReadOnlyList<OpenPromptInfo> open;
-        try { open = host.CurrentOpenPrompts(); }
+        try
+        {
+            var blocked = host.View.Notices.Where(n => n.Kind == NoticeKinds.SaveBlocked).SelectMany(n => n.Items).Select(i => i.Path).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            open = host.CurrentOpenPrompts().Where(p => !blocked.Contains(p.Path)).ToArray();
+        }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
             log.Error("could not read the open files", error);
@@ -147,6 +153,18 @@ internal sealed partial class TrayApp : IShellSurface
         foreach (var tag in asks.Update(open, WindowShowing, DateTimeOffset.UtcNow)) notifier.Withdraw(tag, ToastXml.OpenGroup);
         ScheduleAsk();
         UpdateSaveDownAsks();
+    }
+
+    private void UpdateSaveBlockedAsks()
+    {
+        var (show, withdraw) = saveBlockedAsks.Update(host.View);
+        foreach (var tag in withdraw) notifier!.Withdraw(tag, "saveblocked");
+        foreach (var (tag, card) in show)
+        {
+            var toast = new ToastContent(tag, "saveblocked", card.Title, card.Detail, OpenLink([], tag),
+                [new(card.Action!.Label, OpenLink([card.Key], tag, ProtocolLink.SaveBlocked))]);
+            notifier!.Ask(toast, (card.Title, card.Detail + " Click here to open Armory."));
+        }
     }
 
     // ---- The question before a save down (B2) ------------------------------------------------

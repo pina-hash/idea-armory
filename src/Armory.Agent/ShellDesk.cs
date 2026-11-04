@@ -18,6 +18,7 @@ internal interface IShellHost
     Task<ActionResult> UndoCheckOutAsync(IReadOnlyList<string> paths);
     Task<ActionResult> TakeBackAsync(IReadOnlyList<Guid> fileIds);
     Task<ActionResult> CheckOutAndReopenAsync(IReadOnlyList<string> paths);
+    Task<ActionResult> SaveBlockedActionAsync(string key);
     // The question before a save down: save in the project's year, or keep the file here only.
     Task<ActionResult> AnswerSaveDownAsync(string path, bool keepLocal);
     // Open, as the window's own Open does it (SolidWorks for a part; read-only unless checked out here).
@@ -265,6 +266,11 @@ internal sealed class ShellDesk(Action<string> log, TimeProvider? timeProvider =
         {
             s.OpenWindow();
             s.Answer(new ActionResult(false, ShellWords.ConnectFirst));
+            return;
+        }
+        if (ticket.Action == ProtocolLink.SaveBlocked)
+        {
+            s.Answer(await h.SaveBlockedActionAsync(ticket.Paths[0]).ConfigureAwait(false));
             return;
         }
         if (ticket.Action is ProtocolLink.SaveIn or ProtocolLink.KeepLocal)

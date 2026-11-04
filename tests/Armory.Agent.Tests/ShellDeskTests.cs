@@ -80,6 +80,7 @@ internal sealed class FakeShellHost(AgentView view) : IShellHost
     public Task<ActionResult> UndoCheckOutAsync(IReadOnlyList<string> paths) => Call("undo", paths);
     public Task<ActionResult> TakeBackAsync(IReadOnlyList<Guid> fileIds) => Call("force check in", fileIds.Select(i => i.ToString()));
     public Task<ActionResult> CheckOutAndReopenAsync(IReadOnlyList<string> paths) => Call("check out and reopen", paths);
+    public Task<ActionResult> SaveBlockedActionAsync(string key) => Call("blocked save", [key]);
     public Task<ActionResult> AnswerSaveDownAsync(string path, bool keepLocal) => Call(keepLocal ? "keep local" : "save in the pinned year", [path]);
     public Task<ActionResult> LaunchAsync(string path) => Call("open", [path]);
     public bool PickerShowing { get; set; }

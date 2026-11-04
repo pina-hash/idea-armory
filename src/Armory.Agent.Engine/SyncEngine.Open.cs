@@ -242,6 +242,7 @@ public sealed partial class SyncEngine
                 changed.Changed = true;
                 break;
             case LinkSaving saving when ToVault(saving.Path) is { } path:
+                SaveAttempted(path);
                 savingHolds[path.Value] = (saving.SaveId, deps.Clock.GetUtcNow());
                 if (Document(saving.ProcessId, saving.Path) is { } beingSaved) beingSaved.Saving = saving.Mode;
                 break;
@@ -261,6 +262,7 @@ public sealed partial class SyncEngine
                 checkedDoc.Compatibility = compatibility;
                 break;
             case LinkClosed closed when ToVault(closed.Path) is { } path:
+                BlockedSaves.Forget(path.Value);
                 if (linkDocuments.TryGetValue(DocumentKey(closed.ProcessId, path.Value), out var gone)) ForgetDocument(DocumentKey(closed.ProcessId, path.Value), gone);
                 // A file waiting to open again once closed: the next pass sees it closed.
                 if (reopenWhenClosed.ContainsKey(path.Value)) wake.Release();
@@ -290,6 +292,7 @@ public sealed partial class SyncEngine
 
     private void OnSaved(LinkSaved saved, VaultPath path)
     {
+        BlockedSaves.Forget(path.Value);
         if (saved.Stamp is { } stamp) KeepStamp(stamp);
         savingHolds.Remove(path.Value);
         if (Document(saved.ProcessId, saved.Path) is { } doc)
@@ -331,7 +334,11 @@ public sealed partial class SyncEngine
             if (count <= 1) linkOpen.Remove(doc.Path);
             else linkOpen[doc.Path] = count - 1;
         }
-        if (linkDocuments.Values.All(d => !string.Equals(d.Path, doc.Path, StringComparison.OrdinalIgnoreCase))) savingHolds.Remove(doc.Path);
+        if (linkDocuments.Values.All(d => !string.Equals(d.Path, doc.Path, StringComparison.OrdinalIgnoreCase)))
+        {
+            savingHolds.Remove(doc.Path);
+            BlockedSaves.Forget(doc.Path);
+        }
     }
 
     // The running SolidWorks the words speak of: the one that attached last.
@@ -618,13 +625,14 @@ public sealed partial class SyncEngine
     // notifications, from the link's documents while a SolidWorks is linked, else from markers.
     private PromptView? Prompt()
     {
+        var blocked = SaveBlockedCards().Select(c => c.Items[0].Path).ToHashSet(StringComparer.OrdinalIgnoreCase);
         PromptView? prompt = null;
         List<string> open = [];
         List<OpenPrompt> prompts = [];
         if (linkSessions.Count > 0)
         {
             // Documents the student opened, newest first; one per path (two SolidWorks may have it).
-            var docs = linkDocuments.Values.Where(d => d.TopLevel).OrderByDescending(d => d.OpenedAt).ThenBy(d => d.Path, StringComparer.OrdinalIgnoreCase)
+            var docs = linkDocuments.Values.Where(d => d.TopLevel && !blocked.Contains(d.Path)).OrderByDescending(d => d.OpenedAt).ThenBy(d => d.Path, StringComparer.OrdinalIgnoreCase)
                 .GroupBy(d => d.Path, StringComparer.OrdinalIgnoreCase).Select(g => g.First()).ToList();
             var asked = docs.Where(d => d.Asked).ToList();
             var groups = OpenBursts.LinkGroups(asked.Select(d => (d.Path, d.AskedAt)))
