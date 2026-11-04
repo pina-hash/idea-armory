@@ -24,9 +24,11 @@ internal sealed class SaveBlockedAsks
         List<(string, NoticeGroupView)> show = [];
         foreach (var (tag, card) in tags)
         {
-            var version = card.Key + card.Detail + card.Action?.Label;
-            if (shown.GetValueOrDefault(tag) == version) continue;
-            shown[tag] = version;
+            // The detector owns burst identity. A refreshed reason or newly available
+            // checkout action updates Home, but must not notify again for the same burst.
+            // The notification carries this key; its click rechecks the current action.
+            if (shown.GetValueOrDefault(tag) == card.Key) continue;
+            shown[tag] = card.Key;
             show.Add((tag, card));
         }
         return (show, withdraw);
