@@ -40,6 +40,8 @@ internal sealed class ShellThumbnails : IDisposable
     // the same file joins it.
     private readonly Dictionary<Key, Job> asked = [];
     private readonly Func<string, int, byte[]?> make;
+    private readonly Previews.ContentPreviews previews = new();
+    private readonly bool managedPreviews;
     private readonly Action<string>? log;
     private readonly Action<string>? stuck;
     private readonly TimeProvider clock;
@@ -57,7 +59,8 @@ internal sealed class ShellThumbnails : IDisposable
     {
         this.log = log;
         this.stuck = stuck;
-        this.make = make ?? Make;
+        managedPreviews = make is null;
+        this.make = make ?? ((file, size) => Previews.ContentPreviews.Supports(file) ? previews.Make(file, size) : Make(file, size));
         this.clock = clock ?? TimeProvider.System;
         this.answerWithin = answerWithin ?? AnswerWithin;
         this.stuckAfter = stuckAfter ?? StuckAfter;
@@ -79,7 +82,10 @@ internal sealed class ShellThumbnails : IDisposable
         lock (gate)
         {
             if (disposed || stuckThreads >= MaxStuck) return Task.FromResult<byte[]?>(null);
-            if (cache.TryGetValue(key.Value, out var known) && (known.Until is not { } until || clock.GetUtcNow() < until)) return Task.FromResult(known.Png);
+            // Managed previews verify the content hash on the worker, even if size/time match.
+            // The queue, answer deadline and host are shared with shell pictures.
+            if (!(managedPreviews && Previews.ContentPreviews.Supports(file)) &&
+                cache.TryGetValue(key.Value, out var known) && (known.Until is not { } until || clock.GetUtcNow() < until)) return Task.FromResult(known.Png);
             if (!asked.TryGetValue(key.Value, out job))
             {
                 job = new Job(file, key.Value);

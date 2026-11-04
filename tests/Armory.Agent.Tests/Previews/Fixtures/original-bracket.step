@@ -1,0 +1,10 @@
+ISO-10303-21;
+HEADER;
+FILE_DESCRIPTION(('Original preview-only STEP fixture'),'2;1');
+FILE_NAME('Original bracket','2026-11-03T00:00:00',('Armory preview tests'),(''),'', '', '');
+FILE_SCHEMA(('CONFIG_CONTROL_DESIGN'));
+ENDSEC;
+DATA;
+#1=PRODUCT('bracket','Original bracket','No modeled solid in this fixture',());
+ENDSEC;
+END-ISO-10303-21;

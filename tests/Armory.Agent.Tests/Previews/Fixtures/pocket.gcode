@@ -1,0 +1,13 @@
+; Original preview fixture, never run on a machine
+G21 G90 G17
+G0 X-8 Y-5 Z5
+G0 X0 Y0
+G1 Z-1 F100
+G1 X40 Y0 F400
+Y24
+X0
+Y0
+G0 X10 Y12
+G2 X30 Y12 I10 J0
+G2 X10 Y12 I-10 J0
+G0 X45 Y28
