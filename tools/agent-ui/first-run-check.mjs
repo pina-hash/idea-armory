@@ -103,6 +103,31 @@ const nexts = [...cs.matchAll(/var next = protection\.CanCheckOut \? "([^"]+)"\s
 if (words_.length < 5 || nexts.length !== 2) fail('could not read the save-blocked words from SaveBlockedDetector.cs');
 for (const w of words_) for (const n of nexts) instruction('save-blocked', w + ' ' + n, 2);
 
+// Every whole sentence written into the window (app.js), tooltips included, grades 5 or
+// lower: each single-quoted literal that starts with a capital and ends with . ! or ?.
+// Sentences built from pieces at run time are not read here; the cold-user test reads
+// those as the window shows them on the first run.
+function sourceSentencesOver(src) {
+	const out = [];
+	let n = 0;
+	for (const m of src.matchAll(/'((?:[^'\\\n]|\\.){12,})'/g)) {
+		const t = m[1].replace(/\\'/g, "'");
+		if (!/^[A-Z].*[.!?]$/.test(t) || /[<>{}=]/.test(t)) continue;
+		n++;
+		const g = gradeOfString(t);
+		if (g !== null && g > BAR) out.push(`grade ${g}: "${t}"`);
+	}
+	return { n, out };
+}
+{
+	// The control: a planted hard tooltip is caught, or a zero below says nothing.
+	const planted = sourceSentencesOver("var tips = { x: 'Institutional accountability necessitates comprehensive documentation.', y: 'Click here.' };");
+	if (planted.out.length !== 1) fail('the app.js sentence sweep missed its planted hard sentence');
+	const real = sourceSentencesOver(fs.readFileSync(path.join(WWWROOT, 'app.js'), 'utf8'));
+	for (const o of real.out) fail('app.js: ' + o);
+	tally.appSentences = real.n;
+}
+
 // One vocabulary: no second name for checking out, checking in or the folder.
 const BANNED = /\b(lock(?:ed|s)?|unlock|reserve[sd]?|grab|sync(?:ed|ing)?|push(?:ed)?|vault)\b/i;
 const copy = [
@@ -115,7 +140,7 @@ const copy = [
 ];
 for (const t of copy) if (BANNED.test(t)) fail(`a second word for an Armory idea: "${t}"`);
 
-console.log(`FIRST-RUN strings=${tally.strings} worstGrade=${tally.worst} (${tally.worstText}) lessonCards=${lesson.steps.length} words=${glossary.list.length} helpCards=${help.cards.length + 1} realLines=${REAL.length}`);
+console.log(`FIRST-RUN strings=${tally.strings} appSentences=${tally.appSentences} worstGrade=${tally.worst} (${tally.worstText}) lessonCards=${lesson.steps.length} words=${glossary.list.length} helpCards=${help.cards.length + 1} realLines=${REAL.length}`);
 for (const f of fails) console.log('  FAIL ' + f);
 console.log(fails.length ? 'FIRST-RUN FAIL' : 'FIRST-RUN PASS');
 process.exit(fails.length ? 1 : 0);

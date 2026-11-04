@@ -498,23 +498,23 @@
 		fileSearch: 'Find a file by any part of its name or folder path in this folder and the folders inside it. Ctrl+F focuses this box; Escape clears it.',
 		searchClear: 'Clear the search words and keep the quick filters.',
 		searchReset: 'Clear the search words and every quick filter to show all files again.',
-		searchMe: 'Show files checked out by you, including on your other computers.',
+		searchMe: 'Show the files you have checked out, here or on another computer.',
 		searchOthers: 'Show files checked out by other people.',
 		searchChanged: 'Show files with changes on this computer.',
-		selectMatching: function (c) { return c.all ? 'Let go of every matching file selected here.' : 'Select all ' + plural(c.count, 'matching file', 'matching files') + ' shown here.'; },
+		selectMatching: function (c) { return c.all ? 'Stop picking the files that match.' : 'Select all ' + plural(c.count, 'matching file', 'matching files') + ' shown here.'; },
 		// The header.
 		vault: function (c) { return 'Open your Armory folder, ' + c.root + ', in File Explorer.'; },
 		feedback: 'Tell the IDEA team what got in your way, an idea you have, or something you like.',
 		settings: 'Change where your files are kept, how Armory starts, and its colors.',
 		// Connect.
 		connect: 'Open your browser to sign in with your school Google account. You only do this once.',
-		connectAgain: 'Open your browser and try signing in again.',
+		connectAgain: 'Open your browser and try to sign in again.',
 		browserAgain: 'Open the sign-in page in your browser again, if you closed it.',
 		cancelConnect: 'Stop signing in. You can connect this computer later.',
 		// The folder belongs to someone else.
 		takeFolder: function (c) { return 'Make this Armory folder yours. Armory checks first that nothing of ' + c.owner + ' is waiting in it, and nothing of theirs changes.'; },
 		ownFolder: function (c) { return 'Keep your files in a new folder of your own: ' + c.path + '.'; },
-		chooseFolder: 'Pick a different folder on this computer for your Armory files.',
+		chooseFolder: 'Pick a new folder here for your Armory files.',
 		signOutTaken: 'Sign out, so the person this folder belongs to can sign in.',
 		// A shared computer's picker.
 		pickTile: function (c) {
@@ -525,13 +525,13 @@
 		addStudent: 'Add yourself to this computer. You sign in with your school Google account once, then pick your name each time.',
 		forgotPin: 'Sign in with your school Google account instead, then choose a new PIN.',
 		pickerBack: 'Go back to the list of students.',
-		addAgain: 'Open your browser and try adding yourself again.',
+		addAgain: 'Open your browser and try to add yourself again.',
 		addCancel: 'Stop adding a student and go back to the list.',
 		signInCancel: 'Stop signing in and go back to the list of students.',
 		signInGo: function (c) { return 'Open your browser to sign in as ' + c.name + ' with your school Google account.'; },
 		// Home: status and this computer.
 		pause: 'Stop uploading and downloading for now. Your work stays safe on this computer.',
-		resume: 'Start uploading and downloading again.',
+		resume: 'Turn uploads and downloads back on.',
 		switchAccount: 'Sign out and let the next person sign in to this same Armory folder.',
 		signOut: 'Sign out of Armory on this computer. Your files stay in the Armory folder.',
 		switchStudent: 'Show the list of students, so the next one can pick their name.',
@@ -568,7 +568,7 @@
 				case 'repairVaultRoot':
 					return 'Move Armory back to the folder that holds your projects. Copies that are the same are joined, and a file changed in two places keeps both.';
 				case 'openVault':
-					return 'Open your Armory folder in File Explorer, so you can move these files into a project folder.';
+					return 'Open your Armory folder, so you can move these files into a project.';
 				case 'chooseVaultRoot':
 					return 'Pick the folder that holds your project folders.';
 			}
@@ -612,7 +612,7 @@
 		deleteFolder: function (c) { return 'Delete ' + c.name + ' and its files for everyone on the team. The history of every file is kept.'; },
 		folderOut: function (c) {
 			if (!c.files) return 'This folder has no files to check out.';
-			return c.count ? 'Check out the ' + plural(c.count, 'file', 'files') + ' nobody has checked out in ' + c.name + c.inside + '. Armory asks first.' : 'Every file here is checked out already.';
+			return c.count ? 'Check out the ' + plural(c.count, 'file', 'files') + ' nobody has checked out in ' + c.name + c.inside + '. Armory asks first.' : 'You or someone else has every file here checked out.';
 		},
 		folderIn: function (c) { return c.count ? 'Check in the ' + plural(c.count, 'file', 'files') + ' you have checked out in ' + c.name + c.inside + '.' : 'Nothing here is checked out by you.'; },
 		folderForce: function (c) {
@@ -623,12 +623,12 @@
 			return c.all ? 'Clear the selection.' : 'Select all ' + plural(c.count, 'file', 'files') + ' in this folder. The folders in it are left out.';
 		},
 		// The selection bar.
-		selOut: function (c) { return c.count ? 'Check out the ' + plural(c.count, 'selected file', 'selected files') + ' nobody has checked out, so you can change them.' : 'None of the selected files can be checked out: each one is checked out already.'; },
+		selOut: function (c) { return c.count ? 'Check out the ' + plural(c.count, 'selected file', 'selected files') + ' nobody has checked out, so you can change them.' : 'You can\'t check out any of these: each one is out already.'; },
 		selIn: function (c) { return c.count ? 'Check in the ' + plural(c.count, 'selected file', 'selected files') + ' you have checked out, to share your changes.' : 'None of the selected files is checked out by you.'; },
 		selUndo: function (c) {
 			return c.count ? 'Put the ' + plural(c.count, 'selected file', 'selected files') + ' you have checked out back as they were. Your changes are kept as your own copies.' : 'None of the selected files is checked out by you.';
 		},
-		selForce: function (c) { return c.count ? 'Check in the ' + plural(c.count, 'selected file', 'selected files') + ' other people have checked out. Their changes are kept as their own copies.' : 'Nobody else has a selected file checked out.'; },
+		selForce: function (c) { return c.count ? 'Check in the ' + plural(c.count, 'selected file', 'selected files') + ' other people have checked out. Their changes are kept as their own copies.' : 'Nobody else has one of these files checked out.'; },
 		selEvery: function (c) { return 'Select all ' + plural(c.count, 'file', 'files') + ' in this folder.'; },
 		selClear: 'Clear the selection (Esc).',
 		// File detail.
@@ -643,12 +643,12 @@
 		putBack: function (c) { return 'Put this copy back on this computer, checked out to you. Check it in afterward to share it with the team.'; },
 		// Settings.
 		done: 'Close Settings (Esc).',
-		changeRoot: 'Choose another folder on this computer for your Armory files.',
+		changeRoot: 'Pick a new folder here for your Armory files.',
 		startSwitch: function (c) { return c.on ? 'On: Armory starts by itself when you sign in to Windows. Click to turn it off.' : 'Off: Armory waits until you start it. Click to start it by itself when you sign in to Windows.'; },
 		themeSystem: 'Light or dark, the way Windows is set.',
 		themeIdea: 'The dark IDEA colors.',
 		themeSpaceWhite: 'The light Space White colors.',
-		turnOnBadges: 'Show Armory\'s status on file icons in File Explorer. Windows asks for an administrator\'s password once.',
+		turnOnBadges: 'Show Armory\'s marks on file icons in File Explorer. Windows asks for the admin password once.',
 		pinsSwitch: function (c) {
 			if (c.off) return 'Only a mentor can change this, for this computer.';
 			return c.on ? 'On: each person types their PIN to switch. Click to switch with one click.' : 'Off: picking a name switches at once. Click to ask for a PIN.';
@@ -657,9 +657,9 @@
 		report: 'Tell the IDEA team what went wrong. A short record of what Armory was doing goes with your words.',
 		sendFeedback: 'Send your ideas or comments to the IDEA team.',
 		yourFeedback: 'See the feedback you sent from this account, and where each note is with the IDEA team.',
-		incidents: 'Open the folder where Armory keeps its problem reports, to hand them over by hand.',
+		incidents: 'Open the folder where Armory keeps its problem notes, so you can hand them in.',
 		// The small dialog.
-		cancel: 'Close without doing anything (Esc).',
+		cancel: 'Close this and change nothing (Esc).',
 		ask: function (c) {
 			switch (c.kind) {
 				case 'report':
@@ -673,13 +673,13 @@
 				case 'newFolder':
 					return 'Make the folder with the name you typed.';
 				case 'renameFolder':
-					return 'Rename the folder for everyone on the team.';
+					return 'Rename this folder for the whole team.';
 				case 'deleteFolder':
 					return 'Delete the folder for everyone on the team. The history of its files is kept.';
 				case 'feedback':
 					return c.withoutPicture ? 'Send your note without the picture.' : 'Send your note to the IDEA team.';
 				case 'removeProfile':
-					return 'Remove this student from this computer. No files are deleted.';
+					return 'Take this student off this computer. No files are lost.';
 			}
 			return c.count === 1 ? 'Check the file in for the person who has it. Their changes are kept as their own copy.' : 'Check these files in for the people who have them. Their changes are kept as their own copies.';
 		},
@@ -687,9 +687,9 @@
 			return 'Check in the files other people have checked out here, then ' + (c.kind === 'deleteFolder' ? 'delete the folder' : 'rename it') + '. Their changes are kept as their own copies.';
 		},
 		kind: function (c) {
-			return { bug: 'Something in Armory broke or did the wrong thing.', idea: 'Something you would like Armory to do.', praise: 'Something you like about Armory.', other: 'Anything else you want to tell the IDEA team.' }[c.kind] || '';
+			return { bug: 'Something in Armory broke or did the wrong thing.', idea: 'Something you would like Armory to do.', praise: 'Tell us something you like about Armory.', other: 'Anything else you want to tell the IDEA team.' }[c.kind] || '';
 		},
-		addShot: 'Add a picture of only this window. Email addresses and file pictures are hidden, and you see it before it goes.',
+		addShot: 'Add a picture of just this window. Emails and file pictures are hidden, and you see it first.',
 		removeShot: 'Send your note without this picture.',
 		mineLink: 'See the feedback you sent, and where each note is.',
 		mineBack: 'Go back to your note. Your words are kept.',
@@ -1351,7 +1351,7 @@
 		var waiting = s.connectPhase === 'waitingForBrowser';
 		var failed = s.connectPhase === 'failed';
 		var html = studentHtml(p);
-		if (waiting) html += lcdPlate('look', 'Waiting for Google', (s.message ? s.message + ' ' : '') + 'This window updates by itself.', true);
+		if (waiting) html += lcdPlate('look', 'Waiting for Google', (s.message ? s.message + ' ' : '') + 'This window shows each step as it happens.', true);
 		else if (failed) html += lcdPlate('bad', 'Sign-in didn\'t finish', s.message || 'Check that you\'re online, then try again.', false);
 		else html += '<p class="lead">' + esc(glue(s.message || 'Sign in with your school Google account once more.')) + '</p>';
 		html += '<p class="connect-where">' + NOT_YOU + '</p>';
@@ -1525,7 +1525,7 @@
 				(pr.pinsRequired
 					? 'Each person types their PIN to switch to themselves, so nobody uses another person\'s sign-in by accident. '
 					: 'Picking a name switches at once. ') +
-					(pr.canChangePins ? 'Only mentors can change this, for this computer.' : 'A mentor can turn PINs on for this computer.') +
+					(pr.canChangePins ? 'Only a mentor can change this on this computer.' : 'A mentor can turn PINs on for this computer.') +
 					(pr.pinsNote ? ' ' + pr.pinsNote : '')
 			) +
 			'</p>';
@@ -3228,7 +3228,7 @@
 			title = 'Undo my check outs';
 			body =
 				'Undo all ' + plural(c.count, 'check out', 'check outs') + '? Each file goes back to the version from before you checked it out, and anyone can check it out. ' +
-				'Changes you saved are kept as your own copies in each file\'s history, so nothing is lost.';
+				'Each file keeps the changes you saved as your own copy, so nothing is lost.';
 			ok = 'Undo ' + plural(c.count, 'check out', 'check outs');
 			cancelFirst = true;
 		} else if (kind === 'renameFile') {
@@ -3252,7 +3252,7 @@
 			title = 'Delete folder';
 			body =
 				'Delete ' + c.name + (c.files ? ' and the ' + plural(c.files, 'file', 'files') + ' in it' : '') + ' from ' + c.project + '? It goes for everyone on the team. ' +
-				(c.files ? 'The history of every file is kept, so a file can be brought back later.' : 'It has no files in it.');
+				(c.files ? 'Each file keeps all its old versions, so it can come back later.' : 'It has no files in it.');
 			ok = 'Delete folder';
 			danger = true;
 			if (c.held && c.canTakeBack) force = 'Force check in ' + plural(c.held, 'file', 'files') + ' and delete';
@@ -4105,7 +4105,7 @@
 			case 'sendFeedback':
 				return { line: 'Sending your feedback...', row: null };
 			case 'turnOnBadges':
-				return { line: 'Waiting for an administrator\'s password...', row: null };
+				return { line: 'Waiting for the admin to type a password...', row: null };
 			case 'enterPin':
 				return { line: 'Checking your PIN...', row: null };
 			case 'setPinsRequired':

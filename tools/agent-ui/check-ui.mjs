@@ -1042,7 +1042,7 @@ for (const size of SIZES) {
 		await page.click('[data-key="fk-delete"]');
 		await settle(page);
 		const words = await text(page, '#ask-words');
-		expect(/the 8 files in it/.test(words) && /history of every file is kept/.test(words), `Delete folder says "${words}"`);
+		expect(/the 8 files in it/.test(words) && /keeps all its old versions/.test(words), `Delete folder says "${words}"`);
 		await page.keyboard.press('Escape');
 		await settle(page);
 		const f = await page.evaluate(() => document.activeElement.getAttribute('data-key'));
