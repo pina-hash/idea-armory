@@ -79,8 +79,15 @@ internal sealed partial class TrayApp : ApplicationContext
         attentionTimer = new System.Windows.Forms.Timer { Interval = 2000 };
         attentionTimer.Tick += (_, _) => TellAttention();
         attentionTimer.Start();
-        showWait = ThreadPool.RegisterWaitForSingleObject(instance.ShowSignal, (_, _) => Post(OpenWindow), null, Timeout.Infinite, executeOnlyOnce: false);
+        // 0.5.8: a second launch's Show is answered once the window is up (Acknowledge), and the
+        // second launch is told the tray listens (MarkReady); one that gets no answer says so.
+        showWait = ThreadPool.RegisterWaitForSingleObject(instance.ShowSignal, (_, _) => Post(() =>
+        {
+            OpenWindow();
+            if (WindowShowing) instance.Acknowledge();
+        }), null, Timeout.Infinite, executeOnlyOnce: false);
         quitWait = ThreadPool.RegisterWaitForSingleObject(instance.QuitSignal, (_, _) => Post(Quit), null, Timeout.Infinite, executeOnlyOnce: false);
+        instance.MarkReady();
 
         _ = StartAsync(background);
         updater = new Updater(log, paths, words => Post(() =>

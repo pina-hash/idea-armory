@@ -93,6 +93,12 @@ public sealed class IncidentReporter : IFlightObserver
         return snapshot;
     }
 
+    // 0.5.8: one incident from outside the flight (a launch that could not reach the running
+    // Armory, the cleanup of other installs giving way), saved on this thread under the same
+    // throttle as every other kind. Null when the throttle held it back or it could not be saved.
+    public string? Save(Glitch glitch)
+        => throttle.TryAdmit(glitch.Kind, clock.GetUtcNow()) ? Write(glitch, Quick(), null) : null;
+
     // A crash the process will not survive: recorded and saved on this thread, before it ends.
     public string? CrashNow(string where, object? error)
     {

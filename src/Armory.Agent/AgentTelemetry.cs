@@ -69,10 +69,17 @@ internal sealed class AgentTelemetry : IAsyncDisposable
     private IncidentHeader Header()
     {
         var current = session();
-        string os;
-        try { os = RuntimeInformation.OSDescription + " (" + RuntimeInformation.OSArchitecture + ")"; }
-        catch (Exception error) when (error is not OutOfMemoryException) { os = Environment.OSVersion.VersionString; }
-        return new IncidentHeader(AgentPaths.Version, os, current?.DeviceName ?? Environment.MachineName, current?.Email, MachineId.Current);
+        return new IncidentHeader(AgentPaths.Version, OsWords(), current?.DeviceName ?? Environment.MachineName, current?.Email, MachineId.Current);
+    }
+
+    // 0.5.8: a launch with no sign-in of its own (StartupIncidents). No address: the file goes
+    // with whoever is using Armory when it is sent (docs/agent/TELEMETRY.md).
+    internal static IncidentHeader HeaderWithoutSession() => new(AgentPaths.Version, OsWords(), Environment.MachineName, null, MachineId.Current);
+
+    private static string OsWords()
+    {
+        try { return RuntimeInformation.OSDescription + " (" + RuntimeInformation.OSArchitecture + ")"; }
+        catch (Exception error) when (error is not OutOfMemoryException) { return Environment.OSVersion.VersionString; }
     }
 
     // The host is up: who is signed in, the engine's snapshot, and the uploader on its network.
@@ -115,6 +122,13 @@ internal sealed class AgentTelemetry : IAsyncDisposable
     // At start: the run before ended without "stopped". Its crash incident comes from the last
     // flight it wrote (a stack overflow leaves nothing else).
     internal string? PreviousRunEnded(string lastLine, string? why = null, string? veryLastLine = null) => Reporter.PreviousRunEnded(lastLine, why, veryLastLine);
+
+    // 0.5.8: one incident from outside the flight (the install cleanup giving way), under the throttle.
+    internal string? Save(Glitch glitch)
+    {
+        try { return Reporter.Save(glitch); }
+        catch (Exception error) when (error is not OutOfMemoryException) { log.Error("could not save an incident", error); return null; }
+    }
 
     // An exception nothing caught; the process ends after this returns.
     internal void CrashNow(string where, object? error)

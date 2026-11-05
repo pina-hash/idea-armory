@@ -188,6 +188,22 @@ public sealed class GlitchRuleTests
         Assert.True(glitch.Summary.Length <= 500);
         Assert.DoesNotContain('\n', glitch.Summary);
         Assert.StartsWith("Reported from the window (bug): It froze when I pressed Check in.", glitch.Summary);
-        Assert.Equal(7, GlitchKinds.All.Count);
+        Assert.Equal(9, GlitchKinds.All.Count);
+    }
+
+    [Fact]
+    public void A_cleanup_that_gave_way_and_a_launch_that_could_not_reach_armory_are_their_own_incidents()
+    {
+        var retire = GlitchRules.RetireFailed("deferred: another retirement owns the inventory\n(exit 1)");
+        Assert.Equal(GlitchKinds.RetireFailed, retire.Kind);
+        Assert.Equal("retireFailed", retire.Kind);
+        Assert.StartsWith("Armory opened, but the cleanup of other Armory installs did not finish: deferred", retire.Summary);
+        Assert.DoesNotContain('\n', retire.Summary);
+        var blocked = GlitchRules.StartupBlocked("no answer in 5 s from process 4120");
+        Assert.Equal("startupBlocked", blocked.Kind);
+        Assert.Contains("process 4120", blocked.Summary);
+        Assert.Null(blocked.Trigger);
+        // Both are one word, as the site's armory_submit_app_incident requires.
+        Assert.All(GlitchKinds.All, kind => Assert.Matches("^[A-Za-z][A-Za-z0-9_-]{0,39}$", kind));
     }
 }

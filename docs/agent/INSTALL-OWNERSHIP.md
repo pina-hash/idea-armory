@@ -39,8 +39,9 @@ stubs after the update callback, so repairing only inside that callback can be o
 
 ## Built behavior
 
-`InstallRetirement` runs the embedded `installer/scripts/Retire.ps1` before the single-instance
-handoff. Install/update callbacks start an external Windows PowerShell waiter, which survives
+`InstallRetirement` runs the embedded `installer/scripts/Retire.ps1`. From 0.5.5 to 0.5.7 that
+was before the single-instance handoff and could end the launch; since 0.5.8 it runs after the
+window (see "0.5.8: never a silent launch" below). Install/update callbacks start an external Windows PowerShell waiter, which survives
 Velopack's post-hook termination of processes inside the install root. It waits for its parent
 installer/updater to exit, then starts the same reconciliation. An isolated `ARMORY_DATA_DIR` instance and a
 development bin/obj build do not participate. A directly launched release carrying its packaged
@@ -76,7 +77,8 @@ the root's existing files; otherwise its launchers and updater are retired and o
 Manifest cleanup uses `current` for these roots, and cached-package hashes also cover the
 bundled `current\Squirrel.exe` and execution stub, so those cannot re-create the retired app.
 Slow uninstallers retain the safe hook until they finish. The application waits at most 90
-seconds before giving this launch up; it does not kill an uninstaller midway through cleanup.
+seconds for the script; it does not kill an uninstaller midway through cleanup. Since 0.5.8 the
+launch goes on when that wait runs out.
 
 Legacy compiled uninstall records can also remove shared shell keys and local registry fields.
 Those fields are preserved, then the survivor's executable/forwarder targets are repaired.
@@ -93,6 +95,93 @@ present while aliases are removed.
 Each removal/deferral goes to the retirement audit under `logs`, then to the existing
 `FlightRecorder.Note` and scrubbed agent log. Atomic replay handles interrupted records. The
 running process also drains late events from a second launch or an update worker.
+
+## 0.5.8: never a silent launch
+
+Reported November 5, 2026 (0.5.7, school lab): "It's just not opening... Fresh install. Doesn't
+open. No message, nothing." Found by reading the code; not yet reproduced on a lab computer.
+
+**What made a launch end without a word (0.5.5 to 0.5.7).**
+
+1. `Program.Main` ran `InstallRetirement.Run` before the single-instance guard, the log, the crash
+   handlers and the window, and returned 1 when it said false. It said false for any non-zero
+   script exit, a 90 second timeout, and an `IOException`, `UnauthorizedAccessException`,
+   `Win32Exception` or `InvalidOperationException`. The script exits non-zero when another
+   inventory holds `Global\IDEA-Armory-Retire-<SID>` for 60 seconds (exit 1), when this copy was
+   retired while it waited (exit 2), and on any error under `$ErrorActionPreference = 'Stop'`:
+   `Get-CimInstance Win32_Process -ErrorAction Stop` where WMI is restricted, `Add-Type` under
+   Constrained Language Mode, and Windows PowerShell refusing the `.ps1` in `%TEMP%` (an execution
+   policy set by Group Policy wins over `-ExecutionPolicy Bypass`; AppLocker and Defender rules for
+   scripts in TEMP). Those are all common on school-managed computers, which fits "some computers".
+   A fresh install makes it likelier: the install hook's worker runs the same inventory while the
+   first launch starts, so one of them waits on the other's lock.
+2. `SingleInstance.Acquire` falls back to a copy that is not first when an elevated Armory (one a
+   setup run as administrator started) owns the guard's names. That launch signaled an unnamed
+   event and exited 0. A hung first copy took a Show and never opened, and the launch also exited 0.
+3. Any exception before the crash handlers were attached ended the process with no trace.
+
+The only record of case 1 was a line in the retirement audit file:
+`%LOCALAPPDATA%\IDEA Armory\logs\install-retirement.jsonl` (on a lab computer,
+`C:\Users\<Windows account>\AppData\Local\IDEA Armory\logs\install-retirement.jsonl`, normally
+the IDEA account), one JSON string per line beginning with the UTC time, for example
+`deferred: another retirement owns the inventory` or `retirement failed: <reason>`. A run that
+starts renames it to `install-retirement.jsonl.replay` while it copies the lines into agent.log
+as `retire: ...`, then deletes it. A 0.5.7 that never opened never got that far, so on a failing
+computer the file is still there, and the first 0.5.8 run moves its lines into agent.log. Such a
+computer also never downloads an update (the updater runs inside the open app), so it needs
+`IDEAArmory-win-Setup.exe` from the 0.5.8 release run once.
+
+**Built behavior.**
+
+- The guard is taken first (`LaunchFlow`). The first copy opens its window, then runs the cleanup
+  on its own STA thread 3 seconds later (`InstallRetirement.StartInBackground`), with the same
+  90 second wait and lock. It never kills the script: past the wait the script keeps its lock and
+  any uninstaller it started finishes. Every outcome is logged as `retire: <outcome>`, and one
+  that did not finish is a `retireFailed` incident (docs/agent/TELEMETRY.md). The window and the
+  engine go on either way. The post-update worker (`--armory-finish-update`) still exits 1 on a
+  failed inventory, as AfterUpdate.ps1 expects.
+- Two copies running at once during the cleanup is not unsafe here, so nothing is refused. The
+  guard has had one name in every release since 0.1.0 (`Local\IDEA-Armory-Agent-<SID>`), so a
+  copy that holds it is the only engine on this account; the other Armory processes the script
+  can find are second launches on their way out, and it closes those only by their full path.
+  One thing changed with the order: an older copy's own `--quit` signals whichever copy holds the
+  guard, and that is now the survivor. The survivor passes `-CallerRunning`, and the script then
+  closes older copies by path (CloseMainWindow, then stop) instead of asking them to quit.
+- Only when another install's Armory holds the guard (a leftover copy started at sign-in, the
+  case 0.5.5 was built for) does a launch run the cleanup before its window, because only that
+  copy's end frees the guard. When it finishes, the launch waits up to 10 seconds for the guard and
+  runs as the first copy. When it does not, the launch writes `logs\launch.log`, files a
+  `retireFailed` incident and hands off to the copy that runs, whose window comes up.
+- A second launch waits to be answered (`SecondLaunch`, `Handoff`). A 0.5.8 first copy sets
+  `-Ready` once its tray listens and `-Shown` once a Show brought its window up; the second launch
+  waits up to 60 seconds for Ready (a slow start) and 5 seconds for Shown. A 0.5.7 or older first
+  copy has no such events; then the Show signal being taken within 15 seconds counts as answered.
+  With no answer, or with an elevated copy holding the guard, the launch shows a message box:
+  "Armory is already running in the background but not responding (process 4120). Restart the
+  computer, or end IdeaArmory in Task Manager, then open Armory again." (or "already running as
+  administrator ..."), writes `logs\launch.log`, files a `startupBlocked` incident and exits 1.
+  Nothing a second launch does writes the running copy's agent.log.
+- Every step of `Main` before the app runs is inside `StartupGuard`: an exception writes
+  crash.log (with its pointer line in agent.log), files a `crash` incident ("Armory crashed in
+  startup: ...") and shows "Armory couldn't start: <type>: <first line of the message>" with
+  where the details are.
+- Unchanged: `--check` and `--quit` (no window or message, ever), a notification link (forwarded
+  to the running copy, or its window signaled), and `--background`, the sign-in start, which
+  stays quiet: beside a running copy it exits 0, and a fatal startup error is only written down
+  (crash.log and an incident). Velopack's hook launches (`--veloapp-install`, `-updated`,
+  `-obsolete`, `-uninstall`) are quiet the same way.
+
+**Tests.** `StartupTests` (every host): a cleanup that exits 1 or 2, times out, cannot find
+powershell.exe, is refused by script policy or throws still starts the first copy normally and
+files one `retireFailed` incident; a failed cleanup beside another install hands off; a finished
+one re-takes the guard; a second launch with a first copy that never gets ready, never answers, is
+older and never takes the signal, or is elevated shows its message with the process id, while the
+sign-in start and a link behave as before; an early exception writes crash.log and an incident
+and shows its one-line summary, and a quiet start shows nothing. On Windows the real guard's
+Ready and Shown events are exercised across threads.
+
+**Not verified on a lab computer.** Which of the causes above hit the lab's machines is not known;
+the audit file above says. Group Policy, AppLocker and WMI restrictions were not reproduced.
 
 ## Validation and bounds
 

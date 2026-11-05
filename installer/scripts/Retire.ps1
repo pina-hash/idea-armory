@@ -1,9 +1,12 @@
 # Shared by startup and Velopack's post-install/update hooks. Windows PowerShell 5.1.
 # Inventory is bounded to registrations, running processes and known install locations.
 # Never search a vault or a whole drive, never delete a directory tree, never follow links.
+# -CallerRunning (0.5.8): the caller is the running survivor and owns the single-instance guard,
+# so an older copy's own --quit would reach the caller's quit signal. Close by full path instead.
 param([Parameter(Mandatory = $true)][string]$CurrentExe,
       [Parameter(Mandatory = $true)][string]$DataFolder,
-      [int]$CurrentProcessId = 0)
+      [int]$CurrentProcessId = 0,
+      [switch]$CallerRunning)
 $ErrorActionPreference = 'Stop'
 if ($PSVersionTable.PSEdition -ne 'Core') {
     $env:PSModulePath = (Join-Path $PSHOME 'Modules') + ';' + (Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\Modules')
@@ -316,7 +319,7 @@ try {
     }
     $processes = @(Get-CimInstance Win32_Process -Filter "Name = 'IdeaArmory.exe' OR Name = 'Update.exe'" -ErrorAction Stop)
     $caller = $CurrentProcessId
-    $survivorRunning = @($processes | Where-Object { $_.ExecutablePath -ieq $CurrentExe -and $_.ProcessId -ne $caller }).Count -gt 0
+    $survivorRunning = $CallerRunning -or @($processes | Where-Object { $_.ExecutablePath -ieq $CurrentExe -and $_.ProcessId -ne $caller }).Count -gt 0
     foreach ($p in $processes) {
         # An elevated inventory must not stop another student's per-user copy.
         $owner = Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -ErrorAction SilentlyContinue

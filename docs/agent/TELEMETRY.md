@@ -68,6 +68,12 @@ Each rule is a pure function in `GlitchRules` with its own test (`GlitchRuleTest
 | `repairedCheckout` | any `repairedCheckout` event |
 | `readOnlyBroken` | any `readOnlyBroken` event |
 | `userReport` | Report a problem (below) |
+| `retireFailed` | 0.5.8: the cleanup of other Armory installs (docs/agent/INSTALL-OWNERSHIP.md, "0.5.8") did not finish: the script exited 1 or 2, was still running after 90 seconds, or could not run (powershell.exe missing or blocked). Armory opened anyway. Summary: "Armory opened, but the cleanup of other Armory installs did not finish: <outcome>". Saved by the running copy, or by a launch that then handed off to another install's copy |
+| `startupBlocked` | 0.5.8: a launch found Armory already running for this account and could not reach it (no answer to its Show, or an elevated copy holds the guard), and showed a message box instead of leaving without a word. Saved by that launch with no address and no flight; the next Armory that runs sends it |
+
+A `crash` also comes from an exception before the app runs (0.5.8, `StartupGuard`): "Armory
+crashed in startup: ...", saved by the failing launch itself, with crash.log beside it. The site
+takes any kind that is one word (idea-app 0233), so the two new kinds need nothing there.
 
 **A sign out is not a crash** (0.4.2). A shared lab computer signs each student out, and an
 Armory still running then ends with the session. Two things now tell that apart from a crash: the

@@ -6,8 +6,30 @@ using Microsoft.Win32;
 
 namespace Armory.Agent;
 
-// Runs before the single-instance guard: an older install may own that guard. The Windows
-// inventory is embedded so an extracted release and every installer use exactly the same code.
+// One active Armory install per Windows account (0.5.5, docs/agent/INSTALL-OWNERSHIP.md). The
+// Windows inventory is embedded so an extracted release and every installer use exactly the same
+// code. Since 0.5.8 it never stops a launch: see Run.
+internal enum RetireResult { Done, Skipped, Deferred, RetiredWhileWaiting, TimedOut, Unavailable }
+
+internal sealed record RetireOutcome(RetireResult Result, string Detail)
+{
+    internal static readonly RetireOutcome Done = new(RetireResult.Done, "inventory complete");
+    internal static readonly RetireOutcome Skipped = new(RetireResult.Skipped, "not an installed copy");
+    internal bool Ok => Result is RetireResult.Done or RetireResult.Skipped;
+    internal string Words => Result switch
+    {
+        RetireResult.Done => "done",
+        RetireResult.Skipped => "skipped (" + Detail + ")",
+        RetireResult.Deferred => "deferred (" + Detail + ")",
+        RetireResult.RetiredWhileWaiting => "this install was retired by another one while it waited (" + Detail + ")",
+        RetireResult.TimedOut => "deferred (" + Detail + ")",
+        _ => "could not run (" + Detail + ")",
+    };
+}
+
+// The script's run: Finished false when it was still running when the wait ran out.
+internal sealed record ScriptRun(bool Finished, int ExitCode, string Output, string Errors);
+
 internal static class InstallRetirement
 {
     internal const string FinishUpdateArgument = "armory-finish-update";
@@ -51,44 +73,163 @@ internal static class InstallRetirement
         => !paths.IsOverridden && exe is not null &&
            (ShellIdentity.IsInstalledCopy(paths, exe, ShellIdentity.InstallFolder()) || Updates.IsVelopackCopy(exe, exists) || ShellIdentity.IsPackagedCopy(paths, exe, exists));
 
-    internal static bool Run(AgentPaths paths)
+    // How long a launch waits for the inventory script. Never kill an uninstaller halfway
+    // through its work: past this the script keeps running and holds its lock, and this launch
+    // stops waiting for it.
+    internal static readonly TimeSpan ScriptWait = TimeSpan.FromSeconds(90);
+
+    // 0.5.8: never a reason for a launch to end. Before 0.5.8 this ran before the window, and any
+    // way it could not finish (a lock held by another cleanup, WMI or PowerShell blocked by school
+    // policy, a .ps1 in %TEMP% blocked, a slow uninstaller) ended the launch with no window and no
+    // word ("Armory doesn't open", 2026-11-05). Now the first copy runs it after the window is up
+    // (StartInBackground), and a second launch runs it only when another install owns the
+    // single-instance guard, then hands off to that copy if it could not finish
+    // (docs/agent/INSTALL-OWNERSHIP.md, "0.5.8"). callerRunning: this process already owns the
+    // guard and is the survivor, so an older copy is never asked to quit with its own --quit
+    // (which would reach this process's quit signal) and is closed by its full path instead.
+    internal static RetireOutcome Run(AgentPaths paths, bool callerRunning = false)
     {
-        if (!OperatingSystem.IsWindows() || !Enabled(paths, Environment.ProcessPath, File.Exists)) return true;
+        if (!OperatingSystem.IsWindows() || !Enabled(paths, Environment.ProcessPath, File.Exists)) return RetireOutcome.Skipped;
+        return Run(paths, () => RunScript(paths, callerRunning, ScriptWait), () => Repair(paths));
+    }
+
+    // The steps without Windows: the script's run (its exit code, output, or that it is still
+    // running), then the registration repairs. Every way it can go is an outcome, never a throw.
+    internal static RetireOutcome Run(AgentPaths paths, Func<ScriptRun> script, Action repairs)
+    {
+        try
+        {
+            var auditBefore = AuditLength(paths);
+            var run = script();
+            if (!run.Finished)
+            {
+                Save(paths, "deferred: retirement is still running; this launch stopped waiting for it");
+                return new(RetireResult.TimedOut, "the cleanup was still running after " + (int)ScriptWait.TotalSeconds + " s");
+            }
+            foreach (var line in run.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                Save(paths, line);
+            if (run.ExitCode != 0)
+            {
+                var errors = run.Errors.ReplaceLineEndings(" ").Trim();
+                // The script says why in the audit file (its last line), PowerShell on stderr.
+                var why = LastSaved(paths, auditBefore) ?? LastLine(run.Output) ?? (errors.Length == 0 ? "no reason given" : errors);
+                Save(paths, "deferred: exit " + run.ExitCode.ToString(System.Globalization.CultureInfo.InvariantCulture) + (errors.Length == 0 ? "" : ": " + errors));
+                return new(run.ExitCode == 2 ? RetireResult.RetiredWhileWaiting : RetireResult.Deferred,
+                    "exit " + run.ExitCode.ToString(System.Globalization.CultureInfo.InvariantCulture) + ": " + why);
+            }
+            // Old uninstallers remove shared shell keys and the common Start menu link.
+            repairs();
+            return RetireOutcome.Done;
+        }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            // A missing or blocked powershell.exe is a Win32Exception here; a resource or temp
+            // folder problem an IOException. Each is a reason, never the end of a launch.
+            Save(paths, "deferred: " + error.GetType().Name + ": " + error.Message);
+            return new(RetireResult.Unavailable, error.GetType().Name + ": " + error.Message);
+        }
+    }
+
+    private static string? LastLine(string output)
+        => output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).LastOrDefault();
+
+    private static long AuditLength(AgentPaths paths)
+    {
+        try { return new FileInfo(AuditFile(paths)).Exists ? new FileInfo(AuditFile(paths)).Length : 0; }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return 0; }
+    }
+
+    // The audit's last line without its time, when this run wrote it (the file grew past
+    // before), or null. A script that was never allowed to run wrote nothing, and an older line
+    // is not its reason. Never throws.
+    internal static string? LastSaved(AgentPaths paths, long before)
+    {
+        try
+        {
+            var file = AuditFile(paths);
+            if (!File.Exists(file) || new FileInfo(file).Length <= before) return null;
+            var last = File.ReadLines(file).LastOrDefault(line => line.Length > 0);
+            if (last is null) return null;
+            var text = (JsonSerializer.Deserialize<string>(last) ?? "").Trim();
+            var space = text.IndexOf(' ', StringComparison.Ordinal);
+            var words = space > 0 && DateTimeOffset.TryParse(text[..space], System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out _)
+                ? text[(space + 1)..] : text;
+            return words.Length == 0 ? null : Redactor.Scrub(words);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException) { return null; }
+    }
+
+    // The embedded script under Windows PowerShell, waited for at most wait.
+    private static ScriptRun RunScript(AgentPaths paths, bool callerRunning, TimeSpan wait)
+    {
         var script = Path.Combine(Path.GetTempPath(), "Armory-retire-" + Guid.NewGuid().ToString("N") + ".ps1");
         try
         {
-            using (var input = typeof(InstallRetirement).Assembly.GetManifestResourceStream("Armory.Retire.ps1")!)
+            using (var input = typeof(InstallRetirement).Assembly.GetManifestResourceStream("Armory.Retire.ps1")
+                ?? throw new InvalidOperationException("The retirement script is missing from the app."))
             using (var output = File.Create(script)) input.CopyTo(output);
             var start = new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), @"WindowsPowerShell\v1.0\powershell.exe"))
             { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
             foreach (var arg in new[] { "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script,
                          "-CurrentExe", Environment.ProcessPath!, "-DataFolder", paths.DataFolder, "-CurrentProcessId", Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture) }) start.ArgumentList.Add(arg);
-            using var process = Process.Start(start)!;
+            if (callerRunning) start.ArgumentList.Add("-CallerRunning");
+            using var process = Process.Start(start) ?? throw new InvalidOperationException("Windows PowerShell did not start.");
             var stdout = process.StandardOutput.ReadToEndAsync();
             var stderr = process.StandardError.ReadToEndAsync();
-            // Never kill an uninstaller halfway through its work. A slow one retains the safe
-            // cleanup hook; this launch gives way and the next start retries under the same lock.
-            if (!process.WaitForExit(TimeSpan.FromSeconds(90))) { Save(paths, "deferred: retirement is still running; this launch waits for a later retry"); return false; }
-            foreach (var line in stdout.GetAwaiter().GetResult().Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-                Save(paths, line);
-            if (process.ExitCode != 0) { Save(paths, "deferred: " + stderr.GetAwaiter().GetResult()); return false; }
-            // Old uninstallers remove shared shell keys and the common Start menu link.
-            // Repair even on a second launch, before it hands off to an existing runtime.
-            var exe = Environment.ProcessPath!;
-            var settings = new SettingsStore(paths.SettingsFile).Load();
-            StartupRegistration.Apply(settings.StartAtSignIn, StableLauncher.For(exe, File.Exists));
-            ShellIdentity.Repair(AgentPaths.AppFolder, line => Save(paths, line));
-            RepairExplorerTargets(paths);
-            AppsRegistration.Repair(exe, line => Save(paths, line));
-            return true;
+            if (!process.WaitForExit(wait)) return new(false, 0, "", "");
+            return new(true, process.ExitCode, stdout.GetAwaiter().GetResult(), stderr.GetAwaiter().GetResult());
         }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception or InvalidOperationException)
-        { Save(paths, "deferred: " + error.Message); return false; }
         finally
         {
             try { File.Delete(script); }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
         }
+    }
+
+    // Old uninstallers remove shared shell keys and the common Start menu link. Repaired after
+    // every finished inventory, for the copy that survives.
+    private static void Repair(AgentPaths paths)
+    {
+        var exe = Environment.ProcessPath!;
+        var settings = new SettingsStore(paths.SettingsFile).Load();
+        StartupRegistration.Apply(settings.StartAtSignIn, StableLauncher.For(exe, File.Exists));
+        ShellIdentity.Repair(AgentPaths.AppFolder, line => Save(paths, line));
+        RepairExplorerTargets(paths);
+        AppsRegistration.Repair(exe, line => Save(paths, line));
+    }
+
+    // 0.5.8: the first copy's cleanup, after its window is up, on its own thread (STA: the
+    // shortcut and shell repairs use COM), a few seconds after start so the window comes first.
+    // Whatever happens is logged and, when it did not finish, a retireFailed incident; the
+    // window and the engine go on either way.
+    internal static Thread? StartInBackground(AgentPaths paths, AgentLog log, Func<Glitch, string?> report, TimeSpan delay)
+    {
+        if (!OperatingSystem.IsWindows() || !Enabled(paths, Environment.ProcessPath, File.Exists)) return null;
+        var thread = new Thread(() =>
+        {
+            Thread.Sleep(delay);
+            RunAndReport(() => Run(paths, callerRunning: true), log.Info, report);
+        })
+        { IsBackground = true, Name = "Armory install retirement" };
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        return thread;
+    }
+
+    // What the background thread does: never throws, logs every outcome, files one incident when
+    // the cleanup did not finish.
+    internal static RetireOutcome RunAndReport(Func<RetireOutcome> retire, Action<string> log, Func<Glitch, string?> report)
+    {
+        RetireOutcome outcome;
+        try { outcome = retire(); }
+        catch (Exception error) when (error is not OutOfMemoryException) { outcome = new(RetireResult.Unavailable, error.GetType().Name + ": " + error.Message); }
+        try
+        {
+            log("retire: " + outcome.Words);
+            if (!outcome.Ok) report(GlitchRules.RetireFailed(outcome.Words));
+        }
+        catch (Exception error) when (error is not OutOfMemoryException) { try { log("retire: could not report: " + error.Message); } catch (Exception) { } }
+        return outcome;
     }
 
     // Fast install/update callbacks have no live flight recorder. Queue their scrubbed audit

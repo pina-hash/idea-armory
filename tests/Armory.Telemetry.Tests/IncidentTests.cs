@@ -30,6 +30,24 @@ public sealed class IncidentTests
     }
 
     [Fact]
+    public void A_startup_incident_is_saved_at_once_under_the_same_throttle()
+    {
+        using var temp = new TempFolder();
+        var (reporter, _, clock, _) = Reporter(temp.Path);
+        var file = reporter.Save(GlitchRules.RetireFailed("deferred: retirement is still running"));
+        Assert.NotNull(file);
+        Assert.Equal("20261007T180000000Z-retireFailed.json.gz", Path.GetFileName(file));
+        var incident = reporter.Store.Read(file!);
+        Assert.Equal("retireFailed", incident["kind"]!.GetValue<string>());
+        Assert.Contains("still running", incident["summary"]!.GetValue<string>());
+        clock.Advance(TimeSpan.FromMinutes(5));
+        Assert.Null(reporter.Save(GlitchRules.RetireFailed("again")));
+        Assert.NotNull(reporter.Save(GlitchRules.StartupBlocked("process 4120 did not answer")));
+        clock.Advance(TimeSpan.FromMinutes(6));
+        Assert.NotNull(reporter.Save(GlitchRules.RetireFailed("later")));
+    }
+
+    [Fact]
     public void An_incident_holds_every_documented_field_and_is_named_by_its_time_and_kind()
     {
         using var temp = new TempFolder();

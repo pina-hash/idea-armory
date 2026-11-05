@@ -31,6 +31,11 @@ internal static class Updates
 
     // Before anything else in Main: Velopack's install, update and uninstall steps run here and
     // exit; a downloaded update is applied here, at start, and the new version starts instead.
+    // Velopack's own hook launches (install, update, obsolete, uninstall): no person is looking,
+    // so a startup problem in one is written down and never shown (0.5.8, StartupGuard).
+    internal static bool IsInstallerStep(IReadOnlyList<string> args)
+        => args.Count > 0 && args[0].Trim().ToLowerInvariant() is "--veloapp-install" or "--veloapp-updated" or "--veloapp-obsolete" or "--veloapp-uninstall";
+
     internal static void RunInstallerSteps(string[] args, bool applyDownloaded)
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -45,7 +50,8 @@ internal static class Updates
     }
 
     // Keep the installer hook fast. The worker runs retirement and repairs registrations after
-    // the installer exits; ordinary startup uses that same reconciliation before the UI.
+    // the installer exits; ordinary startup runs that same reconciliation once its window is up
+    // (0.5.8, InstallRetirement.Run).
     [SupportedOSPlatform("windows")]
     private static void AfterInstall() => InstallRetirement.FinishAfterUpdaterExits();
 
@@ -62,7 +68,7 @@ internal static class Updates
     }
 
     [SupportedOSPlatform("windows")]
-    internal static int FinishUpdate() => InstallRetirement.Run(AgentPaths.Resolve()) ? 0 : 1;
+    internal static int FinishUpdate() => InstallRetirement.Run(AgentPaths.Resolve()).Ok ? 0 : 1;
 
     // The line the new version writes once it is in place (AgentLog.EndOf reads it).
     internal static string UpdatedLineFor(string version) => AgentLog.UpdatedLine + version;

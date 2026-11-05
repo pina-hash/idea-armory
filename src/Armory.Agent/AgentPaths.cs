@@ -3,7 +3,8 @@ using System.Text;
 
 namespace Armory.Agent;
 
-// The per-user data folder, %LOCALAPPDATA%\IDEA Armory: settings.json, logs\, secrets\,
+// The per-user data folder, %LOCALAPPDATA%\IDEA Armory: settings.json, logs\ (agent.log, crash.log,
+// install-retirement.jsonl, and since 0.5.8 launch.log for a launch that could not reach the running copy), secrets\,
 // incidents\ (docs/agent/TELEMETRY.md), WebView2\, and profiles\ on a computer shared by several
 // students (docs/agent/PROFILES.md; never made or read while it is not). ARMORY_DATA_DIR replaces it for automated tests only, so a test instance never
 // shares a sign-in, settings or the single-instance guard with a real one.

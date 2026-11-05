@@ -29,42 +29,70 @@ public sealed record AgentCommandLine(bool Background, bool Quit, bool Check, st
 
 internal static class Program
 {
+    // The first copy's install cleanup starts this long after its window, so the window comes first.
+    private static readonly TimeSpan RetireAfterWindow = TimeSpan.FromSeconds(3);
+
     [STAThread]
     private static int Main(string[] args)
     {
         if (args.Length == 1 && args[0] == "--" + InstallRetirement.FinishUpdateArgument)
             return Updates.FinishUpdate();
         var command = AgentCommandLine.Parse(args);
-        // Velopack's install, update and uninstall steps run (and exit) here, before anything
-        // else; a downloaded update is applied here and the new version starts instead (0.4.0),
-        // never for --quit or --check, which must answer as the version that is here.
-        Updates.RunInstallerSteps(args, applyDownloaded: !command.Quit && !command.Check);
+        // --check and --quit answer as they always have: no window, no message box, ever.
+        if (command.Check || command.Quit) return CheckOrQuit(args, command);
+        // 0.5.8: Armory either opens or says why (docs/agent/INSTALL-OWNERSHIP.md, "0.5.8"). Every
+        // early step runs inside the guard; nobody is looking at a sign-in start or an installer
+        // step, so those only write crash.log and an incident.
+        var quiet = command.Background || Updates.IsInstallerStep(args);
+        return StartupGuard.Run(() => Launch(args, command), quiet, StartupNotice.Show);
+    }
+
+    private static int CheckOrQuit(string[] args, AgentCommandLine command)
+    {
+        // Velopack's steps first, never applying a downloaded update: these answer as the
+        // version that is here.
+        Updates.RunInstallerSteps(args, applyDownloaded: false);
         var paths = AgentPaths.Resolve();
         if (command.Check)
         {
             NativeConsole.AttachToParentIfNeeded();
             return CheckCommand.Run(paths, Console.Out);
         }
-        if (command.Quit) return SingleInstance.RequestQuit(paths, TimeSpan.FromSeconds(30)) ? 0 : 1;
+        return SingleInstance.RequestQuit(paths, TimeSpan.FromSeconds(30)) ? 0 : 1;
+    }
 
-        if (!InstallRetirement.Run(paths)) return 1;
-        using var instance = SingleInstance.Acquire(paths);
-        if (!instance.IsFirst)
+    private static int Launch(string[] args, AgentCommandLine command)
+    {
+        // Velopack's install, update and uninstall steps run (and exit) here, before anything
+        // else; a downloaded update is applied here and the new version starts instead (0.4.0).
+        Updates.RunInstallerSteps(args, applyDownloaded: true);
+        var paths = AgentPaths.Resolve();
+        return LaunchFlow.Run(new LaunchSteps
         {
-            // A notification's link goes to the running Armory, which acts on it; if it can't be
-            // reached, its window still comes up.
-            if (command.Link is { } link)
+            Acquire = wait => SingleInstance.Acquire(paths, wait),
+            AnotherInstallOwnsTheGuard = () => InstallRetirement.Enabled(paths, Environment.ProcessPath, File.Exists) &&
+                RunningArmories.AnotherInstall(Environment.ProcessPath, RunningArmories.InThisSession(), LinkForwarder.LongName),
+            RetireNow = () => InstallRetirement.Run(paths),
+            RetireFailed = outcome =>
             {
-                if (LinkForwarder.Forward(paths, link, TimeSpan.FromSeconds(10))) return 0;
-                instance.SignalShow();
-                return 1;
-            }
-            // Already running for this Windows user: bring its window up (unless this is the
-            // sign-in start entry) and leave.
-            if (!command.Background) instance.SignalShow();
-            return 0;
-        }
+                LaunchLog.Write(paths, "install cleanup before handing off: " + outcome.Words);
+                StartupIncidents.Save(paths, null, GlitchRules.RetireFailed(outcome.Words));
+            },
+            SecondLaunch = instance => SecondLaunch.Run(command, instance,
+                link => LinkForwarder.Forward(paths, link, TimeSpan.FromSeconds(10)),
+                () => RunningArmories.InThisSession().Select(r => r.Id).ToList(),
+                (words, detail) =>
+                {
+                    LaunchLog.Write(paths, "could not reach the running Armory: " + detail);
+                    StartupIncidents.Save(paths, null, GlitchRules.StartupBlocked(detail));
+                    StartupNotice.Show(words);
+                }),
+            RunFirst = (instance, retireInBackground) => RunFirst(paths, command, (SingleInstance)instance, retireInBackground),
+        });
+    }
 
+    private static int RunFirst(AgentPaths paths, AgentCommandLine command, SingleInstance instance, bool retireInBackground)
+    {
         var log = new AgentLog(paths.LogFile, paths.CrashFile);
         // The flight recorder and the incident files (docs/agent/TELEMETRY.md), before anything
         // that could crash.
@@ -116,6 +144,7 @@ internal static class Program
             telemetry.Recorder.Exception("window thread", e.Exception, fatal: true);
         };
         log.Info("started " + AgentPaths.Version);
+        // Install cleanup audits a second launch, an update worker or an earlier run left behind.
         if (ShellIdentity.IsInstalledCopy(paths)) InstallRetirement.Replay(paths, log, telemetry.Recorder);
         using var retirementAudits = InstallRetirement.Watch(paths, log, telemetry.Recorder);
         // File Explorer's right-click items and a notification's second launch reach this Armory
@@ -134,9 +163,13 @@ internal static class Program
         using (var tray = new TrayApp(host, paths, log, instance, command.Background))
         {
             tray.AttachShell(desk, command.Link);
+            // 0.5.8: the install cleanup runs now that the window is up, on its own thread. It
+            // never ends this run: what it could not do is logged and a retireFailed incident.
+            if (retireInBackground) InstallRetirement.StartInBackground(paths, log, telemetry.Save, RetireAfterWindow);
             Application.Run(tray);
         }
-        telemetry.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(5));
+        try { telemetry.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(5)); }
+        catch (Exception error) when (error is not OutOfMemoryException) { log.Error("stopping telemetry", error); }
         log.Info("stopped");
         return 0;
     }

@@ -7,8 +7,13 @@ namespace Armory.Telemetry;
 public static class GlitchKinds
 {
     public const string Crash = "crash", SlowAction = "slowAction", SlowPass = "slowPass", RepeatedFailure = "repeatedFailure",
-        RepairedCheckout = "repairedCheckout", ReadOnlyBroken = "readOnlyBroken", UserReport = "userReport";
-    public static readonly IReadOnlyList<string> All = [Crash, SlowAction, SlowPass, RepeatedFailure, RepairedCheckout, ReadOnlyBroken, UserReport];
+        RepairedCheckout = "repairedCheckout", ReadOnlyBroken = "readOnlyBroken", UserReport = "userReport",
+        // 0.5.8: the cleanup of other Armory installs did not finish, and Armory opened anyway; and a
+        // launch that found Armory already running but could not reach it, and said so. The site takes
+        // any kind that is one word (idea-app 0233, armory_submit_app_incident).
+        RetireFailed = "retireFailed", StartupBlocked = "startupBlocked";
+    public static readonly IReadOnlyList<string> All = [Crash, SlowAction, SlowPass, RepeatedFailure, RepairedCheckout, ReadOnlyBroken, UserReport,
+        RetireFailed, StartupBlocked];
 }
 
 // Something went wrong enough to keep: its kind, one plain sentence, and the event that showed it.
@@ -67,6 +72,16 @@ public static class GlitchRules
     // the power): found at the next start from the log and the last flight.
     public static Glitch PreviousRunEnded(string lastLine, string? why = null)
         => new(GlitchKinds.Crash, Clip("The previous run ended unexpectedly. " + (why is null ? "" : why + " ") + "Its last log line was: " + lastLine), null);
+
+    // 0.5.8: the cleanup of other Armory installs (InstallRetirement) failed or gave way; Armory
+    // opened anyway. detail is the reason as the audit says it.
+    public static Glitch RetireFailed(string detail)
+        => new(GlitchKinds.RetireFailed, Clip("Armory opened, but the cleanup of other Armory installs did not finish: " + detail), null);
+
+    // 0.5.8: a launch found Armory already running for this Windows account and could not reach it,
+    // and told the person so instead of leaving without a word.
+    public static Glitch StartupBlocked(string detail)
+        => new(GlitchKinds.StartupBlocked, Clip("A launch found Armory already running but could not reach it: " + detail), null);
 
     public static Glitch UserReport(string kind, string body)
         => new(GlitchKinds.UserReport, Clip($"Reported from the window ({kind}): {body.ReplaceLineEndings(" ").Trim()}"), null);

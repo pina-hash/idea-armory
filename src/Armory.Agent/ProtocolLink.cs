@@ -160,14 +160,20 @@ internal static class LinkForwarder
     {
         var own = Environment.ProcessPath;
         if (own is null) return false;
+        var image = ImagePath(processId);
+        return image is not null && string.Equals(LongName(image), LongName(own), StringComparison.OrdinalIgnoreCase);
+    }
+
+    // The full path of a process's executable, or null when it can't be read.
+    internal static string? ImagePath(uint processId)
+    {
         var handle = OpenProcess(QueryLimitedInformation, false, processId);
-        if (handle == IntPtr.Zero) return false;
+        if (handle == IntPtr.Zero) return null;
         try
         {
             var buffer = new StringBuilder(32768);
             var length = buffer.Capacity;
-            if (!QueryFullProcessImageNameW(handle, 0, buffer, ref length)) return false;
-            return string.Equals(LongName(buffer.ToString(0, length)), LongName(own), StringComparison.OrdinalIgnoreCase);
+            return QueryFullProcessImageNameW(handle, 0, buffer, ref length) ? buffer.ToString(0, length) : null;
         }
         finally { CloseHandle(handle); }
     }

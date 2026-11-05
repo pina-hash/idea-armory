@@ -43,12 +43,16 @@ internal static class WindowsTheme
 
 // One agent per Windows user. A second launch asks the first to open its window and exits;
 // --quit asks the first to exit cleanly. The events exist before the mutex is taken, so a
-// signal from a second launch is never lost.
-internal sealed class SingleInstance : IDisposable
+// signal from a second launch is never lost. 0.5.8: the first copy also says when its tray
+// listens (-Ready) and when its window came up for a Show (-Shown), so a second launch knows
+// whether it was answered and says so when it was not (SecondLaunch, never a silent exit).
+internal sealed class SingleInstance : IInstance
 {
     private readonly Mutex? mutex;
     private readonly EventWaitHandle show;
     private readonly EventWaitHandle quit;
+    private readonly EventWaitHandle shown;
+    private readonly EventWaitHandle ready;
     private bool owned;
 
     // A copy started elevated (for example by a setup run as administrator) owns names that
@@ -57,23 +61,34 @@ internal sealed class SingleInstance : IDisposable
     {
         show = new EventWaitHandle(false, EventResetMode.AutoReset);
         quit = new EventWaitHandle(false, EventResetMode.AutoReset);
+        shown = new EventWaitHandle(false, EventResetMode.AutoReset);
+        ready = new EventWaitHandle(false, EventResetMode.ManualReset);
         owned = false;
+        Reachable = false;
     }
 
-    private SingleInstance(string name)
+    private SingleInstance(string name, TimeSpan wait)
     {
         show = new EventWaitHandle(false, EventResetMode.AutoReset, name + "-Show");
         quit = new EventWaitHandle(false, EventResetMode.AutoReset, name + "-Quit");
+        // Already there when the copy that owns the guard is 0.5.8 or later (it makes its events
+        // before the mutex); made here when it is older and will never answer on it.
+        shown = new EventWaitHandle(false, EventResetMode.AutoReset, name + "-Shown", out var shownIsNew);
+        ready = new EventWaitHandle(false, EventResetMode.ManualReset, name + "-Ready");
         mutex = new Mutex(true, name, out var created);
         if (!created)
         {
-            try { owned = mutex.WaitOne(0); }
+            try { owned = mutex.WaitOne(wait); }
             catch (AbandonedMutexException) { owned = true; }
         }
         else owned = true;
+        Reachable = true;
+        Acknowledges = !owned && !shownIsNew;
     }
 
-    internal bool IsFirst => owned;
+    public bool IsFirst => owned;
+    public bool Reachable { get; }
+    public bool Acknowledges { get; }
     internal WaitHandle ShowSignal => show;
     internal WaitHandle QuitSignal => quit;
 
@@ -83,13 +98,50 @@ internal sealed class SingleInstance : IDisposable
         return @"Local\IDEA-Armory-Agent-" + user + paths.InstanceSuffix;
     }
 
-    internal static SingleInstance Acquire(AgentPaths paths)
+    // wait: how long to wait for a copy that is letting go of the guard (after the install
+    // cleanup closed it); zero for an ordinary launch.
+    internal static SingleInstance Acquire(AgentPaths paths, TimeSpan wait = default)
     {
-        try { return new(Name(paths)); }
+        try { return new(Name(paths), wait); }
         catch (Exception error) when (error is UnauthorizedAccessException or WaitHandleCannotBeOpenedException) { return new(); }
     }
 
-    internal void SignalShow() => show.Set();
+    public void SignalShow() => show.Set();
+
+    public void AllowForeground() => ForegroundRights.AllowAnyone();
+
+    // The first copy: its tray listens for Show and Quit now.
+    internal void MarkReady()
+    {
+        try { ready.Set(); }
+        catch (ObjectDisposedException) { }
+    }
+
+    // The first copy: a second launch's Show brought the window up.
+    internal void Acknowledge()
+    {
+        try { shown.Set(); }
+        catch (ObjectDisposedException) { }
+    }
+
+    public bool WaitReady(TimeSpan wait) => ready.WaitOne(wait);
+
+    public bool WaitShown(TimeSpan wait) => shown.WaitOne(wait);
+
+    // An auto-reset event stays set until a waiter takes it: still set means nobody took the
+    // Show. Looking takes it, so it is set again at once for the running copy to find.
+    public bool ShowTaken(TimeSpan wait)
+    {
+        var clock = Stopwatch.StartNew();
+        while (true)
+        {
+            if (!show.WaitOne(0)) return true;
+            show.Set();
+            if (clock.Elapsed >= wait) return false;
+            Thread.Sleep(100);
+        }
+    }
+
 
     // Asks a running agent to quit and waits for it to let go of the mutex. True when no
     // agent is running any more.
@@ -128,6 +180,8 @@ internal sealed class SingleInstance : IDisposable
         mutex?.Dispose();
         show.Dispose();
         quit.Dispose();
+        shown.Dispose();
+        ready.Dispose();
     }
 }
 
