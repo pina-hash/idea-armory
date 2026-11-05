@@ -240,9 +240,9 @@ internal sealed class ShellDesk(Action<string> log, TimeProvider? timeProvider =
     // opened; anything else only opens the window.
     private async Task RunLinkAsync(string? text, IShellHost h, IShellSurface s)
     {
-        if (ProtocolLink.TryParseOpen(text, out var fileId))
+        if (ProtocolLink.TryParseOpen(text, out var fileId, out var checkOut))
         {
-            await OpenFromWebsiteAsync(fileId, h, s).ConfigureAwait(false);
+            await OpenFromWebsiteAsync(fileId, checkOut, h, s).ConfigureAwait(false);
             return;
         }
         if (!ProtocolLink.TryParse(text, out var link))
@@ -273,6 +273,14 @@ internal sealed class ShellDesk(Action<string> log, TimeProvider? timeProvider =
             s.Answer(await h.SaveBlockedActionAsync(ticket.Paths[0]).ConfigureAwait(false));
             return;
         }
+        if (ticket.Action == ProtocolLink.CheckIn)
+        {
+            // The end-of-period reminder's Check in (0.5.6): exactly the files it named.
+            var checkedIn = await h.CheckInAsync(ticket.Paths).ConfigureAwait(false);
+            log("shell: check in from the end-of-period reminder" + (checkedIn.Ok ? " done" : " refused"));
+            s.Answer(checkedIn);
+            return;
+        }
         if (ticket.Action is ProtocolLink.SaveIn or ProtocolLink.KeepLocal)
         {
             // The question before a save down, about the one file it named.
@@ -291,8 +299,10 @@ internal sealed class ShellDesk(Action<string> log, TimeProvider? timeProvider =
 
     // Open on a file's page on ideabosco.com: the window shows that file, and the file opens the
     // way the window's own Open opens it. The link names only an id; the file must be one this
-    // computer's Armory has.
-    private async Task OpenFromWebsiteAsync(Guid fileId, IShellHost h, IShellSurface s)
+    // computer's Armory has. Check out and open (0.5.6): the same file checked out to this
+    // computer first (downloading the newest version if this copy is older), unless somebody
+    // else has it, when it opens read-only and the answer says who.
+    private async Task OpenFromWebsiteAsync(Guid fileId, bool checkOut, IShellHost h, IShellSurface s)
     {
         var view = h.View;
         if (view.Connection is not (Connections.SignedIn or Connections.VaultOwnedByOther))
@@ -312,6 +322,13 @@ internal sealed class ShellDesk(Action<string> log, TimeProvider? timeProvider =
             return;
         }
         s.Reveal(row.Path);
+        if (checkOut && row.Checkout.State is CheckoutStates.Available)
+        {
+            var checkedOut = await h.CheckOutAsync([row.Path], open: true).ConfigureAwait(false);
+            log("shell: check out and open from the website" + (checkedOut.Ok ? " done" : " refused"));
+            s.Answer(checkedOut);
+            return;
+        }
         if (row.Status == FileStatuses.NotOnThisComputer)
         {
             log("shell: open from the website: not on this computer yet");
@@ -320,6 +337,8 @@ internal sealed class ShellDesk(Action<string> log, TimeProvider? timeProvider =
         }
         var result = await h.LaunchAsync(row.Path).ConfigureAwait(false);
         log("shell: open from the website" + (result.Ok ? " done" : " refused"));
+        if (checkOut && result.Ok && row.Checkout.State is CheckoutStates.Other or CheckoutStates.MyOtherComputer)
+            result = new ActionResult(true, ShellWords.OpenedReadOnly(row.Name, row.Checkout.State == CheckoutStates.MyOtherComputer ? null : row.Checkout.Name));
         s.Answer(result);
     }
 
@@ -361,6 +380,10 @@ internal static class ShellWords
     internal const string NotInVault = "That isn't in the Armory folder.";
     // The website's Open (0.4.2): a file of a project this computer's Armory doesn't have.
     internal const string NotHereFromWebsite = "That file isn't in this computer's Armory folder. Check that you're signed in to Armory as yourself, in a project that has it.";
+    // Check out and open from the website on a file somebody else has (0.5.6).
+    internal static string OpenedReadOnly(string name, string? holder) => holder is null
+        ? $"{name} is checked out on your other computer, so it opened read-only here. Check it in there first."
+        : $"{holder} has {name} checked out, so it opened read-only. You can look, but not save over it.";
     internal static string NotDownloadedYet(string name) => $"{name} isn't on this computer yet. Armory is downloading it. Click Open again in a moment.";
     internal const string WholeVault = "Pick files or folders inside a project for that.";
     internal const string NothingCheckedOut = "Nothing there is checked out by you.";

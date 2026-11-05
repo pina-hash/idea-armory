@@ -63,6 +63,30 @@ public sealed class SaveBlockedTests(ITestOutputHelper output)
         Assert.Single(asks.Update(app.Engine.View).Withdraw);
     }
 
+    // 0.5.6 (idea-app ledger 0521): the website learns a team file was opened in its own window,
+    // saved and closed, by its id; a reference an assembly loads, and a file the team does not
+    // have, say nothing.
+    [Fact]
+    public async Task Real_engine_queues_open_save_and_close_of_a_team_file_for_the_website()
+    {
+        using var temp = new TempFolder(); var link = new RecordsLink();
+        await using var app = new Fixture(temp.Root, "mine", link);
+        var full = app.Engine.FullPathOf(Part);
+        link.Send(new LinkOpened(42, full, SolidWorksDocTypes.Part, false, false, false, DateTimeOffset.UtcNow));
+        link.Send(new LinkOpened(42, app.Engine.FullPathOf("Class/Elsewhere.SLDPRT"), SolidWorksDocTypes.Part, false, false, true, DateTimeOffset.UtcNow));
+        await app.Engine.LinkSettledAsync();
+        Assert.Equal(0, app.Engine.DeskEvents.Count); // a reference loaded with an assembly is not an open
+        link.Send(new LinkOpened(42, full, SolidWorksDocTypes.Part, false, false, true, DateTimeOffset.UtcNow));
+        link.Send(new LinkSaved(42, full, Guid.NewGuid(), 1, null));
+        link.Send(new LinkClosed(42, full));
+        await app.Engine.LinkSettledAsync();
+        var events = app.Engine.DeskEvents.Take();
+        Assert.Equal(["opened", "saved", "closed"], events.Select(e => e.KindWord));
+        Assert.All(events, e => Assert.NotEqual(Guid.Empty, e.FileId));
+        Assert.Single(events.Select(e => e.FileId).Distinct());
+        Assert.Equal(0, app.Network.Calls);
+    }
+
     [Theory]
     [InlineData("mine")]
     [InlineData("unknown")]

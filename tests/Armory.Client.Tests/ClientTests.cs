@@ -308,3 +308,29 @@ public sealed partial class ClientTests
         await Assert.ThrowsAsync<BlobRefusedException>(() => blobs.UploadAsync(project, hash, BlobClient.MaximumPutBytes + 1, () => new MemoryStream()));
     }
 }
+
+// 0.5.6 (idea-app ledger 0521): what armory_file_events is sent, and the website's bell answer.
+public sealed class DeskTrackingClientTests
+{
+    [Fact]
+    public void File_events_go_as_file_kind_and_a_utc_time_to_the_millisecond()
+    {
+        var id = Guid.Parse("8b906ba1-ad34-40fd-bf54-63b7db8f7e8c");
+        var at = new DateTimeOffset(2026, 11, 5, 7, 3, 4, 567, TimeSpan.FromHours(-8));
+        var payload = ArmoryApi.FileEventsPayload([new FileEventCall(id, "opened", at)]);
+        Assert.Equal("""[{"file":"8b906ba1-ad34-40fd-bf54-63b7db8f7e8c","kind":"opened","at":"2026-11-05T15:03:04.567Z"}]""", payload.ToJsonString());
+    }
+
+    [Fact]
+    public void The_bells_answer_gives_the_ends_of_a_school_day_and_nothing_else()
+    {
+        var day = """{"day":"2026-11-05","schoolDay":true,"letter":"A","schedule":"regular","ends":[{"label":"Block A4","end":"2026-11-05T23:05:00.000Z"},{"label":"Block A1","end":"2026-11-05T17:30:00.000Z"}],"feed":"ok"}""";
+        var ends = PeriodEnds.Parse(day);
+        Assert.Equal([new DateTimeOffset(2026, 11, 5, 17, 30, 0, TimeSpan.Zero), new DateTimeOffset(2026, 11, 5, 23, 5, 0, TimeSpan.Zero)], ends);
+        Assert.Empty(PeriodEnds.Parse("""{"day":"2026-11-07","schoolDay":false,"ends":[]}"""));
+        Assert.Empty(PeriodEnds.Parse("""{"schoolDay":true,"ends":[{"end":7},{"label":"x"}]}"""));
+        Assert.Empty(PeriodEnds.Parse("not json"));
+        Assert.Empty(PeriodEnds.Parse(null));
+        Assert.Empty(PeriodEnds.Parse("[]"));
+    }
+}

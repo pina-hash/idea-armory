@@ -4,6 +4,11 @@ using System.Text.Json.Nodes;
 namespace Armory.Client;
 
 public enum MemberRole { Student, CadLead, Mentor, Instructor }
+
+// One thing this computer saw of a file (idea-app 0364): Kind is opened, saved, closed or nudged.
+public sealed record FileEventCall(Guid File, string Kind, DateTimeOffset At);
+// The site admin's check out rules (idea-app 0364). AutoCheckInIdleMinutes null is off.
+public sealed record SiteCheckoutRules(int HeldTooLongMinutes, int QuietMinutes, int? AutoCheckInIdleMinutes);
 public enum ProjectReleaseGate { Warn, Enforce }
 
 // Season is null for a project made without one (contract v2, C1). Archived is false when the
@@ -200,6 +205,46 @@ public sealed class ArmoryApi(PostgrestClient rest)
     // PGRST202 (ArmoryRpcException.IsFunctionMissing) and the three-argument form still answers.
     public async Task HeartbeatAsync(Guid device, string? appVersion, string? state, string computerKey, CancellationToken ct = default)
         => await rest.CallAsync("armory_heartbeat", Args(("p_device", device), ("p_app_version", appVersion), ("p_state", state), ("p_computer_key", computerKey)), ct);
+
+    // v0.5.6 (idea-app 0364, ledger 0521). What this computer saw of each file: opened, saved in
+    // SolidWorks, closed, or asked to be checked in at the end of a class period. At most 200 a
+    // call. The server keeps only files of the caller's projects and skips anything it cannot
+    // read, and answers how many it kept. A site before 0364 answers 404 PGRST202
+    // (ArmoryRpcException.IsFunctionMissing).
+    public const int MaximumFileEvents = 200;
+    public async Task<int> FileEventsAsync(Guid device, IReadOnlyList<FileEventCall> events, CancellationToken ct = default)
+    {
+        if (events.Count > MaximumFileEvents) throw new ArgumentException($"At most {MaximumFileEvents} events go in one call.", nameof(events));
+        var answer = await rest.CallAsync("armory_file_events", Args(("p_device", device), ("p_events", FileEventsPayload(events))), ct);
+        return answer is JsonValue v && v.TryGetValue<int>(out var kept) ? kept : 0;
+    }
+
+    // The p_events list armory_file_events reads: {file, kind, at}, the time in UTC to the millisecond.
+    public static JsonArray FileEventsPayload(IReadOnlyList<FileEventCall> events)
+    {
+        var list = new JsonArray();
+        foreach (var e in events)
+            list.Add(new JsonObject
+            {
+                ["file"] = e.File.ToString("D"),
+                ["kind"] = e.Kind,
+                ["at"] = e.At.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", System.Globalization.CultureInfo.InvariantCulture),
+            });
+        return list;
+    }
+
+    // v0.5.6 (idea-app 0364). The site admin's check out rules, or null from a site before 0364.
+    public async Task<SiteCheckoutRules?> CheckoutRulesAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            var r = await rest.CallAsync("armory_checkout_rules", Args(), ct) as JsonObject;
+            if (r is null) return null;
+            int? Minutes(string key) => r[key] is JsonValue v && v.TryGetValue<int>(out var n) ? n : null;
+            return new SiteCheckoutRules(Minutes("held_too_long_minutes") ?? 120, Minutes("quiet_minutes") ?? 15, Minutes("auto_check_in_idle_minutes"));
+        }
+        catch (ArmoryRpcException error) when (error.IsFunctionMissing) { return null; }
+    }
 
     // v0.3 (0233, 0234): at most this many distinct files per armory_lock_files, armory_release_locks
     // or armory_break_locks.

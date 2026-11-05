@@ -135,6 +135,8 @@ internal sealed partial class AgentHost : IAsyncDisposable
         hintTimer.Change(HintPoll, HintPoll);
         // Beats until a clean stop; a failed beat is logged and never touches a sync pass.
         StartBeating();
+        // 0.5.6: what this computer saw of each file, to the website; the end-of-period reminder.
+        StartDeskTracking();
         // File Explorer's right-click items and badges (AgentHost.Shell.cs).
         StartShell();
     }

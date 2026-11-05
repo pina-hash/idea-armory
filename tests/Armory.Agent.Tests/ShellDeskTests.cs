@@ -347,6 +347,70 @@ public sealed class ShellDeskTests
         Assert.Equal("Connect this computer first.", Assert.Single(outSurface.Answers).Message);
     }
 
+    // 0.5.6 (idea-app ledger 0521): Check out and open on a file's website page checks out a file
+    // nobody has and opens it; on a file somebody else has it only opens read-only and says who;
+    // on one already checked out here it just opens. A file outside this Armory opens nothing.
+    [Fact]
+    public async Task Check_out_and_open_from_the_website_checks_out_only_a_file_nobody_has()
+    {
+        var plate = ShellViews.Row(Plate);
+        var gear = ShellViews.Row(Gear, ShellViews.HeldBy("Maria Lopez"));
+        var hub = ShellViews.Row(Hub, ShellViews.Mine);
+        var view = ShellViews.View(plate, gear, hub);
+        string Link(FileRowView r) => ProtocolLink.FormatOpen(Guid.Parse(r.FileId!), checkOut: true);
+
+        var (host, surface, _) = await Run(view, ShellViews.Batch(ShellVerb.Uri, Link(plate)));
+        Assert.Equal(["check out and open: " + Plate], host.Calls);
+        Assert.Equal(["reveal " + Plate], surface.Shown);
+
+        var (held, heldSurface, _) = await Run(view, ShellViews.Batch(ShellVerb.Uri, Link(gear)));
+        Assert.Equal(["open: " + Gear], held.Calls);
+        Assert.Equal(ShellWords.OpenedReadOnly("Gear.SLDPRT", "Maria Lopez"), Assert.Single(heldSurface.Answers).Message);
+
+        var (mine, _, _) = await Run(view, ShellViews.Batch(ShellVerb.Uri, Link(hub)));
+        Assert.Equal(["open: " + Hub], mine.Calls);
+
+        var (other, otherSurface, _) = await Run(view, ShellViews.Batch(ShellVerb.Uri, ProtocolLink.FormatOpen(Guid.NewGuid(), checkOut: true)));
+        Assert.Empty(other.Calls);
+        Assert.Equal(ShellWords.NotHereFromWebsite, Assert.Single(otherSurface.Answers).Message);
+    }
+
+    // 0.5.6: the end-of-period reminder's Check in checks in exactly the files its token named, once.
+    [Fact]
+    public async Task The_end_of_period_reminder_checks_in_the_files_it_named_once()
+    {
+        var desk = new ShellDesk(_ => { });
+        var view = ShellViews.View(ShellViews.Row(Plate, ShellViews.Mine), ShellViews.Row(Hub, ShellViews.Mine));
+        var link = ProtocolLink.Format(desk.Tokens.Issue(ProtocolLink.CheckIn, [Plate, Hub], "n1"), ProtocolLink.CheckIn);
+        var (host, surface, _) = await Run(view, ShellViews.Batch(ShellVerb.Uri, link), desk: desk);
+        Assert.Equal(["check in: " + Plate + " | " + Hub], host.Calls);
+        Assert.Single(surface.Answers);
+        var (again, againSurface, _) = await Run(view, ShellViews.Batch(ShellVerb.Uri, link), desk: desk);
+        Assert.Empty(again.Calls);
+        Assert.Equal(["window"], againSurface.Shown);
+    }
+
+    // 0.5.6: a forced check in from this computer is said once as a notification per card, a
+    // card that goes is withdrawn, and a sign-in change withdraws everything said before it.
+    [Fact]
+    public void A_forced_check_in_is_said_once_and_withdrawn_when_its_card_goes()
+    {
+        var asks = new TakenBackAsks();
+        var card = new NoticeGroupView("takenBack:1", NoticeKinds.TakenBack, NoticeTones.Look, "Plate.SLDPRT was force checked in",
+            "Maria Lopez checked it in for you.", 1, null, [new NoticeItemView(Guid.NewGuid().ToString(), Plate, "Plate.SLDPRT", null)]);
+        var view = ShellViews.View(ShellViews.Row(Plate)) with { Notices = [card] };
+        var first = asks.Update(view);
+        Assert.Equal(card, Assert.Single(first.Show).Card);
+        Assert.Empty(asks.Update(view).Show);
+        // Not a forced check in: nothing to say.
+        Assert.Empty(new TakenBackAsks().Update(view with { Notices = [card with { Kind = NoticeKinds.KeptCopy }] }).Show);
+        // Signed out: nothing is said.
+        Assert.Empty(new TakenBackAsks().Update(ShellViews.View([ShellViews.Row(Plate)], Connections.SignedOut) with { Notices = [card] }).Show);
+        var gone = asks.Update(view with { Notices = [] });
+        Assert.Equal(Assert.Single(first.Show).Tag, Assert.Single(gone.Withdraw));
+        Assert.Equal("Maria Lopez checked it in for you. Your saved work is kept.", DeskWords.TakenBack(card.Detail));
+    }
+
     // The question before a save down: its two buttons answer for the one file it named, once;
     // a check out token never answers a save down, and nothing acts while the picker shows.
     [Fact]

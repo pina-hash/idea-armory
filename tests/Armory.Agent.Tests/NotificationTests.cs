@@ -81,6 +81,33 @@ public sealed class ProtocolLinkTests
         }
     }
 
+    // 0.5.6 (idea-app ledger 0521): Check out and open is the one other form, &co=1 after the id
+    // and nothing else, and it survives forwarding as it was given.
+    [Fact]
+    public void The_website_s_check_out_and_open_link_is_the_open_link_and_one_flag()
+    {
+        var id = Guid.Parse("8b906ba1-ad34-40fd-bf54-63b7db8f7e8c");
+        Assert.True(ProtocolLink.TryParseOpen("idea-armory:open?f=8b906ba1-ad34-40fd-bf54-63b7db8f7e8c&co=1", out var file, out var checkOut));
+        Assert.Equal(id, file);
+        Assert.True(checkOut);
+        Assert.True(ProtocolLink.TryParseOpen("idea-armory:open?f=8b906ba1-ad34-40fd-bf54-63b7db8f7e8c", out _, out checkOut));
+        Assert.False(checkOut);
+        Assert.Equal("idea-armory:open?f=8b906ba1-ad34-40fd-bf54-63b7db8f7e8c&co=1", ProtocolLink.FormatOpen(id, checkOut: true));
+        Assert.True(ProtocolLink.FormatOpen(id, checkOut: true).Length <= ProtocolLink.MaxLength);
+        Assert.Equal(ProtocolLink.FormatOpen(id, checkOut: true), ProtocolLink.ForForwarding(" IDEA-ARMORY:open?f=8B906BA1-AD34-40FD-BF54-63B7DB8F7E8C&co=1/ "));
+        foreach (var refused in new[]
+        {
+            "idea-armory:open?f=8b906ba1-ad34-40fd-bf54-63b7db8f7e8c&co=0", "idea-armory:open?f=8b906ba1-ad34-40fd-bf54-63b7db8f7e8c&co=1&co=1",
+            "idea-armory:open?f=8b906ba1-ad34-40fd-bf54-63b7db8f7e8c&CO=1", "idea-armory:open?co=1&f=8b906ba1-ad34-40fd-bf54-63b7db8f7e8c",
+            "idea-armory:open?f=8b906ba1-ad34-40fd-bf54-63b7db8f7e8c&co=1&x=..\\x", "idea-armory:open?f=&co=1",
+            "idea-armory:open?f=00000000-0000-0000-0000-000000000000&co=1", "idea-armory:open?f=8b906ba1-ad34-40fd-bf54-63b7db8f7e8c &co=1",
+        })
+        {
+            Assert.False(ProtocolLink.TryParseOpen(refused, out _, out _), refused);
+            Assert.Equal(ProtocolLink.OpenOnly, ProtocolLink.ForForwarding(refused));
+        }
+    }
+
     [Fact]
     public void The_forwarded_link_is_a_line_the_pipe_takes()
     {

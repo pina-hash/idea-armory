@@ -22,6 +22,15 @@ namespace Armory.Agent;
 // does (SolidWorks for a part, read-only unless it is checked out to this computer), never checks
 // anything out, and shows the file's page in the window. A file this computer doesn't have opens
 // nothing.
+//
+// 0.5.6 adds the one other form a web page may carry (idea-app ledger 0521, Check out and open):
+// exactly idea-armory:open?f=<the file's id>&co=1. The running Armory finds that file among the
+// projects it syncs (nothing outside them), downloads the newest version first if its copy is
+// older, checks it out to this computer and opens it, the way its own Check out and open does.
+// A file somebody else has checked out only opens read-only, with who has it said. Any other
+// parameter, value or order is not a link and only opens the window.
+//
+// 0.5.6 also adds checkin to the notification actions: the end-of-period reminder's Check in.
 internal sealed record ProtocolLink(string Token, string Action)
 {
     internal const string Scheme = "idea-armory";
@@ -30,29 +39,42 @@ internal sealed record ProtocolLink(string Token, string Action)
     // The two answers to the question before a save down (SaveDownAsks): save in the project's
     // year, or keep the file on this computer only.
     internal const string SaveIn = "savein", KeepLocal = "keeplocal", SaveBlocked = "saveblocked";
+    // The end-of-period reminder's button (0.5.6): check in the files it named.
+    internal const string CheckIn = "checkin";
     internal const int TokenLength = 22;
     internal const int MaxLength = 80;
     // What a second launch hands over for anything that is not a link: open the window, nothing more.
     internal const string OpenOnly = Prefix;
     private const string Head = "act?t=";
     private const string OpenHead = "open?f=";
+    private const string CheckOutTail = "&co=1";
     internal const string OpenFile = "open";
 
     // An Open link from the website: the file's id, or false for anything else.
-    internal static bool TryParseOpen(string? text, out Guid fileId)
+    internal static bool TryParseOpen(string? text, out Guid fileId) => TryParseOpen(text, out fileId, out _);
+
+    // An Open link from the website: the file's id and whether it asks for Check out and open
+    // (0.5.6), or false for anything else.
+    internal static bool TryParseOpen(string? text, out Guid fileId, out bool checkOut)
     {
         fileId = Guid.Empty;
+        checkOut = false;
         if (text is null || text.Length > MaxLength || !text.StartsWith(Prefix, StringComparison.OrdinalIgnoreCase)) return false;
         var rest = text.AsSpan(Prefix.Length);
         if (!rest.StartsWith(OpenHead, StringComparison.Ordinal)) return false;
         rest = rest[OpenHead.Length..];
         if (rest.EndsWith("/")) rest = rest[..^1];
+        if (rest.EndsWith(CheckOutTail, StringComparison.Ordinal))
+        {
+            checkOut = true;
+            rest = rest[..^CheckOutTail.Length];
+        }
         if (rest.Length != 36) return false;
         foreach (var c in rest) if (!(char.IsAsciiHexDigit(c) || c == '-')) return false;
         return Guid.TryParseExact(rest, "D", out fileId) && fileId != Guid.Empty;
     }
 
-    internal static string FormatOpen(Guid fileId) => Prefix + OpenHead + fileId.ToString("D");
+    internal static string FormatOpen(Guid fileId, bool checkOut = false) => Prefix + OpenHead + fileId.ToString("D") + (checkOut ? CheckOutTail : "");
     private const string ActionField = "&a=";
 
     // An argument Windows passes for a protocol activation: the scheme first, any case.
@@ -76,7 +98,7 @@ internal sealed record ProtocolLink(string Token, string Action)
         return true;
     }
 
-    internal static bool IsAction(string action) => action is CheckOut or Show or SaveIn or KeepLocal or SaveBlocked;
+    internal static bool IsAction(string action) => action is CheckOut or Show or SaveIn or KeepLocal or SaveBlocked or CheckIn;
 
     internal static bool IsTokenChar(char c) => char.IsAsciiLetterOrDigit(c) || c is '_' or '-';
 
@@ -87,7 +109,8 @@ internal sealed record ProtocolLink(string Token, string Action)
     // What a second launch forwards: the link as Armory writes it, or OpenOnly for anything else,
     // so nothing the browser or a script passed reaches the running Armory as it was given.
     internal static string ForForwarding(string? argument)
-        => TryParse(argument?.Trim(), out var link) ? link!.Format() : TryParseOpen(argument?.Trim(), out var file) ? FormatOpen(file) : OpenOnly;
+        => TryParse(argument?.Trim(), out var link) ? link!.Format()
+            : TryParseOpen(argument?.Trim(), out var file, out var checkOut) ? FormatOpen(file, checkOut) : OpenOnly;
 }
 
 // A second IdeaArmory.exe started for a link (Windows runs "<app>\IdeaArmory.exe" "<link>" when a

@@ -16,6 +16,7 @@ internal sealed partial class TrayApp : IShellSurface
     private readonly OpenAsks asks = new();
     private readonly SaveDownAsks saveDownAsks = new();
     private readonly SaveBlockedAsks saveBlockedAsks = new();
+    private readonly TakenBackAsks takenBackAsks = new();
     private System.Threading.Timer? askTimer;
     private int asksPosted;
 
@@ -35,6 +36,8 @@ internal sealed partial class TrayApp : IShellSurface
         // 0.4.3: "Armory updated from 0.4.2 to 0.4.3." and the taskbar sentence, once each, in the
         // window's foot line or as a notification (the same way a right-click item's answer goes).
         host.OnNotice(words => ((IShellSurface)this).Answer(new ActionResult(true, words)));
+        // 0.5.6: the end-of-period reminder, with a Check in button for the files it names.
+        host.NudgeDue += OnNudgeDue;
         shellDesk.Attach(host, this);
         if (link is not null)
         {
@@ -47,6 +50,7 @@ internal sealed partial class TrayApp : IShellSurface
     private void CloseShell()
     {
         host.ViewChanged -= OnAsksView;
+        host.NudgeDue -= OnNudgeDue;
         askTimer?.Dispose();
         askTimer = null;
         desk?.Close();
@@ -139,6 +143,7 @@ internal sealed partial class TrayApp : IShellSurface
     {
         if (quitting || notifier is null) return;
         UpdateSaveBlockedAsks();
+        UpdateTakenBackAsks();
         IReadOnlyList<OpenPromptInfo> open;
         try
         {
@@ -154,6 +159,30 @@ internal sealed partial class TrayApp : IShellSurface
         ScheduleAsk();
         UpdateSaveDownAsks();
     }
+
+    // 0.5.6: a file forced in from this computer, said once as a notification (TakenBackAsks).
+    private void UpdateTakenBackAsks()
+    {
+        var (show, withdraw) = takenBackAsks.Update(host.View);
+        foreach (var tag in withdraw) notifier!.Withdraw(tag, "takenback");
+        foreach (var (tag, card) in show)
+        {
+            var text = DeskWords.TakenBack(card.Detail);
+            notifier!.Ask(new ToastContent(tag, "takenback", card.Title, text, OpenLink([], tag), []), (card.Title, text + " Click here to open Armory."));
+        }
+    }
+
+    // 0.5.6: "Class is ending. Check in Plate.SLDPRT so your team can use it." with Check in.
+    private void OnNudgeDue(DateTimeOffset bell, IReadOnlyList<MyFileView> files) => Post(() =>
+    {
+        if (quitting || notifier is null || files.Count == 0) return;
+        var paths = files.Select(f => f.Path).ToArray();
+        var tag = "n" + ToastXml.TagFor([.. paths, bell.ToUnixTimeSeconds().ToString(System.Globalization.CultureInfo.InvariantCulture)]);
+        var text = DeskWords.Nudge(files.Select(f => f.Name).ToArray());
+        var toast = new ToastContent(tag, "nudge", DeskWords.NudgeTitle, text, OpenLink(paths, tag),
+            [new(DeskWords.CheckInButton, OpenLink(paths, tag, ProtocolLink.CheckIn))]);
+        notifier.Ask(toast, (DeskWords.NudgeTitle, text + " Click here to open Armory."));
+    });
 
     private void UpdateSaveBlockedAsks()
     {

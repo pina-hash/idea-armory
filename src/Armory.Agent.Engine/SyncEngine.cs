@@ -1867,6 +1867,8 @@ public sealed partial class SyncEngine : IAsyncDisposable
         foreach (var gone in markerFirstSeen.Keys.Where(k => !seen.Contains(k)).ToArray()) markerFirstSeen.Remove(gone);
         foreach (var gone in staleMarkers.Keys.Where(k => !seen.Contains(k)).ToArray()) staleMarkers.Remove(gone);
         staleRecorded.RemoveWhere(k => !seen.Contains(k));
+        // 0.5.6: a marker that appeared or went is an open or a close for the website.
+        DeskMarkers(new HashSet<string>(markerDocuments, StringComparer.OrdinalIgnoreCase), documents, now);
         // In one step, so a view built while the question was out still saw the last pass's.
         markerDocuments.Clear();
         markerDocuments.UnionWith(documents);

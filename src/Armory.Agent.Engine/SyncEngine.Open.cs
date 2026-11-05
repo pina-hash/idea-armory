@@ -248,6 +248,7 @@ public sealed partial class SyncEngine
                 break;
             case LinkSaved saved when ToVault(saved.Path) is { } path:
                 OnSaved(saved, path);
+                Desk(path.Value, DeskEventKind.Saved, deps.Clock.GetUtcNow());
                 break;
             case LinkSaveCanceled canceled when ToVault(canceled.Path) is { } path:
                 savingHolds.Remove(path.Value);
@@ -263,7 +264,11 @@ public sealed partial class SyncEngine
                 break;
             case LinkClosed closed when ToVault(closed.Path) is { } path:
                 BlockedSaves.Forget(path.Value);
-                if (linkDocuments.TryGetValue(DocumentKey(closed.ProcessId, path.Value), out var gone)) ForgetDocument(DocumentKey(closed.ProcessId, path.Value), gone);
+                if (linkDocuments.TryGetValue(DocumentKey(closed.ProcessId, path.Value), out var gone))
+                {
+                    if (gone.TopLevel) Desk(path.Value, DeskEventKind.Closed, deps.Clock.GetUtcNow());
+                    ForgetDocument(DocumentKey(closed.ProcessId, path.Value), gone);
+                }
                 // A file waiting to open again once closed: the next pass sees it closed.
                 if (reopenWhenClosed.ContainsKey(path.Value)) wake.Release();
                 break;
@@ -282,6 +287,8 @@ public sealed partial class SyncEngine
         {
             doc.TopLevel = true;
             doc.OpenedAt = at;
+            // 0.5.6: the website learns the student has it open (SyncEngine.Tracking.cs).
+            Desk(doc.Path, DeskEventKind.Opened, at);
         }
         if (!doc.Asked && askedOnce.TryAsk(doc.Path, doc.Pid))
         {
