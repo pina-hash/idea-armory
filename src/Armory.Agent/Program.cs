@@ -160,13 +160,15 @@ internal static class Program
         }
         ApplicationConfiguration.Initialize();
         var host = new AgentHost(paths, log, AgentPaths.Site(), telemetry);
+        using (var stopping = new CancellationTokenSource())
         using (var tray = new TrayApp(host, paths, log, instance, command.Background))
         {
             tray.AttachShell(desk, command.Link);
             // 0.5.8: the install cleanup runs now that the window is up, on its own thread. It
             // never ends this run: what it could not do is logged and a retireFailed incident.
-            if (retireInBackground) InstallRetirement.StartInBackground(paths, log, telemetry.Save, RetireAfterWindow);
-            Application.Run(tray);
+            if (retireInBackground) InstallRetirement.StartInBackground(paths, log, telemetry.Save, RetireAfterWindow, stopping.Token);
+            try { Application.Run(tray); }
+            finally { stopping.Cancel(); }
         }
         try { telemetry.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(5)); }
         catch (Exception error) when (error is not OutOfMemoryException) { log.Error("stopping telemetry", error); }

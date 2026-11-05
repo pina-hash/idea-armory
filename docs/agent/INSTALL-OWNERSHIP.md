@@ -138,7 +138,10 @@ computer also never downloads an update (the updater runs inside the open app), 
   90 second wait and lock. It never kills the script: past the wait the script keeps its lock and
   any uninstaller it started finishes. Every outcome is logged as `retire: <outcome>`, and one
   that did not finish is a `retireFailed` incident (docs/agent/TELEMETRY.md). The window and the
-  engine go on either way. The post-update worker (`--armory-finish-update`) still exits 1 on a
+  engine go on either way. The script starts in TEMP, not Armory's folder: it can now outlive
+  Armory (a setup closes Armory and replaces its folder; the flash-drive setup's "A file ... is in
+  use" in CI was the script's inherited working directory holding the folder open). A cleanup
+  that has not started when Armory begins to quit does not start. The post-update worker (`--armory-finish-update`) still exits 1 on a
   failed inventory, as AfterUpdate.ps1 expects.
 - Two copies running at once during the cleanup is not unsafe here, so nothing is refused. The
   guard has had one name in every release since 0.1.0 (`Local\IDEA-Armory-Agent-<SID>`), so a

@@ -169,7 +169,13 @@ internal static class InstallRetirement
                 ?? throw new InvalidOperationException("The retirement script is missing from the app."))
             using (var output = File.Create(script)) input.CopyTo(output);
             var start = new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), @"WindowsPowerShell\v1.0\powershell.exe"))
-            { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
+            {
+                UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true,
+                // 0.5.8: the script can outlive Armory now (it runs beside the window, and a setup
+                // may close Armory meanwhile). Started in Armory's own folder it would hold that
+                // folder open, and a setup could not replace it ("A file ... is in use").
+                WorkingDirectory = Path.GetTempPath(),
+            };
             foreach (var arg in new[] { "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script,
                          "-CurrentExe", Environment.ProcessPath!, "-DataFolder", paths.DataFolder, "-CurrentProcessId", Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture) }) start.ArgumentList.Add(arg);
             if (callerRunning) start.ArgumentList.Add("-CallerRunning");
@@ -202,12 +208,13 @@ internal static class InstallRetirement
     // shortcut and shell repairs use COM), a few seconds after start so the window comes first.
     // Whatever happens is logged and, when it did not finish, a retireFailed incident; the
     // window and the engine go on either way.
-    internal static Thread? StartInBackground(AgentPaths paths, AgentLog log, Func<Glitch, string?> report, TimeSpan delay)
+    // stopping: Armory began to quit; a cleanup that has not started yet does not start.
+    internal static Thread? StartInBackground(AgentPaths paths, AgentLog log, Func<Glitch, string?> report, TimeSpan delay, CancellationToken stopping)
     {
         if (!OperatingSystem.IsWindows() || !Enabled(paths, Environment.ProcessPath, File.Exists)) return null;
         var thread = new Thread(() =>
         {
-            Thread.Sleep(delay);
+            if (stopping.WaitHandle.WaitOne(delay)) return;
             RunAndReport(() => Run(paths, callerRunning: true), log.Info, report);
         })
         { IsBackground = true, Name = "Armory install retirement" };
