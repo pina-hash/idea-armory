@@ -81,7 +81,7 @@ public sealed class ProtocolLinkTests
         }
     }
 
-    // 0.5.6 (idea-app ledger 0521): Check out and open is the one other form, &co=1 after the id
+    // 0.5.7 (idea-app ledger 0521): Check out and open is the one other form, &co=1 after the id
     // and nothing else, and it survives forwarding as it was given.
     [Fact]
     public void The_website_s_check_out_and_open_link_is_the_open_link_and_one_flag()

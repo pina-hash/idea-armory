@@ -36,7 +36,7 @@ internal sealed partial class TrayApp : IShellSurface
         // 0.4.3: "Armory updated from 0.4.2 to 0.4.3." and the taskbar sentence, once each, in the
         // window's foot line or as a notification (the same way a right-click item's answer goes).
         host.OnNotice(words => ((IShellSurface)this).Answer(new ActionResult(true, words)));
-        // 0.5.6: the end-of-period reminder, with a Check in button for the files it names.
+        // 0.5.7: the end-of-period reminder, with a Check in button for the files it names.
         host.NudgeDue += OnNudgeDue;
         shellDesk.Attach(host, this);
         if (link is not null)
@@ -160,7 +160,7 @@ internal sealed partial class TrayApp : IShellSurface
         UpdateSaveDownAsks();
     }
 
-    // 0.5.6: a file forced in from this computer, said once as a notification (TakenBackAsks).
+    // 0.5.7: a file forced in from this computer, said once as a notification (TakenBackAsks).
     private void UpdateTakenBackAsks()
     {
         var (show, withdraw) = takenBackAsks.Update(host.View);
@@ -172,7 +172,7 @@ internal sealed partial class TrayApp : IShellSurface
         }
     }
 
-    // 0.5.6: "Class is ending. Check in Plate.SLDPRT so your team can use it." with Check in.
+    // 0.5.7: "Class is ending. Check in Plate.SLDPRT so your team can use it." with Check in.
     private void OnNudgeDue(DateTimeOffset bell, IReadOnlyList<MyFileView> files) => Post(() =>
     {
         if (quitting || notifier is null || files.Count == 0) return;

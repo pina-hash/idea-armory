@@ -287,7 +287,7 @@ public sealed partial class SyncEngine
         {
             doc.TopLevel = true;
             doc.OpenedAt = at;
-            // 0.5.6: the website learns the student has it open (SyncEngine.Tracking.cs).
+            // 0.5.7: the website learns the student has it open (SyncEngine.Tracking.cs).
             Desk(doc.Path, DeskEventKind.Opened, at);
         }
         if (!doc.Asked && askedOnce.TryAsk(doc.Path, doc.Pid))

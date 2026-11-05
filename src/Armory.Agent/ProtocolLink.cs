@@ -23,14 +23,14 @@ namespace Armory.Agent;
 // anything out, and shows the file's page in the window. A file this computer doesn't have opens
 // nothing.
 //
-// 0.5.6 adds the one other form a web page may carry (idea-app ledger 0521, Check out and open):
+// 0.5.7 adds the one other form a web page may carry (idea-app ledger 0521, Check out and open):
 // exactly idea-armory:open?f=<the file's id>&co=1. The running Armory finds that file among the
 // projects it syncs (nothing outside them), downloads the newest version first if its copy is
 // older, checks it out to this computer and opens it, the way its own Check out and open does.
 // A file somebody else has checked out only opens read-only, with who has it said. Any other
 // parameter, value or order is not a link and only opens the window.
 //
-// 0.5.6 also adds checkin to the notification actions: the end-of-period reminder's Check in.
+// 0.5.7 also adds checkin to the notification actions: the end-of-period reminder's Check in.
 internal sealed record ProtocolLink(string Token, string Action)
 {
     internal const string Scheme = "idea-armory";
@@ -39,7 +39,7 @@ internal sealed record ProtocolLink(string Token, string Action)
     // The two answers to the question before a save down (SaveDownAsks): save in the project's
     // year, or keep the file on this computer only.
     internal const string SaveIn = "savein", KeepLocal = "keeplocal", SaveBlocked = "saveblocked";
-    // The end-of-period reminder's button (0.5.6): check in the files it named.
+    // The end-of-period reminder's button (0.5.7): check in the files it named.
     internal const string CheckIn = "checkin";
     internal const int TokenLength = 22;
     internal const int MaxLength = 80;
@@ -54,7 +54,7 @@ internal sealed record ProtocolLink(string Token, string Action)
     internal static bool TryParseOpen(string? text, out Guid fileId) => TryParseOpen(text, out fileId, out _);
 
     // An Open link from the website: the file's id and whether it asks for Check out and open
-    // (0.5.6), or false for anything else.
+    // (0.5.7), or false for anything else.
     internal static bool TryParseOpen(string? text, out Guid fileId, out bool checkOut)
     {
         fileId = Guid.Empty;

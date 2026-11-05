@@ -87,7 +87,7 @@
 		themePaint: false, // a theme was just picked: it paints before anything heavy is drawn
 		heldView: null, // the newest view that arrived meanwhile
 		freshDraw: false, // the next draw starts the page anew (another file's detail)
-		moment: null, // 0.5.6: 'checkout' or 'twoChanges' while its first-time card shows (moments.js)
+		moment: null, // 0.5.7: 'checkout' or 'twoChanges' while its first-time card shows (moments.js)
 		lastAction: null // the last answer to an action on many files, kept until OK (N9)
 	};
 
@@ -2103,7 +2103,7 @@
 		return html + '</ul></section>';
 	}
 
-	/** 0.5.6: the card that explains a check out or a conflict the first time one happens (moments.js). */
+	/** 0.5.7: the card that explains a check out or a conflict the first time one happens (moments.js). */
 	function momentHtml() {
 		return ui.moment && window.ArmoryMoments ? window.ArmoryMoments.html(ui.moment, esc, tipAttr('momentDone')) : '';
 	}
@@ -5544,7 +5544,7 @@
 			var previousStudent = previousRealStudent;
 			var wasSignedIn = ui.view && ui.view.connection === 'signedIn';
 			ui.view = message.view;
-			// 0.5.6: help at the first check out and the first conflict (moments.js), from real views only.
+			// 0.5.7: help at the first check out and the first conflict (moments.js), from real views only.
 			if (window.ArmoryMoments) {
 				var moment = window.ArmoryMoments.observe(ui.view);
 				if (moment !== ui.moment) ui.freshDraw = true;

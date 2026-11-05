@@ -275,7 +275,7 @@ internal sealed class ShellDesk(Action<string> log, TimeProvider? timeProvider =
         }
         if (ticket.Action == ProtocolLink.CheckIn)
         {
-            // The end-of-period reminder's Check in (0.5.6): exactly the files it named.
+            // The end-of-period reminder's Check in (0.5.7): exactly the files it named.
             var checkedIn = await h.CheckInAsync(ticket.Paths).ConfigureAwait(false);
             log("shell: check in from the end-of-period reminder" + (checkedIn.Ok ? " done" : " refused"));
             s.Answer(checkedIn);
@@ -299,7 +299,7 @@ internal sealed class ShellDesk(Action<string> log, TimeProvider? timeProvider =
 
     // Open on a file's page on ideabosco.com: the window shows that file, and the file opens the
     // way the window's own Open opens it. The link names only an id; the file must be one this
-    // computer's Armory has. Check out and open (0.5.6): the same file checked out to this
+    // computer's Armory has. Check out and open (0.5.7): the same file checked out to this
     // computer first (downloading the newest version if this copy is older), unless somebody
     // else has it, when it opens read-only and the answer says who.
     private async Task OpenFromWebsiteAsync(Guid fileId, bool checkOut, IShellHost h, IShellSurface s)
@@ -380,7 +380,7 @@ internal static class ShellWords
     internal const string NotInVault = "That isn't in the Armory folder.";
     // The website's Open (0.4.2): a file of a project this computer's Armory doesn't have.
     internal const string NotHereFromWebsite = "That file isn't in this computer's Armory folder. Check that you're signed in to Armory as yourself, in a project that has it.";
-    // Check out and open from the website on a file somebody else has (0.5.6).
+    // Check out and open from the website on a file somebody else has (0.5.7).
     internal static string OpenedReadOnly(string name, string? holder) => holder is null
         ? $"{name} is checked out on your other computer, so it opened read-only here. Check it in there first."
         : $"{holder} has {name} checked out, so it opened read-only. You can look, but not save over it.";

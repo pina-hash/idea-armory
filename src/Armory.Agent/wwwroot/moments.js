@@ -1,4 +1,4 @@
-/* Help at the moment it is needed (0.5.6, idea-app ledger 0521): a short card on Home the first
+/* Help at the moment it is needed (0.5.7, idea-app ledger 0521): a short card on Home the first
  * time a student checks out a file, and the first time two people changed one file. Front-loaded
  * lessons did not raise how often people got this right; help at the first check out and the
  * first conflict does. One picture: check out, work, check in.

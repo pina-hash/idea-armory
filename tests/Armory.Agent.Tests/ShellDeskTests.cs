@@ -347,7 +347,7 @@ public sealed class ShellDeskTests
         Assert.Equal("Connect this computer first.", Assert.Single(outSurface.Answers).Message);
     }
 
-    // 0.5.6 (idea-app ledger 0521): Check out and open on a file's website page checks out a file
+    // 0.5.7 (idea-app ledger 0521): Check out and open on a file's website page checks out a file
     // nobody has and opens it; on a file somebody else has it only opens read-only and says who;
     // on one already checked out here it just opens. A file outside this Armory opens nothing.
     [Fact]
@@ -375,7 +375,7 @@ public sealed class ShellDeskTests
         Assert.Equal(ShellWords.NotHereFromWebsite, Assert.Single(otherSurface.Answers).Message);
     }
 
-    // 0.5.6: the end-of-period reminder's Check in checks in exactly the files its token named, once.
+    // 0.5.7: the end-of-period reminder's Check in checks in exactly the files its token named, once.
     [Fact]
     public async Task The_end_of_period_reminder_checks_in_the_files_it_named_once()
     {
@@ -390,7 +390,7 @@ public sealed class ShellDeskTests
         Assert.Equal(["window"], againSurface.Shown);
     }
 
-    // 0.5.6: a forced check in from this computer is said once as a notification per card, a
+    // 0.5.7: a forced check in from this computer is said once as a notification per card, a
     // card that goes is withdrawn, and a sign-in change withdraws everything said before it.
     [Fact]
     public void A_forced_check_in_is_said_once_and_withdrawn_when_its_card_goes()

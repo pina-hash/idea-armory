@@ -4,7 +4,7 @@ using Armory.Core;
 
 namespace Armory.Agent;
 
-// Desk tracking (0.5.6; idea-app ledger 0521, docs/agent/TRACKING.md). About every 30 seconds,
+// Desk tracking (0.5.7; idea-app ledger 0521, docs/agent/TRACKING.md). About every 30 seconds,
 // on its own task, never inside a sync pass:
 //   1. what this computer saw of each team file (the engine's DeskEvents) goes to the website
 //      (armory_file_events), so the Checked out view says who has a file open and since when;
@@ -15,7 +15,7 @@ namespace Armory.Agent;
 //      tray's NudgeDue), and the website is told they were asked;
 //   4. where the site admin switched on automatic check in, a file checked out here, closed and
 //      untouched for that long is checked in, and the student is told in one sentence.
-// A website without 0364 answers 404 PGRST202: nothing is queued for it and it is asked again in
+// A website without 0369 answers 404 PGRST202: nothing is queued for it and it is asked again in
 // six hours. Every failure is logged once per kind and never touches a pass.
 internal sealed partial class AgentHost
 {
@@ -110,7 +110,7 @@ internal sealed partial class AgentHost
             }
             catch (ArmoryRpcException error) when (error.IsFunctionMissing)
             {
-                // A website before 0364 tracks nothing: nothing waits for it.
+                // A website before 0369 tracks nothing: nothing waits for it.
                 deskNotLiveUntil = now + DeskNotLiveRetry;
                 queue.Clear();
                 DeskProblem("send", "the website does not track open files yet");

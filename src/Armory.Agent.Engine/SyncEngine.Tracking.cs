@@ -2,7 +2,7 @@ using Armory.Core;
 
 namespace Armory.Agent.Engine;
 
-// Desk tracking (0.5.6; idea-app ledger 0521, docs/agent/TRACKING.md): what this computer saw of
+// Desk tracking (0.5.7; idea-app ledger 0521, docs/agent/TRACKING.md): what this computer saw of
 // each team file, queued for the website. A file is opened when the student opens it in its own
 // SolidWorks window (a reference an assembly loads is not), or when SolidWorks' lock marker for
 // it appears without the link; closed when that window or marker goes; saved on every SolidWorks

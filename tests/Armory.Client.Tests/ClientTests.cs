@@ -309,7 +309,7 @@ public sealed partial class ClientTests
     }
 }
 
-// 0.5.6 (idea-app ledger 0521): what armory_file_events is sent, and the website's bell answer.
+// 0.5.7 (idea-app ledger 0521): what armory_file_events is sent, and the website's bell answer.
 public sealed class DeskTrackingClientTests
 {
     [Fact]

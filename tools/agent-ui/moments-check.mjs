@@ -1,10 +1,11 @@
-// Checks wwwroot/moments.js (0.5.6, idea-app ledger 0521): the first-time help at a student's
+// Checks wwwroot/moments.js (0.5.7, idea-app ledger 0521): the first-time help at a student's
 // first check out and first "two people changed one file" shows only when that happens while
 // Armory is open, once per student, and Got it keeps it away. Runs the real file in a sandbox
 // with a stand-in localStorage; no browser. Exit 1 on any failure.
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
+import { grade } from './reading-level.mjs';
 
 const source = readFileSync(fileURLToPath(new URL('../../src/Armory.Agent/wwwroot/moments.js', import.meta.url)), 'utf8');
 const store = new Map();
@@ -39,5 +40,9 @@ check('a quiet kept copy (info) never shows it', (M.reset(), M.observe(view('ben
 check('another student on the same window starts fresh', (M.observe(view('cy@x.net')), M.observe(view('cy@x.net', ['z']))) === 'checkout');
 check('signed out shows nothing', M.observe({ connection: 'signedOut', account: null, myFiles: [], notices: [] }) === null);
 check('an unknown moment draws nothing', M.html('nope', esc) === '');
+// Every line grades 5 or lower (reading-level.mjs, the same counter as the lesson and help).
+for (const [id, m] of Object.entries(M.moments)) {
+	for (const line of [m.title + '.', ...m.lines]) check(`${id}: grade ${grade(line).toFixed(1)} for "${line}"`, grade(line) <= 5);
+}
 if (failed) { console.log(`${failed} failed`); process.exit(1); }
 console.log('moments: all checks passed');
