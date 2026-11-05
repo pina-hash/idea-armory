@@ -1,6 +1,6 @@
 namespace Armory.Core;
 
-// Desk tracking (idea-app ledger 0521, migration 0369; docs/agent/TRACKING.md): what this
+// Desk tracking (idea-app ledger 0521, migration 0370; docs/agent/TRACKING.md): what this
 // computer tells the website about each team file, and the two rules that act on a check out
 // the student may have forgotten. Operational data only, never a score: it says a file was
 // opened, saved in SolidWorks, closed, or that its person was asked to check it in.
@@ -19,7 +19,7 @@ public enum DeskEventKind
 
 public sealed record DeskEvent(Guid FileId, DeskEventKind Kind, DateTimeOffset At)
 {
-    // The word armory_file_events reads (0369): opened, saved, closed or nudged.
+    // The word armory_file_events reads (0370): opened, saved, closed or nudged.
     public string KindWord => Kind switch
     {
         DeskEventKind.Opened => "opened",
@@ -91,7 +91,7 @@ public sealed class DeskEventQueue
         }
     }
 
-    // A website that does not track (before 0369) is not sent anything to wait for.
+    // A website that does not track (before 0370) is not sent anything to wait for.
     public void Clear()
     {
         lock (gate) waiting.Clear();
@@ -135,7 +135,7 @@ public static class PeriodNudge
     }
 }
 
-// The site admin's automatic check in (0369's auto_check_in_idle_minutes, off unless set): a
+// The site admin's automatic check in (0370's auto_check_in_idle_minutes, off unless set): a
 // file checked out here, closed, and untouched for that long is checked in by Armory itself.
 // Never while it is open: a check in waits for the file to close anyway, and an open file is
 // somebody working.

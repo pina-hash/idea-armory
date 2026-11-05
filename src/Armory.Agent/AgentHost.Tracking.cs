@@ -15,7 +15,7 @@ namespace Armory.Agent;
 //      tray's NudgeDue), and the website is told they were asked;
 //   4. where the site admin switched on automatic check in, a file checked out here, closed and
 //      untouched for that long is checked in, and the student is told in one sentence.
-// A website without 0369 answers 404 PGRST202: nothing is queued for it and it is asked again in
+// A website without 0370 answers 404 PGRST202: nothing is queued for it and it is asked again in
 // six hours. Every failure is logged once per kind and never touches a pass.
 internal sealed partial class AgentHost
 {
@@ -110,7 +110,7 @@ internal sealed partial class AgentHost
             }
             catch (ArmoryRpcException error) when (error.IsFunctionMissing)
             {
-                // A website before 0369 tracks nothing: nothing waits for it.
+                // A website before 0370 tracks nothing: nothing waits for it.
                 deskNotLiveUntil = now + DeskNotLiveRetry;
                 queue.Clear();
                 DeskProblem("send", "the website does not track open files yet");

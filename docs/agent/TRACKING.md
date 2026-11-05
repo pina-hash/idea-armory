@@ -1,6 +1,6 @@
 # Desk tracking (0.5.7)
 
-idea-app ledger 0521, migration 0369. What this computer tells ideabosco.com about team files, and
+idea-app ledger 0521, migration 0370. What this computer tells ideabosco.com about team files, and
 what it does at the end of a class period. Operational data only, never a score.
 
 ## What is sent
@@ -17,7 +17,7 @@ what it does at the end of a class period. Operational data only, never a score.
 Only files the team has (a server id) are sent. `DeskEventQueue` (Armory.Core) collapses the same
 kind for the same file inside 20 seconds, keeps the newest 1,000, and puts a failed batch back in
 front. `SyncEngine.Tracking.cs` fills it on the engine thread; `AgentHost.Tracking.cs` sends it
-every 30 seconds on its own task. A site without 0369 answers 404 PGRST202: the queue is cleared
+every 30 seconds on its own task. A site without 0370 answers 404 PGRST202: the queue is cleared
 and the site is asked again after six hours.
 
 The site keeps one row per file and computer (`armory_file_activity`) and shows, on each live

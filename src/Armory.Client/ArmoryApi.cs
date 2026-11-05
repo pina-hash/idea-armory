@@ -5,9 +5,9 @@ namespace Armory.Client;
 
 public enum MemberRole { Student, CadLead, Mentor, Instructor }
 
-// One thing this computer saw of a file (idea-app 0369): Kind is opened, saved, closed or nudged.
+// One thing this computer saw of a file (idea-app 0370): Kind is opened, saved, closed or nudged.
 public sealed record FileEventCall(Guid File, string Kind, DateTimeOffset At);
-// The site admin's check out rules (idea-app 0369). AutoCheckInIdleMinutes null is off.
+// The site admin's check out rules (idea-app 0370). AutoCheckInIdleMinutes null is off.
 public sealed record SiteCheckoutRules(int HeldTooLongMinutes, int QuietMinutes, int? AutoCheckInIdleMinutes);
 public enum ProjectReleaseGate { Warn, Enforce }
 
@@ -206,10 +206,10 @@ public sealed class ArmoryApi(PostgrestClient rest)
     public async Task HeartbeatAsync(Guid device, string? appVersion, string? state, string computerKey, CancellationToken ct = default)
         => await rest.CallAsync("armory_heartbeat", Args(("p_device", device), ("p_app_version", appVersion), ("p_state", state), ("p_computer_key", computerKey)), ct);
 
-    // v0.5.7 (idea-app 0369, ledger 0521). What this computer saw of each file: opened, saved in
+    // v0.5.7 (idea-app 0370, ledger 0521). What this computer saw of each file: opened, saved in
     // SolidWorks, closed, or asked to be checked in at the end of a class period. At most 200 a
     // call. The server keeps only files of the caller's projects and skips anything it cannot
-    // read, and answers how many it kept. A site before 0369 answers 404 PGRST202
+    // read, and answers how many it kept. A site before 0370 answers 404 PGRST202
     // (ArmoryRpcException.IsFunctionMissing).
     public const int MaximumFileEvents = 200;
     public async Task<int> FileEventsAsync(Guid device, IReadOnlyList<FileEventCall> events, CancellationToken ct = default)
@@ -233,7 +233,7 @@ public sealed class ArmoryApi(PostgrestClient rest)
         return list;
     }
 
-    // v0.5.7 (idea-app 0369). The site admin's check out rules, or null from a site before 0369.
+    // v0.5.7 (idea-app 0370). The site admin's check out rules, or null from a site before 0370.
     public async Task<SiteCheckoutRules?> CheckoutRulesAsync(CancellationToken ct = default)
     {
         try
