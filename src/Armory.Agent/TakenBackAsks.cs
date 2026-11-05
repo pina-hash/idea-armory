@@ -2,7 +2,7 @@ using Armory.Agent.Engine.View;
 
 namespace Armory.Agent;
 
-// 0.5.7 (idea-app ledger 0521): when a mentor, the folder's owner or the team forces in a file
+// 0.5.7 (idea-app ledger 0537): when a mentor, the folder's owner or the team forces in a file
 // this computer had checked out, its card on Home says so; this also says it once as a Windows
 // notification, so a student who closed the window still hears it. One notification per card
 // key (the engine keeps the key stable while the card stands); a card that goes is withdrawn.

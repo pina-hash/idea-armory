@@ -4,7 +4,7 @@ using Armory.Core;
 
 namespace Armory.Agent;
 
-// Desk tracking (0.5.7; idea-app ledger 0521, docs/agent/TRACKING.md). About every 30 seconds,
+// Desk tracking (0.5.7; idea-app ledger 0537, docs/agent/TRACKING.md). About every 30 seconds,
 // on its own task, never inside a sync pass:
 //   1. what this computer saw of each team file (the engine's DeskEvents) goes to the website
 //      (armory_file_events), so the Checked out view says who has a file open and since when;

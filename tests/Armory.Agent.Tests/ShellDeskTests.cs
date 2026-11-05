@@ -347,7 +347,7 @@ public sealed class ShellDeskTests
         Assert.Equal("Connect this computer first.", Assert.Single(outSurface.Answers).Message);
     }
 
-    // 0.5.7 (idea-app ledger 0521): Check out and open on a file's website page checks out a file
+    // 0.5.7 (idea-app ledger 0537): Check out and open on a file's website page checks out a file
     // nobody has and opens it; on a file somebody else has it only opens read-only and says who;
     // on one already checked out here it just opens. A file outside this Armory opens nothing.
     [Fact]

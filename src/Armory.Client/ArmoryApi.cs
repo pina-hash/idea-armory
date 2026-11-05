@@ -206,7 +206,7 @@ public sealed class ArmoryApi(PostgrestClient rest)
     public async Task HeartbeatAsync(Guid device, string? appVersion, string? state, string computerKey, CancellationToken ct = default)
         => await rest.CallAsync("armory_heartbeat", Args(("p_device", device), ("p_app_version", appVersion), ("p_state", state), ("p_computer_key", computerKey)), ct);
 
-    // v0.5.7 (idea-app 0370, ledger 0521). What this computer saw of each file: opened, saved in
+    // v0.5.7 (idea-app 0370, ledger 0537). What this computer saw of each file: opened, saved in
     // SolidWorks, closed, or asked to be checked in at the end of a class period. At most 200 a
     // call. The server keeps only files of the caller's projects and skips anything it cannot
     // read, and answers how many it kept. A site before 0370 answers 404 PGRST202

@@ -1,6 +1,6 @@
 namespace Armory.Core;
 
-// Desk tracking (idea-app ledger 0521, migration 0370; docs/agent/TRACKING.md): what this
+// Desk tracking (idea-app ledger 0537, migration 0370; docs/agent/TRACKING.md): what this
 // computer tells the website about each team file, and the two rules that act on a check out
 // the student may have forgotten. Operational data only, never a score: it says a file was
 // opened, saved in SolidWorks, closed, or that its person was asked to check it in.

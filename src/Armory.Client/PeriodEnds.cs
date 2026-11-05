@@ -2,7 +2,7 @@ using System.Text.Json;
 
 namespace Armory.Client;
 
-// When each class period ends today (idea-app ledger 0521): GET <site>/api/armory/bells, the
+// When each class period ends today (idea-app ledger 0537): GET <site>/api/armory/bells, the
 // website's own bell schedule and the school calendar's day letter, so the end-of-period
 // reminder and the calendar never disagree. A day that is not a school day, whose times the
 // website does not have, or that could not be read is no ends at all: the reminder stays quiet.

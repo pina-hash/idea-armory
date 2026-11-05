@@ -23,7 +23,7 @@ namespace Armory.Agent;
 // anything out, and shows the file's page in the window. A file this computer doesn't have opens
 // nothing.
 //
-// 0.5.7 adds the one other form a web page may carry (idea-app ledger 0521, Check out and open):
+// 0.5.7 adds the one other form a web page may carry (idea-app ledger 0537, Check out and open):
 // exactly idea-armory:open?f=<the file's id>&co=1. The running Armory finds that file among the
 // projects it syncs (nothing outside them), downloads the newest version first if its copy is
 // older, checks it out to this computer and opens it, the way its own Check out and open does.

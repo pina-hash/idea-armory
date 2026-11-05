@@ -63,7 +63,7 @@ public sealed class SaveBlockedTests(ITestOutputHelper output)
         Assert.Single(asks.Update(app.Engine.View).Withdraw);
     }
 
-    // 0.5.7 (idea-app ledger 0521): the website learns a team file was opened in its own window,
+    // 0.5.7 (idea-app ledger 0537): the website learns a team file was opened in its own window,
     // saved and closed, by its id; a reference an assembly loads, and a file the team does not
     // have, say nothing.
     [Fact]

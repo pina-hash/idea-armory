@@ -2,7 +2,7 @@ using Armory.Core;
 
 namespace Armory.Core.Tests;
 
-// Desk tracking (idea-app ledger 0521): the queue of what this computer tells the website about
+// Desk tracking (idea-app ledger 0537): the queue of what this computer tells the website about
 // each file, the end-of-period nudge, and the site admin's automatic check in. One test per rule.
 public sealed class DeskTrackingTests
 {

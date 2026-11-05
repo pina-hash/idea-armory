@@ -1,4 +1,4 @@
-// Checks wwwroot/moments.js (0.5.7, idea-app ledger 0521): the first-time help at a student's
+// Checks wwwroot/moments.js (0.5.7, idea-app ledger 0537): the first-time help at a student's
 // first check out and first "two people changed one file" shows only when that happens while
 // Armory is open, once per student, and Got it keeps it away. Runs the real file in a sandbox
 // with a stand-in localStorage; no browser. Exit 1 on any failure.
