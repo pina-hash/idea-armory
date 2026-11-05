@@ -5162,4 +5162,12 @@ body[data-tutorial] dialog.housing { padding-bottom: 50vh; }
 @media (max-width: 520px) {
 	.fs-item { grid-template-columns: 30px minmax(0, 1fr); }
 	.fs-item > .key { grid-column: 2; justify-self: start; }
+
+/* 0.5.6: help at the first check out and the first conflict (moments.js). */
+.moment-lines {
+	margin: 0.25rem 0 0.5rem;
+	padding-left: 1.2rem;
+}
+.moment-lines li + li {
+	margin-top: 0.15rem;
 }

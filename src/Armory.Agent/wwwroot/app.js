@@ -87,6 +87,7 @@
 		themePaint: false, // a theme was just picked: it paints before anything heavy is drawn
 		heldView: null, // the newest view that arrived meanwhile
 		freshDraw: false, // the next draw starts the page anew (another file's detail)
+		moment: null, // 0.5.6: 'checkout' or 'twoChanges' while its first-time card shows (moments.js)
 		lastAction: null // the last answer to an action on many files, kept until OK (N9)
 	};
 
@@ -495,6 +496,7 @@
 	 * follow the copy rule (no jargon) and name the file, folder or person the control is about.
 	 */
 	var TIPS = {
+		momentDone: 'Hide this help. It will not show again for you on this computer.',
 		fileSearch: 'Find a file by any part of its name or folder path in this folder and the folders inside it. Ctrl+F focuses this box; Escape clears it.',
 		searchClear: 'Clear the search words and keep the quick filters.',
 		searchReset: 'Clear the search words and every quick filter to show all files again.',
@@ -1625,6 +1627,7 @@
 			promptHtml(v) +
 			(window.ArmoryFirstSteps && !(tutorial && tutorial.practice()) ? window.ArmoryFirstSteps.html(v, !!(tutorial && tutorial.active())) : '') +
 			activityHtml(v.activity) +
+			momentHtml() +
 			noticesHtml(v) +
 			heldHtml(v) +
 			myFilesHtml(v) +
@@ -2098,6 +2101,11 @@
 				'<p class="attn-detail">' + esc(glue('It opens read-only for you. It goes to Armory under ' + first + '\'s own sign-in when ' + first + ' picks their name on this computer.')) + '</p></div></li>';
 		});
 		return html + '</ul></section>';
+	}
+
+	/** 0.5.6: the card that explains a check out or a conflict the first time one happens (moments.js). */
+	function momentHtml() {
+		return ui.moment && window.ArmoryMoments ? window.ArmoryMoments.html(ui.moment, esc, tipAttr('momentDone')) : '';
 	}
 
 	function noticesHtml(v) {
@@ -4894,6 +4902,12 @@
 		var from = el.getAttribute('data-key');
 		if (pickerClick(action, el, from)) return;
 		switch (action) {
+			case 'momentDone':
+				if (window.ArmoryMoments) window.ArmoryMoments.done(el.getAttribute('data-moment'));
+				ui.moment = null;
+				ui.freshDraw = true;
+				render();
+				break;
 			case 'searchMe':
 				ui.fileSearch.checkout ^= 1;
 				applyFileSearch();
@@ -5530,6 +5544,12 @@
 			var previousStudent = previousRealStudent;
 			var wasSignedIn = ui.view && ui.view.connection === 'signedIn';
 			ui.view = message.view;
+			// 0.5.6: help at the first check out and the first conflict (moments.js), from real views only.
+			if (window.ArmoryMoments) {
+				var moment = window.ArmoryMoments.observe(ui.view);
+				if (moment !== ui.moment) ui.freshDraw = true;
+				ui.moment = moment;
+			}
 			if (previousStudent && previousStudent !== studentKey(ui.view)) leaveForPicker();
 			if (!ui.view.activity) ui.view.activity = { line: null, upload: null, download: null, move: null, waiting: null, active: [] };
 			ui.index = buildIndex(ui.view);

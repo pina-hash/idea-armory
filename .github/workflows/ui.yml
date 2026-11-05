@@ -52,6 +52,9 @@ jobs:
           mkdir -p evidence
           node tools/agent-ui/check-ui.mjs | tee evidence/check-ui.txt
 
+      - name: First-time help at a check out and two changes (moments-check.mjs)
+        run: node tools/agent-ui/moments-check.mjs | tee evidence/moments-check.txt
+
       - name: The same geometry in both themes (bbox-diff.mjs)
         run: node tools/agent-ui/bbox-diff.mjs | tee evidence/bbox-diff.txt
 
