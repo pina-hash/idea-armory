@@ -1,35 +1,47 @@
 /* First-run guidance. The adapter renders the real window; practice never reaches the host. */
 (function () {
 	'use strict';
+	// THE FIRST RUN IS A WORKED EXAMPLE (ledger 0504). The student does the whole job once
+	// on a practice part, one short sentence a card: get it, open it, change it, save, give
+	// it back, then see what it looks like when someone else has a file. The real project
+	// comes after, on Home's First steps list (first-steps.js), which lights each real step.
+	// The 0.5.5 lesson's nineteen cards taught search, filters, the Armory folder, Switch
+	// student and Report a problem as well; none of those changes what a student does in a
+	// first edit, so they left the lesson (Search and the filters stay one press away on
+	// Home, Report a problem is on the First steps list, and the picker asks who is using a
+	// shared computer by itself). Each card's topic is named so check-ui can hold the
+	// lesson to the job rather than to a count. A card's word is its glossary line
+	// (words.js), shown on the card where the student first meets that word.
 	var steps = [
-		{ id: 'welcome', title: 'Your first few minutes', target: '[data-part="browser"]', body: 'Armory keeps your team\'s files together. We will find your work, then try a practice file. You can skip now and choose Show me again in Settings.' },
-		{ id: 'project', title: 'Find your project', target: '[role="tablist"]', click: '[data-action="project"]', action: 'project', body: 'Choose your class or team project here. Each project has its own folders. If yours is missing, ask your teacher to add you.' },
-		{ id: 'folder', title: 'Find your own folder', target: '.browser-body', click: '[data-action="folder"]', action: 'folder', body: 'Open your folder. In a class project, look for your last and first name, like Reyes_Ana. Save your work there. If you cannot find it, ask your teacher.' },
-		{ afterTarget: '.detail-side .display', id: 'file', title: 'Try a practice file', practice: true, phase: 'available', place: 'home', target: '#vl-browser [data-action="openFile"]', click: '[data-action="openFile"]', action: 'openFile', body: 'This is a practice file inside the same file list. Open its details by choosing its name. All practice changes stay in this lesson.' },
-		{ id: 'checkout', title: 'Check out before editing', practice: true, phase: 'available', target: '[data-key="d-checkout"]', click: '[data-action="checkOut"]', action: 'checkOut', body: 'Choose Check out. It reserves the file for you to change. Other people can still look at it, but cannot check it out until you check it in.' },
-		{ id: 'mine', title: 'Checked out by you', practice: true, phase: 'mine', target: '.detail-side .display', body: 'Your name and the green mark mean you can edit this file on this computer. The words carry the meaning, even if you cannot see the color.' },
-		{ id: 'open', title: 'Open from Armory', practice: true, phase: 'mine', target: '[data-key="d-open"]', click: '[data-action="launch"]', action: 'launchFile', body: 'Choose Open. For a real part, this starts SolidWorks. This practice only shows the result; it does not start another program. Later, save in SolidWorks before coming back here.' },
-		{ id: 'save', title: 'Try a saved change', practice: true, phase: 'mine', target: '.detail-side .display', action: 'practiceSave', body: 'In SolidWorks, make your change and click Save. Try that here with Make a practice change. It only changes our practice file.', exercise: 'Make a practice change' },
-		{ id: 'changed', title: 'Changed on this computer', practice: true, phase: 'changed', place: 'home', target: '#vl-browser .chip.lamp.amber', body: 'Changed means this copy differs from the last check in. Your teammates get the new shared version when you check it in. Saving and checking in are two separate steps.' },
-		{ id: 'checkin', title: 'Share your finished work', practice: true, phase: 'changed', target: '[data-key="d-checkin"]', click: '[data-action="checkIn"]', action: 'checkIn', body: 'Save and close the file in SolidWorks, then choose Check in. Armory shares your changes and lets the next person edit. If the file is still open, it waits for you to close it.' },
-		{ id: 'saved', title: 'Up to date', practice: true, phase: 'available', target: '.detail-side .display', body: 'Up to date means this copy matches the version shared in Armory. A normal saved row needs no extra badge. Available means nobody has it checked out.' },
-		{ id: 'other', title: 'Two people want one file', practice: true, phase: 'other', target: '.detail-side .display', body: 'Ana has this practice file checked out. The first check out wins, so there is no Check out button for you now. Ask Ana to check it in when done. You can open it to look, read-only.' },
-		{ id: 'search', title: 'Find a file fast', practice: true, phase: 'changed', place: 'home', target: '#file-search', action: 'search', body: 'Type Practice in Search files. It searches this folder and the folders inside it by file name or folder. Ctrl+F jumps here. Escape clears your words.' },
-		{ id: 'filters', title: 'Narrow the list', practice: true, phase: 'changed', place: 'home', target: '[aria-label="Quick filters"]', click: '[data-action^="search"]', action: 'filter', body: 'Try a quick filter: checked out by me, by others, or changed here. File type below offers parts, assemblies, drawings, and other files. Reset filters brings the full list back.' },
-		{ id: 'storage', title: 'Where your work goes', target: '#set-root-value', settings: true, body: 'This is the Armory folder on this computer. Each project lives inside it. Lab students share that folder. Work you leave waiting stays yours and goes to Armory under your sign-in when you return.' },
-		{ afterTarget: '.picker-inner', preview: true, id: 'student', title: 'Check your name', target: '[data-key="switch-student"], [data-key="switch-account"]', click: '[data-action="showPicker"], [data-action="switchAccount"]', action: 'switchPreview', body: 'Before working, check who is using Armory. On a shared lab PC, choose Switch student, then your name. Add a student signs you in once. Try this button for a practice preview.' },
-		{ afterTarget: '#ask-report', id: 'report', title: 'Something looks wrong?', target: '[data-key="set-report"]', settings: true, click: '[data-action="askReport"]', action: 'askReport', body: 'Choose Report a problem in Settings. Say what you expected and what happened. A report includes a short record of what Armory was doing, with file names, never file contents.' },
-		{ id: 'words', title: 'Practice asking for help', target: '#ask-report', report: true, action: 'reportWords', body: 'Type a few practice words. In real use, Send saves your report and tries to send it. If offline, it waits. This lesson will discard your practice words without sending them.' },
-		{ id: 'finish', title: 'Ready to try your own work', target: '[data-key="set-tutorial"]', settings: true, body: 'Find your project and folder. Check out, open, save, close, then check in. You can come back to Show me again any time. Ask your teacher if you are unsure.' }
+		{ id: 'welcome', topic: 'overview', title: 'Let\'s try Armory', practice: true, phase: 'available', place: 'home', target: '[data-part="browser"]', word: 'project', body: 'You will get a practice part, change it, and give it back.' },
+		{ id: 'file', topic: 'find', title: 'Open the part', practice: true, phase: 'available', place: 'home', afterTarget: '.detail-side .display', target: '#vl-browser [data-action="openFile"]', click: '[data-action="openFile"]', action: 'openFile', word: 'available', body: 'Click Practice-Plate to see the part.' },
+		{ id: 'checkout', topic: 'checkOut', title: 'Check it out', practice: true, phase: 'available', target: '[data-key="d-checkout"]', click: '[data-action="checkOut"]', action: 'checkOut', word: 'checkOut', body: 'Click Check out so you can change it.' },
+		{ id: 'open', topic: 'launch', title: 'Open it', practice: true, phase: 'mine', target: '[data-key="d-open"]', click: '[data-action="launch"]', action: 'launchFile', body: 'Click Open, and your part opens in SolidWorks.' },
+		{ id: 'save', topic: 'save', title: 'Change it and save', practice: true, phase: 'mine', target: '.detail-side .display', action: 'practiceSave', exercise: 'Make a practice change', word: 'changed', body: 'In SolidWorks you change it and click Save, so try it here.' },
+		{ id: 'checkin', topic: 'checkIn', title: 'Check it in', practice: true, phase: 'changed', target: '[data-key="d-checkin"]', click: '[data-action="checkIn"]', action: 'checkIn', word: 'checkIn', body: 'Close it in SolidWorks, then click Check in.' },
+		{ id: 'other', topic: 'other', title: 'See who has a file', practice: true, phase: 'other', target: '.detail-side .display', body: 'Ana has this part now, so you can look but not change it.' },
+		{ id: 'finish', topic: 'realWork', title: 'Now do it for real', target: '#first-steps', body: 'The First steps list on Home lights up each step for you.' }
 	];
-	window.ArmoryTutorial = { steps: steps, create: function (adapter) {
+	/** How the card sits (the three first-run candidates in the 0504 pull request):
+	 *  coach, the card beside the lit control with progress dots (the default); quest, the
+	 *  same card with every step listed and ticked, like a game's quest log; bar, one big
+	 *  sentence docked across the window's foot. Only the default ships to students; the
+	 *  others are kept for the comparison screenshots (?lesson=quest|bar in a browser). */
+	var LAYOUTS = ['coach', 'quest', 'bar'];
+	var layout = (function () {
+		try { var q = new URLSearchParams(location.search).get('lesson'); return LAYOUTS.indexOf(q) >= 0 ? q : LAYOUTS[0]; } catch (_) { return LAYOUTS[0]; }
+	})();
+	window.ArmoryTutorial = { steps: steps, layouts: LAYOUTS, create: function (adapter) {
 		var root = document.getElementById('tutorial'), card = root.querySelector('.tutorial-card'), spot = root.querySelector('.tutorial-spot');
-		var index = -1, target = null, completed = {}, student = '', saved = null, frame = 0, inert = [], sessionSeen = {}, stopped = false;
+		var index = -1, target = null, pressed = null, completed = {}, student = '', saved = null, frame = 0, inert = [], sessionSeen = {}, stopped = false;
+		root.setAttribute('data-layout', layout);
 		var prefix = 'armory.tutorial.v1:';
 		function active() { return index >= 0; }
 		function key(email) { return prefix + encodeURIComponent(email); }
+		var sessionState = {};
 		function remember(state) {
 			sessionSeen[student] = true;
+			sessionState[student] = state;
 			try { localStorage.setItem(key(student), state); return true; } catch (_) { return false; }
 		}
 		function seen(email) {
@@ -38,6 +50,7 @@
 		function release() {
 			inert.forEach(function (e) { e[0].inert = e[1]; }); inert = [];
 			if (target) target.removeAttribute('data-tutorial-target');
+			if (pressed) pressed.removeAttribute('data-lit'); pressed = null;
 		}
 		function isolate() {
 			var keep = [target, root];
@@ -59,7 +72,9 @@
 		}
 		function update() {
 			card.querySelector('[data-tour="next"]').disabled = !!step().action && !completed[index] && !stopped;
-			card.querySelector('#tutorial-hint').textContent = stopped ? 'Nothing to choose here yet. Ask your teacher, or continue the lesson.' : step().action && !completed[index] ? (step().exercise ? 'Try the practice change, then choose Next.' : 'Try the highlighted control, then choose Next.') : 'Choose Next when you are ready.';
+			// One sentence a card: the body says what to do, the lit control shows where, and
+			// Next wakes once it is done. The hint speaks only when there is nothing to press.
+			card.querySelector('#tutorial-hint').textContent = stopped ? 'Nothing to click here yet, so click Next.' : '';
 		}
 		function place() {
 			frame = 0;
@@ -74,13 +89,21 @@
 			var parent = document.getElementById('ask').open ? document.getElementById('ask') : document.getElementById('settings').open ? document.getElementById('settings') : document.body;
 			if (root.parentNode !== parent) parent.appendChild(root);
 			target.setAttribute('data-tutorial-target', step().id);
+			// THE NEXT ACTION IS ALWAYS LIT: the one control to press wears data-lit (a green
+			// ring), or the exercise key, or Next itself once the step is done.
+			var press = null;
+			if (!completed[index] && !stopped && step().click) press = target.matches(step().click) ? target : target.querySelector(step().click);
+			else if (!completed[index] && !stopped && step().exercise) press = card.querySelector('[data-tour="exercise"]');
+			if (!press) press = card.querySelector('[data-tour="next"]');
+			pressed = press; pressed.setAttribute('data-lit', 'lesson');
 			update();
 			isolate();
 			var r = target.getBoundingClientRect(), w = window.innerWidth, h = window.innerHeight;
 			var width = Math.min(344, w - 16);
 			card.style.width = width + 'px';
-			var left = r.right + 16 + width <= w ? r.right + 16 : r.left - width - 16 >= 0 ? r.left - width - 16 : Math.max(8, w - width - 8);
-			var beside = r.right + 16 + width <= w || r.left - width - 16 >= 0;
+			if (layout === 'bar') { width = w - 16; card.style.width = width + 'px'; }
+			var left = layout === 'bar' ? 8 : r.right + 16 + width <= w ? r.right + 16 : r.left - width - 16 >= 0 ? r.left - width - 16 : Math.max(8, w - width - 8);
+			var beside = layout !== 'bar' && (r.right + 16 + width <= w || r.left - width - 16 >= 0);
 			card.style.left = left + 'px';
 			card.style.top = (beside ? Math.max(8, Math.min(r.top, h - card.offsetHeight - 8)) : h - card.offsetHeight - 8) + 'px';
 			var c = card.getBoundingClientRect();
@@ -111,7 +134,15 @@
 			root.setAttribute('data-step', step().id);
 			card.querySelector('#tutorial-title').textContent = step().title;
 			card.querySelector('#tutorial-body').textContent = step().body;
-			card.querySelector('#tutorial-progress').textContent = 'Step ' + (index + 1) + ' of ' + steps.length + (step().practice || step().preview ? ' · Practice' : '');
+			card.querySelector('#tutorial-progress').textContent = (step().practice ? 'Practice ' : 'Step ') + (index + 1) + ' of ' + steps.length;
+			// Progress you can see: a dot a step (the quest layout lists each step by name).
+			card.querySelector('#tutorial-dots').innerHTML = steps.map(function (s, i) {
+				var state = i < index ? 'done' : i === index ? 'current' : 'todo';
+				return '<li data-state="' + state + '"><span class="dot"></span><span class="quest-name">' + s.title.replace(/[&<>"]/g, '') + '</span></li>';
+			}).join('');
+			var word = card.querySelector('#tutorial-word');
+			word.innerHTML = step().word && window.ArmoryWords ? window.ArmoryWords.line(step().word) : '';
+			word.hidden = !word.innerHTML;
 			card.querySelector('[data-tour="back"]').disabled = index === 0;
 			card.querySelector('[data-tour="next"]').textContent = index === steps.length - 1 ? 'Finish' : 'Next';
 			var exercise = card.querySelector('[data-tour="exercise"]');
@@ -198,6 +229,11 @@
 		window.addEventListener('resize', refresh);
 		document.addEventListener('scroll', refresh, { capture: true, passive: true });
 		return { active: active, start: start, refresh: refresh, action: action, owner: function () { return student; },
+			/** True once this student finished the lesson, this session or before. */
+			finished: function (email) {
+				if (sessionState[email] === 'finished') return true;
+				try { return localStorage.getItem(key(email)) === 'finished'; } catch (_) { return false; }
+			},
 			practice: function () { return active() && !!(step().practice || step().preview); },
 			consider: function () {
 				var current = adapter.student();

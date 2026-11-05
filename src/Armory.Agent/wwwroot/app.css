@@ -5030,3 +5030,136 @@ body[data-tutorial] dialog.housing { padding-bottom: 50vh; }
 @media (max-width: 360px) {
 	.report-kinds { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* ------------------------------------------------ The first run (ledger 0504) */
+
+/* THE ONE THING TO PRESS IS LIT: a green ring and a soft glow outside the key's own
+   edge, in both themes, on top of its normal face. It pulses only when motion is allowed.
+   A ring, never a fill, so the key still reads as the key it is. */
+[data-lit] {
+	box-shadow:
+		0 0 0 3px var(--plate-accent),
+		0 0 14px 3px var(--plate-bloom),
+		inset 0 0 0 1px var(--plate-bezel-mid) !important;
+}
+@media (prefers-reduced-motion: no-preference) {
+	[data-lit] { animation: lit-pulse 1.6s ease-in-out infinite; }
+}
+@keyframes lit-pulse {
+	50% { box-shadow: 0 0 0 3px var(--plate-accent), 0 0 4px 1px var(--plate-bloom), inset 0 0 0 1px var(--plate-bezel-mid); }
+}
+
+/* A glossary word: its icon, the word, what it means, in one line that can wrap. */
+.word-line {
+	display: grid;
+	grid-template-columns: 20px minmax(0, 1fr);
+	gap: 0.5rem;
+	align-items: start;
+	margin: 0.5rem 0 0;
+	padding: 0.5rem 0.65rem;
+	border-radius: var(--plate-r-control);
+	background-color: var(--plate-chip-ground);
+	box-shadow: inset 0 0 0 1px var(--plate-chip-edge);
+	color: var(--plate-ink);
+	font-size: 0.9rem;
+	line-height: 1.4;
+}
+.word-icon {
+	width: 20px;
+	height: 20px;
+	fill: none;
+	stroke: var(--plate-accent);
+	stroke-width: 2;
+	stroke-linecap: round;
+	stroke-linejoin: round;
+}
+.word-icon circle:only-child { fill: var(--plate-accent); stroke: none; }
+.word-list { display: grid; gap: 0.5rem; margin: 0; }
+.word-row { display: grid; grid-template-columns: minmax(8.5rem, auto) minmax(0, 1fr); gap: 0.75rem; align-items: start; }
+.word-row dt { display: flex; gap: 0.5rem; align-items: center; font-weight: 600; color: var(--plate-head-ink); }
+.word-row dd { margin: 0; color: var(--plate-ink); line-height: 1.4; }
+@media (max-width: 520px) {
+	.word-row { grid-template-columns: minmax(0, 1fr); gap: 0.15rem; }
+}
+.history-head + .word-line { margin: 0 0 0.75rem; }
+
+/* The lesson's progress: a dot a step, the current one lit. The quest layout names them. */
+.tutorial-dots {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+.tutorial-dots li { display: flex; align-items: center; gap: 0.5rem; }
+.tutorial-dots .dot {
+	width: 10px;
+	height: 10px;
+	border-radius: 50%;
+	box-shadow: inset 0 0 0 1.5px var(--plate-ink-2);
+}
+.tutorial-dots li[data-state='done'] .dot { background-color: var(--plate-accent); box-shadow: none; }
+.tutorial-dots li[data-state='current'] .dot { width: 22px; border-radius: 5px; background-color: var(--plate-accent); box-shadow: 0 0 6px 1px var(--plate-bloom); }
+.tutorial-dots .quest-name { display: none; }
+#tutorial[data-layout='quest'] .tutorial-dots { display: grid; gap: 2px; }
+#tutorial[data-layout='quest'] .tutorial-dots .quest-name { display: inline; font-size: 0.82rem; color: var(--plate-ink-2); }
+#tutorial[data-layout='quest'] .tutorial-dots li[data-state='current'] .quest-name { color: var(--plate-head-ink); font-weight: 600; }
+#tutorial[data-layout='quest'] .tutorial-dots li[data-state='current'] .dot { width: 10px; border-radius: 50%; }
+#tutorial[data-layout='quest'] .tutorial-card { max-height: min(560px, calc(100dvh - 32px)); }
+#tutorial[data-layout='bar'] .tutorial-card h2 { font-size: 24px; }
+#tutorial[data-layout='bar'] #tutorial-body { font-size: 18px; line-height: 1.4; }
+#tutorial[data-layout='bar'] .tutorial-keys { max-width: 32rem; }
+#tutorial-body { font-size: 16px; }
+
+/* FIRST STEPS: Home's list for the first real edit. The next line is lit as the current
+   connect step is; done lines carry a tick and the word Done for a screen reader. */
+.first-steps .fs-count { margin-left: 0.5rem; color: var(--plate-caption); }
+.fs-list { display: grid; gap: 0.2rem; margin: 0; padding: 0; list-style: none; }
+/* Only the next line is big; done and later lines are one short row each, so the team's
+   files stay in sight under the list. */
+.fs-item:not([data-state='next']) { min-height: 30px; padding: 0.1rem 0.75rem; }
+.fs-item:not([data-state='next']) .fs-mark { width: 24px; height: 24px; font-size: 0.75rem; justify-self: center; }
+.fs-item:not([data-state='next']) .fs-title { font-size: 0.92rem; font-weight: 500; }
+.fs-item {
+	display: grid;
+	grid-template-columns: 30px minmax(0, 1fr) auto;
+	gap: 0.75rem;
+	align-items: center;
+	min-height: 44px;
+	padding: 0.35rem 0.75rem;
+	border-radius: var(--plate-r-control);
+}
+.fs-item[data-state='next'] {
+	padding: 0.65rem 0.75rem;
+	background-color: var(--plate-panel-ground);
+	box-shadow: inset 0 0 0 2px var(--plate-accent), 0 0 10px 1px var(--plate-bloom);
+}
+.fs-mark {
+	display: grid;
+	place-items: center;
+	width: 30px;
+	height: 30px;
+	box-sizing: border-box;
+	border-radius: 50%;
+	font-family: var(--font-mono);
+	font-size: 0.85rem;
+	font-weight: 700;
+	color: var(--plate-ink-2);
+	background-color: var(--plate-chip-ground);
+	box-shadow: inset 0 0 0 1px var(--plate-chip-edge);
+}
+.fs-mark svg, .fs-done svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+.fs-item[data-state='done'] .fs-mark { color: var(--plate-accent); }
+.fs-item[data-state='next'] .fs-mark { color: var(--plate-sel-ink); background-color: var(--plate-sel-face); box-shadow: 0 0 0 1px var(--plate-sel-edge); }
+.fs-words { display: grid; gap: 0.15rem; min-width: 0; }
+.fs-title { font-weight: 600; color: var(--plate-head-ink); }
+.fs-item[data-state='done'] .fs-title { font-weight: 400; color: var(--plate-ink-2); }
+.fs-line { color: var(--plate-ink); line-height: 1.4; }
+.fs-keys { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.fs-done { display: flex; align-items: center; gap: 0.5rem; margin: 0; font-weight: 600; color: var(--plate-head-ink); }
+.fs-done svg { color: var(--plate-accent); }
+@media (max-width: 520px) {
+	.fs-item { grid-template-columns: 30px minmax(0, 1fr); }
+	.fs-item > .key { grid-column: 2; justify-self: start; }
+}
