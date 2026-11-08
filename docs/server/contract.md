@@ -2,6 +2,21 @@
 
 These SQL files are a draft, not an idea-app migration. The app's migration lane must assign a number after review. Every write is a security-definer RPC with an empty search path; clients have read-only, row-level-security access.
 
+[`server/optional/007_v059_shared_folders.sql`](../../server/optional/007_v059_shared_folders.sql)
+is the opt-in test copy of idea-app's additive 0.5.9 empty-folder migration,
+`supabase/migrations/0410_armory_shared_empty_folders.sql`. Production applies that numbered
+file through idea-app's existing migration workflow, recorded in the
+[0.5.9 field report](../agent/v0.5.9-field-report.md). No Armory release step applies SQL to
+production. Legacy-server suites keep exercising 001 to 006 without this capability;
+FileActionsTests opts into it explicitly.
+
+`armory_list_folder_paths(project)` returns shared empty-folder paths and existing class
+folder paths for members. `armory_edit_folder(project, action, from, to, device, operation)`
+creates folder metadata or delegates rename/delete to the existing RPCs in one transaction,
+using their permissions, checkout refusals and receipt rules. An internal change-feed
+trigger also follows older clients' folder rename/delete/purge events. Metadata contains no
+file bytes; direct client writes are revoked and member reads have RLS.
+
 Every write call carries a stable `operation_id`. The first call stores its typed JSON result in `armory_operation_receipts`; a replay by the same caller and RPC returns that result without another write. Reuse by another caller or RPC is refused. Concurrent deliveries serialize on the operation ID. Receipts can be read only by the named caller through RLS, and direct writes are revoked.
 
 A caller first registers each installation with `armory_register_device(name, operation_id)`. The returned UUID belongs to the email obtained exclusively from `current_user_email()`. Every lock-related call validates that ownership. A lock holder is the pair `(email, device_id)`, and break changes preserve that exact former pair in both the lock row and change-feed payload.

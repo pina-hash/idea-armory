@@ -52,6 +52,7 @@
 		/** @type {any} */ detail: null,
 		projectId: null,
 		folders: {}, // project id -> the folder open in the browser ("" for its top)
+		fileOrder: 'name',
 		fileSearch: { text: '', applied: '', checkout: 0, changed: false, type: 0, timer: 0 },
 		selected: {}, // vault-relative path -> true, files picked in the open folder
 		anchor: null, // the last file picked, for a Shift range
@@ -672,6 +673,8 @@
 					return 'Undo ' + plural(c.count, 'check out', 'check outs') + '. Your changes are kept as your own copies.';
 				case 'renameFile':
 					return 'Rename the file to the name you typed.';
+				case 'trashFile':
+					return 'Move this file to Trash for everyone. Its history and a recovery copy are kept.';
 				case 'newFolder':
 					return 'Make the folder with the name you typed.';
 				case 'renameFolder':
@@ -2671,11 +2674,15 @@
 		[['searchMe', 'Checked out by me', !!(s.checkout & 1)], ['searchOthers', 'Checked out by others', !!(s.checkout & 2)], ['searchChanged', 'Changed locally', s.changed]].forEach(function (f) {
 			html += '<button class="key tool keep-word" type="button" data-action="' + f[0] + '" data-key="' + f[0] + '" aria-pressed="' + f[2] + '"' + tipAttr(f[0]) + '>' + f[1] + '</button>';
 		});
-		html += '</div><label class="label" for="file-search-type">File type</label><select class="field" id="file-search-type" data-key="file-search-type">';
+		html += '</div><div class="file-order-fields"><div><label class="label" for="file-search-type">File type</label><select class="field" id="file-search-type" data-key="file-search-type">';
 		['All types', 'Part', 'Assembly', 'Drawing', 'Other'].forEach(function (name, i) {
 			html += '<option value="' + i + '"' + (s.type === i ? ' selected' : '') + '>' + name + '</option>';
 		});
-		html += '</select><div class="folder-keys">';
+		html += '</select></div><div><label class="label" for="file-order">Sort files</label><select class="field" id="file-order" data-key="file-order" data-tip="Sort by name or by when a file was last saved to Armory. Folders stay first.">';
+		[['name', 'Name'], ['newest', 'Last modified (newest first)'], ['oldest', 'Last modified (oldest first)']].forEach(function (choice) {
+			html += '<option value="' + choice[0] + '"' + (ui.fileOrder === choice[0] ? ' selected' : '') + '>' + choice[1] + '</option>';
+		});
+		html += '</select></div></div><div class="folder-keys">';
 		html += key({ action: 'searchClear', key: 'search-clear', word: 'Clear search', tip: tipText('searchClear') });
 		html += key({ action: 'searchReset', key: 'search-reset', word: 'Reset filters', tip: tipText('searchReset') });
 		html += '</div>';
@@ -2695,16 +2702,23 @@
 		if (type) type.value = String(ui.fileSearch.type);
 	}
 
+	// A view's index is immutable until the next host view. Reuse its sorted rows
+	// while rendering or scrolling that view, including the search result array.
+	function orderedFiles(pi, rows) {
+		var cached = pi.orderedFiles;
+		if (!cached || cached.source !== rows || cached.order !== ui.fileOrder)
+			cached = pi.orderedFiles = { source: rows, order: ui.fileOrder, rows: window.ArmoryFileOrder(rows, ui.fileOrder) };
+		return cached.rows;
+	}
+
 	/** The open folder's rows, or flat matching files from its subtree. */
 	function browserItems(pi, folder) {
-		if (fileSearchActive()) return fileSearchResult(pi, folder).map(function (r) { return { kind: 'file', row: r }; });
+		if (fileSearchActive()) return orderedFiles(pi, fileSearchResult(pi, folder)).map(function (r) { return { kind: 'file', row: r }; });
 		var out = [];
 		(pi.children[folder] || []).forEach(function (path) {
 			out.push({ kind: 'folder', path: path, name: pi.folders[path].name, files: pi.under[path] || 0, folders: (pi.children[path] || []).length });
 		});
-		var files = (pi.folders[folder].files || []).slice().sort(function (a, b) {
-			return byName(a.name, b.name);
-		});
+		var files = orderedFiles(pi, pi.folders[folder].files || []);
 		files.forEach(function (r) {
 			out.push({ kind: 'file', row: r });
 		});
@@ -2923,6 +2937,7 @@
 			keys += key({ action: 'undoCheckOut', key: 'd-undo', cls: 'tool', glyph: 'undo', word: 'Undo check out', path: d.path, tip: tipText('detailUndo', about) });
 		}
 		if ((c.state === 'other' || c.state === 'myOtherComputer') && d.canTakeBack) keys += key({ action: 'askTakeBack', key: 'd-takeback', cls: 'tool', glyph: 'takeback', word: 'Force check in', fileId: d.fileId, tip: tipText('detailForce', about) });
+		if (d.fileId && c.state === 'available') keys += key({ action: 'askTrashFile', key: 'd-trash', cls: 'tool', glyph: 'trash', word: 'Move to Trash', path: d.path, fileId: d.fileId, tip: 'Remove this file for everyone. Its history and a recovery copy are kept. Restore it from the project website within 30 days.' });
 		if (keys) html += '<div class="detail-keys">' + keys + '</div>';
 		html += '<button class="textlink" type="button" data-action="showInFolder" data-path="' + esc(d.path) + '" data-key="show-in-folder"' + tipAttr('showInFolder', about) + '>' + icon('folder') + '<span>Show in folder</span></button>';
 		return html + '</div>';
@@ -3239,6 +3254,12 @@
 				'Each file keeps the changes you saved as your own copy, so nothing is lost.';
 			ok = 'Undo ' + plural(c.count, 'check out', 'check outs');
 			cancelFirst = true;
+		} else if (kind === 'trashFile') {
+			title = 'Move to Trash?';
+			body = 'Remove ' + c.name + ' for everyone on the team? Its history stays in Armory. Local copies are kept safe and move to recovery when ready. You can restore it from Trash on the project website within 30 days. Type remove to continue.';
+			field = fieldHtml('Type remove', '');
+			ok = 'Move to Trash';
+			danger = true;
 		} else if (kind === 'renameFile') {
 			title = 'Rename file';
 			body = 'Rename ' + c.name + ' in ' + c.where + '. A project keeps one file per name, so pick a name no other file in ' + c.project + ' has.';
@@ -3393,6 +3414,15 @@
 				// When the host's next view has the new name, the browser goes with it.
 				ui.follow = { projectId: c.projectId, from: c.folder, to: c.folder.split('/').slice(0, -1).concat([name]).join('/') };
 			}
+		} else if (a.kind === 'trashFile') {
+			var confirmation = ask.querySelector('#ask-name');
+			if (confirmation.value.trim().toLowerCase() !== 'remove') {
+				ask.querySelector('#ask-error').textContent = 'Type remove to move this file to Trash.';
+				confirmation.setAttribute('aria-invalid', 'true');
+				confirmation.focus();
+				return;
+			}
+			act('trashFile', { path: c.path, fileId: c.fileId }, { key: a.returnKey });
 		} else if (a.kind === 'checkOutAll') act('checkOut', { paths: [c.path], open: false }, { key: a.returnKey });
 		else if (a.kind === 'undoMine') act('undoCheckOut', { paths: mineFolders(ui.view) }, { key: a.returnKey, words: 'Undoing ' + plural(c.count, 'check out', 'check outs') + '...' });
 		else if (a.kind === 'deleteFolder') act('deleteFolder', { projectId: c.projectId, folder: c.folder, force: force }, { key: a.returnKey });
@@ -4104,6 +4134,8 @@
 				return { line: 'Renaming ' + leaf(f.folder) + ' to ' + f.newName + '...', row: null };
 			case 'deleteFolder':
 				return { line: 'Deleting ' + leaf(f.folder) + '...', row: null };
+			case 'trashFile':
+				return { line: 'Moving ' + leaf(f.path) + ' to Trash...', row: 'Moving to Trash...' };
 			case 'addFiles':
 				return { line: 'Choosing files to add...', row: null };
 			case 'dropFiles':
@@ -5037,6 +5069,9 @@
 			case 'askRenameFile':
 				askRenameFile(path, from);
 				break;
+			case 'askTrashFile':
+				openAsk('trashFile', { path: path, fileId: el.getAttribute('data-file-id'), name: leaf(path) }, from);
+				break;
 			case 'folderCheckIn':
 				var here = browserPlace();
 				act('checkIn', { paths: [folderPathOf(here.pi, here.folder)] }, { key: from });
@@ -5271,6 +5306,10 @@
 		}
 	});
 	document.addEventListener('change', function (e) {
+		if (e.target && e.target.id === 'file-order') {
+			ui.fileOrder = e.target.value;
+			applyFileSearch();
+		}
 		if (e.target && e.target.id === 'file-search-type') {
 			ui.fileSearch.type = Number(e.target.value);
 			applyFileSearch();
@@ -5599,6 +5638,8 @@
 			var answered = ui.pending[message.requestId];
 			delete ui.pending[message.requestId];
 			endWorking(message.requestId);
+			var answeredType = answered && answered.type;
+			if (answeredType === 'trashFile' && message.ok && ui.screen === 'detail') back();
 			if (answered && answered.bulk && message.message) {
 				ui.lastAction = { ok: !!message.ok, message: message.message, at: new Date(bridge.now()).toISOString() };
 				render();

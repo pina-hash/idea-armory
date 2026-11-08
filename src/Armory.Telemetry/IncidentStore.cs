@@ -15,11 +15,27 @@ public sealed class IncidentStore
     public const string SentMark = ".sent", HeldMark = ".held";
     private const string TimeFormat = "yyyyMMdd'T'HHmmssfff'Z'";
     private readonly object gate = new();
+    private long availabilitySequence;
 
     public IncidentStore(string folder) => Folder = folder;
 
     public string Folder { get; }
     public string WaitFile => Path.Combine(Folder, "upload-wait.json");
+    private string OutageFile => Path.Combine(Folder, "server-outage.active");
+    public bool OutageActive => File.Exists(OutageFile);
+
+    // Called off the recording thread. An older queued transition cannot overwrite a newer
+    // recovery, even if pool workers run in reverse order. The marker survives a restart.
+    public void SetOutageActive(bool active, long sequence)
+    {
+        lock (gate)
+        {
+            if (sequence <= availabilitySequence) return;
+            if (active) { Directory.CreateDirectory(Folder); WriteAtomically(OutageFile, [1]); }
+            else File.Delete(OutageFile);
+            availabilitySequence = sequence;
+        }
+    }
 
     public static string FileName(DateTimeOffset at, string kind) => at.UtcDateTime.ToString(TimeFormat, CultureInfo.InvariantCulture) + "-" + kind + Extension;
 

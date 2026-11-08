@@ -468,7 +468,7 @@ keeps the vault).
 - **Copies installed the old way** (the flash drive or `IDEA-Armory-Setup-v<version>.exe`, in
   `%LOCALAPPDATA%\Programs\IDEA Armory`) at 0.4.0 or later move themselves over: when a newer
   release exists, Armory downloads `IDEAArmory-win-Setup.exe` and runs it silently. Velopack's
-  reconciliation now runs before normal startup and after the installer/updater exits. It
+  reconciliation runs after the window opens and after the installer/updater exits. It
   retires discoverable competing copies and their launch entries, preserves local data, and
   points the sign-in start entry at the surviving launcher. See
   [install ownership](INSTALL-OWNERSHIP.md) for the checked historical identities, uninstaller
@@ -550,11 +550,19 @@ in Armory depends on that name being unique:
   computer's own wired network address (its wireless one when it has none), because an image
   copied without Sysprep copies `MachineGuid` too. With no such address it is the id 0.3.3 gave.
 
-One place still reads the name: the website's Team view shows a member's devices one line per
-computer name (`presenceDevices`, ledger 0430), so one member signed in on two copied computers
-both named IDEA-06 shows as one line. Telling those apart needs a stable per-computer key the
-server does not have; the app sends none today, and adding one is a website change. Renaming the
-lab computers (docs/LAB_COMPUTER_NAMES.md) removes the case.
+Since 0.5.1, each heartbeat carries the computer key (idea-app 0310). The website groups
+sign-ins by the project's opaque computer token and labels different computers with the
+same name separately. The admin incident view also shows the machine ID. Renaming the lab
+computers (docs/LAB_COMPUTER_NAMES.md) improves readability but is not an identity repair.
+
+### Stuck updates and retirement paths (0.5.9)
+
+A failed look for a release retries after 1, 5, 15, 60 and then 240 minutes; a successful
+look returns to four hours. A version without an updater, or one that never reaches the
+tray, still needs the updating installer run once. The [0.5.9 field report](v0.5.9-field-report.md)
+traces each observed old version and gives the exact installer, double-click location and
+computer names. Retirement validates registration command text before any path API;
+malformed targets are audited and deferred, never repaired by stripping filename characters.
 
 Before 0.4.0, updating meant running the new release's Install from the flash drive (or the
 new setup.exe) over the old one; the settings and the sign-in file keep every byte, the new

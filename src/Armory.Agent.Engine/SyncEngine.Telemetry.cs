@@ -63,6 +63,7 @@ public sealed partial class SyncEngine
     private void RecordPass(string kind, bool failed)
     {
         var ms = (long)deps.Clock.GetElapsedTime(passStarted).TotalMilliseconds;
+        if (online is { } reachable && deps.Sessions.Current is not null) flight?.ServerAvailability(reachable);
         flight?.PassEnd(kind, failed, ms, downloaded, uploaded, sideVersions, refused);
         if (flight is null) return;
         recentPasses.Enqueue(new JsonObject

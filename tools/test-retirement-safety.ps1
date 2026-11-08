@@ -5,7 +5,7 @@ $scriptFile = Join-Path (Split-Path -Parent $PSScriptRoot) 'installer/scripts/Re
 $tokens = $null; $errors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($scriptFile, [ref]$tokens, [ref]$errors)
 if ($errors.Count) { throw ($errors | Out-String) }
-$names = @('Audit', 'Initialize-NativePaths', 'Full', 'Within', 'Linked', 'Binary', 'Protected', 'OverlapsProtected',
+$names = @('Audit', 'Initialize-NativePaths', 'Full', 'Within', 'Linked', 'Binary', 'Protected', 'OverlapsProtected', 'InventoryPath',
     'Add-Copy', 'Stream-Hash', 'Owned-VelopackTree', 'Package-Launchers', 'Owned-Updater', 'Unmodified-LegacyPayload')
 foreach ($function in $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false)) {
     if ($function.Name -in $names) { Invoke-Expression $function.Extent.Text }

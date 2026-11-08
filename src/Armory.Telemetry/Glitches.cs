@@ -11,9 +11,9 @@ public static class GlitchKinds
         // 0.5.8: the cleanup of other Armory installs did not finish, and Armory opened anyway; and a
         // launch that found Armory already running but could not reach it, and said so. The site takes
         // any kind that is one word (idea-app 0233, armory_submit_app_incident).
-        RetireFailed = "retireFailed", StartupBlocked = "startupBlocked";
+        RetireFailed = "retireFailed", StartupBlocked = "startupBlocked", ServerOutage = "serverOutage";
     public static readonly IReadOnlyList<string> All = [Crash, SlowAction, SlowPass, RepeatedFailure, RepairedCheckout, ReadOnlyBroken, UserReport,
-        RetireFailed, StartupBlocked];
+        RetireFailed, StartupBlocked, ServerOutage];
 }
 
 // Something went wrong enough to keep: its kind, one plain sentence, and the event that showed it.
@@ -124,19 +124,29 @@ public sealed class RepeatedFailureRule
 
 // Runs every rule on the events the recorder hands its observer. Thread safe: events come from
 // the engine's thread, the window's thread and the network's.
-public sealed class GlitchDetector
+public sealed class GlitchDetector(bool initiallyOffline = false)
 {
     private readonly object gate = new();
     private readonly RepeatedFailureRule repeated = new();
     // The computer slept or woke since the pass that is running started (a power event).
     private bool sleptDuringPass;
+    private bool serverOutage = initiallyOffline;
 
     public Glitch? Inspect(in FlightEvent e)
     {
         switch (e.Kind)
         {
+            case FlightKind.ServerAvailability:
+                lock (gate)
+                {
+                    if (e.Ok) { serverOutage = false; return null; }
+                    if (serverOutage) return null;
+                    serverOutage = true;
+                    return new(GlitchKinds.ServerOutage, "Armory could not reach the server. Work stays safe here while it retries with longer waits.", e);
+                }
             case FlightKind.Exception: return GlitchRules.Crash(e);
-            case FlightKind.WindowAction: return GlitchRules.SlowAction(e);
+            case FlightKind.WindowAction:
+                lock (gate) return serverOutage ? null : GlitchRules.SlowAction(e);
             case FlightKind.PassStart:
                 lock (gate) sleptDuringPass = false;
                 return null;
@@ -145,7 +155,7 @@ public sealed class GlitchDetector
                 return null;
             case FlightKind.PassEnd:
                 bool slept;
-                lock (gate) slept = sleptDuringPass;
+                lock (gate) { if (serverOutage) return null; slept = sleptDuringPass; }
                 return GlitchRules.SlowPass(e, slept);
             case FlightKind.RepairedCheckout: return GlitchRules.RepairedCheckout(e);
             case FlightKind.ReadOnlyBroken: return GlitchRules.ReadOnlyBroken(e);

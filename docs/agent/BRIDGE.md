@@ -404,6 +404,15 @@ has it, it says who and offers OK (the same `dismissNotice`).
 
 ## Page to host
 
+0.5.9 adds `trashFile { path, fileId, requestId }`, from the file page's Move to Trash question
+after typing `remove`. It uses the ordinary actionResult and working indicators. The engine
+asks the website's existing member Trash RPC, preserves local copies through tombstone
+reconciliation, and reports any checkout, membership, class-folder or open-file refusal.
+A successful result returns to the file list. Restore is in the project's website Trash.
+
+The page-only Sort files control changes both folder and search ordering by `UpdatedAt`,
+the last shared save, with natural filename ties and undated files last. It sends no action.
+
 Paths are vault-relative with forward slashes. A path in `checkOut`, `checkIn` or
 `undoCheckOut` may be a folder, which means every file under it. `projectId` is a
 project's id; `parent` and `folder` are paths in that project ("" for its top).

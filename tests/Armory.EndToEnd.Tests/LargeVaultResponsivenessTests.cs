@@ -232,7 +232,7 @@ public sealed class LargeVaultResponsivenessTests(LargeVault vault, ITestOutputH
     public async Task A_new_folder_answers_at_once()
     {
         var answer = await Click("createFolder", () => B.Engine.CreateFolderAsync(vault.Project, "Vault", "New parts"), "Making the folder New parts");
-        Assert.Equal("Made the folder New parts in Robot 2027 › Vault.", answer.Message);
+        Assert.Equal("Made the folder New parts on this computer. The website needs an update before empty folders can be shared.", answer.Message);
     }
 
     [PostgresFact]

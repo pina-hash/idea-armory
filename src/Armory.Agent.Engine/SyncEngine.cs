@@ -716,6 +716,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
             // The team's folder renames move here in one step each; anything else moves file by
             // file. Moves on this disk change nothing on the server: nothing is read again.
             ApplyRemoteFolderMoves();
+            EnsureSharedFolders();
             ApplyRemoteMoves();
             AdoptIdenticalBases();
             Capture(session, notify: true); // projects learned this pass
@@ -1020,6 +1021,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
                         }
                         foreach (var change in changes)
                         {
+                            if (change.Kind.StartsWith("folder_", StringComparison.Ordinal)) sharedFolderReads.Remove(ps.Id);
                             // Deleted forever (v0.3): those files and their history are gone.
                             if (FolderPurge.From(change) is { } purge) FolderPurged(ps, purge);
                             if (change.Kind == "lock_broken" && change.Payload["former_device_id"]?.GetValue<string>() is { } former &&
@@ -1057,6 +1059,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
                     }
                     read.Add(ps.Id);
                     KnowProject(ps, files);
+                    await ReadSharedFoldersAsync(ps, ct);
                 }
                 if (!refreshCut)
                 {
@@ -1093,7 +1096,7 @@ public sealed partial class SyncEngine : IAsyncDisposable
     // A project's files as just read replace what was known of it.
     private void KnowProject(ProjectState ps, IReadOnlyList<RemoteFile> files)
     {
-        ForgetProject(ps.Id);
+        ForgetProject(ps.Id, keepFolders: true);
         sharedDeviceNames = null;
         remoteProjects[ps.Id] = files;
         foreach (var file in files) Know(ps, file, publish: false);
@@ -1102,8 +1105,9 @@ public sealed partial class SyncEngine : IAsyncDisposable
         staleProjects.Remove(ps.Id);
     }
 
-    private void ForgetProject(Guid project)
+    private void ForgetProject(Guid project, bool keepFolders = false)
     {
+        if (!keepFolders) { sharedFolders.Remove(project); sharedFolderReads.Remove(project); }
         sharedDeviceNames = null;
         remoteProjects.Remove(project);
         foreach (var (id, known) in remoteById.Where(r => r.Value.Project.Id == project).ToArray())

@@ -502,7 +502,7 @@
 	 *   saveDown: { paths }                   (a solidWorks notice's "Save it in 2025 now": saved again in the project's year)
 	 * @typedef {'ready' | 'connect' | 'cancelConnect' | 'signOut' | 'pause' | 'resume'
 	 *   | 'openVault' | 'openFile' | 'launchFile' | 'showInFolder' | 'checkOut' | 'checkIn'
-	 *   | 'undoCheckOut' | 'takeBack' | 'createFolder' | 'renameFolder' | 'deleteFolder' | 'renameFile'
+	 *   | 'undoCheckOut' | 'takeBack' | 'createFolder' | 'renameFolder' | 'deleteFolder' | 'renameFile' | 'trashFile'
 	 *   | 'addFiles' | 'dropFiles' | 'dismissNotice' | 'saveSettings' | 'chooseVaultRoot'
 	 *   | 'reportProblem' | 'openIncidents' | 'sendFeedback' | 'takeBackAll' | 'takeOverFolder' | 'switchAccount'
 	 *   | 'putBackKeptCopy' | 'captureWindow' | 'readMyFeedback' | 'turnOnBadges' | 'repairVaultRoot' | 'readNoticeItems'
@@ -532,7 +532,7 @@
 	/* ------------------------------------------------------- Message lists */
 
 	/** Page to host message types (BRIDGE.md, "Page to host"). */
-	var PAGE_TO_HOST = ['ready', 'connect', 'cancelConnect', 'signOut', 'pause', 'resume', 'openVault', 'openFile', 'launchFile', 'showInFolder', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'dismissNotice', 'saveSettings', 'chooseVaultRoot', 'reportProblem', 'openIncidents', 'sendFeedback', 'takeBackAll', 'takeOverFolder', 'switchAccount', 'putBackKeptCopy', 'captureWindow', 'readMyFeedback', 'turnOnBadges', 'repairVaultRoot', 'readNoticeItems', 'showPicker', 'pickProfile', 'enterPin', 'setPin', 'addProfile', 'forgotPin', 'cancelPicker', 'removeProfile', 'setPinsRequired', 'keepLocal', 'saveDown', 'openRecovery', 'saveBlockedAction'];
+	var PAGE_TO_HOST = ['ready', 'connect', 'cancelConnect', 'signOut', 'pause', 'resume', 'openVault', 'openFile', 'launchFile', 'showInFolder', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'trashFile', 'addFiles', 'dropFiles', 'dismissNotice', 'saveSettings', 'chooseVaultRoot', 'reportProblem', 'openIncidents', 'sendFeedback', 'takeBackAll', 'takeOverFolder', 'switchAccount', 'putBackKeptCopy', 'captureWindow', 'readMyFeedback', 'turnOnBadges', 'repairVaultRoot', 'readNoticeItems', 'showPicker', 'pickProfile', 'enterPin', 'setPin', 'addProfile', 'forgotPin', 'cancelPicker', 'removeProfile', 'setPinsRequired', 'keepLocal', 'saveDown', 'openRecovery', 'saveBlockedAction'];
 
 	/** Host to page message types (BRIDGE.md, "Host to page"). */
 	var HOST_TO_PAGE = ['view', 'fileDetail', 'activity', 'actionResult', 'windowShot', 'myFeedback', 'reveal', 'noticeItems'];
@@ -553,6 +553,7 @@
 		renameFolder: ['projectId', 'folder', 'newName', 'force'],
 		deleteFolder: ['projectId', 'folder', 'force'],
 		renameFile: ['path', 'newName', 'force'],
+		trashFile: ['path', 'fileId'],
 		addFiles: ['projectId', 'folder'],
 		dropFiles: ['projectId', 'folder'],
 		dismissNotice: ['key'],
@@ -573,7 +574,7 @@
 	};
 
 	/** Actions: each carries a requestId, and the host answers it with one actionResult. */
-	var ACTIONS = ['launchFile', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'addFiles', 'dropFiles', 'reportProblem', 'sendFeedback', 'takeBackAll', 'takeOverFolder', 'putBackKeptCopy', 'turnOnBadges', 'pickProfile', 'enterPin', 'setPin', 'addProfile', 'forgotPin', 'removeProfile', 'setPinsRequired', 'keepLocal', 'saveDown', 'repairVaultRoot', 'saveBlockedAction'];
+	var ACTIONS = ['launchFile', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'trashFile', 'addFiles', 'dropFiles', 'reportProblem', 'sendFeedback', 'takeBackAll', 'takeOverFolder', 'putBackKeptCopy', 'turnOnBadges', 'pickProfile', 'enterPin', 'setPin', 'addProfile', 'forgotPin', 'removeProfile', 'setPinsRequired', 'keepLocal', 'saveDown', 'repairVaultRoot', 'saveBlockedAction'];
 
 	/** Asks: each carries a requestId too, and the host answers it with a message of its own
 	 *  (windowShot, myFeedback, noticeItems), never actionResult. */
@@ -1005,6 +1006,15 @@
 					});
 					postView();
 					result(message, true, 'Renamed ' + from.split('/').pop() + ' to ' + message.newName + '.');
+					break;
+				case 'trashFile':
+					var trashedName = '';
+					(view.projects || []).forEach(function (project) { project.folders.forEach(function (folder) {
+						folder.files = folder.files.filter(function (row) { if (row.path !== message.path || row.fileId !== message.fileId) return true; trashedName = row.name; return false; });
+						folder.fileCount = folder.files.length;
+					}); });
+					refreshMine(); postView();
+					result(message, !!trashedName, trashedName ? 'Moved ' + trashedName + ' to Trash. Restore it from the project website within 30 days.' : 'That file is no longer in Armory.');
 					break;
 				case 'deleteFolder':
 					p = projectById(message.projectId);

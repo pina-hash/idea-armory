@@ -34,6 +34,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: File ordering rules
+        run: node tools/agent-ui/file-order-test.mjs
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22

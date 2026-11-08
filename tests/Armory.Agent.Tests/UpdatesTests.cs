@@ -5,6 +5,13 @@ namespace Armory.Agent.Tests;
 public sealed class UpdatesTests
 {
     [Fact]
+    public void A_failed_look_retries_within_the_class_period_and_success_resets_the_wait()
+    {
+        Assert.Equal(new double[] { 240, 1, 5, 15, 60, 240, 240 }, Enumerable.Range(0, 7).Select(n => Updates.NextLook(n).TotalMinutes));
+        Assert.Equal(Updates.LookEvery, Updates.NextLook(0));
+    }
+
+    [Fact]
     public void A_copy_Velopack_installed_is_known_by_its_current_folder_and_Update_exe()
     {
         var root = @"C:\Users\IDEA\AppData\Local\IDEAArmory";

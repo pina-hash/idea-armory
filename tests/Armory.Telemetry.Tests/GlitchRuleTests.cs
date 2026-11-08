@@ -3,6 +3,22 @@ namespace Armory.Telemetry.Tests;
 // Each glitch rule on its own (docs/agent/TELEMETRY.md, "Triggers"), and the throttle.
 public sealed class GlitchRuleTests
 {
+    [Fact]
+    public void One_outage_has_one_incident_until_a_successful_pass_and_never_a_slow_call_incident()
+    {
+        var detector = new GlitchDetector();
+        Assert.Equal(GlitchKinds.ServerOutage, detector.Inspect(Last(r => r.ServerAvailability(false)))?.Kind);
+        for (var i = 0; i < 100; i++)
+        {
+            Assert.Null(detector.Inspect(Last(r => r.ServerAvailability(false))));
+            Assert.Null(detector.Inspect(Last(r => r.PassEnd("loop", false, 300_000, 0, 0, 0, 0))));
+            Assert.Null(detector.Inspect(Last(r => r.WindowAction("checkOut", 1, 60_000, false))));
+        }
+        Assert.Null(detector.Inspect(Last(r => r.ServerAvailability(true))));
+        Assert.Equal(GlitchKinds.ServerOutage, detector.Inspect(Last(r => r.ServerAvailability(false)))?.Kind);
+        Assert.False(FlightJson.Event(Last(r => r.ServerAvailability(false)), DateTimeOffset.UnixEpoch)["online"]!.GetValue<bool>());
+    }
+
     private static FlightEvent Last(Action<FlightRecorder> record)
     {
         var recorder = new FlightRecorder(clock: new ManualClock());
@@ -188,7 +204,7 @@ public sealed class GlitchRuleTests
         Assert.True(glitch.Summary.Length <= 500);
         Assert.DoesNotContain('\n', glitch.Summary);
         Assert.StartsWith("Reported from the window (bug): It froze when I pressed Check in.", glitch.Summary);
-        Assert.Equal(9, GlitchKinds.All.Count);
+        Assert.Equal(10, GlitchKinds.All.Count);
     }
 
     [Fact]

@@ -234,7 +234,7 @@ public static class BridgeMessages
     public const string Ready = "ready", Connect = "connect", CancelConnect = "cancelConnect", SignOut = "signOut", Pause = "pause", Resume = "resume",
         OpenVault = "openVault", OpenFile = "openFile", LaunchFile = "launchFile", ShowInFolder = "showInFolder", CheckOut = "checkOut", CheckIn = "checkIn",
         UndoCheckOut = "undoCheckOut", TakeBack = "takeBack", CreateFolder = "createFolder", RenameFolder = "renameFolder", DeleteFolder = "deleteFolder",
-        RenameFile = "renameFile", AddFiles = "addFiles", DropFiles = "dropFiles", DismissNotice = "dismissNotice", SaveSettings = "saveSettings",
+        RenameFile = "renameFile", TrashFile = "trashFile", AddFiles = "addFiles", DropFiles = "dropFiles", DismissNotice = "dismissNotice", SaveSettings = "saveSettings",
         ChooseVaultRoot = "chooseVaultRoot", ReportProblem = "reportProblem", OpenIncidents = "openIncidents", SendFeedback = "sendFeedback", TakeBackAll = "takeBackAll",
         TakeOverFolder = "takeOverFolder", SwitchAccount = "switchAccount", PutBackKeptCopy = "putBackKeptCopy", TurnOnBadges = "turnOnBadges",
         // 0.4.2: Fix it on the card about an Armory folder inside a project folder.
@@ -252,7 +252,7 @@ public static class BridgeMessages
     // 0.5.3: "Show me" on the card about work Armory kept aside (its recovery folder in File Explorer).
     public const string OpenRecovery = "openRecovery", SaveBlockedAction = "saveBlockedAction";
     public static readonly IReadOnlyList<string> PageToHost = [Ready, Connect, CancelConnect, SignOut, Pause, Resume, OpenVault, OpenFile, LaunchFile, ShowInFolder,
-        CheckOut, CheckIn, UndoCheckOut, TakeBack, CreateFolder, RenameFolder, DeleteFolder, RenameFile, AddFiles, DropFiles, DismissNotice, SaveSettings, ChooseVaultRoot,
+        CheckOut, CheckIn, UndoCheckOut, TakeBack, CreateFolder, RenameFolder, DeleteFolder, RenameFile, TrashFile, AddFiles, DropFiles, DismissNotice, SaveSettings, ChooseVaultRoot,
         ReportProblem, OpenIncidents, SendFeedback, TakeBackAll, TakeOverFolder, SwitchAccount, PutBackKeptCopy, TurnOnBadges, RepairVaultRoot,
         CaptureWindow, ReadMyFeedback, ReadNoticeItems,
         ShowPicker, PickProfile, EnterPin, SetPin, AddProfile, ForgotPin, CancelPicker, RemoveProfile, SetPinsRequired,

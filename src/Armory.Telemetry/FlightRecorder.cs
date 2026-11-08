@@ -22,6 +22,7 @@ public enum FlightKind : byte
     // 0.3.3: one open-files question (feedback N6), and the computer going to sleep or waking.
     OpenFiles,
     Power,
+    ServerAvailability,
 }
 
 // One event, stored in place in the recorder's ring (no allocation per event). Strings are
@@ -151,6 +152,9 @@ public sealed class FlightRecorder
 
     // The computer went to sleep ("suspend") or woke ("resume"): a pass that spans it is not slow.
     public void Power(string mode) => Write(FlightKind.Power, mode, null, null, true);
+
+    // The result of a whole pass, so one healthy RPC cannot end an outage of another service.
+    public void ServerAvailability(bool online) => Write(FlightKind.ServerAvailability, null, null, null, online);
 
     private void Write(FlightKind kind, string? name, string? target, string? detail, bool ok, int status = 0, long ms = 0, long bytes = 0,
         int count = 0, int count2 = 0, int count3 = 0, int count4 = 0, string? stack = null, bool fatal = false)

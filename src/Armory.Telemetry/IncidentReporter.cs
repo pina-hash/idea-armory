@@ -22,15 +22,17 @@ public sealed class IncidentSources
     public static readonly TimeSpan SnapshotPatience = TimeSpan.FromMilliseconds(500);
 }
 
-// Watches the flight recorder's events with the glitch rules and, at most once per kind per
-// 10 minutes, saves an incident: built and written on a pool thread, never on the thread that
+// Watches the flight recorder's events with the glitch rules. Outages get one incident per
+// outage; other kinds get at most one per 10 minutes. Each is built on a pool thread, never the thread that
 // recorded the event. Saved is raised with each new file's path (the uploader wakes on it).
 public sealed class IncidentReporter : IFlightObserver
 {
     private readonly FlightRecorder recorder;
     private readonly IncidentSources sources;
     private readonly TimeProvider clock;
-    private readonly GlitchDetector detector = new();
+    private readonly GlitchDetector detector;
+    private readonly object availabilityGate = new();
+    private bool? observedOnline;
     private readonly IncidentThrottle throttle = new();
     [ThreadStatic] private static bool quiet;
 
@@ -38,6 +40,8 @@ public sealed class IncidentReporter : IFlightObserver
     {
         this.recorder = recorder;
         Store = store;
+        detector = new GlitchDetector(store.OutageActive);
+        observedOnline = store.OutageActive ? false : null;
         this.sources = sources;
         this.clock = clock ?? TimeProvider.System;
         LastFlight = lastFlight;
@@ -56,8 +60,28 @@ public sealed class IncidentReporter : IFlightObserver
     {
         if (e.Kind is FlightKind.PassStart or FlightKind.PassPhase or FlightKind.PassEnd) LastFlight?.Poke();
         if (quiet) return;
+        if (e.Kind == FlightKind.ServerAvailability)
+        {
+            lock (availabilityGate)
+            {
+                if (observedOnline != e.Ok)
+                {
+                    observedOnline = e.Ok;
+                    var active = !e.Ok;
+                    var sequence = e.Sequence;
+                    Schedule(() =>
+                    {
+                        try { Store.SetOutageActive(active, sequence); }
+                        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { sources.Log?.Invoke("incident: could not save server availability: " + error.Message); }
+                        return Task.CompletedTask;
+                    });
+                }
+            }
+        }
         var glitch = detector.Inspect(e);
-        if (glitch is null || !throttle.TryAdmit(glitch.Kind, clock.GetUtcNow())) return;
+        // Availability transitions already admit exactly one report for an outage. A
+        // recovery followed by a different outage must not disappear in the time throttle.
+        if (glitch is null || (glitch.Kind != GlitchKinds.ServerOutage && !throttle.TryAdmit(glitch.Kind, clock.GetUtcNow()))) return;
         Schedule(() => WriteAsync(glitch));
     }
 

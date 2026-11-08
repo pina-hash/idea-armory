@@ -180,6 +180,8 @@ internal sealed partial class AgentHost : IAsyncDisposable
     // a mentor or CAD lead force checks it in first, in the same action).
     internal Task<ActionResult> RenameFileAsync(string path, string newName, bool force = false)
         => OnEngineAsync("rename a file", e => e.RenameFileAsync(path, newName, force));
+    internal Task<ActionResult> TrashFileAsync(string path, Guid fileId)
+        => OnEngineAsync("move a file to Trash", e => e.TrashFileAsync(path, fileId));
     // Folders (contract C5 and C6): a rename or a removal goes to the team in one call, then here.
     // Force: as for a file, for every check out in the folder that is in the way.
     internal Task<ActionResult> CreateFolderAsync(Guid project, string parent, string name) => OnEngineAsync("new folder", e => e.CreateFolderAsync(project, parent, name));

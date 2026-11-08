@@ -27,6 +27,7 @@ public static class FlightJson
         FlightKind.Refusal => "refusal",
         FlightKind.OpenFiles => "openFiles",
         FlightKind.Power => "power",
+        FlightKind.ServerAvailability => "serverAvailability",
         _ => "unknown",
     };
 
@@ -131,6 +132,9 @@ public static class FlightJson
                 break;
             case FlightKind.Power:
                 o["mode"] = e.Name;
+                break;
+            case FlightKind.ServerAvailability:
+                o["online"] = e.Ok;
                 break;
         }
         return o;

@@ -143,6 +143,8 @@ def describe(event):
         return f"open-files question about {event.get('files')} files: {ms(event.get('ms'))}{late}"
     if kind == "power":
         return f"the computer {'went to sleep' if event.get('mode') == 'suspend' else 'woke up' if event.get('mode') == 'resume' else event.get('mode')}"
+    if kind == "serverAvailability":
+        return "the server answered again" if event.get("online") else "the server is unavailable; retrying with backoff"
     return json.dumps(event, ensure_ascii=False)
 
 

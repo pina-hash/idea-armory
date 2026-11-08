@@ -329,8 +329,12 @@ public sealed class ProfilesHostTests
         await UntilOnServer(lab, "Plate.SLDPRT", "v1");
         await lab.AddAsync(Jordan, null);
         await lab.UntilRunningAsync(Jordan, Shared);
+        // Signed in precedes the first pass's ownership handoff. Read-only can still
+        // be Alex's previous attribute, so it alone does not establish Jordan is ready.
+        await Until(() => SyncEngineOwner(lab) == Jordan, "the folder bound to Jordan before checking out");
         await Until(() => shared.Disk.IsReadOnly(Plate), "Plate read-only");
-        Assert.True((await lab.Host.CheckOutAsync([Plate], false)).Ok);
+        var checkedOut = await lab.Host.CheckOutAsync([Plate], false);
+        Assert.True(checkedOut.Ok, checkedOut.Message);
         await lab.Host.DisposeAsync();
         await lab.Telemetry.DisposeAsync();
 

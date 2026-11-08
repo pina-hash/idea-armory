@@ -7,6 +7,43 @@ namespace Armory.Telemetry.Tests;
 // they may be, how many are kept, and when they are written.
 public sealed class IncidentTests
 {
+    [Fact]
+    public void A_distinct_outage_after_recovery_is_reported_even_within_ten_minutes()
+    {
+        using var temp = new TempFolder();
+        var (reporter, recorder, clock, _) = Reporter(temp.Path);
+        recorder.ServerAvailability(false);
+        for (var i = 0; i < 30; i++) recorder.ServerAvailability(false);
+        Assert.Single(reporter.Store.All());
+        recorder.ServerAvailability(true);
+        Assert.False(reporter.Store.OutageActive);
+        clock.Advance(TimeSpan.FromMinutes(1));
+        recorder.ServerAvailability(false);
+        Assert.Equal(2, reporter.Store.All().Count);
+        Assert.True(reporter.Store.OutageActive);
+    }
+
+    [Fact]
+    public void An_outage_is_reported_once_across_restarts_and_a_recovery_allows_the_next_outage()
+    {
+        using var temp = new TempFolder();
+        var (first, recorder, clock, _) = Reporter(temp.Path);
+        recorder.ServerAvailability(false);
+        Assert.Single(first.Store.All());
+        clock.Advance(TimeSpan.FromHours(1));
+        var (second, restarted, _, _) = Reporter(temp.Path, clock: clock);
+        for (var i = 0; i < 50; i++) restarted.ServerAvailability(false);
+        Assert.Single(second.Store.All());
+        restarted.ServerAvailability(true);
+        clock.Advance(TimeSpan.FromHours(1));
+        var (third, next, _, _) = Reporter(temp.Path, clock: clock);
+        next.ServerAvailability(false);
+        Assert.Equal(2, third.Store.All().Count);
+        third.Store.SetOutageActive(false, 10_000);
+        third.Store.SetOutageActive(true, 5_000);
+        Assert.False(third.Store.OutageActive);
+    }
+
     private static readonly IncidentHeader Header = new("0.3.0", "Windows 11 Education 10.0.22631", "LAB-PC-07", "alex.kim@students.test");
 
     private static (IncidentReporter Reporter, FlightRecorder Recorder, ManualClock Clock, List<string> Log) Reporter(string folder,

@@ -148,7 +148,7 @@ public sealed class ArmoryTestDatabase : IAsyncDisposable
             try
             {
                 await new NpgsqlCommand(
-                    "do $$ begin if not exists(select from pg_roles where rolname='anon') then create role anon nologin; end if; if not exists(select from pg_roles where rolname='authenticated') then create role authenticated nologin; end if; end $$;",
+                    "do $$ begin if not exists(select from pg_roles where rolname='anon') then create role anon nologin; end if; if not exists(select from pg_roles where rolname='service_role') then create role service_role nologin; end if; if not exists(select from pg_roles where rolname='authenticated') then create role authenticated nologin; end if; end $$;",
                     connection).ExecuteNonQueryAsync(cancellationToken);
                 return;
             }

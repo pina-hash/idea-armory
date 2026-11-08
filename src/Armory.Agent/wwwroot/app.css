@@ -3576,6 +3576,18 @@ dialog.housing > .title-bar {
 	flex-wrap: wrap;
 	gap: var(--space-2);
 }
+.file-order-fields {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-2);
+}
+.file-order-fields > div {
+	flex: 1 1 10rem;
+	min-width: 0;
+}
+.file-order-fields > div:last-child {
+	flex-basis: 15rem;
+}
 .key.tool {
 	padding: 0.55rem 0.85rem;
 	font-size: 0.75rem;

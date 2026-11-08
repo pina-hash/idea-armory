@@ -912,7 +912,7 @@ for (const size of SIZES) {
 		expect(s.title === 'Wheel-Hub.SLDPRT', `heading says ${s.title}`);
 		expect(s.history > 0, 'no history rows');
 		const free = await page.$$eval('.detail-act button', (b) => b.map((x) => x.textContent.trim()));
-		expect(free.join('|') === 'Open|Check out|Check out and open|Show in folder', `an available file offers ${free.join(', ')}`);
+		expect(free.join('|') === 'Open|Check out|Check out and open|Move to Trash|Show in folder', `an available file offers ${free.join(', ')}`);
 		expect(/Available\. ?Check it out to make changes\./.test(await text(page, '.who-panel')), 'Checked out does not say the file is available');
 		await page.click('[data-key="back"]');
 		await settle(page);
@@ -1739,6 +1739,7 @@ const CONTRACT = {
 	renameFolder: ['projectId', 'folder', 'newName', 'force', ...ACT],
 	deleteFolder: ['projectId', 'folder', 'force', ...ACT],
 	renameFile: ['path', 'newName', 'force', ...ACT],
+	trashFile: ['path', 'fileId', ...ACT],
 	addFiles: ['projectId', 'folder', ...ACT],
 	dropFiles: ['projectId', 'folder', ...ACT],
 	dismissNotice: ['key'],
@@ -1818,6 +1819,43 @@ async function noticesBridge({ page, host, click, view, expect }) {
 // its own that the view alone decides; a PIN goes at its fourth digit and never before.
 // 0.3.3, the SolidWorks link: the notice's own button sends keepLocal (before a save in the
 // project's year that drops something) or saveDown (a file kept here), with the file's path.
+async function fileActionsBridge({ page, host, click, take, view, expect, demo }) {
+	const v = view('synced');
+	const project = v.projects[0];
+	const rows = [
+		{ fileId: 'f-order-old', name: 'Old.txt', updatedAt: '2026-10-01T10:00:00Z' },
+		{ fileId: 'f-order-new', name: 'New.txt', updatedAt: '2026-11-06T10:00:00Z' }
+	].map(r => Object.assign({ path: project.name + '/' + r.name, status: 'synced', checkout: { state: 'available', label: 'Available', name: null, email: null, device: null, since: null }, changed: false, releaseNotChecked: false, updatedBy: null, savedRelease: null, newerThanPin: false }, r));
+	project.folders = [{ path: '', name: project.name, fileCount: 2, files: rows }, { path: 'Empty', name: 'Empty', fileCount: 0, files: [] }];
+	v.projects = [project];
+	await host({ type: 'view', view: v });
+	await page.selectOption('#file-order', 'newest');
+	expect((await page.locator('#vl-browser .row-name').allTextContents()).join('|') === 'Empty|New.txt|Old.txt', 'newest sort or empty folder order is wrong');
+	await page.selectOption('#file-order', 'oldest');
+	expect((await page.locator('#vl-browser .row-name').allTextContents()).join('|') === 'Empty|Old.txt|New.txt', 'oldest sort is wrong');
+	await page.fill('#file-search', '.txt');
+	await page.waitForTimeout(250);
+	expect((await page.locator('#vl-browser .row-name').allTextContents()).join('|') === 'Old.txt|New.txt', 'search did not keep modified-date sorting');
+	await click('[data-key="row-f-order-old"]');
+	const detail = demo.detailFor('synced', 'f-wheel-hub');
+	Object.assign(detail, { fileId: rows[0].fileId, name: rows[0].name, path: rows[0].path, checkout: rows[0].checkout, status: 'synced' });
+	await host({ type: 'fileDetail', detail });
+	await click('[data-key="d-trash"]');
+	expect(await page.locator('#ask').evaluate(e => e.open), 'Trash did not ask for confirmation');
+	const refused = await click('[data-key="ask-ok"]');
+	expect(refused.type !== 'trashFile', 'Trash accepted an empty confirmation');
+	await page.fill('#ask-name', 'remove');
+	const sent = await click('[data-key="ask-ok"]');
+	expect(sent.type === 'trashFile' && sent.path === rows[0].path && sent.fileId === rows[0].fileId && typeof sent.requestId === 'string', 'Trash sent the wrong file or no request id: ' + JSON.stringify(sent));
+	await host({ type: 'actionResult', requestId: sent.requestId, ok: false, message: 'Check in this file before moving it to Trash.' });
+	expect((await page.textContent('#result-word')).includes('Check in'), 'the server refusal was hidden');
+	await click('[data-key="d-trash"]');
+	await page.fill('#ask-name', 'remove');
+	const accepted = await click('[data-key="ask-ok"]');
+	await host({ type: 'actionResult', requestId: accepted.requestId, ok: true, message: 'Moved Old.txt to Trash.' });
+	expect(await page.getAttribute('body', 'data-screen') === 'home', 'a successful Trash action left the removed file open');
+}
+
 async function solidWorksBridge({ page, host, click, view, expect }) {
 	const GEAR = 'Robot 2027/Drivetrain/Gearbox.SLDASM';
 	await host({ type: 'view', view: view('solidWorksDrops') });
@@ -2447,6 +2485,7 @@ tally.bridgeTypes = 0;
 		await profilesBridge({ page, host, click, take, view, expect, all });
 		await solidWorksBridge({ page, host, click, view, expect });
 		await noticesBridge({ page, host, click, view, expect });
+		await fileActionsBridge({ page, host, click, take, view, expect, demo });
 
 		for (const x of all) {
 			const want = CONTRACT[x.type];
@@ -2525,6 +2564,12 @@ tally.drawing = 0;
 		const big = view('manyMine');
 		await host({ type: 'view', view: big });
 		await page.waitForTimeout(300);
+		// Font metrics and the virtual list's first layout must settle before
+		// observing what a repeated view changes. The budgets below stay the same.
+		await page.evaluate(async () => {
+			await document.fonts.ready;
+			await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+		});
 		// The same view again: nothing changes.
 		await page.evaluate(() => window.__watch());
 		await host({ type: 'view', view: big });

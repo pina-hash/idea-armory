@@ -530,6 +530,7 @@ public sealed partial class SyncEngine
                 CrashAt("before-folder");
                 wrote = true;
                 staleProjects.Add(ps.Id);
+                sharedFolderReads.Remove(ps.Id);
                 await deps.Api.RenameFolderAsync(ps.Id, from, to, state.DeviceId!.Value, OperationIds.Derive(op.Operation.ToString(), from), ct);
                 CrashAt("after-folder");
             }
@@ -618,6 +619,7 @@ public sealed partial class SyncEngine
                 CrashAt("before-folder");
                 wrote = true;
                 staleProjects.Add(ps.Id);
+                sharedFolderReads.Remove(ps.Id);
                 await deps.Api.DeleteFolderAsync(ps.Id, folder, state.DeviceId!.Value, OperationIds.Derive(op.Operation.ToString(), folder), ct);
                 CrashAt("after-folder");
             }
@@ -740,6 +742,8 @@ public sealed partial class SyncEngine
     // per spelling, almost always one.
     private List<string> ServerFolders(string localFolder, ProjectState ps)
     {
+        if (sharedFolders.TryGetValue(ps.Id, out var metadata) && metadata.Any(f => Inside(f, localFolder)))
+            return [Relative(localFolder, ps)];
         var depth = localFolder.Split('/').Length - 1;
         return remoteById.Values.Where(r => r.Project.Id == ps.Id && !r.File.Deleted && Inside(r.Path.Value, localFolder))
             .Select(r => string.Join('/', r.File.Folder.Split('/').Take(depth))).Where(f => f.Length > 0)
@@ -753,6 +757,7 @@ public sealed partial class SyncEngine
         if (!staleProjects.Contains(ps.Id) && remoteProjects.ContainsKey(ps.Id)) return;
         var files = await deps.Api.ProjectFilesAsync(ps.Id, ct);
         KnowProject(ps, files);
+        await ReadSharedFoldersAsync(ps, ct);
         RememberHolders();
         PublishRemote();
     }
@@ -925,6 +930,7 @@ public sealed partial class SyncEngine
         var busy = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         void Busy(string path) { for (var folder = Parent(path); folder is not null && busy.Add(folder); folder = Parent(folder)) { } }
         foreach (var remote in remoteById.Values) if (!remote.File.Deleted) Busy(remote.Path.Value);
+        foreach (var folder in sharedFolders.Values.SelectMany(f => f)) Busy(folder + "/");
         foreach (var key in local.Keys) Busy(key);
         foreach (var st in state.Files.Values)
             if (st.Inflight is not null || st.Entries.Count > 0 || st.Drafts.Count > 0 || st.LocalMoveTo is not null || st.CheckOut is not null || st.Request != CheckoutRequest.None)
@@ -1040,8 +1046,7 @@ public sealed partial class SyncEngine
 
     // ---- The window's folder actions (v2-design.md 4.3) ------------------------------------
 
-    // New folder: made on this computer (the server keeps no empty folders; the folder is the
-    // team's as soon as a file is in it).
+    // New folder: shared through metadata when the server supports it; otherwise local.
     public async Task<ActionResult> CreateFolderAsync(Guid projectId, string parent, string name, CancellationToken cancellationToken = default)
     {
         if (!engineThread.IsCurrent) return await engineThread.InvokeAsync(() => CreateFolderAsync(projectId, parent, name, cancellationToken));
@@ -1059,6 +1064,14 @@ public sealed partial class SyncEngine
             if (!VaultPath.TryCreate(inside + "/" + name, out var folder, out var tooLong, options.VaultRoot)) return new(false, tooLong ?? "That name can't be used here.");
             if (FolderOnDisk(folder.Value) || local.ContainsKey(folder.Value) || state.Files.ContainsKey(folder.Value) || remoteByPath.Keys.Any(k => Inside(k, folder.Value)) || Exists(folder))
                 return new(false, $"Something named {name} is already in {Where(inside)}.");
+            bool shared;
+            try
+            {
+                if (state.DeviceId is null) return Offline("Connect this computer before making a shared folder.");
+                shared = await deps.Api.CreateFolderAsync(projectId, Relative(folder.Value, ps), state.DeviceId.Value, Guid.NewGuid(), cancellationToken);
+            }
+            catch (Exception error) when (Stopped(error)) { return Offline("A shared folder can be made once this computer is back online."); }
+            catch (ArmoryRpcException error) { return new(false, error.Message); }
             try { fs.EnsureFolder(folder.Value); }
             catch (IOException error)
             {
@@ -1066,8 +1079,16 @@ public sealed partial class SyncEngine
                 return new(false, $"Armory couldn't make the folder {name}. Try again in a moment.");
             }
             for (var f = folder.Value; f is not null && !Same(f, ps.Folder); f = Parent(f)) localFolders.Add(f);
+            if (shared)
+            {
+                if (!sharedFolders.TryGetValue(projectId, out var known)) sharedFolders[projectId] = known = new(StringComparer.OrdinalIgnoreCase);
+                known.Add(folder.Value);
+                state.KnownFolders.Add(folder.Value);
+                SaveNow();
+            }
             PublishLocked();
-            return new(true, $"Made the folder {name} in {Where(inside)}.");
+            return new(true, shared ? $"Made the folder {name} in {Where(inside)}. Everyone on the team can see it."
+                : $"Made the folder {name} on this computer. The website needs an update before empty folders can be shared.");
         }
         finally { LeaveAction(); }
     }
@@ -1166,6 +1187,7 @@ public sealed partial class SyncEngine
                     CrashAt("before-folder");
                     wrote = true;
                     staleProjects.Add(ps.Id);
+                    sharedFolderReads.Remove(ps.Id);
                     await deps.Api.RenameFolderAsync(ps.Id, serverFolder, Relative(op.LocalTo, ps), state.DeviceId!.Value, OperationIds.Derive(op.Operation.ToString(), serverFolder), ct);
                     CrashAt("after-folder");
                 }
@@ -1284,6 +1306,7 @@ public sealed partial class SyncEngine
                 CrashAt("before-folder");
                 wrote = true;
                 staleProjects.Add(ps.Id);
+                sharedFolderReads.Remove(ps.Id);
                 removed += await deps.Api.DeleteFolderAsync(ps.Id, serverFolder, state.DeviceId!.Value, OperationIds.Derive(op.Operation.ToString(), serverFolder), ct);
                 CrashAt("after-folder");
             }

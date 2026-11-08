@@ -64,10 +64,37 @@ function Binary([string]$path) {
     $v = [Diagnostics.FileVersionInfo]::GetVersionInfo($path)
     $v.ProductName -ceq 'IDEA Armory' -and $v.CompanyName -ceq 'IDEA, Don Bosco Tech'
 }
+# Untrusted registry/task/shortcut values are not paths until this boundary accepts them.
+# Normalize only surrounding quotes, whitespace and environment variables. Never strip a
+# character from a filename to guess another file; defer the registration and keep evidence.
+function InventoryPath([string]$value) {
+    if ([string]::IsNullOrWhiteSpace($value)) { return $null }
+    $path = [Environment]::ExpandEnvironmentVariables($value.Trim())
+    if ($path.StartsWith('"') -and $path.EndsWith('"') -and $path.Length -gt 1) { $path = $path.Substring(1, $path.Length - 2) }
+    if ($path -notmatch '^[A-Za-z]:\\' -or $path -match '["<>|?*\x00-\x1f]' -or $path.Substring(2).Contains(':')) {
+        Audit ('deferred invalid inventory target ' + $value)
+        return $null
+    }
+    return $path
+}
 function CommandFile([string]$command) {
-    if ($command -match '^\s*"([^"]+)"') { return $Matches[1] }
-    if ($command -match '^\s*(.+?\.(?:exe|cmd|bat|ps1))(?=\s|,|$)') { return $Matches[1] }
+    if ([string]::IsNullOrWhiteSpace($command)) { return $null }
+    if ($command -match '^\s*"([^"]+)"') { return InventoryPath $Matches[1] }
+    # A wrapper such as cmd /c "...exe must never reach Full as a filename.
+    if ($command -match '^\s*([^"\r\n]+?\.(?:exe|cmd|bat|ps1))(?=\s|,|$)') { return InventoryPath $Matches[1] }
+    Audit ('deferred command without a direct local target ' + $command)
     return $null
+}
+function Belongs([string]$file, $copy) {
+    $file = InventoryPath $file
+    if (-not $file) { return $false }
+    $file = Full $file
+    foreach ($relative in @('IdeaArmory.exe', 'current\IdeaArmory.exe', 'IDEA Armory.exe', 'Update.exe')) {
+        if ($file -ine (Join-Path $copy.Root $relative)) { continue }
+        if ($relative -eq 'Update.exe' -and -not (Owned-Updater $copy)) { continue }
+        return $true
+    }
+    return $false
 }
 function Start-Uninstaller([string]$file, [string]$arguments) {
     $start = New-Object Diagnostics.ProcessStartInfo
@@ -226,6 +253,7 @@ function OverlapsProtected([string]$root) {
 }
 $copies = @{}
 function Add-Copy([string]$path, [bool]$Referenced = $true) {
+    $path = InventoryPath $path
     if (-not $path) { return }
     try {
         $path = Full $path
@@ -285,7 +313,7 @@ try {
                         $key = $list.OpenSubKey($name)
                         try {
                             if ([string]$key.GetValue('DisplayName') -notmatch '^IDEA Armory(?:\s+\d.*)?$') { continue }
-                            $location = [string]$key.GetValue('InstallLocation')
+                            $location = InventoryPath ([string]$key.GetValue('InstallLocation'))
                             if ($location) { Add-Copy (Join-Path $location 'IdeaArmory.exe'); Add-Copy (Join-Path $location 'current\IdeaArmory.exe') }
                             $icon = CommandFile ([string]$key.GetValue('DisplayIcon')); Add-Copy $icon
                             $command = [string]$key.GetValue('QuietUninstallString')
@@ -348,21 +376,11 @@ try {
     try {
         foreach ($task in @(Get-ScheduledTask -ErrorAction Stop)) {
             foreach ($action in $task.Actions) {
-                $file = [Environment]::ExpandEnvironmentVariables([string]$action.Execute).Trim('"'); Add-Copy $file
+                $file = InventoryPath ([string]$action.Execute); Add-Copy $file
                 $tasks += [pscustomobject]@{ Task = $task; File = $file }
             }
         }
     } catch { Audit ('could not inventory scheduled tasks: ' + $_.Exception.Message) }
-    function Belongs([string]$file, $copy) {
-        if (-not $file) { return $false }
-        $file = Full $file
-        foreach ($relative in @('IdeaArmory.exe', 'current\IdeaArmory.exe', 'IDEA Armory.exe', 'Update.exe')) {
-            if ($file -ine (Join-Path $copy.Root $relative)) { continue }
-            if ($relative -eq 'Update.exe' -and -not (Owned-Updater $copy)) { continue }
-            return $true
-        }
-        return $false
-    }
     function Remove-TaskAction($entry, $copy) {
         # Other copies can share this task. Read its latest actions so a later removal cannot
         # restore an action removed for an earlier copy from the original inventory snapshot.

@@ -48,6 +48,12 @@ runs:
       shell: pwsh
       run: dotnet build --no-restore -warnaserror
 
+    - name: Retirement accepts paths and defers command text (Windows PowerShell 5.1)
+      shell: pwsh
+      run: |
+        & "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File ./tools/test-retirement-paths.ps1
+        if ($LASTEXITCODE -ne 0) { throw 'Retirement path regression checks failed.' }
+
     # MSVC from the image's Visual Studio: ArmoryBadges.dll (x64, and ARM64 when its C++ tools
     # are there; else a warning), ArmoryShell.exe, and the test tools BadgeProbe.exe and
     # ShellPipeTest.exe, into publish/native. Imports and version resources are checked.

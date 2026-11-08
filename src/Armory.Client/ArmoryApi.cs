@@ -77,7 +77,7 @@ public sealed record FolderPurge(string Folder, int Files, IReadOnlyList<Guid> F
 
 // Typed calls for every RPC in docs/agent/CONTRACT.md, server/sql/001-005. Every write
 // takes the caller's operation id; replaying the same id returns the stored receipt.
-public sealed class ArmoryApi(PostgrestClient rest)
+public sealed partial class ArmoryApi(PostgrestClient rest)
 {
     public async Task<Guid> RegisterDeviceAsync(string name, Guid operation, CancellationToken ct = default)
         => GuidOf(await rest.CallAsync("armory_register_device", Args(("p_name", name), ("p_operation", operation)), ct));
@@ -124,10 +124,12 @@ public sealed class ArmoryApi(PostgrestClient rest)
     // Contract v2. Returns the number of live files moved. A refusal is ArmoryRpcException with
     // IsInUse; FolderRefusal.TryParse reads its Details.
     public async Task<int> RenameFolderAsync(Guid project, string from, string to, Guid device, Guid operation, CancellationToken ct = default)
-        => IntOf(await rest.CallAsync("armory_rename_folder", Args(("p_project", project), ("p_from", from), ("p_to", to), ("p_device", device), ("p_operation", operation)), ct));
+        => await EditKnownFolderAsync(project, "rename", from, to, device, operation, ct)
+            ?? IntOf(await rest.CallAsync("armory_rename_folder", Args(("p_project", project), ("p_from", from), ("p_to", to), ("p_device", device), ("p_operation", operation)), ct));
     // Contract v2. Returns the number of live files removed; refusals as RenameFolderAsync.
     public async Task<int> DeleteFolderAsync(Guid project, string folder, Guid device, Guid operation, CancellationToken ct = default)
-        => IntOf(await rest.CallAsync("armory_delete_folder", Args(("p_project", project), ("p_folder", folder), ("p_device", device), ("p_operation", operation)), ct));
+        => await EditKnownFolderAsync(project, "delete", folder, null, device, operation, ct)
+            ?? IntOf(await rest.CallAsync("armory_delete_folder", Args(("p_project", project), ("p_folder", folder), ("p_device", device), ("p_operation", operation)), ct));
     public async Task<bool> AddMemberAsync(Guid project, string email, MemberRole role, Guid operation, CancellationToken ct = default)
         => BoolOf(await rest.CallAsync("armory_add_member", Args(("p_project", project), ("p_email", email), ("p_role", RoleName(role)), ("p_operation", operation)), ct));
     public async Task<bool> RemoveMemberAsync(Guid project, string email, Guid operation, CancellationToken ct = default)

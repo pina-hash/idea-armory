@@ -15,6 +15,9 @@ namespace Armory.TestSupport;
 /// </summary>
 public static class ArmoryV3StandIn
 {
+    public static Task ApplyFileActionsAsync(ArmoryTestDatabase database) => ApplyAsync(database, "armory_v059_trash.sql");
+    public static Task ApplySharedFoldersAsync(ArmoryTestDatabase database) => ApplyAsync(database, "007_v059_shared_folders.sql");
+
     public static Task ApplyCoreAsync(ArmoryTestDatabase database) => ApplyAsync(database, "armory_v3_core.sql");
 
     public static Task ApplyReportsAsync(ArmoryTestDatabase database) => ApplyAsync(database, "armory_v3_reports.sql");

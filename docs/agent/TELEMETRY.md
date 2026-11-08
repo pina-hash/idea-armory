@@ -29,6 +29,7 @@ ring unless an incident is saved.
 | `passStart` | the engine | pass kind (`loop`, `action`, `whole`) |
 | `passPhase` | the engine | phase (`scan`, `server`, `plan`, `move`, `finish`), ms since the last phase |
 | `passEnd` | the engine | pass kind, ok, ms, downloaded, uploaded, kept copies, refused |
+| `serverAvailability` | the signed-in engine, before each pass end | `online`: whether this pass could reach the server |
 | `passYield` | the engine | why a loop pass gave way (`slice`: its slice was up; `action`: a window action waited; `pause`, 0.3.3: Armory was paused), units or paths left, ms, and (0.3.3) `carried`: the units still in flight it carried on to the passes after it (docs/agent/ENGINE.md, "The transfer queue") |
 | `openFiles` | the engine (`AskOpenAsync`, 0.3.3) | one open-files question: ms, how many files it asked about, `timedOut` (the platform's budget ran out and the probe alone answered the rest); a question a window action ended for a loop pass is not recorded |
 | `power` | the agent (`SystemEvents.PowerModeChanged`, 0.3.3) | `suspend` or `resume`: the computer went to sleep or woke |
@@ -57,7 +58,7 @@ the files. (The Redactor also masks any unbroken run of 32 or more letters, digi
 
 ## Triggers
 
-Each rule is a pure function in `GlitchRules` with its own test (`GlitchRuleTests`).
+`GlitchRules` and the stateful `GlitchDetector` have regression coverage in `GlitchRuleTests`.
 
 | Kind | When |
 |---|---|
@@ -70,6 +71,7 @@ Each rule is a pure function in `GlitchRules` with its own test (`GlitchRuleTest
 | `userReport` | Report a problem (below) |
 | `retireFailed` | 0.5.8: the cleanup of other Armory installs (docs/agent/INSTALL-OWNERSHIP.md, "0.5.8") did not finish: the script exited 1 or 2, was still running after 90 seconds, or could not run (powershell.exe missing or blocked). Armory opened anyway. Summary: "Armory opened, but the cleanup of other Armory installs did not finish: <outcome>". Saved by the running copy, or by a launch that then handed off to another install's copy |
 | `startupBlocked` | 0.5.8: a launch found Armory already running for this account and could not reach it (no answer to its Show, or an elevated copy holds the guard), and showed a message box instead of leaving without a word. Saved by that launch with no address and no flight; the next Armory that runs sends it |
+| `serverOutage` | 0.5.9: the first offline pass result, at most once until a pass reaches the server again. The atomic `server-outage.active` marker remembers it across restarts. Slow passes and slow window actions while the outage lasts do not create additional incidents. A distinct outage after recovery earns its own report, including within ten minutes. Real fatal exceptions and disk failures retain their own reporting. The loop's existing exponential retry waits remain unchanged |
 
 A `crash` also comes from an exception before the app runs (0.5.8, `StartupGuard`): "Armory
 crashed in startup: ...", saved by the failing launch itself, with crash.log beside it. The site
@@ -104,7 +106,8 @@ run's last line, treats every line after it as the installer's, and, unless Wind
 Armory crashing, logs `previous run ended with an update, not a crash` and files nothing
 (`RunEndCause.Explain`'s `updatedAt`). Not verified on a lab computer: it takes a real release.
 
-**Throttles.** At most one incident per kind per 10 minutes on a computer, counted across
+**Throttles.** Except `serverOutage`, which is limited by availability transitions above,
+at most one incident per kind per 10 minutes on a computer, counted across
 restarts from the files on disk; a person's own report is never held back. At most 20
 incident files are kept (files the site already has go first, then the oldest). Each file is
 under 200 KB compressed: the oldest events go first, then the oldest log lines, then the

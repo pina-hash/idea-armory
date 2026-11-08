@@ -29,6 +29,18 @@ internal static class Updates
     internal const string SetupName = PackId + "-win-Setup.exe";
     internal static readonly TimeSpan FirstLook = TimeSpan.FromMinutes(1), LookEvery = TimeSpan.FromHours(4);
 
+    // A school computer may have no network at sign-in. A failed first look must not cost
+    // the rest of a class period. Success returns to the ordinary four-hour schedule.
+    internal static TimeSpan NextLook(int failedLooks) => failedLooks switch
+    {
+        <= 0 => LookEvery,
+        1 => TimeSpan.FromMinutes(1),
+        2 => TimeSpan.FromMinutes(5),
+        3 => TimeSpan.FromMinutes(15),
+        4 => TimeSpan.FromHours(1),
+        _ => LookEvery,
+    };
+
     // Before anything else in Main: Velopack's install, update and uninstall steps run here and
     // exit; a downloaded update is applied here, at start, and the new version starts instead.
     // Velopack's own hook launches (install, update, obsolete, uninstall): no person is looking,
@@ -133,6 +145,8 @@ internal sealed class Updater : IDisposable
     private readonly Action<string>? ready;
     private System.Threading.Timer? timer;
     private int looking;
+    private int failedLooks;
+    private int disposed;
     private UpdateManager? manager;
 
     // ready: the tray's words once an update waits for the next start.
@@ -149,7 +163,7 @@ internal sealed class Updater : IDisposable
     internal void Start()
     {
         if (!OperatingSystem.IsWindows() || paths.IsOverridden) return;
-        timer = new System.Threading.Timer(_ => _ = LookAsync(), null, Updates.FirstLook, Updates.LookEvery);
+        timer = new System.Threading.Timer(_ => _ = LookAsync(), null, Updates.FirstLook, Timeout.InfiniteTimeSpan);
     }
 
     internal async Task LookAsync()
@@ -161,12 +175,22 @@ internal sealed class Updater : IDisposable
             if (Updates.IsVelopackCopy(exe, File.Exists)) await UpdateInPlaceAsync();
             else if (ShellIdentity.IsInstalledCopy(paths)) await MoveOntoUpdatingInstallAsync();
             // A developer's build or a test instance never updates.
+            failedLooks = 0;
         }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
-            log.Info("updates: the look for a new version failed (" + error.GetType().Name + ": " + error.Message + "); Armory looks again later");
+            failedLooks = Math.Min(failedLooks + 1, 5);
+            log.Info("updates: the look for a new version failed (" + error.GetType().Name + ": " + error.Message + "); next look in " + Updates.NextLook(failedLooks).TotalMinutes + " minutes");
         }
-        finally { Volatile.Write(ref looking, 0); }
+        finally
+        {
+            Volatile.Write(ref looking, 0);
+            if (Volatile.Read(ref disposed) == 0)
+            {
+                try { timer?.Change(Updates.NextLook(failedLooks), Timeout.InfiniteTimeSpan); }
+                catch (ObjectDisposedException) { }
+            }
+        }
     }
 
     private async Task UpdateInPlaceAsync()
@@ -233,7 +257,7 @@ internal sealed class Updater : IDisposable
         Process.Start(new ProcessStartInfo(setup, "--silent") { UseShellExecute = false });
     }
 
-    public void Dispose() => timer?.Dispose();
+    public void Dispose() { Volatile.Write(ref disposed, 1); timer?.Dispose(); }
 }
 
 // Historical identities retained as a regression contract. Retirement discovers their actual

@@ -15,6 +15,18 @@ itself except an add (below) and a lock taken only for a move or a removal.
 
 ## Public API
 
+0.5.9 adds `TrashFileAsync(path, expectedFileId)`: an available, closed shared file is removed through the
+website's existing `armory_web_trash`, with its membership and class-folder checks. The
+ordinary tombstone reconciler retains local bytes. Checkout and pending-work refusals are
+not bypassed. A lost answer is reported as unconfirmed and the next pass reconciles it.
+Restore remains the existing website action. See [the field report](v0.5.9-field-report.md).
+
+The additive empty-folder contract reads shared metadata with file snapshots, validates each
+path through VaultPath, then creates directories after remote folder moves. Those directories
+stay through tidy passes until metadata removes them; old folder RPCs keep the metadata
+aligned through a transactional change-feed trigger. A server missing this capability is
+asked again in six hours, and a locally created folder is described as local only.
+
 ```csharp
 var engine = new SyncEngine(new EngineOptions { VaultRoot = @"C:\IDEA\Armory", TransferConcurrency = 6 }, new EngineDependencies
 {
