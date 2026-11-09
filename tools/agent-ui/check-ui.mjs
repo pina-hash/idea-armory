@@ -110,7 +110,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { pathToFileURL } from 'node:url';
-import { loadPlaywright, combos, comboName, openPage, demoStates, WWWROOT, ROOT, THEMES, SIZES, walkFiles } from './lib.mjs';
+import { localPageUrl, localRequest, loadPlaywright, combos, comboName, openPage, demoStates, WWWROOT, ROOT, THEMES, SIZES, walkFiles } from './lib.mjs';
 
 const { chromium } = loadPlaywright();
 const problems = [];
@@ -657,7 +657,7 @@ for (const c of list) {
 			onContext: async (ctx) => {
 				await ctx.route('**/*', (route) => {
 					const url = route.request().url();
-					if (/^https?:/i.test(url)) {
+					if (/^https?:/i.test(url) && !localRequest(url)) {
 						leaks.push(url);
 						return route.abort();
 					}
@@ -667,11 +667,12 @@ for (const c of list) {
 			onPage: async (p) => {
 				p.on('request', (req) => {
 					const url = req.url();
-					if (!/^(file|data|blob|about):/i.test(url) && !leaks.includes(url)) leaks.push(url);
+					if (!/^(file|data|blob|about):/i.test(url) && !localRequest(url) && !leaks.includes(url)) leaks.push(url);
 				});
 			}
 		});
 		tally.pages++;
+		if (tally.pages % 50 === 0) console.log(`Checked ${tally.pages} rendered pages.`);
 
 		const r = await page.evaluate(inspect, JARGON);
 		tally.controls += r.controls;
@@ -802,7 +803,7 @@ for (const c of list) {
 		onContext: async (ctx) => {
 			await ctx.route('**/*', (route) => {
 				const url = route.request().url();
-				if (/^https?:/i.test(url)) {
+				if (/^https?:/i.test(url) && !localRequest(url)) {
 					leaks.push(url);
 					return route.abort();
 				}
@@ -912,7 +913,7 @@ for (const size of SIZES) {
 		expect(s.title === 'Wheel-Hub.SLDPRT', `heading says ${s.title}`);
 		expect(s.history > 0, 'no history rows');
 		const free = await page.$$eval('.detail-act button', (b) => b.map((x) => x.textContent.trim()));
-		expect(free.join('|') === 'Open|Check out|Check out and open|Move to Trash|Show in folder', `an available file offers ${free.join(', ')}`);
+		expect(free.join('|') === 'Open|Check out|Check out and open|Move to Trash|Move file|Show in folder', `an available file offers ${free.join(', ')}`);
 		expect(/Available\. ?Check it out to make changes\./.test(await text(page, '.who-panel')), 'Checked out does not say the file is available');
 		await page.click('[data-key="back"]');
 		await settle(page);
@@ -926,7 +927,7 @@ for (const size of SIZES) {
 		expect(s.screen === 'detail' && s.title === 'Gearbox.SLDASM', `Enter on a row opened ${s.title}`);
 		expect(s.focus === 'detail-title', `Enter left focus on ${s.focus}`);
 		const mine = await page.$$eval('.detail-act button', (b) => b.map((x) => x.textContent.trim()));
-		expect(mine.join('|') === 'Open|Check in|Undo check out|Show in folder', `a file I have checked out offers ${mine.join(', ')}`);
+		expect(mine.join('|') === 'Open|Check in|Undo check out|Move file|Show in folder', `a file I have checked out offers ${mine.join(', ')}`);
 		await page.click('[data-key="back"]');
 		await settle(page);
 		await clickRow(page, 'row-f-plate-left');
@@ -1739,6 +1740,7 @@ const CONTRACT = {
 	renameFolder: ['projectId', 'folder', 'newName', 'force', ...ACT],
 	deleteFolder: ['projectId', 'folder', 'force', ...ACT],
 	renameFile: ['path', 'newName', 'force', ...ACT],
+	moveFile: ['path', 'fileId', 'projectId', 'folder', ...ACT],
 	trashFile: ['path', 'fileId', ...ACT],
 	addFiles: ['projectId', 'folder', ...ACT],
 	dropFiles: ['projectId', 'folder', ...ACT],
@@ -1840,6 +1842,11 @@ async function fileActionsBridge({ page, host, click, take, view, expect, demo }
 	const detail = demo.detailFor('synced', 'f-wheel-hub');
 	Object.assign(detail, { fileId: rows[0].fileId, name: rows[0].name, path: rows[0].path, checkout: rows[0].checkout, status: 'synced' });
 	await host({ type: 'fileDetail', detail });
+    await page.selectOption('#move-folder', 'Empty');
+    const move = await click('[data-key="d-move"]');
+    expect(move.type === 'moveFile' && move.fileId === rows[0].fileId && move.path === rows[0].path && move.projectId === project.id && move.folder === 'Empty', 'Move file sent the wrong identity or folder: ' + JSON.stringify(move));
+    await host({ type: 'actionResult', requestId: move.requestId, ok: false, message: 'Close Old.txt in SolidWorks first.' });
+    expect((await page.textContent('#result-word')).includes('Close Old.txt'), 'the move refusal was hidden');
 	await click('[data-key="d-trash"]');
 	expect(await page.locator('#ask').evaluate(e => e.open), 'Trash did not ask for confirmation');
 	const refused = await click('[data-key="ask-ok"]');
@@ -1961,7 +1968,7 @@ tally.bridgeTypes = 0;
 	const page = await context.newPage();
 	page.on('pageerror', (e) => fails.push('page error: ' + e.message));
 	try {
-		await page.goto(pathToFileURL(path.join(WWWROOT, 'index.html')).href);
+		await page.goto(localPageUrl());
 		await page.waitForTimeout(150);
 		const take = () => page.evaluate(() => window.__sent.splice(0));
 		const host = async (m) => {
@@ -2501,7 +2508,7 @@ tally.bridgeTypes = 0;
 		const types = new Set(all.map((x) => x.type));
 		tally.bridgeTypes = [...types].filter((t) => CONTRACT[t]).length;
 		for (const t of Object.keys(CONTRACT)) if (!types.has(t)) fails.push('never sent ' + t);
-		expect(!requests.some((u) => /^https?:/i.test(u)), 'a request left file://');
+		expect(!requests.some((u) => /^https?:/i.test(u) && !localRequest(u)), 'a request left file://');
 	} catch (e) {
 		fails.push(threw(e));
 	}
@@ -2554,7 +2561,7 @@ tally.drawing = 0;
 	const page = await context.newPage();
 	page.on('pageerror', (e) => fails.push('page error: ' + e.message));
 	try {
-		await page.goto(pathToFileURL(path.join(WWWROOT, 'index.html')).href);
+		await page.goto(localPageUrl());
 		await page.waitForTimeout(100);
 		const view = (name, patch) => Object.assign(JSON.parse(JSON.stringify(demo.states[name].view)), patch || {});
 		const host = async (m) => {
@@ -2774,7 +2781,7 @@ tally.drawing = 0;
 	const context = await browser.newContext({ viewport: { width: 1120, height: 760 }, deviceScaleFactor: 1, colorScheme: 'dark', reducedMotion: 'reduce' });
 	const page = await context.newPage();
 	try {
-		await page.goto(pathToFileURL(path.join(WWWROOT, 'index.html')).href + '?state=synced');
+		await page.goto(localPageUrl() + '?state=synced');
 		await page.waitForSelector('html[data-ready="true"]', { timeout: 15000 });
 		const cdp = await context.newCDPSession(page);
 		const parameters = JSON.parse('{"format":"png","captureBeyondViewport":false,"clip":{"x":0,"y":0,"width":1120,"height":760,"scale":0.5}}');
@@ -2802,7 +2809,7 @@ for (const [scheme, query, want] of [
 ]) {
 	const context = await browser.newContext({ viewport: { width: 420, height: 720 }, colorScheme: scheme });
 	const page = await context.newPage();
-	await page.goto(pathToFileURL(path.join(WWWROOT, 'index.html')).href + '?state=synced' + (query ? '&' + query : ''));
+	await page.goto(localPageUrl() + '?state=synced' + (query ? '&' + query : ''));
 	await page.waitForSelector('html[data-ready="true"]', { timeout: 15000 });
 	const got = await page.getAttribute('html', 'data-theme');
 	if (got !== want) {
@@ -2833,7 +2840,7 @@ for (const theme of THEMES) for (const size of [...SIZES, { w: 320, h: 480 }]) {
 	const page = await context.newPage();
 	page.on('pageerror', e => fails.push(e.message));
 	try {
-		await page.goto(pathToFileURL(path.join(WWWROOT, 'index.html')).href);
+		await page.goto(localPageUrl());
 		await page.waitForFunction(() => window.__sent.length);
 		const real = JSON.parse(JSON.stringify(demoStates().states.synced.view)); real.effectiveTheme = theme;
 		await page.evaluate(v => window.__host({ type: 'view', view: v }), real);
@@ -2980,7 +2987,7 @@ for (const storageFails of [false, true]) {
 	const page = await context.newPage();
 	const fails = []; page.on('pageerror', e => fails.push(e.message));
 	try {
-		await page.goto(pathToFileURL(path.join(WWWROOT,'index.html')).href);
+		await page.goto(localPageUrl());
 		await page.waitForFunction(() => window.__sent.length);
 		const real = JSON.parse(JSON.stringify(demoStates().states.synced.view)); real.projects = []; real.myFiles = [];
 		await page.evaluate(v => window.__host({type:'view',view:v}),real);
@@ -3040,7 +3047,7 @@ for (const storageFails of [false, true]) for (const size of [SIZES[0], { w: 320
 		return l;
 	};
 	try {
-		await page.goto(pathToFileURL(path.join(WWWROOT, 'index.html')).href);
+		await page.goto(localPageUrl());
 		await page.waitForFunction(() => window.__sent.length);
 		const real = JSON.parse(JSON.stringify(demoStates().states.synced.view));
 		const rows = [];
@@ -3153,7 +3160,7 @@ for (const size of [...SIZES, {w:320,h:480}]) await flow('window back and forwar
 	await side(4);
 	expect(await page.getAttribute('body','data-screen') === 'home', 'Forward survived a new navigation branch');
 	await side(3); await side(3); await side(3); await side(3);
-	expect(page.url().startsWith('file:'), 'an edge escaped the Armory page');
+	expect((page.url().startsWith('file:') || localRequest(page.url())), 'an edge escaped the Armory page');
 });
 
 // Both themes, each reason, a small window, keyboard activation, and shareable evidence.

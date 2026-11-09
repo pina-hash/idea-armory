@@ -31,7 +31,12 @@ export function loadPlaywright() {
 	].filter(Boolean);
 	for (const c of candidates) {
 		try {
-			return require(c);
+			const api = require(c);
+			if (process.env.ARMORY_CHROMIUM) {
+				const launch = api.chromium.launch.bind(api.chromium);
+				return { ...api, chromium: { ...api.chromium, launch: (options = {}) => launch({ executablePath: process.env.ARMORY_CHROMIUM, ...options }) } };
+			}
+			return api;
 		} catch {
 			// try the next place
 		}
@@ -48,6 +53,19 @@ export function demoStates() {
 	vm.runInNewContext(src, sandbox, { filename: 'demo/states.js' });
 	demoCache = sandbox.window.ArmoryDemoStates;
 	return demoCache;
+}
+
+// Managed Chromium can forbid file URLs. A loopback server is the equivalent local
+// fixture; never allow an arbitrary web origin through the no-network checks.
+export function localPageUrl() {
+	if (!process.env.ARMORY_UI_BASE_URL) return pathToFileURL(path.join(WWWROOT, 'index.html')).href;
+	const u = new URL(process.env.ARMORY_UI_BASE_URL);
+	if (u.protocol !== 'http:' || u.hostname !== '127.0.0.1' || u.pathname !== '/' || u.username || u.password || u.search || u.hash)
+		throw new Error('ARMORY_UI_BASE_URL must be an HTTP loopback origin.');
+	return new URL('index.html', u).href;
+}
+export function localRequest(url) {
+	return !!process.env.ARMORY_UI_BASE_URL && new URL(url).origin === new URL(localPageUrl()).origin;
 }
 
 /** Every (screen, state, size) the tools render, in a stable order. */
@@ -72,7 +90,7 @@ export function shotName(c, theme) {
 /** The page for one combination: the state, the theme, the screen, and the state's own
  *  page-only place (project, folder, select, expand, dialog, drag) from demo/states.js. */
 export function pageUrl(c, theme) {
-	const u = pathToFileURL(path.join(WWWROOT, 'index.html'));
+	const u = new URL(localPageUrl());
 	const s = demoStates().states[c.state] || {};
 	u.search = new URLSearchParams({ state: c.state, theme, screen: c.screen, ...(s.params || {}) }).toString();
 	return u.href;

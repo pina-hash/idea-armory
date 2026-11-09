@@ -178,6 +178,9 @@ internal sealed partial class AgentHost : IAsyncDisposable
     // One file, in the same folder: a file Armory doesn't have yet is renamed on disk; a file in
     // Armory is renamed for everyone (refused while someone else has it checked out, unless force:
     // a mentor or CAD lead force checks it in first, in the same action).
+    internal Task<ActionResult> MoveFileAsync(string path, Guid fileId, Guid projectId, string folder)
+        => OnEngineAsync("move a file", e => e.MoveFileAsync(path, fileId, projectId, folder));
+
     internal Task<ActionResult> RenameFileAsync(string path, string newName, bool force = false)
         => OnEngineAsync("rename a file", e => e.RenameFileAsync(path, newName, force));
     internal Task<ActionResult> TrashFileAsync(string path, Guid fileId)

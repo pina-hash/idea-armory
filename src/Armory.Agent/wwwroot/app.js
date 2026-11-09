@@ -53,6 +53,8 @@
 		projectId: null,
 		folders: {}, // project id -> the folder open in the browser ("" for its top)
 		fileOrder: 'name',
+		fileLayout: 'list',
+		compactFolders: false,
 		fileSearch: { text: '', applied: '', checkout: 0, changed: false, type: 0, timer: 0 },
 		selected: {}, // vault-relative path -> true, files picked in the open folder
 		anchor: null, // the last file picked, for a Shift range
@@ -674,7 +676,7 @@
 				case 'renameFile':
 					return 'Rename the file to the name you typed.';
 				case 'trashFile':
-					return 'Move this file to Trash for everyone. Its history and a recovery copy are kept.';
+					return 'Move this file to Trash for the team. Its old saves and copies stay safe.';
 				case 'newFolder':
 					return 'Make the folder with the name you typed.';
 				case 'renameFolder':
@@ -2270,9 +2272,10 @@
 		var t = '-1';
 		var hit = o.hit;
 		var html =
-			'<li class="row vrow' + (o.cls ? ' ' + o.cls : '') + '" data-vkey="' + esc(o.vkey) + '" data-i="' + o.i + '"><div class="row-main' + (o.select !== undefined ? ' has-select' : '') + (o.extra ? ' has-extra' : '') + (o.thumb ? ' has-thumb' : '') + '">' +
+			'<li' + (o.dropFolder != null ? ' data-move-folder="' + esc(o.dropFolder) + '"' : '') + ' class="row vrow' + (o.cls ? ' ' + o.cls : '') + '" data-vkey="' + esc(o.vkey) + '" data-i="' + o.i + '"><div class="row-main' + (o.select !== undefined ? ' has-select' : '') + (o.extra ? ' has-extra' : '') + (o.thumb ? ' has-thumb' : '') + '">' +
 			'<button class="row-hit" type="button" data-rove="row" tabindex="' + t + '" data-action="' + hit.action + '"' +
 			(hit.fileId ? ' data-file-id="' + esc(hit.fileId) + '"' : '') +
+			(o.dragFile ? ' draggable="true" data-drag-file="' + esc(o.dragFile) + '"' : '') +
 			(hit.path != null ? ' data-path="' + esc(hit.path) + '"' : '') +
 			(hit.folder != null ? ' data-folder="' + esc(hit.folder) + '"' : '') +
 			' data-key="row-' + esc(o.k) + '" aria-labelledby="n-' + esc(o.k) + '"' + (hit.tip ? ' data-tip="' + esc(hit.tip) + '"' : '') + '></button>';
@@ -2545,17 +2548,25 @@
 		var folder = place.folder;
 		html += '<div class="list-well project-card browser" id="project-panel" role="tabpanel" aria-labelledby="tab-' + esc(p.id) + '" data-drop="true">';
 		html += '<div class="browser-head">' + crumbsHtml(p, pi, folder) + folderKeysHtml(p, pi, folder) + '</div>';
+		html += '<p class="group-help upload-help" data-part="upload-help"><strong>How do I upload my part?</strong> Open your folder, then click Add files and choose your part. Armory copies it here and shares it with your team.</p>';
 		html += fileSearchHtml(pi, folder);
 		// The cue lies over the list only, so where you are and the folder's keys stay in sight.
 		html += '<div class="browser-body">';
 		html += '<div class="drop-cue" aria-hidden="true"><span class="drop-word">' + icon('addfile') + '<span>' + esc('Drop to add to ' + crumbWords(p, folder)) + '</span></span></div>';
 		var items = browserItems(pi, folder);
-		if (!items.length) html += '<p class="group-help browser-empty">' + (fileSearchActive()
+		if (ui.compactFolders && p.canTakeBack && !fileSearchActive()) {
+			var folders = items.filter(function (x) { return x.kind === 'folder'; });
+			items = items.filter(function (x) { return x.kind !== 'folder'; });
+			if (folders.length) html += registerList({ id: 'vl-folders', cls: 'compact-folders', label: 'Folders in ' + crumbWords(p, folder), items: folders,
+				key: function (x) { return 'dir:' + x.path; }, row: browserRow, scrollEl: homeScroller });
+		}
+		if (!items.length && !(folders && folders.length)) html += '<p class="group-help browser-empty">' + (fileSearchActive()
 			? 'No files match. Clear the search, turn off a quick filter, choose All types, or open a folder above this one.'
 			: 'This folder is empty. Add files, or drag them here from File Explorer.') + '</p>';
 		else
 			html += listHeadHtml(pi, folder) + registerList({
 				id: 'vl-browser',
+				cls: ui.fileLayout === 'tiles' ? 'file-tiles' : '',
 				label: 'In ' + crumbWords(p, folder),
 				items: items,
 				key: function (x) {
@@ -2582,7 +2593,7 @@
 		});
 		steps.forEach(function (s, i) {
 			var last = i === steps.length - 1;
-			html += '<li>' + (i ? '<span class="crumb-sep" aria-hidden="true">\u203a</span>' : '');
+			html += '<li data-move-folder="' + esc(s.path) + '">' + (i ? '<span class="crumb-sep" aria-hidden="true">\u203a</span>' : '');
 			html += last
 				? '<span class="crumb-here" aria-current="location">' + icon('folder') + '<span>' + esc(s.name) + '</span></span>'
 				: '<button class="textlink crumb" type="button" data-action="folder" data-folder="' + esc(s.path) + '" data-key="crumb-' + esc(s.path) + '"' + tipAttr('crumb', { name: s.name }) + '>' + esc(s.name) + '</button>';
@@ -2611,7 +2622,7 @@
 		var inside = (pi.children[folder] || []).length ? ' and the folders in it' : '';
 		var html = '<div class="folder-keys" role="group" aria-label="' + esc('Folder ' + name) + '">';
 		html += key({ action: 'askNewFolder', key: 'fk-new', cls: 'tool', glyph: 'newfolder', word: 'New folder', tip: tipText('newFolder', { name: name }) });
-		html += key({ action: 'addFiles', key: 'fk-add', cls: 'tool', glyph: 'addfile', word: 'Add files', tip: tipText('addFiles', { name: name }) });
+		html += key({ action: 'addFiles', key: 'fk-add', cls: 'tool keep-word', glyph: 'addfile', word: 'Add files', tip: tipText('addFiles', { name: name }) });
 		if (folder) {
 			html += key({ action: 'askRenameFolder', key: 'fk-rename', cls: 'tool', glyph: 'rename', word: 'Rename folder', tip: tipText('renameFolder', { name: name }) });
 			html += key({ action: 'askDeleteFolder', key: 'fk-delete', cls: 'tool', glyph: 'trash', word: 'Delete folder', tip: tipText('deleteFolder', { name: name }) });
@@ -2629,6 +2640,19 @@
 	function fileSearchActive() {
 		var s = ui.fileSearch;
 		return !!(s.applied.trim() || s.checkout || s.changed || s.type);
+	}
+
+	function readFileView(v) {
+		ui.fileLayout = 'list'; ui.compactFolders = false; clearMoveDrag();
+		try {
+			var saved = JSON.parse(localStorage.getItem('armory.fileView.v1:' + encodeURIComponent(studentKey(v))) || '{}');
+			if (saved.layout === 'tiles') ui.fileLayout = 'tiles';
+			ui.compactFolders = saved.compact === true;
+		} catch (_) { /* The view still works when storage is unavailable. */ }
+	}
+	function saveFileView() {
+		try { localStorage.setItem('armory.fileView.v1:' + encodeURIComponent(studentKey(ui.view)), JSON.stringify({ layout: ui.fileLayout, compact: ui.compactFolders })); }
+		catch (_) { /* Keep this session's choice. */ }
 	}
 
 	function resetFileSearch() {
@@ -2682,7 +2706,11 @@
 		[['name', 'Name'], ['newest', 'Last modified (newest first)'], ['oldest', 'Last modified (oldest first)']].forEach(function (choice) {
 			html += '<option value="' + choice[0] + '"' + (ui.fileOrder === choice[0] ? ' selected' : '') + '>' + choice[1] + '</option>';
 		});
-		html += '</select></div></div><div class="folder-keys">';
+		html += '</select></div></div><div class="folder-keys" role="group" aria-label="View files">';
+		['list', 'tiles'].forEach(function (mode) {
+			html += '<button class="key tool keep-word" type="button" data-action="fileLayout" data-layout="' + mode + '" data-key="layout-' + mode + '" aria-pressed="' + (ui.fileLayout === mode) + '" data-tip="Show files as ' + mode + '.">' + (mode === 'list' ? 'List' : 'Tiles') + '</button>';
+		});
+		if (pi.project.canTakeBack) html += '<button class="key tool keep-word" type="button" data-action="compactFolders" data-key="compact-folders" aria-pressed="' + ui.compactFolders + '" data-tip="Fit folders in short rows. Every folder stays here, even an empty one.">Condense folders</button>';
 		html += key({ action: 'searchClear', key: 'search-clear', word: 'Clear search', tip: tipText('searchClear') });
 		html += key({ action: 'searchReset', key: 'search-reset', word: 'Reset filters', tip: tipText('searchReset') });
 		html += '</div>';
@@ -2733,6 +2761,7 @@
 				i: i,
 				vkey: fk,
 				cls: 'folder-item',
+				dropFolder: x.path,
 				active: active,
 				select: null,
 				hit: { action: 'folder', folder: x.path, tip: tipText('folderRow', { name: x.name }) },
@@ -2755,6 +2784,7 @@
 		return rowHtml({
 			i: i,
 			vkey: k,
+			dragFile: r.fileId ? r.path : null,
 			active: active,
 			select: selectKey,
 			hit: r.fileId ? { action: 'openFile', fileId: r.fileId, tip: tipText('fileRow', { name: r.name }) } : { action: 'showInFolder', path: r.path, tip: tipText('localRow', { name: r.name }) },
@@ -2937,8 +2967,17 @@
 			keys += key({ action: 'undoCheckOut', key: 'd-undo', cls: 'tool', glyph: 'undo', word: 'Undo check out', path: d.path, tip: tipText('detailUndo', about) });
 		}
 		if ((c.state === 'other' || c.state === 'myOtherComputer') && d.canTakeBack) keys += key({ action: 'askTakeBack', key: 'd-takeback', cls: 'tool', glyph: 'takeback', word: 'Force check in', fileId: d.fileId, tip: tipText('detailForce', about) });
-		if (d.fileId && c.state === 'available') keys += key({ action: 'askTrashFile', key: 'd-trash', cls: 'tool', glyph: 'trash', word: 'Move to Trash', path: d.path, fileId: d.fileId, tip: 'Remove this file for everyone. Its history and a recovery copy are kept. Restore it from the project website within 30 days.' });
+		if (d.fileId && c.state === 'available') keys += key({ action: 'askTrashFile', key: 'd-trash', cls: 'tool', glyph: 'trash', word: 'Move to Trash', path: d.path, fileId: d.fileId, tip: 'Move this file to Trash for the team. Its old saves stay safe. Bring it back on the website within 30 days.' });
 		if (keys) html += '<div class="detail-keys">' + keys + '</div>';
+		var found = findRow(d.fileId);
+		if (found && !found.project.archived && (c.state === 'available' || c.state === 'mine')) {
+			var pi = ui.index.projects[found.project.id];
+			html += '<div class="move-fields"><label class="label" for="move-folder">Move to folder</label><select class="field" id="move-folder" data-key="move-folder">';
+			Object.keys(pi.folders).sort(byName).forEach(function (folder) {
+				html += '<option value="' + esc(folder) + '"' + (folder === found.folder.path ? ' selected' : '') + '>' + esc(folder || found.project.name) + '</option>';
+			});
+			html += '</select>' + key({ action: 'moveFile', key: 'd-move', word: 'Move file', path: d.path, fileId: d.fileId, tip: 'Move this file to the folder you chose. Its history stays with it.' }) + '</div>';
+		}
 		html += '<button class="textlink" type="button" data-action="showInFolder" data-path="' + esc(d.path) + '" data-key="show-in-folder"' + tipAttr('showInFolder', about) + '>' + icon('folder') + '<span>Show in folder</span></button>';
 		return html + '</div>';
 	}
@@ -4126,6 +4165,8 @@
 				return { line: 'Force checking in ' + (row ? row.row.name : 'the file') + '...', row: 'Force checking in...' };
 			case 'takeBackAll':
 				return { line: 'Force checking in ' + plural(f.fileIds.length, 'file', 'files') + '...', row: 'Force checking in...' };
+			case 'moveFile':
+				return { line: 'Moving ' + leaf(f.path) + '...', row: 'Moving...' };
 			case 'renameFile':
 				return { line: 'Renaming ' + leaf(f.path) + ' to ' + f.newName + '...', row: 'Renaming...' };
 			case 'createFolder':
@@ -4352,6 +4393,8 @@
 		if (!ul) return;
 		var n = list.items.length;
 		var h = (list.h = rowHeight(ul));
+		var grid = ul.classList.contains('file-tiles') || ul.classList.contains('compact-folders');
+		var cols = list.cols = grid ? Math.max(1, Math.floor(ul.clientWidth / (ul.classList.contains('file-tiles') ? 250 : 210))) : 1;
 		var a;
 		var b;
 		if (blind) {
@@ -4362,8 +4405,8 @@
 			var sc = list.scrollEl() || scroller;
 			var sr = sc.getBoundingClientRect();
 			var ur = ul.getBoundingClientRect();
-			var first = Math.floor((sr.top - ur.top) / h);
-			var last = Math.ceil((sr.bottom - ur.top) / h);
+			var first = Math.floor((sr.top - ur.top) / h) * cols;
+			var last = Math.ceil((sr.bottom - ur.top) / h) * cols;
 			a = clamp(first - OVERSCAN, 0, n);
 			b = clamp(last + OVERSCAN, 0, n);
 			if (b <= a) {
@@ -4435,6 +4478,21 @@
 				nodes[f.at] = node;
 			});
 		}
+		// A grid positions only the visible cells. Its height represents every cell.
+		if (grid) {
+			ul.style.position = 'relative'; ul.style.height = Math.ceil(n / cols) * h + 'px';
+			nodes.forEach(function (node, j) {
+				var i = idx[j]; node.style.position = 'absolute'; node.style.top = Math.floor(i / cols) * h + 'px';
+				node.style.left = (i % cols) * 100 / cols + '%'; node.style.width = 100 / cols + '%';
+			});
+			var keepGrid = new Set(nodes);
+			Array.prototype.slice.call(ul.children).forEach(function (node) { if (!keepGrid.has(node)) ul.removeChild(node); });
+			var gridRef = ul.firstChild;
+			nodes.forEach(function (node) { if (node === gridRef) gridRef = gridRef.nextSibling; else ul.insertBefore(node, gridRef); });
+			markActive(ul, list); return;
+		}
+		ul.style.position = ''; ul.style.height = '';
+		nodes.forEach(function (node) { node.style.position = ''; node.style.top = ''; node.style.left = ''; node.style.width = ''; });
 		// Spacers between runs, and above and below.
 		var out = [];
 		var prev = -1;
@@ -4511,7 +4569,7 @@
 		var sc = list.scrollEl() || scroller;
 		var sr = sc.getBoundingClientRect();
 		var ur = ul.getBoundingClientRect();
-		var top = ur.top + to * list.h;
+		var top = ur.top + Math.floor(to / (list.cols || 1)) * list.h;
 		var bottom = top + list.h;
 		// The pinned folder keys, or the selection bar, cover the top of the column: a row is
 		// in sight only below them (X-sticky-focus).
@@ -4554,7 +4612,7 @@
 			var ul = document.getElementById(id);
 			if (!ul || !l.h || (l.scrollEl() || scroller) !== box) return;
 			var ur = ul.getBoundingClientRect();
-			var k = clamp(Math.ceil((limit - ur.top) / l.h), 0, l.items.length);
+			var k = clamp(Math.ceil((limit - ur.top) / l.h) * (l.cols || 1), 0, l.items.length);
 			n += l.items.length - k;
 			for (var j = k; j < l.items.length && files; j++) if (l.items[j].kind !== 'file' && l.items[j].kind !== 'mine') files = false;
 		});
@@ -4718,6 +4776,44 @@
 	}
 
 	/* ------------------------------------------------------- Dropping files */
+
+	// Only an in-window drag can move an existing file. Foreign text/URLs never become
+	// file paths. The engine rechecks the selected identity, project and permissions.
+	var movingFile = null;
+	function clearMoveDrag() {
+		movingFile = null;
+		document.querySelectorAll('[data-move-over]').forEach(function (el) { el.removeAttribute('data-move-over'); });
+	}
+	document.addEventListener('dragstart', function (e) {
+		var el = e.target.closest && e.target.closest('[data-drag-file]');
+		var hit = el && ui.index.byPath[el.getAttribute('data-drag-file')];
+		if (!hit || !hit.row.fileId) return;
+		var state = checkoutOf(hit.row).state;
+		if (hit.project.archived || (state !== 'available' && state !== 'mine')) { e.preventDefault(); return; }
+		movingFile = { path: hit.row.path, fileId: hit.row.fileId, projectId: hit.project.id, email: ui.view.account.email };
+		e.dataTransfer.setData('application/x-armory-file', hit.row.fileId);
+		e.dataTransfer.effectAllowed = 'move';
+	});
+	document.addEventListener('dragend', clearMoveDrag);
+	document.addEventListener('dragover', function (e) {
+		if (!movingFile) return;
+		e.preventDefault();
+		document.querySelectorAll('[data-move-over]').forEach(function (el) { el.removeAttribute('data-move-over'); });
+		var target = e.target.closest && e.target.closest('[data-move-folder]');
+		var place = browserPlace();
+		var ok = target && place && place.project.id === movingFile.projectId && ui.view.account.email === movingFile.email;
+		e.dataTransfer.dropEffect = ok ? 'move' : 'none';
+		if (ok) target.setAttribute('data-move-over', 'true');
+	});
+	document.addEventListener('drop', function (e) {
+		if (!movingFile) return;
+		e.preventDefault();
+		var target = e.target.closest && e.target.closest('[data-move-folder]');
+		var place = browserPlace(); var source = movingFile;
+		clearMoveDrag();
+		if (!target || !place || place.project.id !== source.projectId || ui.view.account.email !== source.email) return;
+		act('moveFile', { path: source.path, fileId: source.fileId, projectId: source.projectId, folder: target.getAttribute('data-move-folder') });
+	});
 
 	function hasFiles(e) {
 		var t = e.dataTransfer && e.dataTransfer.types;
@@ -5059,6 +5155,14 @@
 			case 'askDeleteFolder':
 				askFolder('deleteFolder', from);
 				break;
+			case 'fileLayout':
+				ui.fileLayout = el.getAttribute('data-layout'); saveFileView(); ui.vrange['vl-browser'] = null; render(); break;
+			case 'compactFolders':
+				ui.compactFolders = !ui.compactFolders; saveFileView(); render(); break;
+			case 'moveFile':
+				var moving = findRow(el.getAttribute('data-file-id'));
+				if (moving) act('moveFile', { path: path, fileId: moving.row.fileId, projectId: moving.project.id, folder: document.getElementById('move-folder').value }, { key: from });
+				break;
 			case 'addFiles':
 				var place = browserPlace();
 				act('addFiles', { projectId: place.project.id, folder: place.folder }, { key: from });
@@ -5260,12 +5364,14 @@
 			var at = Number(el.closest('li[data-i]').getAttribute('data-i'));
 			var page = Math.max(1, Math.floor((list.scrollEl() || scroller).clientHeight / list.h) - 1);
 			var to = null;
-			if (e.key === 'ArrowDown') to = at + 1;
-			else if (e.key === 'ArrowUp') to = at - 1;
+			if (e.key === 'ArrowDown') to = at + (list.cols || 1);
+			else if (list.cols > 1 && e.key === 'ArrowRight') to = at + 1;
+			else if (list.cols > 1 && e.key === 'ArrowLeft') to = at - 1;
+			else if (e.key === 'ArrowUp') to = at - (list.cols || 1);
 			else if (e.key === 'Home') to = 0;
 			else if (e.key === 'End') to = list.items.length - 1;
-			else if (e.key === 'PageDown') to = at + page;
-			else if (e.key === 'PageUp') to = at - page;
+			else if (e.key === 'PageDown') to = at + page * (list.cols || 1);
+			else if (e.key === 'PageUp') to = at - page * (list.cols || 1);
 			if (to !== null) {
 				e.preventDefault();
 				moveInList(list, to, role);
@@ -5583,6 +5689,7 @@
 			var previousStudent = previousRealStudent;
 			var wasSignedIn = ui.view && ui.view.connection === 'signedIn';
 			ui.view = message.view;
+			if (previousStudent !== studentKey(ui.view) || !wasSignedIn) readFileView(ui.view);
 			// 0.5.7: help at the first check out and the first conflict (moments.js), from real views only.
 			if (window.ArmoryMoments) {
 				var moment = window.ArmoryMoments.observe(ui.view);

@@ -55,12 +55,17 @@ internal sealed class ShellThumbnails : IDisposable
     // log: a line for agent.log; stuck: the file a handler got stuck on (the flight recorder).
     // Tests pass their own make, clock and waits; the app uses Windows' handlers (Make).
     internal ShellThumbnails(Action<string>? log = null, Action<string>? stuck = null, Func<string, int, byte[]?>? make = null,
-        TimeProvider? clock = null, TimeSpan? answerWithin = null, TimeSpan? stuckAfter = null)
+        TimeProvider? clock = null, TimeSpan? answerWithin = null, TimeSpan? stuckAfter = null, Func<string, int, byte[]?>? shellMake = null)
     {
         this.log = log;
         this.stuck = stuck;
         managedPreviews = make is null;
-        this.make = make ?? ((file, size) => Previews.ContentPreviews.Supports(file) ? previews.Make(file, size) : Make(file, size));
+        // STEP has no managed geometry reader. Give an installed Windows STEP handler
+        // the same bounded worker/watchdog as SolidWorks pictures before the honest tile.
+        var shell = shellMake ?? Make;
+        this.make = make ?? ((file, size) => Path.GetExtension(file).ToLowerInvariant() is ".step" or ".stp"
+            ? shell(file, size) ?? previews.Make(file, size)
+            : Previews.ContentPreviews.Supports(file) ? previews.Make(file, size) : shell(file, size));
         this.clock = clock ?? TimeProvider.System;
         this.answerWithin = answerWithin ?? AnswerWithin;
         this.stuckAfter = stuckAfter ?? StuckAfter;
@@ -84,7 +89,7 @@ internal sealed class ShellThumbnails : IDisposable
             if (disposed || stuckThreads >= MaxStuck) return Task.FromResult<byte[]?>(null);
             // Managed previews verify the content hash on the worker, even if size/time match.
             // The queue, answer deadline and host are shared with shell pictures.
-            if (!(managedPreviews && Previews.ContentPreviews.Supports(file)) &&
+            if (!(managedPreviews && Previews.ContentPreviews.Supports(file) && Path.GetExtension(file).ToLowerInvariant() is not (".step" or ".stp")) &&
                 cache.TryGetValue(key.Value, out var known) && (known.Until is not { } until || clock.GetUtcNow() < until)) return Task.FromResult(known.Png);
             if (!asked.TryGetValue(key.Value, out job))
             {

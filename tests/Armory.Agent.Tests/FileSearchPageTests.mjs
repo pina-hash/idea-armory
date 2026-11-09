@@ -101,8 +101,15 @@ try {
         await waitCount('2 of 5 files');
         await page.waitForFunction(() => !document.querySelector('#vl-browser [role=checkbox][aria-checked=true]'));
         assert.match(await page.locator('#vl-browser').innerText(), /Écrou|Plate/);
+        // Finish the scroll before starting the hover delay. Scrolling dismisses tips.
+        await input.scrollIntoViewIfNeeded();
+        await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
+        await page.mouse.move(0, 0);
         await input.hover();
-        await page.locator('#tip[data-on=true]').waitFor();
+        await page.locator('#tip[data-on=true]').waitFor().catch(async error => {
+            console.error('TIP STATE', await input.evaluate(e => ({ rect: e.getBoundingClientRect().toJSON(), hover: e.matches(':hover'), focus: e === document.activeElement, tip: document.getElementById('tip').outerHTML })));
+            throw error;
+        });
         await page.keyboard.press('Escape');
         await waitCount('5 of 5 files');
         assert.equal(await input.inputValue(), '');

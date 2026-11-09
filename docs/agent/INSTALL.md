@@ -572,3 +572,12 @@ every run (it does not reach a real server). The window's page is replaced as a 
 program folder. The WebView2 profile in `%LOCALAPPDATA%\IDEA Armory\WebView2` survives an
 upgrade, so the page and its scripts load with `?v=<version>`, and the first start of a new
 version empties that profile's cache once.
+
+### 0.6.0: the 0.5.9 publication failure
+
+The v0.5.9 tag's Agent release failed its Windows PowerShell 5.1 path check before any
+installer was published. Use v0.6.0's setup, not a nonexistent v0.5.9 asset. InventoryPath
+now rejects control characters before ExpandEnvironmentVariables, since .NET Framework
+on Windows can truncate a NUL-containing string during expansion. The regression retains
+all old bad-path cases and adds leading/trailing NUL. The release workflow and installer
+safety cycles are unchanged. See the [0.6.0 field report](v0.6.0-field-report.md).

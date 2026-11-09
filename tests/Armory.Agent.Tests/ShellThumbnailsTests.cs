@@ -6,6 +6,28 @@ namespace Armory.Agent.Tests;
 // text file has none (never the file type's icon), and a path outside the vault is never read.
 public sealed class ShellThumbnailsTests
 {
+    [Theory]
+    [InlineData(".step")]
+    [InlineData(".stp")]
+    public async Task Step_uses_an_installed_thumbnail_handler_and_keeps_the_information_tile_when_none_exists(string extension)
+    {
+        using var folder = new TempFolder();
+        var path = folder.File("original" + extension);
+        File.WriteAllText(path, "ISO-10303-21;HEADER;ENDSEC;DATA;ENDSEC;END-ISO-10303-21;");
+        var native = new byte[] { 1, 2, 3 };
+        var calls = 0;
+        using (var pictures = new ShellThumbnails(shellMake: (file, size) => { Assert.Equal(path, file); calls++; return native; }))
+        {
+            Assert.Same(native, await pictures.GetAsync(path));
+            Assert.Same(native, await pictures.GetAsync(path));
+        }
+        Assert.Equal(1, calls);
+        using var fallback = new ShellThumbnails(shellMake: (_, _) => null);
+        var png = await fallback.GetAsync(path);
+        Assert.NotNull(png);
+        Assert.Equal(new byte[] { 137, 80, 78, 71 }, png.Take(4));
+    }
+
     [WindowsFact]
     public async Task A_picture_has_a_thumbnail_and_a_text_file_has_none()
     {

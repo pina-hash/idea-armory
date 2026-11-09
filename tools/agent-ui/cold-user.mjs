@@ -38,7 +38,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { loadPlaywright, demoStates, WWWROOT, ROOT } from './lib.mjs';
+import { localPageUrl, localRequest, loadPlaywright, demoStates, WWWROOT, ROOT } from './lib.mjs';
 import { gradeOfString, gradeOfScreen, sentences, words, BAR } from './reading-level.mjs';
 
 export const READING_WPM = 115;
@@ -290,7 +290,7 @@ export async function runColdUser({ size = { w: 1280, h: 800 }, theme = 'idea' }
 	const lit = () => page.locator('[data-lit]:visible').first();
 
 	try {
-		await page.goto(pathToFileURL(path.join(WWWROOT, 'index.html')).href);
+		await page.goto(localPageUrl());
 		await page.waitForSelector('body[data-screen="connect"]', { timeout: 10000 });
 		await settle();
 

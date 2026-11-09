@@ -6,6 +6,52 @@ namespace Armory.Agent.Engine;
 
 public sealed partial class SyncEngine
 {
+    // A drop names the selected identity as well as its old path. A refreshed path must
+    // never authorize moving a replacement file. PendingMove supplies durable replay.
+    public async Task<ActionResult> MoveFileAsync(string relativePath, Guid expectedFileId, Guid projectId, string folder, CancellationToken cancellationToken = default)
+    {
+        if (!engineThread.IsCurrent) return await engineThread.InvokeAsync(() => MoveFileAsync(relativePath, expectedFileId, projectId, folder, cancellationToken));
+        if (!VaultPath.TryCreate(relativePath, out var from, out _, options.VaultRoot)) return new(false, "Choose a file in Armory.");
+        await EnterActionAsync(cancellationToken);
+        try
+        {
+            if (Unready() is { } why) return why;
+            await EnsureScannedAsync(cancellationToken);
+            await AwaitCarriedAsync(entry => entry.Unit.Any(p => Same(p.Key, from.Value)));
+            if (!await RefreshAsync(cancellationToken)) return Offline("Move files once this computer is back online.");
+            if (!remoteByPath.TryGetValue(from.Value, out var known) || known.File.Id != expectedFileId || known.File.Deleted)
+                return new(false, "That file moved or changed. Choose it again.");
+            if (known.Project.Id != projectId) return new(false, "Move files within the same project.");
+            if (known.Project.Archived) return ArchivedAnswer(known.Project);
+            var destination = known.Project.Folder + (string.IsNullOrEmpty(folder) ? "" : "/" + folder);
+            if (!VaultPath.TryCreate(destination, out var targetFolder, out _, options.VaultRoot) ||
+                !Same(targetFolder.Value, known.Project.Folder) && !localFolders.Contains(targetFolder.Value))
+                return new(false, "Choose an existing folder in this project.");
+            if (!VaultPath.TryCreate(targetFolder.Value + "/" + from.Name, out var to, out _, options.VaultRoot))
+                return new(false, "That folder path is too long for this file.");
+            if (Same(from.Value, to.Value)) return new(false, "That file is already in this folder.");
+            if (HeldForOther(from.Value)) return HeldRefusal(from.Value);
+            if (IsOpenNow(from)) return new(false, $"Close {from.Name} in SolidWorks first.");
+            if (OwnershipOf(known.File.Lock) is LockOwnership.OtherPerson or LockOwnership.MyOtherDevice)
+                return new(false, "Check in this file on its other computer before moving it.");
+            if (HeldByWork(from.Value) || state.Files.TryGetValue(from.Value, out var st) &&
+                (st.Inflight is not null || st.Entries.Count > 0 || st.LocalMoveTo is not null))
+                return new(false, "Armory is still saving this file. Wait for it to finish, then try again.");
+            if (state.Files.ContainsKey(to.Value) || local.ContainsKey(to.Value) || remoteByPath.ContainsKey(to.Value) || Exists(to))
+                return new(false, $"Something named {from.Name} is already in that folder.");
+            var operation = Guid.NewGuid();
+            state.Moves.Add(new PendingMove(operation, expectedFileId, from.Value, to.Value));
+            MarkDirty();
+            await PassLockedAsync(cancellationToken, PassScope.File(expectedFileId));
+            return moveResults.Remove(operation, out var done) && done
+                ? new(true, $"Moved {from.Name} to {(string.IsNullOrEmpty(folder) ? known.Project.Name : folder)}. Its history stays with it.")
+                : new(false, "Armory couldn't confirm the move yet. Look again before trying it again.");
+        }
+        catch (Exception error) when (Stopped(error))
+        { return Offline("Armory couldn't confirm the move yet. Look again when this computer is online. Your work stays safe."); }
+        finally { LeaveAction(); }
+    }
+
     private readonly Dictionary<Guid, HashSet<string>> sharedFolders = [];
     private readonly Dictionary<Guid, (string Folder, long At)> sharedFolderReads = [];
 

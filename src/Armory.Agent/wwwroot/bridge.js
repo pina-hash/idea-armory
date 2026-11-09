@@ -465,6 +465,7 @@
  *   takeOverFolder: none                  (the folder is another account's: take it over when nothing of theirs waits)
  *   switchAccount: none                   (sign out, and the next person signs in now)
 	 *   createFolder: { projectId, parent, name }    renameFolder: { projectId, folder, newName, force }
+	 *   moveFile: { path, fileId, projectId, folder } (one selected identity, within its project)
 	 *   deleteFolder: { projectId, folder, force }   renameFile: { path, newName, force }   (one file, in its folder)
 	 *                                         (force: a mentor or CAD lead force checks in the check outs
 	 *                                          in the way first, in the same action; false for everyone else)
@@ -502,7 +503,7 @@
 	 *   saveDown: { paths }                   (a solidWorks notice's "Save it in 2025 now": saved again in the project's year)
 	 * @typedef {'ready' | 'connect' | 'cancelConnect' | 'signOut' | 'pause' | 'resume'
 	 *   | 'openVault' | 'openFile' | 'launchFile' | 'showInFolder' | 'checkOut' | 'checkIn'
-	 *   | 'undoCheckOut' | 'takeBack' | 'createFolder' | 'renameFolder' | 'deleteFolder' | 'renameFile' | 'trashFile'
+	 *   | 'undoCheckOut' | 'takeBack' | 'createFolder' | 'renameFolder' | 'deleteFolder' | 'renameFile' | 'moveFile' | 'trashFile'
 	 *   | 'addFiles' | 'dropFiles' | 'dismissNotice' | 'saveSettings' | 'chooseVaultRoot'
 	 *   | 'reportProblem' | 'openIncidents' | 'sendFeedback' | 'takeBackAll' | 'takeOverFolder' | 'switchAccount'
 	 *   | 'putBackKeptCopy' | 'captureWindow' | 'readMyFeedback' | 'turnOnBadges' | 'repairVaultRoot' | 'readNoticeItems'
@@ -532,7 +533,7 @@
 	/* ------------------------------------------------------- Message lists */
 
 	/** Page to host message types (BRIDGE.md, "Page to host"). */
-	var PAGE_TO_HOST = ['ready', 'connect', 'cancelConnect', 'signOut', 'pause', 'resume', 'openVault', 'openFile', 'launchFile', 'showInFolder', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'trashFile', 'addFiles', 'dropFiles', 'dismissNotice', 'saveSettings', 'chooseVaultRoot', 'reportProblem', 'openIncidents', 'sendFeedback', 'takeBackAll', 'takeOverFolder', 'switchAccount', 'putBackKeptCopy', 'captureWindow', 'readMyFeedback', 'turnOnBadges', 'repairVaultRoot', 'readNoticeItems', 'showPicker', 'pickProfile', 'enterPin', 'setPin', 'addProfile', 'forgotPin', 'cancelPicker', 'removeProfile', 'setPinsRequired', 'keepLocal', 'saveDown', 'openRecovery', 'saveBlockedAction'];
+	var PAGE_TO_HOST = ['ready', 'connect', 'cancelConnect', 'signOut', 'pause', 'resume', 'openVault', 'openFile', 'launchFile', 'showInFolder', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'moveFile', 'trashFile', 'addFiles', 'dropFiles', 'dismissNotice', 'saveSettings', 'chooseVaultRoot', 'reportProblem', 'openIncidents', 'sendFeedback', 'takeBackAll', 'takeOverFolder', 'switchAccount', 'putBackKeptCopy', 'captureWindow', 'readMyFeedback', 'turnOnBadges', 'repairVaultRoot', 'readNoticeItems', 'showPicker', 'pickProfile', 'enterPin', 'setPin', 'addProfile', 'forgotPin', 'cancelPicker', 'removeProfile', 'setPinsRequired', 'keepLocal', 'saveDown', 'openRecovery', 'saveBlockedAction'];
 
 	/** Host to page message types (BRIDGE.md, "Host to page"). */
 	var HOST_TO_PAGE = ['view', 'fileDetail', 'activity', 'actionResult', 'windowShot', 'myFeedback', 'reveal', 'noticeItems'];
@@ -553,6 +554,7 @@
 		renameFolder: ['projectId', 'folder', 'newName', 'force'],
 		deleteFolder: ['projectId', 'folder', 'force'],
 		renameFile: ['path', 'newName', 'force'],
+		moveFile: ['path', 'fileId', 'projectId', 'folder'],
 		trashFile: ['path', 'fileId'],
 		addFiles: ['projectId', 'folder'],
 		dropFiles: ['projectId', 'folder'],
@@ -574,7 +576,7 @@
 	};
 
 	/** Actions: each carries a requestId, and the host answers it with one actionResult. */
-	var ACTIONS = ['launchFile', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'trashFile', 'addFiles', 'dropFiles', 'reportProblem', 'sendFeedback', 'takeBackAll', 'takeOverFolder', 'putBackKeptCopy', 'turnOnBadges', 'pickProfile', 'enterPin', 'setPin', 'addProfile', 'forgotPin', 'removeProfile', 'setPinsRequired', 'keepLocal', 'saveDown', 'repairVaultRoot', 'saveBlockedAction'];
+	var ACTIONS = ['launchFile', 'checkOut', 'checkIn', 'undoCheckOut', 'takeBack', 'createFolder', 'renameFolder', 'deleteFolder', 'renameFile', 'moveFile', 'trashFile', 'addFiles', 'dropFiles', 'reportProblem', 'sendFeedback', 'takeBackAll', 'takeOverFolder', 'putBackKeptCopy', 'turnOnBadges', 'pickProfile', 'enterPin', 'setPin', 'addProfile', 'forgotPin', 'removeProfile', 'setPinsRequired', 'keepLocal', 'saveDown', 'repairVaultRoot', 'saveBlockedAction'];
 
 	/** Asks: each carries a requestId too, and the host answers it with a message of its own
 	 *  (windowShot, myFeedback, noticeItems), never actionResult. */
@@ -1007,6 +1009,17 @@
 					postView();
 					result(message, true, 'Renamed ' + from.split('/').pop() + ' to ' + message.newName + '.');
 					break;
+				case 'moveFile':
+                    p = projectById(message.projectId);
+                    var sourceFolder, moving;
+                    p.folders.forEach(function (f) { f.files.forEach(function (r) { if (r.fileId === message.fileId && r.path === message.path) { sourceFolder = f; moving = r; } }); });
+                    var destinationFolder = p.folders.filter(function (f) { return f.path === message.folder; })[0];
+                    if (!moving || !destinationFolder) { result(message, false, 'Choose the file and folder again.'); break; }
+                    sourceFolder.files = sourceFolder.files.filter(function (r) { return r !== moving; });
+                    moving.path = p.name + '/' + (message.folder ? message.folder + '/' : '') + moving.name;
+                    destinationFolder.files.push(moving);
+                    refreshMine(); postView(); result(message, true, 'Moved ' + moving.name + '. Its history stays with it.');
+                    break;
 				case 'trashFile':
 					var trashedName = '';
 					(view.projects || []).forEach(function (project) { project.folders.forEach(function (folder) {

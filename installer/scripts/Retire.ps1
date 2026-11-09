@@ -69,6 +69,8 @@ function Binary([string]$path) {
 # character from a filename to guess another file; defer the registration and keep evidence.
 function InventoryPath([string]$value) {
     if ([string]::IsNullOrWhiteSpace($value)) { return $null }
+    # .NET Framework's Windows expansion can truncate at NUL. Reject controls before it.
+    if ($value -match '[\x00-\x1f]') { Audit ('deferred invalid inventory target ' + $value); return $null }
     $path = [Environment]::ExpandEnvironmentVariables($value.Trim())
     if ($path.StartsWith('"') -and $path.EndsWith('"') -and $path.Length -gt 1) { $path = $path.Substring(1, $path.Length - 2) }
     if ($path -notmatch '^[A-Za-z]:\\' -or $path -match '["<>|?*\x00-\x1f]' -or $path.Substring(2).Contains(':')) {

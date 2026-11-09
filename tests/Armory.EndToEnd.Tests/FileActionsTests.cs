@@ -8,6 +8,104 @@ namespace Armory.EndToEnd.Tests;
 public sealed class FileActionsTests
 {
     [PostgresFact]
+    public async Task A_drop_moves_the_same_file_and_history_to_an_empty_folder_on_both_computers()
+    {
+        await using var t = await TeamAsync();
+        await ArmoryV3StandIn.ApplySharedFoldersAsync(t.World.Database);
+        t.A.Write(Plate, "original bytes"); await t.A.SyncAsync(); await t.B.SyncAsync();
+        var id = await t.FileId("Plate.SLDPRT");
+        Assert.True((await t.A.Engine.CreateFolderAsync(t.Project, "", "Empty")).Ok);
+        var moved = await t.A.Engine.MoveFileAsync(Plate, id, t.Project, "Empty");
+        Assert.True(moved.Ok, moved.Message);
+        await t.A.SyncTimesAsync(2); await t.B.SyncTimesAsync(2);
+        Assert.Equal("original bytes", t.A.Text("Robot 2027/Empty/Plate.SLDPRT"));
+        Assert.Equal("original bytes", t.B.Text("Robot 2027/Empty/Plate.SLDPRT"));
+        Assert.Null(t.A.Read(Plate)); Assert.Null(t.B.Read(Plate));
+        Assert.Equal(id, await t.FileId("Plate.SLDPRT")); Assert.Equal(1, await t.Versions(id));
+        Assert.Empty(t.A.Disk.OpenWriteViolations); Assert.Empty(t.B.Disk.UnpreservedOverwrites);
+        t.A.Restart(); await t.A.SyncAsync();
+        var back = await t.A.Engine.MoveFileAsync("Robot 2027/Empty/Plate.SLDPRT", id, t.Project, "");
+        Assert.True(back.Ok, back.Message);
+        Assert.Equal("original bytes", t.A.Text("Robot 2027/Plate.SLDPRT"));
+    }
+
+    [PostgresFact]
+    public async Task Drops_refuse_stale_identity_other_projects_bad_folders_open_files_and_other_holders()
+    {
+        await using var t = await TeamAsync();
+        t.A.Write(Plate, "safe bytes"); await t.A.SyncAsync(); await t.B.SyncAsync();
+        var id = await t.FileId("Plate.SLDPRT");
+        Assert.False((await t.A.Engine.MoveFileAsync(Plate, Guid.NewGuid(), t.Project, "")).Ok);
+        Assert.False((await t.A.Engine.MoveFileAsync(Plate, id, Guid.NewGuid(), "")).Ok);
+        foreach (var folder in new[] { "../Outside", "/Absolute", "Missing", "Drivetrain" })
+            Assert.False((await t.A.Engine.MoveFileAsync(Plate, id, t.Project, folder)).Ok);
+        t.A.Open(Plate);
+        Assert.False((await t.A.Engine.MoveFileAsync(Plate, id, t.Project, "")).Ok); t.A.Close(Plate);
+        Assert.True((await t.B.CheckOutAsync(Plate)).Ok);
+        Assert.False((await t.A.Engine.MoveFileAsync(Plate, id, t.Project, "")).Ok);
+        Assert.Equal(Maria, await t.Holder(id));
+        Assert.Equal(0, t.World.Supabase.RpcCount("armory_break_lock"));
+        Assert.Equal("safe bytes", t.A.Text(Plate));
+        Assert.Equal(0, await t.World.CountAsync("select count(*) from armory_change_feed where kind='file_moved'"));
+        Assert.True((await t.B.CheckInAsync(Plate)).Ok);
+        await t.Mentor.Api.SetProjectArchivedAsync(t.Project, true, Guid.NewGuid());
+        Assert.False((await t.A.Engine.MoveFileAsync(Plate, id, t.Project, "")).Ok);
+    }
+
+    [PostgresFact]
+    public async Task A_lost_move_answer_survives_restart_without_another_move_or_lost_bytes()
+    {
+        await using var t = await TeamAsync();
+        t.A.Write(Plate, "original bytes"); await t.A.SyncAsync(); await t.B.SyncAsync();
+        var id = await t.FileId("Plate.SLDPRT");
+        t.World.Supabase.DropRpcAcknowledgement("armory_move_file", 1);
+        await t.A.Engine.MoveFileAsync(Plate, id, t.Project, "");
+        t.A.Restart(); await t.A.SyncTimesAsync(3); await t.B.SyncTimesAsync(3);
+        Assert.Equal("original bytes", t.A.Text("Robot 2027/Plate.SLDPRT"));
+        Assert.Equal("original bytes", t.B.Text("Robot 2027/Plate.SLDPRT"));
+        Assert.Equal(1, await t.Versions(id));
+        Assert.Equal(1, await t.World.CountAsync("select count(*) from armory_change_feed where kind='file_moved'"));
+        Assert.Empty(t.A.Disk.UnpreservedOverwrites); Assert.Empty(t.B.Disk.UnpreservedOverwrites);
+    }
+
+    [PostgresFact]
+    public async Task A_drop_never_overwrites_an_unshared_destination_file()
+    {
+        await using var t = await TeamAsync();
+        t.A.Write(Plate, "original bytes"); await t.A.SyncAsync();
+        var id = await t.FileId("Plate.SLDPRT");
+        t.A.Write("Robot 2027/Plate.SLDPRT", "unshared destination");
+        var refused = await t.A.Engine.MoveFileAsync(Plate, id, t.Project, "");
+        Assert.False(refused.Ok);
+        Assert.Equal("unshared destination", t.A.Text("Robot 2027/Plate.SLDPRT"));
+        Assert.Equal("original bytes", t.A.Text(Plate));
+        Assert.Equal(1, await t.Versions(id));
+        Assert.Equal(0, await t.World.CountAsync("select count(*) from armory_change_feed where kind='file_moved'"));
+    }
+
+    [PostgresFact]
+    public async Task A_drop_refused_by_class_folder_permissions_keeps_the_source_and_its_history()
+    {
+        await using var t = await TeamAsync();
+        await ArmoryV3StandIn.ApplyFileActionsAsync(t.World.Database);
+        await ArmoryV3StandIn.ApplySharedFoldersAsync(t.World.Database);
+        t.A.Write(Plate, "safe bytes"); await t.A.SyncAsync();
+        var id = await t.FileId("Plate.SLDPRT");
+        await using (var c = await t.World.Database.OpenAsync())
+        {
+            await using var command = new NpgsqlCommand("insert into armory_folders(project_id,folder,owner_email) values ($1,'Private',$2)", c);
+            command.Parameters.AddWithValue(t.Project); command.Parameters.AddWithValue(Maria);
+            await command.ExecuteNonQueryAsync();
+        }
+        t.A.Disk.EnsureFolder("Robot 2027/Private");
+        await t.A.SyncAsync();
+        var refused = await t.A.Engine.MoveFileAsync(Plate, id, t.Project, "Private");
+        Assert.False(refused.Ok, refused.Message);
+        Assert.Equal("safe bytes", t.A.Text(Plate)); Assert.Equal(1, await t.Versions(id));
+        Assert.Equal(0, await t.World.CountAsync("select count(*) from armory_change_feed where kind='file_moved'"));
+    }
+
+    [PostgresFact]
     public async Task A_stale_file_page_never_trashes_a_different_file_that_reuses_its_path()
     {
         await using var t = await TeamAsync();

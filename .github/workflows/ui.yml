@@ -55,6 +55,9 @@ jobs:
           mkdir -p evidence
           node tools/agent-ui/check-ui.mjs | tee evidence/check-ui.txt
 
+      - name: Student notes (tiles, file moves, condensed folders and upload help)
+        run: node tools/agent-ui/student-notes-check.mjs | tee evidence/student-notes.txt
+
       - name: First-time help at a check out and two changes (moments-check.mjs)
         run: node tools/agent-ui/moments-check.mjs | tee evidence/moments-check.txt
 

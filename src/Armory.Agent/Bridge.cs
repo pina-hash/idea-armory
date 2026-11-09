@@ -30,6 +30,7 @@ internal sealed record CreateFolderMessage(string? ProjectId, string? Parent, st
 internal sealed record RenameFolderMessage(string? ProjectId, string? Folder, string? NewName, bool? Force, string? RequestId);
 internal sealed record DeleteFolderMessage(string? ProjectId, string? Folder, bool? Force, string? RequestId);
 internal sealed record RenameFileMessage(string? Path, string? NewName, bool? Force, string? RequestId);
+internal sealed record MoveFileMessage(string? Path, string? FileId, string? ProjectId, string? Folder, string? RequestId);
 internal sealed record TrashFileMessage(string? Path, string? FileId, string? RequestId);
 internal sealed record AddFilesMessage(string? ProjectId, string? Folder, string? RequestId);
 internal sealed record DropFilesMessage(string? ProjectId, string? Folder, string? RequestId);
@@ -107,6 +108,7 @@ internal sealed partial class Bridge(AgentHost host, IBridgeWindow window, Agent
         [BridgeMessages.RenameFolder] = typeof(RenameFolderMessage),
         [BridgeMessages.DeleteFolder] = typeof(DeleteFolderMessage),
         [BridgeMessages.RenameFile] = typeof(RenameFileMessage),
+        [BridgeMessages.MoveFile] = typeof(MoveFileMessage),
         [BridgeMessages.TrashFile] = typeof(TrashFileMessage),
         [BridgeMessages.AddFiles] = typeof(AddFilesMessage),
         [BridgeMessages.DropFiles] = typeof(DropFilesMessage),
@@ -302,6 +304,14 @@ internal sealed partial class Bridge(AgentHost host, IBridgeWindow window, Agent
                         !TryPath(renameFile?.Path, out var renamedFile) ? Refuse(NotAFile)
                         : !TryName(renameFile!.NewName, out var newFileName) ? Refuse(NotAFileName)
                         : host.RenameFileAsync(renamedFile, newFileName, renameFile.Force == true));
+                    break;
+                case BridgeMessages.MoveFile:
+                    var move = Read<MoveFileMessage>(message);
+                    await AnswerAsync(type, 1, asked, move?.RequestId,
+                        !TryPath(move?.Path, out var movedFile) || !Guid.TryParse(move?.FileId, out var movedId) ? Refuse(NotAFile)
+                        : !Guid.TryParse(move?.ProjectId, out var moveProject) ? Refuse(NotAProject)
+                        : !TryFolder(move!.Folder, allowTop: true, out var moveFolder) ? Refuse(NotAFile)
+                        : host.MoveFileAsync(movedFile, movedId, moveProject, moveFolder));
                     break;
                 case BridgeMessages.TrashFile:
                     var trash = Read<TrashFileMessage>(message);

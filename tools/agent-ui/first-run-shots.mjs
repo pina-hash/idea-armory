@@ -9,7 +9,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { loadPlaywright, demoStates, WWWROOT, ROOT } from './lib.mjs';
+import { localPageUrl, localRequest, loadPlaywright, demoStates, WWWROOT, ROOT } from './lib.mjs';
 
 const OUT = path.join(ROOT, 'docs', 'agent', 'screens', 'first-run');
 fs.mkdirSync(OUT, { recursive: true });

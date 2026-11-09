@@ -68,6 +68,9 @@ for (const c of list) {
 	const boxes = {};
 	for (const theme of ['idea', 'spaceWhite']) {
 		const { context, page } = await openPage(browser, c, theme);
+		// Initial keyboard focus can show a tip after 300 ms, hover after 750 ms.
+        // Compare both themes at the same settled state, beyond either delay.
+        await page.waitForTimeout(800);
 		const actual = await page.evaluate(() => document.documentElement.getAttribute('data-theme'));
 		if (actual !== theme) throw new Error(`${comboName(c)}: asked for ${theme}, page wears ${actual}`);
 		boxes[theme] = await page.evaluate(readBoxes);
@@ -95,6 +98,7 @@ for (const theme of ['idea', 'spaceWhite']) {
 		});
 		await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
 	}
+	await page.waitForTimeout(800);
 	plantedBoxes[theme] = await page.evaluate(readBoxes);
 	await context.close();
 }

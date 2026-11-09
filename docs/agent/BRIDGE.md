@@ -707,3 +707,20 @@ changes only the theme, a theme picked with 1,401 files on screen and a CPU four
 paints within one frame (and the view that arrived meanwhile follows), ten near-identical
 views of those files are drawn within a time limit and keep their rows, and the running lines
 are added and let go without redrawing the rest.
+
+## Tiles, condensed folders and internal moves (0.6.0)
+
+`moveFile: { path, fileId, projectId, folder, requestId }` is answered by actionResult.
+The selected identity is refreshed and checked on the engine thread; the destination
+must already exist in that same project. The action uses durable PendingMove state and
+the existing server RPC and class-folder permissions. It refuses open files, other
+holders and unsent work. It never force checks in a file from a drag.
+
+File rows can drag to folders and breadcrumbs. The file page also offers Move to folder
+and Move file for keyboard use. Foreign drag data never supplies a source path. External
+File Explorer drops still copy into the open folder. List/Tiles and Condense folders
+are local per-student choices, with no new settings or view fields in the host contract.
+The same virtual list draws cells by visible row/column, retaining focus, Home/End,
+search, sorting and selection. Condense folders is offered by canTakeBack and hides no
+folder. STEP first asks Windows' installed thumbnail handler on the bounded picture
+worker; without one, the existing information tile stays.

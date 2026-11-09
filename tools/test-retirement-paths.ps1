@@ -24,10 +24,10 @@ Require ($null -eq (CommandFile 'cmd /c "C:\WINDOWS\System32\MoNotificationUxStu
 Require ((CommandFile '"C:\Users\IDEA\AppData\Local\IDEAArmory\IDEA Armory.exe" --silent') -ceq 'C:\Users\IDEA\AppData\Local\IDEAArmory\IDEA Armory.exe') 'quoted Armory commands keep the entire filename'
 Require ((CommandFile 'C:\Program Files\IDEA Armory\IdeaArmory.exe,0') -ceq 'C:\Program Files\IDEA Armory\IdeaArmory.exe') 'an icon index is not part of the path'
 Require ((InventoryPath '  "C:\Program Files\IDEA Armory"  ') -ceq 'C:\Program Files\IDEA Armory') 'surrounding registry quotes and whitespace are normalized'
-foreach ($bad in @('C:\bad"name\IdeaArmory.exe', 'C:\bad|name\IdeaArmory.exe', 'C:\bad<name\IdeaArmory.exe', "C:\bad`0name\IdeaArmory.exe", 'C:\file:stream', 'relative\IdeaArmory.exe', '"C:\missing-quote')) {
+foreach ($bad in @('C:\bad"name\IdeaArmory.exe', 'C:\bad|name\IdeaArmory.exe', 'C:\bad<name\IdeaArmory.exe', "C:\bad`0name\IdeaArmory.exe", "C:\tail`0", "`0C:\survivor\IdeaArmory.exe", 'C:\file:stream', 'relative\IdeaArmory.exe', '"C:\missing-quote')) {
     Require ($null -eq (InventoryPath $bad)) 'an invalid inventory target is deferred without changing its filename'
 }
-Require ($script:deferred.Count -ge 7) 'unusable registrations leave audit evidence'
+Require ($script:deferred.Count -ge 9) 'unusable registrations leave audit evidence'
 # The survivor loop used to reparse a rejected Run value and abort the entire inventory.
 function Full([string]$path) { if ($path -match '["|<>\x00]') { throw 'invalid characters reached the path API' }; return $path }
 function Join-Path([string]$path, [string]$child) { return $path.TrimEnd('\') + '\' + $child }
