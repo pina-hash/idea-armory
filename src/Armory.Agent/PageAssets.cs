@@ -41,6 +41,16 @@ internal static partial class PageAssets
         catch (Exception error) when (error is ArgumentException or UriFormatException) { return null; }
     }
 
+    // 0.6.1: the size a thumbnail's address asks for: ShellThumbnails.LargeSize for the picture a
+    // student expands on a file's page (app.js adds &size=large), the small one for anything else.
+    internal static int ThumbSize(string? uri)
+    {
+        if (PictureUri(uri) is not { } parsed) return ShellThumbnails.Size;
+        foreach (var part in parsed.Query.TrimStart('?').Split('&'))
+            if (part == "size=large") return ShellThumbnails.LargeSize;
+        return ShellThumbnails.Size;
+    }
+
     // src="app.js" and href="app.css" (relative, no query yet) become src="app.js?v=0.2.0".
     // Absolute URLs, data: URIs, anchors and anything already versioned are left alone.
     internal static string Versioned(string html, string version)

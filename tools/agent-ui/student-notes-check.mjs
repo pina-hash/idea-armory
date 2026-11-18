@@ -13,10 +13,10 @@ let cases = 0;
 try {
     for (const theme of ['idea', 'spaceWhite']) for (const size of [{ width: 1280, height: 800 }, { width: 420, height: 720 }]) {
         const context = await browser.newContext({ viewport: size, reducedMotion: 'reduce' });
-        const requests = [], errors = [];
+        const requests = [], errors = [], pictures = [];
         await context.route('**/*', route => {
             const u = new URL(route.request().url());
-            if (u.hostname === 'armory-pictures.local') return route.fulfill({ contentType: 'image/png', body: png });
+            if (u.hostname === 'armory-pictures.local') { pictures.push(u.href); return route.fulfill({ contentType: 'image/png', body: png }); }
             if (u.hostname !== 'armory.local') { requests.push(u.href); return route.abort(); }
             const file = path.resolve(WWWROOT, '.' + decodeURIComponent(u.pathname));
             if (!file.startsWith(WWWROOT + path.sep) || !fs.existsSync(file)) return route.fulfill({ status: 404, body: '' });
@@ -100,6 +100,21 @@ try {
         await page.evaluate(m => window.deliver({ type: 'actionResult', requestId: m.requestId, ok: false, message: 'Close this part in SolidWorks first.' }), move);
         assert.match(await page.locator('#result-word').innerText(), /Close this part/);
         await page.locator('[data-key="row-file-4999"]').click();
+        // 0.6.1: the file's picture opens bigger, asked for at the large size, and Close goes back.
+        await page.waitForSelector('[data-key="d-picture"][data-thumb="on"]');
+        await page.locator('[data-key="d-picture"]').click();
+        await page.waitForSelector('#ask[open] img.picture-large-img');
+        await page.waitForFunction(() => document.querySelector('#ask img.picture-large-img').naturalWidth > 0);
+        assert.match(await page.locator('#ask img.picture-large-img').getAttribute('src'), /\/thumb\/.*Part-4999\.step\?v=.*&size=large$/);
+        assert.ok(pictures.some(u => u.includes('Part-4999.step') && u.endsWith('&size=large')));
+        assert.match(await page.locator('#ask-title').textContent(), /Part-4999\.step/);
+        const close = await page.locator('#ask [data-key="ask-cancel"]').boundingBox();
+        assert.ok(close.width >= 43.9 && close.height >= 43.9);
+        const shown = await page.locator('#ask .picture-large').boundingBox();
+        assert.ok(shown.width <= size.width && shown.height <= size.height);
+        if (process.env.ARMORY_UI_SHOTS) await page.screenshot({ path: path.join(process.env.ARMORY_UI_SHOTS, 'picture-' + theme + '-' + size.width + '.png') });
+        await page.keyboard.press('Escape');
+        await page.waitForSelector('#ask:not([open])', { state: 'attached' });
         await page.selectOption('#move-folder', 'Empty');
         await page.locator('[data-key="d-move"]').click();
         assert.equal(await page.evaluate(() => window.sent.at(-1).folder), 'Empty');
@@ -118,12 +133,15 @@ try {
         await page.locator('[data-key="layout-tiles"]').click();
         await page.reload(); await page.waitForSelector('html[data-ready="true"]');
         assert.equal(await page.locator('#vl-browser').evaluate(e => e.classList.contains('file-tiles')), true);
+        // 0.6.1: the sort is kept with the layout, per student.
+        assert.equal(await page.locator('#file-order').inputValue(), 'newest');
         await page.evaluate(() => {
             const next = structuredClone(window.studentView); next.account.email = 'another@students.test';
             localStorage.setItem('armory.tutorial.v1:' + encodeURIComponent(next.account.email), 'finished');
             window.deliver({ type: 'view', view: next });
         });
         assert.equal(await page.locator('#vl-browser').evaluate(e => e.classList.contains('file-tiles')), false);
+        assert.equal(await page.locator('#file-order').inputValue(), 'name');
         await context.close(); cases++;
         console.log(`Student notes passed: ${theme}, ${size.width}x${size.height}`);
     }

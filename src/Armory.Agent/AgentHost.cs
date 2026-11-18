@@ -171,8 +171,8 @@ internal sealed partial class AgentHost : IAsyncDisposable
     internal Task<ActionResult> PutBackKeptCopyAsync(Guid fileId, Guid versionId) => OnEngineAsync("put back a kept copy", e => e.PutBackKeptCopyAsync(fileId, versionId));
     // The picture File Explorer shows for a file in the vault (ShellThumbnails), or null. A
     // handler's failure goes to agent.log, and one stuck on a file to the flight recorder too.
-    internal Task<byte[]?> ThumbnailAsync(string vaultPath)
-        => Volatile.Read(ref runtime)?.Windows?.ExistingFile(vaultPath) is { } file ? thumbnails.GetAsync(file) : Task.FromResult<byte[]?>(null);
+    internal Task<byte[]?> ThumbnailAsync(string vaultPath, int size = ShellThumbnails.Size)
+        => Volatile.Read(ref runtime)?.Windows?.ExistingFile(vaultPath) is { } file ? thumbnails.GetAsync(file, size) : Task.FromResult<byte[]?>(null);
     private readonly ShellThumbnails thumbnails;
     internal Task<ActionResult> TakeBackAsync(IReadOnlyList<Guid> fileIds) => OnEngineAsync("take back " + fileIds.Count + " files", e => e.TakeBackAsync(fileIds));
     // One file, in the same folder: a file Armory doesn't have yet is renamed on disk; a file in

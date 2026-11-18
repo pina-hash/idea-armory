@@ -28,6 +28,29 @@ public sealed class ShellThumbnailsTests
         Assert.Equal(new byte[] { 137, 80, 78, 71 }, png.Take(4));
     }
 
+    // 0.6.1: a student can expand a file's picture. The large one is asked at its own size, kept
+    // apart from the small one, and any other size asked for is the small one.
+    [Fact]
+    public async Task An_expanded_picture_is_made_at_its_own_size_and_kept_apart()
+    {
+        using var folder = new TempFolder();
+        var path = folder.File("Plate.SLDPRT");
+        File.WriteAllText(path, "part");
+        var sizes = new List<int>();
+        using var pictures = new ShellThumbnails(make: (_, size) => { lock (sizes) sizes.Add(size); return [(byte)(size / 4)]; });
+        Assert.Equal(new byte[] { Size / 4 }, await pictures.GetAsync(path));
+        Assert.Equal(new byte[] { ShellThumbnails.LargeSize / 4 }, await pictures.GetAsync(path, ShellThumbnails.LargeSize));
+        Assert.Equal(new byte[] { ShellThumbnails.LargeSize / 4 }, await pictures.GetAsync(path, ShellThumbnails.LargeSize));
+        Assert.Equal(new byte[] { Size / 4 }, await pictures.GetAsync(path, 5000));
+        Assert.Equal(new[] { Size, ShellThumbnails.LargeSize }, sizes);
+        var small = PageAssets.PictureOrigin + PageAssets.ThumbPrefix + "Robot/Plate.SLDPRT?v=2026-11-18";
+        Assert.Equal(Size, PageAssets.ThumbSize(small));
+        Assert.Equal(ShellThumbnails.LargeSize, PageAssets.ThumbSize(small + "&size=large"));
+        Assert.Equal(Size, PageAssets.ThumbSize(small + "&size=larger"));
+        Assert.Equal(Size, PageAssets.ThumbSize("https://armory.local/thumb/Plate.SLDPRT?size=large"));
+        Assert.Equal("Robot/Plate.SLDPRT", PageAssets.ThumbVaultPath(small + "&size=large"));
+    }
+
     [WindowsFact]
     public async Task A_picture_has_a_thumbnail_and_a_text_file_has_none()
     {

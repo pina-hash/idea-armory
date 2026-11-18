@@ -268,7 +268,7 @@ internal sealed class MainWindow : Form, IBridgeWindow
             if (PageAssets.ThumbVaultPath(args.Request.Uri) is not { } vaultPath) return;
             deferral = args.GetDeferral();
             if (Interlocked.Increment(ref thumbsServed) == 1) log.Info("thumbnail: the window asked Armory for its first picture (" + Path.GetExtension(vaultPath) + ")");
-            var png = await host.ThumbnailAsync(vaultPath);
+            var png = await host.ThumbnailAsync(vaultPath, PageAssets.ThumbSize(args.Request.Uri));
             // A file this computer does not have, or Windows had none for it (ShellThumbnails says why).
             if (png is null && Volatile.Read(ref thumbsServed) <= 5) log.Info("thumbnail: no picture for " + Path.GetFileName(vaultPath));
             args.Response = png is null

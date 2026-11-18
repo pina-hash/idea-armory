@@ -201,6 +201,14 @@
 		sheet: 'Spreadsheet', slides: 'Slides', text: 'Text', code: 'Code', image: 'Picture', video: 'Video', archive: 'Archive', file: 'File'
 	};
 
+	/** The ways Team files can be sorted (file-order.js). Folders always stay first. */
+	var FILE_ORDERS = [['name', 'Name (A to Z)'], ['nameDesc', 'Name (Z to A)'], ['newest', 'Last modified (newest first)'], ['oldest', 'Last modified (oldest first)'], ['type', 'File type']];
+	/** Sorting by file type: parts, assemblies, drawings, then every other kind by its name. */
+	function typeGroup(r) {
+		var kind = kindOf(r.name || r.path);
+		return kind === 'part' ? '1' : kind === 'asm' ? '2' : kind === 'drw' ? '3' : '4' + (KIND_WORD[kind] || 'File');
+	}
+
 	/** Files whose team version is the one on this computer. */
 	var UP_TO_DATE = { synced: true, changed: true, uploading: true, waiting: true, keptCopy: true, checkingInWhenClosed: true };
 
@@ -509,6 +517,8 @@
 		selectMatching: function (c) { return c.all ? 'Stop picking the files that match.' : 'Select all ' + plural(c.count, 'matching file', 'matching files') + ' shown here.'; },
 		// The header.
 		vault: function (c) { return 'Open your Armory folder, ' + c.root + ', in File Explorer.'; },
+		expandPicture: 'See a bigger picture of this file.',
+		closePicture: 'Close the bigger picture and go back to the file.',
 		feedback: 'Tell the IDEA team what got in your way, an idea you have, or something you like.',
 		settings: 'Change where your files are kept, how Armory starts, and its colors.',
 		// Connect.
@@ -2643,15 +2653,17 @@
 	}
 
 	function readFileView(v) {
-		ui.fileLayout = 'list'; ui.compactFolders = false; clearMoveDrag();
+		ui.fileLayout = 'list'; ui.compactFolders = false; ui.fileOrder = 'name'; clearMoveDrag();
 		try {
 			var saved = JSON.parse(localStorage.getItem('armory.fileView.v1:' + encodeURIComponent(studentKey(v))) || '{}');
 			if (saved.layout === 'tiles') ui.fileLayout = 'tiles';
 			ui.compactFolders = saved.compact === true;
+			// 0.6.1: the sort is each student's too.
+			if (FILE_ORDERS.some(function (o) { return o[0] === saved.order; })) ui.fileOrder = saved.order;
 		} catch (_) { /* The view still works when storage is unavailable. */ }
 	}
 	function saveFileView() {
-		try { localStorage.setItem('armory.fileView.v1:' + encodeURIComponent(studentKey(ui.view)), JSON.stringify({ layout: ui.fileLayout, compact: ui.compactFolders })); }
+		try { localStorage.setItem('armory.fileView.v1:' + encodeURIComponent(studentKey(ui.view)), JSON.stringify({ layout: ui.fileLayout, compact: ui.compactFolders, order: ui.fileOrder })); }
 		catch (_) { /* Keep this session's choice. */ }
 	}
 
@@ -2702,8 +2714,8 @@
 		['All types', 'Part', 'Assembly', 'Drawing', 'Other'].forEach(function (name, i) {
 			html += '<option value="' + i + '"' + (s.type === i ? ' selected' : '') + '>' + name + '</option>';
 		});
-		html += '</select></div><div><label class="label" for="file-order">Sort files</label><select class="field" id="file-order" data-key="file-order" data-tip="Sort by name or by when a file was last saved to Armory. Folders stay first.">';
-		[['name', 'Name'], ['newest', 'Last modified (newest first)'], ['oldest', 'Last modified (oldest first)']].forEach(function (choice) {
+		html += '</select></div><div><label class="label" for="file-order">Sort files</label><select class="field" id="file-order" data-key="file-order" data-tip="Sort by name, by when a file was last saved to Armory, or by file type. Folders stay first.">';
+		FILE_ORDERS.forEach(function (choice) {
 			html += '<option value="' + choice[0] + '"' + (ui.fileOrder === choice[0] ? ' selected' : '') + '>' + choice[1] + '</option>';
 		});
 		html += '</select></div></div><div class="folder-keys" role="group" aria-label="View files">';
@@ -2735,7 +2747,7 @@
 	function orderedFiles(pi, rows) {
 		var cached = pi.orderedFiles;
 		if (!cached || cached.source !== rows || cached.order !== ui.fileOrder)
-			cached = pi.orderedFiles = { source: rows, order: ui.fileOrder, rows: window.ArmoryFileOrder(rows, ui.fileOrder) };
+			cached = pi.orderedFiles = { source: rows, order: ui.fileOrder, rows: window.ArmoryFileOrder(rows, ui.fileOrder, typeGroup) };
 		return cached.rows;
 	}
 
@@ -3008,7 +3020,10 @@
 
 		html += '<div class="detail-side">';
 		var detailThumb = thumbAddress(findRow(d.fileId) ? findRow(d.fileId).row : d);
-		if (detailThumb && !thumbMissing(detailThumb)) html += '<div class="detail-thumb"' + (thumbsLoaded[detailThumb] ? ' data-thumb="on"' : '') + '>' + thumbImg(detailThumb, true) + '</div>';
+		// 0.6.1: the picture is a key: it opens a bigger picture of the file.
+		if (detailThumb && !thumbMissing(detailThumb))
+			html += '<button class="detail-thumb" type="button" data-action="expandPicture" data-key="d-picture" data-path="' + esc(d.path) + '"' + (thumbsLoaded[detailThumb] ? ' data-thumb="on"' : '') +
+				' aria-label="' + esc('See a bigger picture of ' + leaf(d.path)) + '"' + tipAttr('expandPicture') + '>' + thumbImg(detailThumb, true) + '</button>';
 		html += '<section class="display" data-tone="' + w.tone + '" aria-labelledby="holder-line">';
 		html += '<p class="screen lcd"><span>' + esc(w.readout) + '</span></p>';
 		html += '<h2 class="holder-line" id="holder-line">' + esc(glue(w.line)) + '</h2>';
@@ -3240,6 +3255,9 @@
 	function openAsk(kind, ctx, returnKey) {
 		hideTip();
 		ui.ask = { kind: kind, ctx: ctx, returnKey: returnKey || null };
+		// A bigger picture gets a wider housing (a class, not :has, which made the window's
+		// first-steps check flaky in the UI run).
+		ask.classList.toggle('ask-picture', kind === 'picture');
 		ask.innerHTML = askHtml(kind, ctx);
 		if (!ask.open) ask.showModal();
 		var field = ask.querySelector('input, textarea');
@@ -3268,6 +3286,7 @@
 		var extra = '';
 		// Send feedback and Your feedback draw their own housing contents.
 		if (kind === 'feedback') return feedbackHtml(c);
+		if (kind === 'picture') return pictureHtml(c);
 		if (kind === 'myFeedback') return myFeedbackHtml(c);
 		// A mentor or CAD lead can force check in what is in the way, in the same action (N5).
 		var force = '';
@@ -3343,6 +3362,19 @@
 			'<button class="key' + (danger ? ' danger' : cancelFirst ? '' : ' primary') + '" type="button" data-action="askOk" data-key="ask-ok"' + tipAttr('ask', { kind: kind, count: c.count }) + '>' + esc(glue(ok)) + '</button>' +
 			(force ? '<button class="key danger" type="button" data-action="askForce" data-key="ask-force"' + tipAttr('askForce', { kind: kind }) + '>' + esc(glue(force)) + '</button>' : '') +
 			'<button class="key" type="button" data-action="askCancel" data-key="ask-cancel"' + (field || !(danger || cancelFirst) ? '' : ' data-ask-first="true"') + tipAttr('cancel') + '>Cancel</button>' +
+			'</div></div>'
+		);
+	}
+
+	/** 0.6.1: a file's picture, bigger. The host makes it at its large size; while it comes, or
+	 *  when there is none that big, the small one shows in its place. */
+	function pictureHtml(c) {
+		return (
+			titleBar('h2', c.name, ' id="ask-title"') +
+			'<div class="ask-body">' +
+			'<div class="picture-large"><img class="picture-large-img" src="' + esc(c.small + '&size=large') + '" data-small="' + esc(c.small) + '" alt="' + esc('Picture of ' + c.name) + '" draggable="false"></div>' +
+			'<div class="ask-keys">' +
+			'<button class="key primary" type="button" data-action="askCancel" data-key="ask-cancel" data-ask-first="true"' + tipAttr('closePicture') + '>Close</button>' +
 			'</div></div>'
 		);
 	}
@@ -5176,6 +5208,10 @@
 			case 'askTrashFile':
 				openAsk('trashFile', { path: path, fileId: el.getAttribute('data-file-id'), name: leaf(path) }, from);
 				break;
+			case 'expandPicture':
+				var small = el.querySelector('img.thumb');
+				if (small) openAsk('picture', { name: leaf(path), small: small.getAttribute('src') }, from);
+				break;
 			case 'folderCheckIn':
 				var here = browserPlace();
 				act('checkIn', { paths: [folderPathOf(here.pi, here.folder)] }, { key: from });
@@ -5414,6 +5450,7 @@
 	document.addEventListener('change', function (e) {
 		if (e.target && e.target.id === 'file-order') {
 			ui.fileOrder = e.target.value;
+			saveFileView();
 			applyFileSearch();
 		}
 		if (e.target && e.target.id === 'file-search-type') {
@@ -5443,6 +5480,17 @@
 			if (!img || !img.classList || !img.classList.contains('thumb')) return;
 			thumbsLoaded[img.getAttribute('src')] = true;
 			if (img.parentNode) img.parentNode.setAttribute('data-thumb', 'on');
+		},
+		true
+	);
+	// The bigger picture has none that big (a STEP tile, an STL drawn here): the small one instead.
+	document.addEventListener(
+		'error',
+		function (e) {
+			var img = e.target;
+			if (!img || !img.classList || !img.classList.contains('picture-large-img')) return;
+			var small = img.getAttribute('data-small');
+			if (small && img.getAttribute('src') !== small) img.setAttribute('src', small);
 		},
 		true
 	);

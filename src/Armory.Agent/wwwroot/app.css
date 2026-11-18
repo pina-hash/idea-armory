@@ -2387,6 +2387,10 @@ body[data-screen='connect'] .screen-root {
 .detail-thumb {
 	position: relative;
 	display: none;
+	padding: 0;
+	font: inherit;
+	color: inherit;
+	cursor: zoom-in;
 	width: 100%;
 	aspect-ratio: 4 / 3;
 	max-height: min(200px, 26vh);
@@ -2397,6 +2401,28 @@ body[data-screen='connect'] .screen-root {
 }
 .detail-thumb[data-thumb='on'] {
 	display: block;
+}
+/* 0.6.1: a file's picture, bigger, in the question housing, which grows to hold it. */
+dialog.housing.ask.ask-picture {
+	width: min(48rem, calc(100vw - 2rem));
+}
+.picture-large {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	box-sizing: border-box;
+	width: 100%;
+	height: min(32rem, calc(100vh - 14rem));
+	padding: var(--space-2);
+	border: 1px solid var(--plate-hair);
+	border-radius: var(--plate-r-panel);
+	background-color: var(--plate-list-face);
+}
+.picture-large-img {
+	width: 100%;
+	height: 100%;
+	object-fit: contain;
+	border-radius: var(--plate-r-small);
 }
 /* Managed lab pictures carry opaque paper and ink, legible in either Armory theme. */
 .thumb-slot[data-thumb='on'],

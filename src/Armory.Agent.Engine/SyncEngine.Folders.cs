@@ -1071,7 +1071,7 @@ public sealed partial class SyncEngine
                 shared = await deps.Api.CreateFolderAsync(projectId, Relative(folder.Value, ps), state.DeviceId.Value, Guid.NewGuid(), cancellationToken);
             }
             catch (Exception error) when (Stopped(error)) { return Offline("A shared folder can be made once this computer is back online."); }
-            catch (ArmoryRpcException error) { return new(false, error.Message); }
+            catch (ArmoryRpcException error) { return new(false, RefusalWords(error, $"Armory couldn't make the shared folder {name}. Try again in a moment.")); }
             try { fs.EnsureFolder(folder.Value); }
             catch (IOException error)
             {

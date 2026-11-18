@@ -25,6 +25,9 @@ namespace Armory.Agent;
 internal sealed class ShellThumbnails : IDisposable
 {
     internal const int Size = 192;
+    // 0.6.1: the picture a student expands on a file's page, made by the same handlers at this
+    // size and kept apart from the small one.
+    internal const int LargeSize = 768;
     internal const int Kept = 600;
     internal const int Waiting = 64;
     internal const int MaxStuck = 3;
@@ -77,10 +80,10 @@ internal sealed class ShellThumbnails : IDisposable
     // How many handler threads were left behind, stuck.
     internal int StuckThreads { get { lock (gate) return stuckThreads; } }
 
-    internal Task<byte[]?> GetAsync(string file)
+    internal Task<byte[]?> GetAsync(string file, int size = Size)
     {
-        // The key first: a picture is kept under the bytes it was asked for.
-        var key = KeyOf(file);
+        // The key first: a picture is kept under the bytes it was asked for, at its size.
+        var key = KeyOf(file, size is LargeSize ? LargeSize : Size);
         if (key is null) return Task.FromResult<byte[]?>(null);
         Job? job;
         Job? dropped = null;
@@ -116,12 +119,12 @@ internal sealed class ShellThumbnails : IDisposable
         catch (TimeoutException) { return null; }
     }
 
-    private static Key? KeyOf(string file)
+    private static Key? KeyOf(string file, int size)
     {
         try
         {
             var info = new FileInfo(file);
-            return info.Exists ? new Key(info.FullName.ToUpperInvariant(), info.Length, info.LastWriteTimeUtc.Ticks) : null;
+            return info.Exists ? new Key(info.FullName.ToUpperInvariant(), info.Length, info.LastWriteTimeUtc.Ticks, size) : null;
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { return null; }
     }
@@ -152,7 +155,7 @@ internal sealed class ShellThumbnails : IDisposable
             }
             byte[]? png = null;
             LastFailure = null;
-            try { png = make(job.File, Size); }
+            try { png = make(job.File, job.Key.Size); }
             // Whatever a handler throws, this thread goes on to the next file (one that ended would
             // leave every later picture waiting).
             catch (Exception error) when (error is not OutOfMemoryException)
@@ -240,7 +243,7 @@ internal sealed class ShellThumbnails : IDisposable
         while (cache.Count > Kept && order.TryDequeue(out var old)) cache.Remove(old);
     }
 
-    private readonly record struct Key(string File, long Length, long Written);
+    private readonly record struct Key(string File, long Length, long Written, int Size);
 
     private sealed record Answer(byte[]? Png, DateTimeOffset? Until);
 

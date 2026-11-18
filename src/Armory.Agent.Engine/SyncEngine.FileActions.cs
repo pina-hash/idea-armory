@@ -113,7 +113,7 @@ public sealed partial class SyncEngine
                 return new(false, "Armory is still saving this file. Wait for it to finish, then try again.");
             try { await deps.Api.TrashFileAsync(known.File.Id, false, Guid.NewGuid(), cancellationToken); }
             catch (ArmoryRpcException error) when (error.IsFunctionMissing) { return new(false, "The website needs an update before files can move to Trash."); }
-            catch (ArmoryRpcException error) { return new(false, error.Message); }
+            catch (ArmoryRpcException error) { return new(false, RefusalWords(error, "Armory couldn't move this file to Trash. Try again in a moment.")); }
             projectsWritten.Add(known.Project.Id);
             await PassLockedAsync(cancellationToken);
             await PassLockedAsync(cancellationToken);

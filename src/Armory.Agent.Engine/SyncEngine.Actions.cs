@@ -470,6 +470,20 @@ public sealed partial class SyncEngine
         _ => "This save couldn't be read back from this computer's safe copy. It stays on this computer.",
     };
 
+    // 0.6.1: what the window says when the website refused an action. A refusal written for the
+    // student (a sentence) is said as it is; anything else (a function name, "failed with 500",
+    // a database's own words) is never shown raw: the action's own plain words go instead.
+    internal static string RefusalWords(ArmoryRpcException error, string fallback)
+    {
+        if (error.IsNotYourFolder) return FolderRefusalWords(error);
+        if (error.IsNotMember) return "You're no longer in this project.";
+        if (error.IsForbidden) return "You don't have permission to do that in this project.";
+        var words = error.Message?.Trim() ?? "";
+        return words.Length > 1 && char.IsUpper(words[0]) && words[^1] is '.' or '!' or '?' && !words.Contains('_') &&
+               !words.Contains("failed with", StringComparison.OrdinalIgnoreCase) && !words.Contains("permission denied", StringComparison.OrdinalIgnoreCase)
+            ? words : fallback;
+    }
+
     // The PT403 text is written for the student and carries no address; a blank one gets the rule in words.
     internal static string FolderRefusalWords(ArmoryRpcException error)
         => string.IsNullOrWhiteSpace(error.Message) ? "This folder is someone else's. Save your work in your own folder." : error.Message.Trim();
