@@ -41,6 +41,20 @@ internal static class Updates
         _ => LookEvery,
     };
 
+    // 0.6.1: the lab computers sleep and wake about every 30 minutes, and for a few seconds after
+    // each wake Windows answers "No such host is known". A look that fails within ResumeGrace of
+    // a wake is tried again after ResumeRetry and is not counted as a failed look. A wake after a
+    // failed look looks again ResumeLook later instead of waiting out the long wait.
+    internal static readonly TimeSpan ResumeGrace = TimeSpan.FromMinutes(2), ResumeRetry = TimeSpan.FromSeconds(20), ResumeLook = TimeSpan.FromSeconds(30);
+
+    // After a failed look: how many failed looks count now, and when the next look is.
+    internal static (int FailedLooks, TimeSpan Next) AfterFailure(int failedLooks, TimeSpan? sinceWake)
+    {
+        if (sinceWake is { } since && since >= TimeSpan.Zero && since < ResumeGrace) return (failedLooks, ResumeRetry);
+        var failed = Math.Min(failedLooks + 1, 5);
+        return (failed, NextLook(failed));
+    }
+
     // Before anything else in Main: Velopack's install, update and uninstall steps run here and
     // exit; a downloaded update is applied here, at start, and the new version starts instead.
     // Velopack's own hook launches (install, update, obsolete, uninstall): no person is looking,
@@ -147,6 +161,8 @@ internal sealed class Updater : IDisposable
     private int looking;
     private int failedLooks;
     private int disposed;
+    // Environment.TickCount64 when the computer last woke (it counts sleep), or long.MinValue.
+    private long wokeAt = long.MinValue;
     private UpdateManager? manager;
 
     // ready: the tray's words once an update waits for the next start.
@@ -169,6 +185,7 @@ internal sealed class Updater : IDisposable
     internal async Task LookAsync()
     {
         if (Interlocked.Exchange(ref looking, 1) == 1) return;
+        TimeSpan? next = null;
         try
         {
             var exe = Environment.ProcessPath;
@@ -179,18 +196,31 @@ internal sealed class Updater : IDisposable
         }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
-            failedLooks = Math.Min(failedLooks + 1, 5);
-            log.Info("updates: the look for a new version failed (" + error.GetType().Name + ": " + error.Message + "); next look in " + Updates.NextLook(failedLooks).TotalMinutes + " minutes");
+            var woke = Volatile.Read(ref wokeAt);
+            var (failed, wait) = Updates.AfterFailure(failedLooks, woke == long.MinValue ? null : TimeSpan.FromMilliseconds(Environment.TickCount64 - woke));
+            failedLooks = failed;
+            next = wait;
+            log.Info("updates: the look for a new version failed (" + error.GetType().Name + ": " + error.Message + "); next look in " +
+                (wait < TimeSpan.FromMinutes(1) ? wait.TotalSeconds + " seconds" : wait.TotalMinutes + " minutes"));
         }
         finally
         {
             Volatile.Write(ref looking, 0);
             if (Volatile.Read(ref disposed) == 0)
             {
-                try { timer?.Change(Updates.NextLook(failedLooks), Timeout.InfiniteTimeSpan); }
+                try { timer?.Change(next ?? Updates.NextLook(failedLooks), Timeout.InfiniteTimeSpan); }
                 catch (ObjectDisposedException) { }
             }
         }
+    }
+
+    // The computer woke. After a failed look, look again soon instead of waiting out its long wait.
+    internal void Resumed()
+    {
+        Volatile.Write(ref wokeAt, Environment.TickCount64);
+        if (failedLooks == 0 || Volatile.Read(ref disposed) != 0) return;
+        try { timer?.Change(Updates.ResumeLook, Timeout.InfiniteTimeSpan); }
+        catch (ObjectDisposedException) { }
     }
 
     private async Task UpdateInPlaceAsync()

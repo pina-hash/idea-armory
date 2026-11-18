@@ -15,6 +15,8 @@ namespace Armory.Agent.Engine;
 // - Live updates joined for every project: the poll is only a safety net, at least 120 seconds.
 // - Offline or the site failing (5xx, unreachable, a cut answer): 30, 60, 120, 240, then every
 //   300 seconds until an answer comes.
+// - Within ResumeGrace (2 minutes) of the computer waking (0.6.1): a pass that could not reach
+//   the site is tried again every ResumeRetry (5 seconds), and none of them grows that wait.
 // - Any wake ends a wait at once: a window action, the window shown, Windows unlocked, a disk
 //   change (the host's hints), a SolidWorks save, a live event.
 //
@@ -32,6 +34,9 @@ public sealed partial class SyncEngine
     private bool looking = true;
     // Loop passes in a row that ended offline (the site unreachable or failing).
     private int offlinePasses;
+    // When the computer last woke (Clock timestamp), or MinValue: since 0.6.1 a pass that fails
+    // within ResumeGrace of it is retried after ResumeRetry and is not counted as offline.
+    private long resumedAt = long.MinValue;
     // The project list as last read, for whom, and when (Clock timestamp).
     private IReadOnlyList<RemoteProject>? listedProjects;
     private string? listedFor;
@@ -58,8 +63,10 @@ public sealed partial class SyncEngine
     internal bool Looking => looking;
 
     // How long the loop waits after a pass (any wake ends it sooner).
-    internal static TimeSpan NextPoll(EngineOptions options, bool looking, bool? online, int offlinePasses, bool ownWorkRecent, bool liveEverywhere)
+    internal static TimeSpan NextPoll(EngineOptions options, bool looking, bool? online, int offlinePasses, bool ownWorkRecent, bool liveEverywhere,
+        bool justResumed = false)
     {
+        if (online == false && justResumed) return options.ResumeRetry;
         if (online == false && offlinePasses > 0)
         {
             var wait = options.IdlePollInterval;
@@ -75,8 +82,11 @@ public sealed partial class SyncEngine
     internal TimeSpan NextPollNow()
     {
         var ownWork = online == true && deps.Clock.GetUtcNow() - lastActivity <= options.IdleAfter;
-        return NextPoll(options, looking, online, offlinePasses, ownWork, LiveEverywhere());
+        return NextPoll(options, looking, online, offlinePasses, ownWork, LiveEverywhere(), JustResumed());
     }
+
+    // Within ResumeGrace of the computer waking.
+    private bool JustResumed() => resumedAt != long.MinValue && deps.Clock.GetElapsedTime(resumedAt) < options.ResumeGrace;
 
     // Live updates joined for every project this computer reads (and at least one).
     private bool LiveEverywhere()
@@ -92,7 +102,8 @@ public sealed partial class SyncEngine
         LoopPasses++;
         if (startedAt == long.MinValue) startedAt = deps.Clock.GetTimestamp();
         if (online == true && !refreshCut) feedsDue = false;
-        offlinePasses = online == false ? offlinePasses + 1 : 0;
+        // Just after a wake the network is still coming back: not yet a pass that ended offline.
+        offlinePasses = online != false ? 0 : JustResumed() ? offlinePasses : offlinePasses + 1;
     }
 
     // The project list: from the server, or (a loop pass, within ProjectListEvery of the last

@@ -6,17 +6,123 @@ public sealed class GlitchRuleTests
     [Fact]
     public void One_outage_has_one_incident_until_a_successful_pass_and_never_a_slow_call_incident()
     {
-        var detector = new GlitchDetector();
-        Assert.Equal(GlitchKinds.ServerOutage, detector.Inspect(Last(r => r.ServerAvailability(false)))?.Kind);
+        var (detector, recorder, clock) = Outage();
+        // The first failure is never an outage, nor any before it has lasted three minutes.
+        Assert.Null(detector.Inspect(Record(recorder, r => r.ServerAvailability(false))));
+        clock.Advance(TimeSpan.FromSeconds(179));
+        Assert.Null(detector.Inspect(Record(recorder, r => r.ServerAvailability(false))));
+        clock.Advance(TimeSpan.FromSeconds(1));
+        var glitch = detector.Inspect(Record(recorder, r => r.ServerAvailability(false)));
+        Assert.Equal(GlitchKinds.ServerOutage, glitch?.Kind);
+        Assert.Equal("Armory could not reach the server for 3 minutes while this computer was awake and on a network. Work stays safe here while it retries with longer waits.",
+            glitch!.Summary);
         for (var i = 0; i < 100; i++)
         {
-            Assert.Null(detector.Inspect(Last(r => r.ServerAvailability(false))));
-            Assert.Null(detector.Inspect(Last(r => r.PassEnd("loop", false, 300_000, 0, 0, 0, 0))));
-            Assert.Null(detector.Inspect(Last(r => r.WindowAction("checkOut", 1, 60_000, false))));
+            clock.Advance(TimeSpan.FromMinutes(5));
+            Assert.Null(detector.Inspect(Record(recorder, r => r.ServerAvailability(false))));
+            Assert.Null(detector.Inspect(Record(recorder, r => r.PassEnd("loop", false, 300_000, 0, 0, 0, 0))));
+            Assert.Null(detector.Inspect(Record(recorder, r => r.WindowAction("checkOut", 1, 60_000, false))));
         }
-        Assert.Null(detector.Inspect(Last(r => r.ServerAvailability(true))));
-        Assert.Equal(GlitchKinds.ServerOutage, detector.Inspect(Last(r => r.ServerAvailability(false)))?.Kind);
+        Assert.Null(detector.Inspect(Record(recorder, r => r.ServerAvailability(true))));
+        Assert.False(detector.OutageReported);
+        Assert.Null(detector.Inspect(Record(recorder, r => r.ServerAvailability(false))));
+        clock.Advance(TimeSpan.FromMinutes(3));
+        Assert.Equal(GlitchKinds.ServerOutage, detector.Inspect(Record(recorder, r => r.ServerAvailability(false)))?.Kind);
         Assert.False(FlightJson.Event(Last(r => r.ServerAvailability(false)), DateTimeOffset.UnixEpoch)["online"]!.GetValue<bool>());
+    }
+
+    // 0.6.1: about 250 of 0.6.0's outage incidents were lab computers waking from sleep, which they
+    // do about every 30 minutes: "No such host is known" for a few seconds, then the server again.
+    [Fact]
+    public void A_wake_from_sleep_is_never_an_outage_whatever_order_its_events_come_in()
+    {
+        var (detector, recorder, clock) = Outage();
+        for (var cycle = 0; cycle < 48; cycle++)
+        {
+            // Awake 25 minutes with the server answering, then asleep about 30.
+            clock.Advance(TimeSpan.FromMinutes(25));
+            Assert.Null(detector.Inspect(Record(recorder, r => r.ServerAvailability(true))));
+            // Half the time the last look before the sleep already failed (the network going).
+            if (cycle % 2 == 0) Assert.Null(detector.Inspect(Record(recorder, r => r.ServerAvailability(false))));
+            Assert.Null(detector.Inspect(Record(recorder, r => r.Power("suspend"))));
+            clock.Advance(TimeSpan.FromMinutes(30));
+            // The first pass after the wake can fail before Windows says it woke, or after.
+            if (cycle % 3 == 0) Assert.Null(detector.Inspect(Record(recorder, r => r.ServerAvailability(false))));
+            Assert.Null(detector.Inspect(Record(recorder, r => r.Power(cycle % 4 == 0 ? "frozen" : "resume"))));
+            for (var retry = 0; retry < 6; retry++)
+            {
+                Assert.Null(detector.Inspect(Record(recorder, r => r.ServerAvailability(false))));
+                clock.Advance(TimeSpan.FromSeconds(5));
+            }
+        }
+        Assert.False(detector.OutageReported);
+    }
+
+    // A short sleep the host heard only as the watch's "frozen" gap, with no suspend before it:
+    // the failure before the sleep does not start the measure for the failures after it.
+    [Fact]
+    public void A_short_sleep_without_a_suspend_restarts_the_measure_at_the_wake()
+    {
+        var (detector, recorder, clock) = Outage();
+        Assert.Null(detector.Inspect(Record(recorder, r => r.ServerAvailability(false))));
+        clock.Advance(TimeSpan.FromMinutes(5));
+        Assert.Null(detector.Inspect(Record(recorder, r => r.Power("frozen"))));
+        Assert.Null(detector.Inspect(Record(recorder, r => r.ServerAvailability(false))));
+        clock.Advance(TimeSpan.FromSeconds(30));
+        Assert.Null(detector.Inspect(Record(recorder, r => r.ServerAvailability(false))));
+        Assert.Null(detector.Inspect(Record(recorder, r => r.ServerAvailability(true))));
+        Assert.False(detector.OutageReported);
+    }
+
+    // The host never heard the wake (no power event at all): a gap longer than any retry wait
+    // between two failures is time that did not run here, and the measure starts again.
+    [Fact]
+    public void Time_between_two_failures_longer_than_any_retry_wait_does_not_count()
+    {
+        var (detector, recorder, clock) = Outage();
+        Assert.Null(detector.Inspect(Record(recorder, r => r.ServerAvailability(false))));
+        clock.Advance(GlitchDetector.OutageLongestGap + TimeSpan.FromSeconds(1));
+        Assert.Null(detector.Inspect(Record(recorder, r => r.ServerAvailability(false))));
+        clock.Advance(TimeSpan.FromMinutes(2));
+        Assert.Null(detector.Inspect(Record(recorder, r => r.ServerAvailability(false))));
+        clock.Advance(TimeSpan.FromMinutes(1));
+        Assert.Equal(GlitchKinds.ServerOutage, detector.Inspect(Record(recorder, r => r.ServerAvailability(false)))?.Kind);
+    }
+
+    // With no network the computer is not trying to reach anyone; the measure starts when the
+    // network comes back, and a wake restarts it too.
+    [Fact]
+    public void An_outage_is_measured_only_while_awake_and_on_a_network()
+    {
+        var (detector, recorder, clock) = Outage();
+        Assert.Null(detector.Inspect(Record(recorder, r => r.Power(GlitchDetector.NetworkDown))));
+        for (var i = 0; i < 20; i++)
+        {
+            Assert.Null(detector.Inspect(Record(recorder, r => r.ServerAvailability(false))));
+            clock.Advance(TimeSpan.FromMinutes(1));
+        }
+        Assert.Null(detector.Inspect(Record(recorder, r => r.Power(GlitchDetector.NetworkUp))));
+        Assert.Null(detector.Inspect(Record(recorder, r => r.ServerAvailability(false))));
+        clock.Advance(TimeSpan.FromMinutes(2));
+        Assert.Null(detector.Inspect(Record(recorder, r => r.ServerAvailability(false))));
+        Assert.Null(detector.Inspect(Record(recorder, r => r.Power("resume"))));
+        clock.Advance(TimeSpan.FromMinutes(2));
+        Assert.Null(detector.Inspect(Record(recorder, r => r.ServerAvailability(false))));
+        clock.Advance(TimeSpan.FromMinutes(1));
+        // Three minutes since the wake, every failure awake and on a network: now it is one.
+        Assert.Equal(GlitchKinds.ServerOutage, detector.Inspect(Record(recorder, r => r.ServerAvailability(false)))?.Kind);
+    }
+
+    private static (GlitchDetector Detector, FlightRecorder Recorder, ManualClock Clock) Outage()
+    {
+        var clock = new ManualClock();
+        return (new GlitchDetector(clock: clock), new FlightRecorder(clock: clock), clock);
+    }
+
+    private static FlightEvent Record(FlightRecorder recorder, Action<FlightRecorder> record)
+    {
+        record(recorder);
+        return recorder.Snapshot(1)[0];
     }
 
     private static FlightEvent Last(Action<FlightRecorder> record)

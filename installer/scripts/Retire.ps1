@@ -12,10 +12,21 @@ if ($PSVersionTable.PSEdition -ne 'Core') {
     $env:PSModulePath = (Join-Path $PSHOME 'Modules') + ';' + (Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\Modules')
 }
 function Audit([string]$text) {
-    $folder = Join-Path $DataFolder 'logs'
-    [void][IO.Directory]::CreateDirectory($folder)
-    $line = ([DateTime]::UtcNow.ToString('O') + ' ' + $text) | ConvertTo-Json -Compress
-    [IO.File]::AppendAllText((Join-Path $folder 'install-retirement.jsonl'), $line + "`n")
+    # 0.6.1: this file is written by Armory, this script and the post-update worker, sometimes
+    # at once. Wait up to three seconds for a turn; an audit line is never a reason to stop.
+    try {
+        $folder = Join-Path $DataFolder 'logs'
+        [void][IO.Directory]::CreateDirectory($folder)
+        $bytes = (New-Object Text.UTF8Encoding $false).GetBytes(((([DateTime]::UtcNow.ToString('O') + ' ' + $text) | ConvertTo-Json -Compress) + "`n"))
+        $file = Join-Path $folder 'install-retirement.jsonl'
+        for ($try = 0; $try -lt 120; $try++) {
+            try {
+                $stream = New-Object IO.FileStream($file, [IO.FileMode]::Append, [IO.FileAccess]::Write, [IO.FileShare]::Read)
+                try { $stream.Write($bytes, 0, $bytes.Length) } finally { $stream.Dispose() }
+                return
+            } catch [IO.IOException] { Start-Sleep -Milliseconds 25 }
+        }
+    } catch { }
 }
 function Initialize-NativePaths {
     if ('ArmoryRetirementPath' -as [type]) { return }
@@ -69,6 +80,10 @@ function Binary([string]$path) {
 # character from a filename to guess another file; defer the registration and keep evidence.
 function InventoryPath([string]$value) {
     if ([string]::IsNullOrWhiteSpace($value)) { return $null }
+    # 0.6.1: a program name with no folder (a task's BthUdTask.exe, a Run entry's sc.exe) is one
+    # of Windows' own, found on its search path. Armory is never registered that way: skip it
+    # without an audit line (0.6.0 logged them as deferrals, and they read as the failure).
+    if ($value.Trim().Trim('"') -match '^[^\\/:%]+$') { return $null }
     # .NET Framework's Windows expansion can truncate at NUL. Reject controls before it.
     if ($value -match '[\x00-\x1f]') { Audit ('deferred invalid inventory target ' + $value); return $null }
     $path = [Environment]::ExpandEnvironmentVariables($value.Trim())

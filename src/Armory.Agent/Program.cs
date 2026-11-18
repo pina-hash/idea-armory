@@ -76,7 +76,11 @@ internal static class Program
             RetireFailed = outcome =>
             {
                 LaunchLog.Write(paths, "install cleanup before handing off: " + outcome.Words);
+                // 0.6.1: said once per version, like the running copy's cleanup (RetireNotice).
+                var notice = new RetireNotice(paths.LogFolder, AgentPaths.Version);
+                if (notice.AlreadySaid) return;
                 StartupIncidents.Save(paths, null, GlitchRules.RetireFailed(outcome.Words));
+                notice.Said();
             },
             SecondLaunch = instance => SecondLaunch.Run(command, instance,
                 link => LinkForwarder.Forward(paths, link, TimeSpan.FromSeconds(10)),

@@ -148,7 +148,12 @@ internal static class InstallRetirement
         {
             var file = AuditFile(paths);
             if (!File.Exists(file) || new FileInfo(file).Length <= before) return null;
-            var last = File.ReadLines(file).LastOrDefault(line => line.Length > 0);
+            string? last;
+            using (var reader = new StreamReader(OpenShared(file)))
+            {
+                last = null;
+                while (reader.ReadLine() is { } line) if (line.Length > 0) last = line;
+            }
             if (last is null) return null;
             var text = (JsonSerializer.Deserialize<string>(last) ?? "").Trim();
             var space = text.IndexOf(' ', StringComparison.Ordinal);
@@ -215,7 +220,7 @@ internal static class InstallRetirement
         var thread = new Thread(() =>
         {
             if (stopping.WaitHandle.WaitOne(delay)) return;
-            RunAndReport(() => Run(paths, callerRunning: true), log.Info, report);
+            RunAndReport(() => Run(paths, callerRunning: true), log.Info, report, new RetireNotice(paths.LogFolder, AgentPaths.Version));
         })
         { IsBackground = true, Name = "Armory install retirement" };
         thread.SetApartmentState(ApartmentState.STA);
@@ -224,8 +229,10 @@ internal static class InstallRetirement
     }
 
     // What the background thread does: never throws, logs every outcome, files one incident when
-    // the cleanup did not finish.
-    internal static RetireOutcome RunAndReport(Func<RetireOutcome> retire, Action<string> log, Func<Glitch, string?> report)
+    // the cleanup did not finish. 0.6.1: with a notice, once only: a cleanup that keeps failing
+    // on a shared lab computer said so at every start (four retireFailed incidents from one
+    // IDEA-06 in a day). It says so again only after a cleanup finished, or from a new version.
+    internal static RetireOutcome RunAndReport(Func<RetireOutcome> retire, Action<string> log, Func<Glitch, string?> report, RetireNotice? notice = null)
     {
         RetireOutcome outcome;
         try { outcome = retire(); }
@@ -233,11 +240,43 @@ internal static class InstallRetirement
         try
         {
             log("retire: " + outcome.Words);
-            if (!outcome.Ok) report(GlitchRules.RetireFailed(outcome.Words));
+            if (outcome.Ok) notice?.Finished();
+            else if (notice is { AlreadySaid: true }) log("retire: still not finished; this was already reported, so no new incident");
+            else
+            {
+                report(GlitchRules.RetireFailed(outcome.Words));
+                notice?.Said();
+            }
         }
         catch (Exception error) when (error is not OutOfMemoryException) { try { log("retire: could not report: " + error.Message); } catch (Exception) { } }
         return outcome;
     }
+
+    // The audit file is written by this process, the cleanup script and the post-update worker,
+    // sometimes at once, and read by each (0.6.1: "AppendAllText ... install-retirement.jsonl
+    // because it is being used by another process" ended a cleanup on a shared lab computer).
+    // Each writer holds it only for one line and waits its turn; nobody writes while sharing
+    // writing, so two lines never land on top of each other. Readers share everything.
+    internal static readonly TimeSpan AuditPatience = TimeSpan.FromSeconds(3);
+
+    internal static bool AppendShared(string file, string text, TimeSpan patience)
+    {
+        var bytes = new System.Text.UTF8Encoding(false).GetBytes(text);
+        var started = Environment.TickCount64;
+        while (true)
+        {
+            try
+            {
+                using var stream = new FileStream(file, FileMode.Append, FileAccess.Write, FileShare.Read);
+                stream.Write(bytes);
+                return true;
+            }
+            catch (IOException) when (Environment.TickCount64 - started < patience.TotalMilliseconds) { Thread.Sleep(25); }
+            catch (IOException) { return false; }
+        }
+    }
+
+    internal static FileStream OpenShared(string file) => new(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
 
     // Fast install/update callbacks have no live flight recorder. Queue their scrubbed audit
     // under logs, then replay into the normal process's existing recorder before its first UI.
@@ -246,7 +285,7 @@ internal static class InstallRetirement
         try
         {
             Directory.CreateDirectory(paths.LogFolder);
-            File.AppendAllText(AuditFile(paths), JsonSerializer.Serialize(DateTimeOffset.UtcNow.ToString("O") + " " + Redactor.Scrub(line)) + "\n");
+            AppendShared(AuditFile(paths), JsonSerializer.Serialize(DateTimeOffset.UtcNow.ToString("O") + " " + Redactor.Scrub(line)) + "\n", AuditPatience);
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
     }
@@ -258,7 +297,10 @@ internal static class InstallRetirement
             var batch = AuditFile(paths) + ".replay";
             if (!File.Exists(batch) && File.Exists(AuditFile(paths))) File.Move(AuditFile(paths), batch);
             if (!File.Exists(batch)) return;
-            foreach (var line in File.ReadLines(batch))
+            var lines = new List<string>();
+            using (var reader = new StreamReader(OpenShared(batch)))
+                while (reader.ReadLine() is { } read) lines.Add(read);
+            foreach (var line in lines)
             {
                 try
                 {
@@ -325,5 +367,34 @@ internal static class InstallRetirement
         }
 
         public void Dispose() => timer.Dispose();
+    }
+}
+
+// 0.6.1: whether this version already reported that the cleanup of other installs did not
+// finish (InstallRetirement.RunAndReport). One small file in the logs folder holding the version
+// that said so; a finished cleanup removes it. Never throws: unreadable means not said.
+internal sealed class RetireNotice(string folder, string version)
+{
+    private string Marker => Path.Combine(folder, "retire-failed-reported.txt");
+
+    internal bool AlreadySaid
+    {
+        get
+        {
+            try { return File.Exists(Marker) && File.ReadAllText(Marker).Trim() == version; }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return false; }
+        }
+    }
+
+    internal void Said()
+    {
+        try { Directory.CreateDirectory(folder); File.WriteAllText(Marker, version); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+    }
+
+    internal void Finished()
+    {
+        try { File.Delete(Marker); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
     }
 }

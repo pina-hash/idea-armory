@@ -53,6 +53,12 @@ public sealed record EngineOptions
     public TimeSpan StallLimit { get; init; } = TimeSpan.FromMinutes(2);
     public TimeSpan WatchEvery { get; init; } = TimeSpan.FromSeconds(5);
     public TimeSpan FrozenAfter { get; init; } = TimeSpan.FromSeconds(45);
+    // 0.6.1: for ResumeGrace after the computer wakes, a pass that could not reach the site is
+    // tried again after ResumeRetry and does not grow the offline wait. The lab computers sleep
+    // and wake about every 30 minutes, and Windows answers "No such host is known" for a few
+    // seconds after each wake while the network comes back.
+    public TimeSpan ResumeGrace { get; init; } = TimeSpan.FromMinutes(2);
+    public TimeSpan ResumeRetry { get; init; } = TimeSpan.FromSeconds(5);
     // The contract's PUT limit (2 GiB); tests lower it.
     public long MaximumFileBytes { get; init; } = Armory.Client.BlobClient.MaximumPutBytes;
     // How many files a pass moves at once (uploads, downloads and the server calls around them).
@@ -200,6 +206,14 @@ public sealed partial class SyncEngine : IAsyncDisposable
     public void Pause() => engineThread.Enqueue(() => { paused = true; QueueChanged(); RequestPublish(now: true); });
     public void Resume() => engineThread.Enqueue(() => { paused = false; RequestPublish(now: true); wake.Release(); });
     public void Wake() => engineThread.Enqueue(() => wake.Release());
+
+    // The computer woke from sleep (the host's power event, or the watch finding a gap where no
+    // time ran): look at once, and retry quietly while the network comes back (ResumeGrace).
+    public void Resumed(bool look = true) => engineThread.Enqueue(() =>
+    {
+        resumedAt = deps.Clock.GetTimestamp();
+        if (look) wake.Release();
+    });
 
     public void Start() => engineThread.Enqueue(() =>
     {

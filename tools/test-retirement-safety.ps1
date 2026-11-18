@@ -89,6 +89,26 @@ try {
     Require (-not (Unmodified-LegacyPayload $legacyCopy)) 'an edited payload defers the old uninstaller'
     [IO.File]::WriteAllText((Join-Path $legacy 'scripts\payload.sha256'), $hash + '  ..\data\settings.json')
     Require (-not (Unmodified-LegacyPayload $legacyCopy)) 'a traversal in a manifest cannot reach settings'
+    # 0.6.1: another process holding the audit file for a moment (Armory, the post-update
+    # worker) once ended the whole cleanup with "being used by another process". Audit waits
+    # its turn, and a file it can never have costs a line, never the cleanup.
+    Add-Type -TypeDefinition @'
+public static class ArmoryAuditHold {
+    public static void ReleaseAfter(System.IDisposable held, int milliseconds) {
+        System.Threading.Tasks.Task.Run(async () => { await System.Threading.Tasks.Task.Delay(milliseconds); held.Dispose(); });
+    }
+}
+'@
+    $auditFile = Join-Path $DataFolder 'logs\install-retirement.jsonl'
+    Audit 'before the hold'
+    $held = New-Object IO.FileStream($auditFile, [IO.FileMode]::Append, [IO.FileAccess]::Write, [IO.FileShare]::Read)
+    [ArmoryAuditHold]::ReleaseAfter($held, 400)
+    Audit 'written after another writer let go'
+    $lines = @([IO.File]::ReadAllLines($auditFile) | ForEach-Object { $_ | ConvertFrom-Json })
+    Require (@($lines | Where-Object { $_ -like '* written after another writer let go' }).Count -eq 1) 'an audit line waits for another writer instead of failing'
+    $stuck = New-Object IO.FileStream($auditFile, [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+    try { Audit 'never written'; $survived = $true } catch { $survived = $false } finally { $stuck.Dispose() }
+    Require $survived 'an audit file that stays locked never throws'
     Write-Output 'PASS: retirement safety checks used only a throwaway folder.'
 } catch {
     $audit = Join-Path $DataFolder 'logs\install-retirement.jsonl'

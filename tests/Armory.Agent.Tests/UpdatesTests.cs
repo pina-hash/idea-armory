@@ -11,6 +11,20 @@ public sealed class UpdatesTests
         Assert.Equal(Updates.LookEvery, Updates.NextLook(0));
     }
 
+    // 0.6.1: a look that fails within two minutes of a wake (the network still coming back) is
+    // tried again in 20 seconds and does not count; one later, or with no wake, counts as before.
+    [Fact]
+    public void A_look_that_fails_just_after_a_wake_is_retried_quietly()
+    {
+        Assert.Equal((0, Updates.ResumeRetry), Updates.AfterFailure(0, TimeSpan.FromSeconds(3)));
+        Assert.Equal((2, Updates.ResumeRetry), Updates.AfterFailure(2, Updates.ResumeGrace - TimeSpan.FromSeconds(1)));
+        Assert.Equal((1, Updates.NextLook(1)), Updates.AfterFailure(0, Updates.ResumeGrace));
+        Assert.Equal((1, Updates.NextLook(1)), Updates.AfterFailure(0, null));
+        Assert.Equal((5, Updates.NextLook(5)), Updates.AfterFailure(5, TimeSpan.FromHours(1)));
+        Assert.Equal((1, Updates.NextLook(1)), Updates.AfterFailure(0, TimeSpan.FromSeconds(-1)));
+        Assert.True(Updates.ResumeRetry < TimeSpan.FromMinutes(1));
+    }
+
     [Fact]
     public void A_copy_Velopack_installed_is_known_by_its_current_folder_and_Update_exe()
     {

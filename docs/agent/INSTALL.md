@@ -558,7 +558,9 @@ computers (docs/LAB_COMPUTER_NAMES.md) improves readability but is not an identi
 ### Stuck updates and retirement paths (0.5.9)
 
 A failed look for a release retries after 1, 5, 15, 60 and then 240 minutes; a successful
-look returns to four hours. A version without an updater, or one that never reaches the
+look returns to four hours. Since 0.6.1 a look that fails within 2 minutes of a wake or of the
+network coming back is tried again after 20 seconds and does not count (`Updates.AfterFailure`),
+and a wake after a failed look looks again 30 seconds later instead of waiting out its wait. A version without an updater, or one that never reaches the
 tray, still needs the updating installer run once. The [0.5.9 field report](v0.5.9-field-report.md)
 traces each observed old version and gives the exact installer, double-click location and
 computer names. Retirement validates registration command text before any path API;

@@ -28,6 +28,16 @@ foreach ($bad in @('C:\bad"name\IdeaArmory.exe', 'C:\bad|name\IdeaArmory.exe', '
     Require ($null -eq (InventoryPath $bad)) 'an invalid inventory target is deferred without changing its filename'
 }
 Require ($script:deferred.Count -ge 9) 'unusable registrations leave audit evidence'
+# 0.6.1: Windows' own programs named without a folder (scheduled tasks, Run entries on the lab
+# computers) are not Armory installs and leave no deferral behind.
+$before = $script:deferred.Count
+foreach ($windows in @('BthUdTask.exe', 'sc.exe', '"sc.exe"', ' rundll32.exe ')) {
+    Require ($null -eq (InventoryPath $windows)) ('a program name without a folder is skipped: ' + $windows.Trim())
+}
+Require ($null -eq (CommandFile 'sc.exe start wuauserv')) 'a Run entry starting a Windows program is skipped'
+Require ($script:deferred.Count -eq $before) 'Windows programs named without a folder leave no audit line'
+Require ($null -eq (InventoryPath 'relative\IdeaArmory.exe')) 'a relative path with a folder is still deferred'
+Require ($script:deferred.Count -eq $before + 1) 'and it still leaves audit evidence'
 # The survivor loop used to reparse a rejected Run value and abort the entire inventory.
 function Full([string]$path) { if ($path -match '["|<>\x00]') { throw 'invalid characters reached the path API' }; return $path }
 function Join-Path([string]$path, [string]$child) { return $path.TrimEnd('\') + '\' + $child }

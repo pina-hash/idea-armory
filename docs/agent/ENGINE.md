@@ -1391,6 +1391,11 @@ every project's whole file list again every minute. Now the loop waits, after ea
 - At least 120 seconds (`LivePollInterval`) with live updates joined for every project.
 - Offline or the site failing (unreachable, 5xx, a cut answer): 30, 60, 120, 240, then 300
   seconds (`OfflinePollLongest`) until an answer comes.
+- Within 2 minutes (`ResumeGrace`) of the computer waking or its network coming back (0.6.1,
+  `SyncEngine.Resumed`: the tray's power and network events, or the watch's `frozen` gap): a
+  pass that could not reach the site is tried again after 5 seconds (`ResumeRetry`) and does not
+  grow the offline wait. Lab computers sleep and wake about every 30 minutes, and Windows answers
+  "No such host is known" for a few seconds after each wake.
 
 Any wake ends a wait at once: a window action, the window coming into view (which also reads
 the project list and every project's feed), Windows unlocked, a disk hint, a SolidWorks save, a

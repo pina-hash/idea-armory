@@ -124,38 +124,63 @@ public sealed class RepeatedFailureRule
 
 // Runs every rule on the events the recorder hands its observer. Thread safe: events come from
 // the engine's thread, the window's thread and the network's.
-public sealed class GlitchDetector(bool initiallyOffline = false)
+//
+// serverOutage (0.6.1): ~250 of 0.6.0's outage incidents were lab computers waking from sleep.
+// They sleep and wake about every 30 minutes, and for a few seconds after each wake Windows
+// answers "No such host is known". An outage is now an incident only when the server stayed
+// unreachable for OutageConfirmAfter, measured from the later of the first failure and the
+// last time the computer woke or its network came back, with every failure in that span seen
+// while the computer was awake and on a network. So the first failure is never one, a failure
+// right after a wake is never one, and time the computer slept never counts: a gap of more
+// than OutageLongestGap between two failures (a wake the host never heard) starts it again.
+public sealed class GlitchDetector
 {
+    public static readonly TimeSpan OutageConfirmAfter = TimeSpan.FromMinutes(3);
+    public static readonly TimeSpan OutageLongestGap = TimeSpan.FromMinutes(10);
+    // The power events the host records for the network (FlightRecorder.Power).
+    public const string NetworkUp = "networkUp", NetworkDown = "networkDown";
     private readonly object gate = new();
     private readonly RepeatedFailureRule repeated = new();
+    private readonly TimeProvider clock;
     // The computer slept or woke since the pass that is running started (a power event).
     private bool sleptDuringPass;
-    private bool serverOutage = initiallyOffline;
+    // This outage was reported (here or, initiallyOffline, by an earlier run) and has not ended.
+    private bool outageReported;
+    // The server did not answer the last time it was asked, and since when (a flight timestamp,
+    // measured from the last wake: see above), and when it last failed.
+    private long? failingSince;
+    private long lastFailure;
+    // Asleep (a suspend not yet followed by a wake), and whether Windows says there is a network.
+    private bool asleep;
+    private bool network = true;
+
+    public GlitchDetector(bool initiallyOffline = false, TimeProvider? clock = null)
+    {
+        outageReported = initiallyOffline;
+        this.clock = clock ?? TimeProvider.System;
+    }
+
+    // An outage was reported and has not ended (the incident files keep this across restarts).
+    public bool OutageReported { get { lock (gate) return outageReported; } }
 
     public Glitch? Inspect(in FlightEvent e)
     {
         switch (e.Kind)
         {
             case FlightKind.ServerAvailability:
-                lock (gate)
-                {
-                    if (e.Ok) { serverOutage = false; return null; }
-                    if (serverOutage) return null;
-                    serverOutage = true;
-                    return new(GlitchKinds.ServerOutage, "Armory could not reach the server. Work stays safe here while it retries with longer waits.", e);
-                }
+                lock (gate) return Availability(e);
             case FlightKind.Exception: return GlitchRules.Crash(e);
             case FlightKind.WindowAction:
-                lock (gate) return serverOutage ? null : GlitchRules.SlowAction(e);
+                lock (gate) return Failing ? null : GlitchRules.SlowAction(e);
             case FlightKind.PassStart:
                 lock (gate) sleptDuringPass = false;
                 return null;
             case FlightKind.Power:
-                lock (gate) sleptDuringPass = true;
+                lock (gate) PowerChanged(e);
                 return null;
             case FlightKind.PassEnd:
                 bool slept;
-                lock (gate) { if (serverOutage) return null; slept = sleptDuringPass; }
+                lock (gate) { if (Failing) return null; slept = sleptDuringPass; }
                 return GlitchRules.SlowPass(e, slept);
             case FlightKind.RepairedCheckout: return GlitchRules.RepairedCheckout(e);
             case FlightKind.ReadOnlyBroken: return GlitchRules.ReadOnlyBroken(e);
@@ -168,6 +193,60 @@ public sealed class GlitchDetector(bool initiallyOffline = false)
                 return null;
             default: return null;
         }
+    }
+
+    // Slow passes and slow window actions while the server does not answer are the outage's,
+    // never incidents of their own.
+    private bool Failing => outageReported || failingSince is not null;
+
+    private void PowerChanged(in FlightEvent e)
+    {
+        sleptDuringPass = true;
+        switch (e.Name)
+        {
+            case "suspend": asleep = true; break;
+            case NetworkDown: network = false; break;
+            case NetworkUp: network = true; asleep = false; break;
+            default: asleep = false; break; // resume, or the watch's "frozen": awake again
+        }
+        // Whatever failed before this does not count toward an outage after it.
+        if (failingSince is not null) failingSince = e.Timestamp;
+    }
+
+    private Glitch? Availability(in FlightEvent e)
+    {
+        if (e.Ok)
+        {
+            outageReported = false;
+            failingSince = null;
+            return null;
+        }
+        if (outageReported) return null;
+        // Asleep or with no network, a failure says nothing about the server.
+        if (asleep || !network)
+        {
+            failingSince = e.Timestamp;
+            lastFailure = e.Timestamp;
+            return null;
+        }
+        if (failingSince is not { } since || clock.GetElapsedTime(lastFailure, e.Timestamp) > OutageLongestGap)
+        {
+            failingSince = e.Timestamp;
+            lastFailure = e.Timestamp;
+            return null;
+        }
+        lastFailure = e.Timestamp;
+        var lasted = clock.GetElapsedTime(since, e.Timestamp);
+        if (lasted < OutageConfirmAfter) return null;
+        outageReported = true;
+        return new(GlitchKinds.ServerOutage,
+            $"Armory could not reach the server for {Minutes(lasted)} while this computer was awake and on a network. Work stays safe here while it retries with longer waits.", e);
+    }
+
+    private static string Minutes(TimeSpan span)
+    {
+        var minutes = (int)Math.Floor(span.TotalMinutes);
+        return minutes == 1 ? "1 minute" : minutes.ToString(CultureInfo.InvariantCulture) + " minutes";
     }
 }
 

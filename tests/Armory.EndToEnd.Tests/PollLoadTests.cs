@@ -85,6 +85,38 @@ public sealed class PollLoadTests(ITestOutputHelper output)
         Assert.Equal(files + 1, server.Count("armory_project_files"));
     }
 
+    // 0.6.1: the lab computers sleep and wake about every 30 minutes, and the first looks after a
+    // wake fail ("No such host is known") while the network comes back. For two minutes after a
+    // wake a failed look is tried again after 5 seconds and does not grow the offline wait; after
+    // that the usual 30, 60, 120 second waits go on from where they were.
+    [Fact]
+    public async Task Just_after_a_wake_a_failed_look_is_retried_quietly_and_the_wait_does_not_grow()
+    {
+        var server = new CountingServer(Projects) { Failing = true };
+        var options = After;
+        await using var app = await AppAsync(options, server);
+        Assert.Equal(options.IdlePollInterval, await app.TurnAsync());
+        Assert.Equal(options.IdlePollInterval * 2, await app.TurnAsync());
+        app.Engine.Resumed(look: false);
+        var retries = 0;
+        for (var waited = TimeSpan.Zero; waited < options.ResumeGrace; waited += options.ResumeRetry)
+        {
+            Assert.Equal(options.ResumeRetry, await app.TurnAsync());
+            app.Clock.Advance(options.ResumeRetry);
+            retries++;
+        }
+        Assert.Equal(24, retries);
+        Assert.Equal(options.IdlePollInterval * 4, await app.TurnAsync());
+        // The server answers again: the ordinary wait, and the next wake's failures start over.
+        server.Failing = false;
+        Assert.Equal(options.IdlePollInterval, await app.TurnAsync());
+        server.Failing = true;
+        app.Engine.Resumed(look: false);
+        Assert.Equal(options.ResumeRetry, await app.TurnAsync());
+        app.Clock.Advance(options.ResumeGrace);
+        Assert.Equal(options.IdlePollInterval, await app.TurnAsync());
+    }
+
     private static string Describe(Rates r) => $"{r.Total:F2}/min (my_projects {r.MyProjects:F2}, list_changes {r.ListChanges:F2}, project_files {r.ProjectFiles:F2}, other {r.Other:F2})";
 
     private sealed record Rates(double MyProjects, double ListChanges, double ProjectFiles, double Other)

@@ -186,6 +186,41 @@ Ready and Shown events are exercised across threads.
 **Not verified on a lab computer.** Which of the causes above hit the lab's machines is not known;
 the audit file above says. Group Policy, AppLocker and WMI restrictions were not reproduced.
 
+## 0.6.1: one audit file, several writers, and an old copy that kept winning
+
+Reported from 0.6.0's `retireFailed` incidents on shared lab computers: "retirement failed:
+Exception calling AppendAllText ... install-retirement.jsonl because it is being used by another
+process", beside "deferred invalid inventory target BthUdTask.exe" and "... sc.exe". Found by
+reading the code; not reproduced on a lab computer.
+
+**What happened.** The audit file is written by the running Armory (`InstallRetirement.Save`),
+by `Retire.ps1` and by the post-update waiter `AfterUpdate.ps1`, which can run at the same time
+after an update, and it is renamed every 5 seconds by the running copy's `AuditWatcher`. Each
+writer used `AppendAllText`, which fails at once when another process has the file open, and the
+script runs under `$ErrorActionPreference = 'Stop'`, so one failed audit line ended the whole
+inventory with exit 1. The two "invalid inventory target" lines were not the failure: they are
+Windows' own programs (a Bluetooth scheduled task, a Run entry that starts `sc.exe`) named
+without a folder, which the 0.5.9 path check deferred and logged, and the last audit line before
+the exit became the incident's reason. The cleanup then failed again at every start, and each
+start filed another incident.
+
+**Why it kept old versions alive.** A launch that finds another install's Armory holding the
+guard runs the cleanup first and, when it does not finish, hands off to that copy (`LaunchFlow`,
+0.5.8). A 0.3.x copy rewrites the sign-in Run entry to itself each time it starts. So on a
+computer where the cleanup always failed, the old copy started at every sign-in, every launch of
+the newer copy handed off to it, and the newer copy never ran long enough to update itself.
+
+**Built behavior.**
+
+- Every writer (`InstallRetirement.AppendShared`, both scripts' `Audit`) holds the file for one
+  line, shares it for reading, and waits up to 3 seconds for its turn. A file it never gets
+  costs that line, never the cleanup. Readers (`LastSaved`, `Replay`) share reading and writing.
+- A program name with no folder is skipped without an audit line (`InventoryPath`). A relative
+  path with a folder is still deferred with evidence; nothing is repaired or guessed.
+- A cleanup that does not finish is reported once per version (`RetireNotice`, the file
+  `logs\retire-failed-reported.txt` holding that version); a finished cleanup clears it, so a
+  later failure is reported again. The log still says `retire: <outcome>` at every start.
+
 ## Validation and bounds
 
 `tools/test-retirement-safety.ps1` executes the production safety functions in a throwaway

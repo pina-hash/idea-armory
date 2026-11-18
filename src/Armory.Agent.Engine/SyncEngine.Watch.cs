@@ -63,6 +63,8 @@ public sealed partial class SyncEngine
         {
             // Asleep, or paused by Windows: no time ran here.
             flight?.Power("frozen");
+            // The host's power event can come late or not at all: the network is coming back.
+            Resumed(look: false);
             deps.Log?.Invoke($"the computer slept or Armory was paused by Windows for {gap.TotalSeconds:F0} s");
             Progress(null);
             return;

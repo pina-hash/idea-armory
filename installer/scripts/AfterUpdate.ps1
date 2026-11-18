@@ -10,9 +10,21 @@ if ($PSVersionTable.PSEdition -ne 'Core') {
     $env:PSModulePath = (Join-Path $PSHOME 'Modules') + ';' + (Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\Modules')
 }
 function Audit([string]$text) {
-    $folder = Join-Path $DataFolder 'logs'
-    [void][IO.Directory]::CreateDirectory($folder)
-    [IO.File]::AppendAllText((Join-Path $folder 'install-retirement.jsonl'), (([DateTime]::UtcNow.ToString('O') + ' ' + $text) | ConvertTo-Json -Compress) + "`n")
+    # 0.6.1: this file is written by Armory, this script and the post-update worker, sometimes
+    # at once. Wait up to three seconds for a turn; an audit line is never a reason to stop.
+    try {
+        $folder = Join-Path $DataFolder 'logs'
+        [void][IO.Directory]::CreateDirectory($folder)
+        $bytes = (New-Object Text.UTF8Encoding $false).GetBytes(((([DateTime]::UtcNow.ToString('O') + ' ' + $text) | ConvertTo-Json -Compress) + "`n"))
+        $file = Join-Path $folder 'install-retirement.jsonl'
+        for ($try = 0; $try -lt 120; $try++) {
+            try {
+                $stream = New-Object IO.FileStream($file, [IO.FileMode]::Append, [IO.FileAccess]::Write, [IO.FileShare]::Read)
+                try { $stream.Write($bytes, 0, $bytes.Length) } finally { $stream.Dispose() }
+                return
+            } catch [IO.IOException] { Start-Sleep -Milliseconds 25 }
+        }
+    } catch { }
 }
 try {
     $updater = Get-Process -Id $UpdaterPid -ErrorAction SilentlyContinue

@@ -75,6 +75,7 @@ internal sealed partial class TrayApp : ApplicationContext
         SystemEvents.SessionSwitch += OnSessionSwitch;
         SystemEvents.SessionEnded += OnSessionEnded;
         SystemEvents.PowerModeChanged += OnPowerModeChanged;
+        System.Net.NetworkInformation.NetworkChange.NetworkAvailabilityChanged += OnNetworkAvailabilityChanged;
         // 0.5.3: the engine looks for changes less often while nobody can see the window.
         attentionTimer = new System.Windows.Forms.Timer { Interval = 2000 };
         attentionTimer.Tick += (_, _) => TellAttention();
@@ -171,6 +172,15 @@ internal sealed partial class TrayApp : ApplicationContext
     private void OnPowerModeChanged(object? sender, PowerModeChangedEventArgs e)
     {
         if (e.Mode is PowerModes.Suspend or PowerModes.Resume) host.PowerChanged(e.Mode == PowerModes.Resume);
+        if (e.Mode == PowerModes.Resume) updater?.Resumed();
+    }
+
+    // 0.6.1: the network went away or came back (a pool thread). An outage is only an outage
+    // while this computer is on a network (docs/agent/TELEMETRY.md, serverOutage).
+    private void OnNetworkAvailabilityChanged(object? sender, System.Net.NetworkInformation.NetworkAvailabilityEventArgs e)
+    {
+        host.NetworkChanged(e.IsAvailable);
+        if (e.IsAvailable) updater?.Resumed();
     }
 
     private void UpdateMenu(AgentView view)
@@ -270,6 +280,7 @@ internal sealed partial class TrayApp : ApplicationContext
             SystemEvents.SessionSwitch -= OnSessionSwitch;
             SystemEvents.SessionEnded -= OnSessionEnded;
             SystemEvents.PowerModeChanged -= OnPowerModeChanged;
+            System.Net.NetworkInformation.NetworkChange.NetworkAvailabilityChanged -= OnNetworkAvailabilityChanged;
             attentionTimer.Dispose();
             showWait.Unregister(null);
             quitWait.Unregister(null);

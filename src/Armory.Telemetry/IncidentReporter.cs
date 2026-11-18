@@ -32,7 +32,6 @@ public sealed class IncidentReporter : IFlightObserver
     private readonly TimeProvider clock;
     private readonly GlitchDetector detector;
     private readonly object availabilityGate = new();
-    private bool? observedOnline;
     private readonly IncidentThrottle throttle = new();
     [ThreadStatic] private static bool quiet;
 
@@ -40,10 +39,9 @@ public sealed class IncidentReporter : IFlightObserver
     {
         this.recorder = recorder;
         Store = store;
-        detector = new GlitchDetector(store.OutageActive);
-        observedOnline = store.OutageActive ? false : null;
         this.sources = sources;
         this.clock = clock ?? TimeProvider.System;
+        detector = new GlitchDetector(store.OutageActive, this.clock);
         LastFlight = lastFlight;
         foreach (var (kind, at) in store.Saved()) throttle.Seed(kind, at);
         recorder.Observer = this;
@@ -60,14 +58,19 @@ public sealed class IncidentReporter : IFlightObserver
     {
         if (e.Kind is FlightKind.PassStart or FlightKind.PassPhase or FlightKind.PassEnd) LastFlight?.Poke();
         if (quiet) return;
+        Glitch? glitch;
         if (e.Kind == FlightKind.ServerAvailability)
         {
+            // 0.6.1: the marker that remembers an outage across restarts is set when its incident
+            // is, and cleared when the server answers again: a failure that never became an
+            // outage (a wake from sleep) leaves nothing behind.
             lock (availabilityGate)
             {
-                if (observedOnline != e.Ok)
+                var wasReported = detector.OutageReported;
+                glitch = detector.Inspect(e);
+                bool? marker = glitch?.Kind == GlitchKinds.ServerOutage ? true : wasReported && e.Ok ? false : null;
+                if (marker is { } active)
                 {
-                    observedOnline = e.Ok;
-                    var active = !e.Ok;
                     var sequence = e.Sequence;
                     Schedule(() =>
                     {
@@ -78,9 +81,9 @@ public sealed class IncidentReporter : IFlightObserver
                 }
             }
         }
-        var glitch = detector.Inspect(e);
-        // Availability transitions already admit exactly one report for an outage. A
-        // recovery followed by a different outage must not disappear in the time throttle.
+        else glitch = detector.Inspect(e);
+        // Availability already admits exactly one report for an outage. A recovery followed by
+        // a different outage must not disappear in the time throttle.
         if (glitch is null || (glitch.Kind != GlitchKinds.ServerOutage && !throttle.TryAdmit(glitch.Kind, clock.GetUtcNow()))) return;
         Schedule(() => WriteAsync(glitch));
     }

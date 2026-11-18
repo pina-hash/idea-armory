@@ -116,6 +116,56 @@ public sealed class StartupTests
         Assert.StartsWith("Armory opened, but the cleanup of other Armory installs did not finish", incident["summary"]!.GetValue<string>());
     }
 
+    // 0.6.1: a cleanup that keeps failing (a shared lab computer) said so at every start. Now
+    // once per version: again only after a cleanup finished, or from a newer Armory.
+    [Fact]
+    public void A_cleanup_that_keeps_failing_is_reported_once_until_one_finishes_or_the_version_changes()
+    {
+        using var folder = new TempFolder();
+        var paths = new AgentPaths(folder.Root, true);
+        var reports = new List<Glitch>();
+        var lines = new List<string>();
+        RetireOutcome Start(string version, Func<RetireOutcome> retire)
+            => InstallRetirement.RunAndReport(retire, lines.Add, glitch => { reports.Add(glitch); return "saved"; }, new RetireNotice(paths.LogFolder, version));
+        var failing = () => InstallRetirement.Run(paths, Failing("exit 1"), () => { });
+        for (var i = 0; i < 5; i++) Assert.False(Start("0.6.1", failing).Ok);
+        Assert.Single(reports);
+        Assert.Equal(4, lines.Count(line => line.Contains("already reported", StringComparison.Ordinal)));
+        Assert.False(Start("0.6.2", failing).Ok);
+        Assert.Equal(2, reports.Count);
+        Assert.True(Start("0.6.2", () => RetireOutcome.Done).Ok);
+        Assert.False(Start("0.6.2", failing).Ok);
+        Assert.Equal(3, reports.Count);
+        Assert.All(reports, glitch => Assert.Equal(GlitchKinds.RetireFailed, glitch.Kind));
+    }
+
+    // 0.6.1: "Exception calling AppendAllText ... install-retirement.jsonl because it is being used
+    // by another process". A line waits for another writer to let go, and readers share.
+    [Fact]
+    public async Task An_audit_line_waits_for_another_writer_and_a_reader_never_blocks_one()
+    {
+        using var folder = new TempFolder();
+        var paths = new AgentPaths(folder.Root, true);
+        var audit = Path.Combine(paths.LogFolder, "install-retirement.jsonl");
+        InstallRetirement.Save(paths, "first");
+        var held = new FileStream(audit, FileMode.Append, FileAccess.Write, FileShare.Read);
+        var letGo = Task.Run(async () => { await Task.Delay(300); held.Dispose(); });
+        InstallRetirement.Save(paths, "second, after the other writer");
+        await letGo;
+        using (var reader = InstallRetirement.OpenShared(audit))
+        {
+            InstallRetirement.Save(paths, "third, while someone reads");
+        }
+        var text = File.ReadAllText(audit);
+        Assert.Contains("first", text);
+        Assert.Contains("second, after the other writer", text);
+        Assert.Contains("third, while someone reads", text);
+        Assert.Equal("third, while someone reads", InstallRetirement.LastSaved(paths, 0));
+        // A file that stays locked costs the line, never a throw.
+        using (new FileStream(audit, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            Assert.False(InstallRetirement.AppendShared(audit, "never", TimeSpan.FromMilliseconds(100)));
+    }
+
     [Fact]
     public void The_background_cleanup_never_throws_even_when_reporting_fails()
     {

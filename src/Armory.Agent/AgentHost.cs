@@ -223,7 +223,17 @@ internal sealed partial class AgentHost : IAsyncDisposable
     {
         Telemetry.Recorder.Power(resumed ? "resume" : "suspend");
         log.Info(resumed ? AgentLog.WakeLine : AgentLog.SleepLine);
-        if (resumed) Wake();
+        if (resumed) OnEngine("resumed", e => e.Resumed());
+    }
+
+    // 0.6.1: Windows says the network went away or came back. In the flight (an outage counts
+    // only while there is a network, GlitchDetector) and the log; when it is back, the engine
+    // looks at once and retries quietly while names start to resolve again.
+    internal void NetworkChanged(bool available)
+    {
+        Telemetry.Recorder.Power(available ? global::Armory.Telemetry.GlitchDetector.NetworkUp : global::Armory.Telemetry.GlitchDetector.NetworkDown);
+        log.Info(available ? "the network is back" : "this computer has no network");
+        if (available) OnEngine("network", e => e.Resumed());
     }
 
     internal async Task<ActionResult> ReportProblemAsync(string? kind, string? body)

@@ -7,20 +7,47 @@ namespace Armory.Telemetry.Tests;
 // they may be, how many are kept, and when they are written.
 public sealed class IncidentTests
 {
+    // An outage is the server unreachable for three minutes awake (GlitchDetector), so each
+    // starts with a failure, then fails again three minutes later.
+    private static void Outage(FlightRecorder recorder, ManualClock clock)
+    {
+        recorder.ServerAvailability(false);
+        clock.Advance(GlitchDetector.OutageConfirmAfter);
+        recorder.ServerAvailability(false);
+    }
+
     [Fact]
     public void A_distinct_outage_after_recovery_is_reported_even_within_ten_minutes()
     {
         using var temp = new TempFolder();
         var (reporter, recorder, clock, _) = Reporter(temp.Path);
-        recorder.ServerAvailability(false);
+        Outage(recorder, clock);
         for (var i = 0; i < 30; i++) recorder.ServerAvailability(false);
         Assert.Single(reporter.Store.All());
+        Assert.True(reporter.Store.OutageActive);
         recorder.ServerAvailability(true);
         Assert.False(reporter.Store.OutageActive);
         clock.Advance(TimeSpan.FromMinutes(1));
-        recorder.ServerAvailability(false);
+        Outage(recorder, clock);
         Assert.Equal(2, reporter.Store.All().Count);
         Assert.True(reporter.Store.OutageActive);
+    }
+
+    // 0.6.1: a failure that never became an outage (a wake from sleep) leaves no incident and no
+    // marker, so a real outage after the next start is still reported.
+    [Fact]
+    public void A_short_failure_leaves_no_incident_and_no_marker()
+    {
+        using var temp = new TempFolder();
+        var (reporter, recorder, clock, _) = Reporter(temp.Path);
+        recorder.ServerAvailability(false);
+        clock.Advance(TimeSpan.FromSeconds(10));
+        recorder.ServerAvailability(false);
+        Assert.Empty(reporter.Store.All());
+        Assert.False(reporter.Store.OutageActive);
+        recorder.ServerAvailability(true);
+        Assert.Empty(reporter.Store.All());
+        Assert.False(reporter.Store.OutageActive);
     }
 
     [Fact]
@@ -28,16 +55,16 @@ public sealed class IncidentTests
     {
         using var temp = new TempFolder();
         var (first, recorder, clock, _) = Reporter(temp.Path);
-        recorder.ServerAvailability(false);
+        Outage(recorder, clock);
         Assert.Single(first.Store.All());
         clock.Advance(TimeSpan.FromHours(1));
         var (second, restarted, _, _) = Reporter(temp.Path, clock: clock);
-        for (var i = 0; i < 50; i++) restarted.ServerAvailability(false);
+        for (var i = 0; i < 50; i++) { restarted.ServerAvailability(false); clock.Advance(TimeSpan.FromMinutes(1)); }
         Assert.Single(second.Store.All());
         restarted.ServerAvailability(true);
         clock.Advance(TimeSpan.FromHours(1));
         var (third, next, _, _) = Reporter(temp.Path, clock: clock);
-        next.ServerAvailability(false);
+        Outage(next, clock);
         Assert.Equal(2, third.Store.All().Count);
         third.Store.SetOutageActive(false, 10_000);
         third.Store.SetOutageActive(true, 5_000);
