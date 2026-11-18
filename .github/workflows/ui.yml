@@ -26,7 +26,9 @@ concurrency:
   cancel-in-progress: true
 jobs:
   window:
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest moved to 26.04 (November 2026), which Playwright 1.56.1 cannot
+    # install Chromium on. Move this with the Playwright version.
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     defaults:
       run:
